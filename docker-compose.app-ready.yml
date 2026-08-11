@@ -1,0 +1,40 @@
+services:
+  api:
+    build: .
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - db
+
+  web:
+    build: .
+    command: streamlit run unified_app.py --server.address=0.0.0.0 --server.port=8501
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    depends_on:
+      - db
+
+  worker:
+    build: .
+    command: python -m scripts.preflight
+    env_file:
+      - .env
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: construction_ai
+      POSTGRES_USER: construction
+      POSTGRES_PASSWORD: construction
+    volumes:
+      - app_ready_pg:/var/lib/postgresql/data
+
+volumes:
+  app_ready_pg:
