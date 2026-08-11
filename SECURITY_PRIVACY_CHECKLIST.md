@@ -1,0 +1,22 @@
+# Security & privacy release checklist
+
+- [ ] OIDC/SSO and MFA policy
+- [ ] least-privilege roles
+- [ ] server-side tenant enforcement on every project/company query
+- [ ] authorization tests for every API/action
+- [ ] encryption in transit and at rest
+- [ ] managed secrets / rotation
+- [ ] audit logging
+- [ ] retention/deletion/export controls
+- [ ] attachment malware scanning
+- [ ] dependency/SCA scanning
+- [ ] SAST
+- [ ] penetration test
+- [ ] rate limiting
+- [ ] secure inbound email/webhook verification
+- [ ] backup encryption
+- [ ] disaster recovery test
+- [ ] incident response plan
+- [ ] vendor/subprocessor review
+- [ ] privacy notice and DPA requirements
+- [ ] legal review of subcontractor analytics and automated notifications

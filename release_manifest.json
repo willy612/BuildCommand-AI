@@ -1,0 +1,8 @@
+{
+  "release": "v7.0",
+  "python_files_compiled": 280,
+  "roadmap_status": "feature foundation complete",
+  "production_status": "requires environment-specific validation",
+  "human_approval_default": true,
+  "tenant_guard_foundation": true
+}
