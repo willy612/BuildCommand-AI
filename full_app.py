@@ -30,7 +30,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="27.0")
+app=FastAPI(title="BuildCommand AI",version="28.0")
 DB="construction_ai_web.db"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR","/tmp/buildcommand_uploads")
 os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -103,6 +103,8 @@ def init():
     CREATE TABLE IF NOT EXISTS beta_feedback(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER,project_id INTEGER,rating INTEGER,category TEXT,feedback TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS invitations(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,email TEXT NOT NULL,role TEXT DEFAULT 'FIELD_USER',token_hash TEXT NOT NULL UNIQUE,expires TEXT,accepted INTEGER DEFAULT 0,created_by INTEGER,created TEXT);
     CREATE TABLE IF NOT EXISTS company_settings(company_id INTEGER PRIMARY KEY,auto_ai_brief INTEGER DEFAULT 1,email_alerts INTEGER DEFAULT 0,beta_mode INTEGER DEFAULT 1,onboarding_complete INTEGER DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS weekly_ai_reports(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,week_ending TEXT,report_text TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS quick_entries(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,user_id INTEGER,entry_type TEXT,text TEXT,routed_to TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS daily_reports(
         id INTEGER PRIMARY KEY,
         project_id INTEGER,
@@ -657,7 +659,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:900px){.app{grid-template-columns:1fr}.side{position:relative;border-right:0;border-bottom:1px solid var(--line)}.grid4,.grid3,.grid2{grid-template-columns:1fr}.mobile-menu-btn{display:block;width:100%;margin:12px 0}.nav{display:none}.nav.mobile-open{display:block}}
 """
 
-NAV=[("Daily Command","/"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Beta Checklist","/beta-checklist")]
+NAV=[("Daily Command","/"),("AI Command","/ai-command"),("3-Week Lookahead","/lookahead-intelligence"),("Project Health","/project-health"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Sub Scorecards","/sub-scorecards"),("RFI Impact","/rfi-impact"),("Procurement Warning","/procurement-warning"),("Recovery Planner","/ai-recovery"),("Quick Entry","/quick-entry"),("Weekly AI Report","/weekly-report"),("Beta Checklist","/beta-checklist")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -8997,3 +8999,218 @@ def beta_checklist():
         "Beta Checklist",
         f"<div class='hero'><div class='eyebrow'>Beta Readiness</div><h1>{complete}/{len(checks)} launch checks complete</h1></div><div class='card'>{html}</div><div class='card'><a href='/beta-feedback'>Record Beta Feedback →</a></div>",
     )
+
+# =========================
+# BuildCommand AI v28 Intelligence Layer
+# =========================
+
+def parse_iso_date(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def activity_delay_signal(activity, today=None):
+    today = today or date.today()
+    start = parse_iso_date(activity["start"])
+    finish = parse_iso_date(activity["finish"])
+    pct = float(activity["pct"] or 0)
+    status = activity["status"] or "NOT_STARTED"
+    score, reasons = 0, []
+    if finish and finish < today and pct < 100:
+        score += 55; reasons.append("finish date has passed")
+    if start and start <= today and pct <= 0 and status != "COMPLETE":
+        score += 25; reasons.append("scheduled start has passed with 0% complete")
+    if start and finish and start <= today <= finish:
+        total = max(1, (finish-start).days+1)
+        elapsed = max(0, (today-start).days+1)
+        expected = min(100, elapsed/total*100)
+        if pct + 15 < expected:
+            variance = expected-pct
+            score += min(35, 10 + variance*.6)
+            reasons.append(f"progress trails time-elapsed plan by about {variance:.0f} points")
+    score = min(100, int(round(score)))
+    band = "CRITICAL" if score >= 70 else "HIGH" if score >= 45 else "WATCH" if score >= 20 else "READY"
+    return score, band, reasons
+
+
+def procurement_warning_signal(row):
+    required, promised = parse_iso_date(row["required_on_site"]), parse_iso_date(row["promised_date"])
+    status, today = (row["status"] or "NOT_RELEASED").upper(), date.today()
+    score, reasons = 0, []
+    if status == "DELIVERED": return 0, "READY", ["delivered"]
+    if not required: score += 20; reasons.append("required-on-site date missing")
+    if not promised: score += 45; reasons.append("promised date missing")
+    elif required and promised > required:
+        late=(promised-required).days; score += min(80,45+late*4); reasons.append(f"promised date is {late} day(s) after required date")
+    if required:
+        days=(required-today).days
+        if days < 0: score += 30; reasons.append("required-on-site date has passed")
+        elif days <= 7 and status not in ["SHIPPED","DELIVERED"]: score += 25; reasons.append("needed within 7 days and not shipped")
+        elif days <= 21 and status in ["NOT_RELEASED","RELEASED"]: score += 12; reasons.append("needed within 3 weeks and not yet in fabrication/shipping")
+    score=min(100,score)
+    band="CRITICAL" if score>=70 else "HIGH" if score>=45 else "WATCH" if score>=20 else "READY"
+    return score,band,reasons or ["no procurement warning detected"]
+
+
+def project_health_snapshot(pid):
+    c=db()
+    activities=c.execute("SELECT * FROM activities WHERE project_id=?",(pid,)).fetchall()
+    risks=c.execute("SELECT * FROM risks WHERE project_id=?",(pid,)).fetchall()
+    actions=c.execute("SELECT * FROM action_items WHERE project_id=? AND status='OPEN'",(pid,)).fetchall()
+    issues=c.execute("SELECT * FROM project_issues WHERE project_id=? AND status!='CLOSED'",(pid,)).fetchall()
+    procurement=c.execute("SELECT * FROM procurement WHERE project_id=? AND status!='DELIVERED'",(pid,)).fetchall()
+    readiness=c.execute("SELECT * FROM activity_readiness WHERE project_id=?",(pid,)).fetchall()
+    safety=c.execute("SELECT * FROM safety_items WHERE project_id=? AND status!='CLOSED'",(pid,)).fetchall()
+    inspections=c.execute("SELECT * FROM inspections_tracker WHERE project_id=? AND result!='PASSED'",(pid,)).fetchall(); c.close()
+    today=date.today()
+    overdue_actions=sum(1 for x in actions if parse_iso_date(x["due"]) and parse_iso_date(x["due"])<today)
+    overdue_issues=sum(1 for x in issues if parse_iso_date(x["due"]) and parse_iso_date(x["due"])<today)
+    delay_risk=sum(activity_delay_signal(a)[0] for a in activities)/len(activities) if activities else 0
+    risk_exp=sum(float(r["score"] or 0) for r in risks)/len(risks) if risks else 0
+    proc_exp=sum(procurement_warning_signal(p)[0] for p in procurement)/len(procurement) if procurement else 0
+    ready_pct=sum(readiness_result(r)[0] for r in readiness)/len(readiness) if readiness else (50 if activities else 100)
+    safety_penalty=sum(25 if s["severity"]=="CRITICAL" else 15 if s["severity"]=="HIGH" else 7 for s in safety)
+    inspection_penalty=sum(18 if i["result"]=="FAILED" else 7 for i in inspections)
+    scores={"schedule":max(0,100-delay_risk),"readiness":max(0,min(100,ready_pct)),"procurement":max(0,100-proc_exp),"risk":max(0,100-risk_exp),"field":max(0,100-min(45,overdue_actions*6+overdue_issues*7)-min(35,safety_penalty+inspection_penalty))}
+    overall=round(scores["schedule"]*.28+scores["readiness"]*.22+scores["procurement"]*.18+scores["risk"]*.17+scores["field"]*.15)
+    return {"overall":overall,**{k:round(v) for k,v in scores.items()},"overdue_actions":overdue_actions,"overdue_issues":overdue_issues}
+
+
+@app.get("/project-health", response_class=HTMLResponse)
+def project_health_page():
+    h=project_health_snapshot(project_id())
+    badge,label=("READY","Healthy") if h["overall"]>=85 else ("WATCH","Watch") if h["overall"]>=70 else ("HIGH","At Risk") if h["overall"]>=50 else ("CRITICAL","Critical")
+    return shell("Project Health",f'<div class="hero"><div class="eyebrow">Executive Project Health</div><h1>{h["overall"]}/100 <span class="badge {badge}">{label}</span></h1></div><div class="grid4"><div class="card"><div class="label">Schedule</div><div class="kpi">{h["schedule"]}</div></div><div class="card"><div class="label">Readiness</div><div class="kpi">{h["readiness"]}</div></div><div class="card"><div class="label">Procurement</div><div class="kpi">{h["procurement"]}</div></div><div class="card"><div class="label">Risk</div><div class="kpi">{h["risk"]}</div></div></div><div class="card"><h2>Field Execution {h["field"]}</h2><p>Overdue actions: {h["overdue_actions"]} · Overdue RFIs/issues: {h["overdue_issues"]}</p></div>')
+
+
+@app.get("/lookahead-intelligence", response_class=HTMLResponse)
+def lookahead_intelligence_page():
+    pid=project_id(); today=date.today(); horizon=today+timedelta(days=21); c=db()
+    activities=c.execute("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,)).fetchall(); readiness_rows=c.execute("SELECT * FROM activity_readiness WHERE project_id=?",(pid,)).fetchall(); procurement=c.execute("SELECT * FROM procurement WHERE project_id=? AND status!='DELIVERED'",(pid,)).fetchall(); inspections=c.execute("SELECT * FROM inspections_tracker WHERE project_id=? AND result!='PASSED'",(pid,)).fetchall(); issues=c.execute("SELECT * FROM project_issues WHERE project_id=? AND status!='CLOSED'",(pid,)).fetchall(); c.close()
+    rm={r["activity_id"]:r for r in readiness_rows}; pm={}; im={}; qm={}
+    for p in procurement: pm.setdefault(p["activity_id"],[]).append(p)
+    for i in inspections: im.setdefault(i["activity_id"],[]).append(i)
+    for q in issues: qm.setdefault(q["activity_id"],[]).append(q)
+    cards=''
+    for a in activities:
+        start,finish=parse_iso_date(a["start"]),parse_iso_date(a["finish"])
+        if not start or (finish and finish<today) or start>horizon: continue
+        rp,rs=(0,"NOT REVIEWED")
+        if a["id"] in rm: rp,rs,_=readiness_result(rm[a["id"]])
+        blockers=[]
+        if rs in ["NOT READY","AT RISK","NOT REVIEWED"]: blockers.append(f"Readiness {rp}%")
+        for p in pm.get(a["id"],[]):
+            _,b,_=procurement_warning_signal(p)
+            if b!="READY": blockers.append(f"Procurement: {p['item']} ({b})")
+        for i in im.get(a["id"],[]): blockers.append(f"Inspection: {i['inspection_type']} ({i['result']})")
+        for q in qm.get(a["id"],[]): blockers.append(f"{q['issue_type']}: {q['title']}")
+        _,dband,_=activity_delay_signal(a)
+        if dband!="READY": blockers.append(f"Schedule: {dband}")
+        days=(start-today).days; timing="STARTED / DUE NOW" if days<=0 else f"Starts in {days} day(s)"; badge="READY" if not blockers else "CRITICAL" if any("CRITICAL" in b for b in blockers) else "WATCH"
+        bh=''.join(f'<div class="small">• {esc(b)}</div>' for b in blockers) or '<div class="small">No major blocker detected.</div>'
+        cards+=f'<div class="card"><span class="badge {badge}">{timing}</span><h3>{esc(a["external_id"])} - {esc(a["name"])}</h3><p>Readiness: {rp}%</p>{bh}</div>'
+    return shell("3-Week Lookahead",f'<div class="hero"><div class="eyebrow">3-Week Lookahead Intelligence</div><h1>Upcoming work + blockers</h1><div class="muted">{today} through {horizon}</div></div><div class="grid2">{cards or "<div class=card>No activities in the next 21 days.</div>"}</div>')
+
+
+@app.get("/sub-scorecards", response_class=HTMLResponse)
+def subcontractor_scorecards_page():
+    pid=project_id(); c=db(); subs=c.execute("SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",(pid,)).fetchall(); updates=c.execute("SELECT * FROM subcontractor_updates WHERE project_id=? ORDER BY update_date DESC,id DESC",(pid,)).fetchall(); punch=c.execute("SELECT * FROM punch_items WHERE project_id=? AND status!='VERIFIED'",(pid,)).fetchall(); safety=c.execute("SELECT * FROM safety_items WHERE project_id=? AND status!='CLOSED'",(pid,)).fetchall(); actions=c.execute("SELECT * FROM action_items WHERE project_id=? AND status='OPEN'",(pid,)).fetchall(); c.close(); today=date.today(); cards=''
+    for s in subs:
+        su=[u for u in updates if u["sub_id"]==s["id"]]; latest=su[0] if su else None; score=100; reasons=[]
+        if not latest: score-=20; reasons.append("no recent subcontractor update")
+        else:
+            st=(latest["status"] or "").upper(); score-=35 if st=="CRITICAL" else 22 if st=="HIGH" else 10 if st=="WATCH" else 0
+            if st in ["CRITICAL","HIGH","WATCH"]: reasons.append(f"latest status: {st}")
+            if (latest["manpower"] or 0)<=0: score-=12; reasons.append("latest manpower is zero")
+        name=(s["name"] or "").lower(); trade=(s["trade"] or "").lower(); op=sum(1 for p in punch if (name and name in (p["owner"] or "").lower()) or (trade and trade in (p["trade"] or "").lower())); osf=sum(1 for x in safety if name and name in (x["responsible_party"] or "").lower()); oa=sum(1 for a in actions if name and name in (a["owner"] or "").lower() and parse_iso_date(a["due"]) and parse_iso_date(a["due"])<today)
+        if op: score-=min(20,op*4); reasons.append(f"{op} open punch item(s)")
+        if osf: score-=min(25,osf*8); reasons.append(f"{osf} open safety item(s)")
+        if oa: score-=min(20,oa*6); reasons.append(f"{oa} overdue action(s)")
+        score=max(0,score); grade="A" if score>=90 else "B" if score>=80 else "C" if score>=65 else "D" if score>=50 else "F"; badge="READY" if score>=80 else "WATCH" if score>=65 else "HIGH" if score>=50 else "CRITICAL"; rh=''.join(f'<div class="small">• {esc(r)}</div>' for r in reasons) or '<div class="small">No major negative signal detected.</div>'; cards+=f'<div class="card"><span class="badge {badge}">Grade {grade}</span><h3>{esc(s["name"])}</h3><div class="muted">{esc(s["trade"])}</div><div class="kpi">{score}</div>{rh}</div>'
+    return shell("Subcontractor Scorecards",f'<div class="hero"><div class="eyebrow">Trade Partner Intelligence</div><h1>Subcontractor Scorecards</h1></div><div class="grid3">{cards or "<div class=card>Add subcontractors to generate scorecards.</div>"}</div>')
+
+
+@app.get("/rfi-impact", response_class=HTMLResponse)
+def rfi_impact_page():
+    pid=project_id(); c=db(); issues=c.execute("""SELECT i.*,a.external_id,a.name activity,a.start activity_start FROM project_issues i LEFT JOIN activities a ON a.id=i.activity_id WHERE i.project_id=? AND i.status!='CLOSED' ORDER BY i.due,i.id""",(pid,)).fetchall(); activities=c.execute("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,)).fetchall(); c.close(); cards=''; today=date.today()
+    for i in issues:
+        ls=parse_iso_date(i["activity_start"]) if i["activity_start"] else None; impacted=[a for a in activities if ls and parse_iso_date(a["start"]) and parse_iso_date(a["start"])>=ls and a["id"]!=i["activity_id"]]; due=parse_iso_date(i["due"]); score=20+(40 if i["priority"]=="CRITICAL" else 25 if i["priority"]=="HIGH" else 0)+(25 if due and due<today else 0)+(20 if ls and (ls-today).days<=14 else 0); score=min(100,score); badge="CRITICAL" if score>=70 else "HIGH" if score>=45 else "WATCH"; impact=', '.join(f'{a["external_id"]} {a["name"]}' for a in impacted[:4]) or 'No downstream activity inferred from date order.'; cards+=f'<div class="card"><span class="badge {badge}">Impact {score}</span><h3>{esc(i["title"])}</h3><p>Linked: {esc(i["external_id"] or "None")} {esc(i["activity"] or "")}</p><p>Possible downstream exposure: {esc(impact)}</p></div>'
+    return shell("RFI Impact",f'<div class="hero"><div class="eyebrow">RFI Impact Intelligence</div><h1>Which questions can move the schedule?</h1></div><div class="grid2">{cards or "<div class=card>No open RFIs/issues.</div>"}</div>')
+
+
+@app.get("/procurement-warning", response_class=HTMLResponse)
+def procurement_warning_page():
+    pid=project_id(); c=db(); rows=c.execute("""SELECT p.*,a.external_id,a.name activity FROM procurement p LEFT JOIN activities a ON a.id=p.activity_id WHERE p.project_id=? AND p.status!='DELIVERED' ORDER BY p.required_on_site,p.id""",(pid,)).fetchall(); c.close(); scored=sorted([(procurement_warning_signal(r)[0],procurement_warning_signal(r)[1],r,procurement_warning_signal(r)[2]) for r in rows],key=lambda x:x[0],reverse=True); cards=''
+    for score,band,r,reasons in scored: cards+=f'<div class="card"><span class="badge {band}">{band} · {score}</span><h3>{esc(r["item"])}</h3><p>Required: {esc(r["required_on_site"] or "—")} · Promised: {esc(r["promised_date"] or "—")}</p>'+''.join(f'<div class="small">• {esc(x)}</div>' for x in reasons)+'</div>'
+    return shell("Procurement Warning",f'<div class="hero"><div class="eyebrow">Procurement Early Warning</div><h1>Material threats ranked before installation.</h1></div><div class="grid2">{cards or "<div class=card>No open procurement items.</div>"}</div>')
+
+
+def recovery_options_for_activity(activity,delay_score):
+    if delay_score<20: return [("Protect Plan",0,0,"No major delay signal. Protect access, material, and inspection readiness.")]
+    return [("Add targeted manpower",min(3.0,max(1.0,delay_score/30)),2500+delay_score*35,"Increase manpower only after constraints are cleared."),("Second shift / extended hours",min(5.0,max(1.5,delay_score/22)),4500+delay_score*55,"Use where supervision and site rules allow."),("Resequence downstream work",min(4.0,max(1.0,delay_score/25)),1500+delay_score*20,"Advance unaffected work while the constraint is removed.")]
+
+
+@app.get("/ai-recovery", response_class=HTMLResponse)
+def ai_recovery_page():
+    pid=project_id(); c=db(); acts=c.execute("SELECT * FROM activities WHERE project_id=? AND status!='COMPLETE' ORDER BY start",(pid,)).fetchall(); c.close(); scored=sorted([(activity_delay_signal(a)[0],activity_delay_signal(a)[1],a) for a in acts],key=lambda x:x[0],reverse=True); cards=''
+    for score,band,a in scored[:6]:
+        opts=recovery_options_for_activity(a,score); oh=''.join(f'<div class="action"><b>{esc(n)}</b><div class="small">Estimated recovery: {d:.1f} day(s) · ROM cost: ${cst:,.0f}</div><div class="small">{esc(note)}</div></div>' for n,d,cst,note in opts); n,d,cst,_=opts[0]; cards+=f'<div class="card"><span class="badge {band}">Delay Signal {score}</span><h3>{esc(a["external_id"])} - {esc(a["name"])}</h3>{oh}<form method="post" action="/ai-recovery/save"><input type="hidden" name="activity_id" value="{a["id"]}"><input type="hidden" name="scenario" value="{esc(n)}"><input type="hidden" name="days_recovered" value="{d}"><input type="hidden" name="est_cost" value="{cst}"><button type="submit">Save Top Recovery Option</button></form></div>'
+    return shell("AI Recovery Planner",f'<div class="hero"><div class="eyebrow">Recovery Intelligence</div><h1>What can we do when work drifts?</h1><div class="muted">ROM planning aid—field validation required.</div></div><div class="grid2">{cards}</div>')
+
+
+@app.post("/ai-recovery/save")
+def save_ai_recovery(activity_id:int=Form(...),scenario:str=Form(...),days_recovered:float=Form(0),est_cost:float=Form(0)):
+    pid=project_id(); c=db(); c.execute("INSERT INTO recovery(project_id,activity_id,scenario,days_recovered,est_cost,status) VALUES(?,?,?,?,?,'PROPOSED')",(pid,activity_id,scenario,days_recovered,est_cost)); c.commit(); c.close(); return RedirectResponse('/ai-recovery',status_code=303)
+
+
+@app.get("/quick-entry", response_class=HTMLResponse)
+def quick_entry_page():
+    pid=project_id(); c=db(); rows=c.execute("SELECT * FROM quick_entries WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 15",(current_company_id(),pid)).fetchall(); c.close(); recent=''.join(f'<div class="action"><b>{esc(r["entry_type"])}</b> → {esc(r["routed_to"])}<div>{esc(r["text"])}</div></div>' for r in rows) or '<div class="muted">No quick entries yet.</div>'; body=f'''<div class="hero"><div class="eyebrow">Superintendent Quick Entry</div><h1>Say it once. Route it where it belongs.</h1></div><div class="grid2"><div class="card"><form method="post" action="/quick-entry"><label>Route As</label><select name="entry_type"><option value="AUTO">Auto Detect</option><option value="ACTION">Action</option><option value="FIELD_UPDATE">Field Update</option><option value="RFI">RFI / Issue</option><option value="SAFETY">Safety Observation</option></select><label>Field Note</label><textarea id="quickText" name="text" required></textarea><button type="button" onclick="startBuildCommandVoice()">Speak</button><button type="submit">Route Entry</button></form></div><div class="card"><h2>Recent Quick Entries</h2>{recent}</div></div><script>function startBuildCommandVoice(){{const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){{alert('Voice recognition is not supported by this browser.');return;}}const rec=new SR();rec.lang='en-US';rec.onresult=function(e){{document.getElementById('quickText').value=e.results[0][0].transcript;}};rec.start();}}</script>'''; return shell("Quick Entry",body)
+
+
+@app.post("/quick-entry")
+def save_quick_entry(entry_type:str=Form("AUTO"),text:str=Form(...)):
+    pid=project_id(); raw=text.strip(); low=raw.lower(); detected=entry_type
+    if detected=="AUTO": detected="SAFETY" if any(k in low for k in ["unsafe","safety","guardrail","near miss","incident"]) else "RFI" if any(k in low for k in ["rfi","question","clarify","design","drawing conflict"]) else "ACTION" if any(k in low for k in ["need to","follow up","confirm","call","send","by friday","by tomorrow"]) else "FIELD_UPDATE"
+    c=db(); routed=detected
+    if detected=="ACTION": c.execute("INSERT INTO action_items(project_id,title,owner,priority,due,status,notes,created) VALUES(?,?,?,?,?,'OPEN',?,?)",(pid,raw[:140],"Superintendent","WATCH",date.today().isoformat(),raw,date.today().isoformat())); routed="Action Center"
+    elif detected=="RFI": c.execute("INSERT INTO project_issues(project_id,activity_id,issue_type,title,owner,due,priority,status,description,response,created) VALUES(?,NULL,'FIELD_ISSUE',?,'',?,'WATCH','OPEN',?,'',?)",(pid,raw[:140],date.today().isoformat(),raw,date.today().isoformat())); routed="RFIs / Issues"
+    elif detected=="SAFETY": c.execute("INSERT INTO safety_items(project_id,activity_id,event_date,item_type,title,location,responsible_party,severity,status,description,corrective_action,created) VALUES(?,NULL,?,'OBSERVATION',?,'','','WATCH','OPEN',?,'',?)",(pid,date.today().isoformat(),raw[:140],raw,date.today().isoformat())); routed="Safety"
+    else: c.execute("INSERT INTO field_updates(project_id,activity_id,update_type,text,created) VALUES(?,NULL,'QUICK_ENTRY',?,?)",(pid,raw,date.today().isoformat())); routed="Field Updates"
+    c.execute("INSERT INTO quick_entries(company_id,project_id,user_id,entry_type,text,routed_to,created) VALUES(?,?,?,?,?,?,?)",(current_company_id(),pid,current_user_id(),detected,raw,routed,datetime.utcnow().isoformat())); c.commit(); c.close(); return RedirectResponse('/quick-entry',status_code=303)
+
+
+@app.get("/weekly-report", response_class=HTMLResponse)
+def weekly_report_page():
+    pid=project_id(); c=db(); row=c.execute("SELECT * FROM weekly_ai_reports WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1",(current_company_id(),pid)).fetchone(); c.close(); report=esc(row["report_text"]).replace("\n","<br>") if row else "No weekly AI report generated yet."; return shell("Weekly AI Report",f'<div class="hero"><div class="eyebrow">Owner / PM Reporting</div><h1>AI Weekly Project Report</h1></div><div class="card"><form method="post" action="/weekly-report/generate"><button type="submit">Generate Weekly Report</button></form></div><div class="card">{report}</div>')
+
+
+@app.post("/weekly-report/generate")
+def generate_weekly_report():
+    pid=project_id(); context=build_project_context(pid); health=project_health_snapshot(pid); key=os.environ.get("OPENAI_API_KEY")
+    if key:
+        instructions=f'''You are BuildCommand AI producing a professional weekly construction project report for an owner/project manager. Use only supplied project facts. Project health score: {health["overall"]}/100. Use sections: EXECUTIVE SUMMARY, SCHEDULE, FIELD PROGRESS, RFIs / DECISIONS, PROCUREMENT, SAFETY / QUALITY, CHANGE EXPOSURE, TOP PRIORITIES NEXT WEEK. Do not invent facts, commitments, costs, or dates.'''
+        try: report=OpenAI(api_key=key).responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),instructions=instructions,input=context).output_text
+        except Exception as exc: report=f"AI weekly report failed: {exc}"
+    else: report=f"Project Health: {health['overall']}/100\nOPENAI_API_KEY is not configured."
+    c=db(); c.execute("INSERT INTO weekly_ai_reports(company_id,project_id,week_ending,report_text,created) VALUES(?,?,?,?,?)",(current_company_id(),pid,date.today().isoformat(),report,datetime.utcnow().isoformat())); c.commit(); c.close(); return RedirectResponse('/weekly-report',status_code=303)
+
+
+@app.get("/ai-command", response_class=HTMLResponse)
+def ai_command_page():
+    pid=project_id(); h=project_health_snapshot(pid); c=db(); acts=c.execute("SELECT * FROM activities WHERE project_id=? AND status!='COMPLETE'",(pid,)).fetchall(); actions=c.execute("SELECT * FROM action_items WHERE project_id=? AND status='OPEN'",(pid,)).fetchall(); procs=c.execute("SELECT * FROM procurement WHERE project_id=? AND status!='DELIVERED'",(pid,)).fetchall(); issues=c.execute("SELECT * FROM project_issues WHERE project_id=? AND status!='CLOSED'",(pid,)).fetchall(); c.close(); sig=[]; today=date.today()
+    for a in acts:
+        s,b,r=activity_delay_signal(a)
+        if b!="READY": sig.append((s,b,"Schedule",f'{a["external_id"]} {a["name"]}',"; ".join(r)))
+    for p in procs:
+        s,b,r=procurement_warning_signal(p)
+        if b!="READY": sig.append((s,b,"Procurement",p["item"],"; ".join(r)))
+    for a in actions:
+        d=parse_iso_date(a["due"])
+        if d and d<today: sig.append((65,a["priority"] or "HIGH","Action",a["title"],f'Overdue · Owner {a["owner"] or "Unassigned"}'))
+    for i in issues:
+        d=parse_iso_date(i["due"])
+        if d and d<today: sig.append((70,i["priority"] or "HIGH",i["issue_type"],i["title"],"Response/decision overdue"))
+    sig.sort(key=lambda x:x[0],reverse=True); sh=''.join(f'<div class="action"><span class="badge {b if b in ["CRITICAL","HIGH","WATCH","READY","LOW"] else "HIGH"}">{esc(cat)}</span> <b>{esc(t)}</b><div class="small">{esc(d)}</div></div>' for _,b,cat,t,d in sig[:12]) or '<div class="muted">No major automated warning signals detected.</div>'; return shell("AI Command",f'<div class="hero"><div class="eyebrow">AI Daily Command Center</div><h1>Project Health {h["overall"]}/100</h1></div><div class="grid2"><div class="card"><h2>Handle First</h2>{sh}</div><div class="card"><h2>Command Tools</h2><p><a href="/lookahead-intelligence">3-Week Lookahead</a></p><p><a href="/ai-recovery">Recovery Planner</a></p><p><a href="/quick-entry">Quick / Voice Entry</a></p><p><a href="/weekly-report">Weekly AI Report</a></p></div></div>')
