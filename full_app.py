@@ -1,12 +1,36 @@
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Form, Request, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, FileResponse
 import sqlite3
 import os
-from datetime import date
-from openai import OpenAI
+import io
+import csv
+import json
+import secrets
+import hashlib
+import hmac
+import mimetypes
+import zipfile
+from contextvars import ContextVar
+from datetime import date, datetime, timedelta
+from pathlib import Path
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
-app=FastAPI(title="BuildCommand AI",version="9.0")
+try:
+    from reportlab.pdfgen import canvas
+except Exception:
+    canvas = None
+
+app=FastAPI(title="BuildCommand AI",version="26.0")
 DB="construction_ai_web.db"
+UPLOAD_DIR=os.environ.get("UPLOAD_DIR","/tmp/buildcommand_uploads")
+os.makedirs(UPLOAD_DIR,exist_ok=True)
+_current_user_id=ContextVar("buildcommand_user_id",default=None)
+_current_company_id=ContextVar("buildcommand_company_id",default=None)
+MAX_UPLOAD_BYTES=10*1024*1024
+ALLOWED_UPLOAD_EXTENSIONS={".pdf",".png",".jpg",".jpeg",".webp",".doc",".docx",".xls",".xlsx",".csv",".txt"}
 
 def db():
     conn=sqlite3.connect(DB)
@@ -16,6 +40,14 @@ def db():
 def init():
     c = db()
     c.executescript("""
+    CREATE TABLE IF NOT EXISTS companies(id INTEGER PRIMARY KEY,name TEXT NOT NULL,logo_url TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,email TEXT NOT NULL UNIQUE,display_name TEXT,password_hash TEXT NOT NULL,role TEXT DEFAULT 'MEMBER',created TEXT);
+    CREATE TABLE IF NOT EXISTS sessions(id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL,token_hash TEXT NOT NULL UNIQUE,expires TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS user_state(user_id INTEGER PRIMARY KEY,selected_project_id INTEGER);
+    CREATE TABLE IF NOT EXISTS attachments(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER,category TEXT,title TEXT,original_name TEXT,stored_name TEXT,mime_type TEXT,size_bytes INTEGER,created_by INTEGER,created TEXT);
+    CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER,severity TEXT,title TEXT,detail TEXT,source TEXT,status TEXT DEFAULT 'UNREAD',created TEXT);
+    CREATE TABLE IF NOT EXISTS morning_briefs(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,brief_date TEXT,brief_text TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS beta_feedback(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER,project_id INTEGER,rating INTEGER,category TEXT,feedback TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS daily_reports(
         id INTEGER PRIMARY KEY,
         project_id INTEGER,
@@ -278,11 +310,164 @@ def init():
                 (first_project["id"],)
             )
 
+    project_columns={row["name"] for row in c.execute("PRAGMA table_info(projects)").fetchall()}
+    if "company_id" not in project_columns:
+        c.execute("ALTER TABLE projects ADD COLUMN company_id INTEGER")
+
     c.commit()
     c.close()
 
 
 init()
+
+def hash_password(password):
+    salt = secrets.token_bytes(16)
+    rounds = 210000
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, rounds)
+    return f"pbkdf2_sha256${rounds}${salt.hex()}${digest.hex()}"
+
+
+def verify_password(password, stored):
+    try:
+        algorithm, rounds, salt_hex, digest_hex = stored.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        calc = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), int(rounds)).hex()
+        return hmac.compare_digest(calc, digest_hex)
+    except Exception:
+        return False
+
+
+def current_user_id():
+    return _current_user_id.get()
+
+
+def current_company_id():
+    return _current_company_id.get()
+
+
+def current_user():
+    uid = current_user_id()
+    if not uid:
+        return None
+    c = db()
+    row = c.execute("""
+        SELECT u.*, c.name AS company_name, c.logo_url
+        FROM users u JOIN companies c ON c.id=u.company_id
+        WHERE u.id=?
+    """, (uid,)).fetchone()
+    c.close()
+    return row
+
+
+def create_session(user_id):
+    raw = secrets.token_urlsafe(40)
+    token_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    expires = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    c = db()
+    c.execute("INSERT INTO sessions(user_id,token_hash,expires,created) VALUES(?,?,?,?)",
+              (user_id, token_hash, expires, datetime.utcnow().isoformat()))
+    c.commit(); c.close()
+    return raw
+
+
+def user_from_session(raw_token):
+    if not raw_token:
+        return None
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    c = db()
+    row = c.execute("""
+        SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
+        WHERE s.token_hash=? AND (s.expires IS NULL OR s.expires>?)
+    """, (token_hash, datetime.utcnow().isoformat())).fetchone()
+    c.close()
+    return row
+
+
+PUBLIC_PATHS = {"/login", "/register", "/health"}
+
+
+@app.middleware("http")
+async def authentication_middleware(request: Request, call_next):
+    raw_token = request.cookies.get("bc_session")
+    user = user_from_session(raw_token)
+    t1 = _current_user_id.set(user["id"] if user else None)
+    t2 = _current_company_id.set(user["company_id"] if user else None)
+    try:
+        if not user and request.url.path not in PUBLIC_PATHS:
+            return RedirectResponse("/login", status_code=303)
+        return await call_next(request)
+    finally:
+        _current_user_id.reset(t1)
+        _current_company_id.reset(t2)
+
+
+def login_page(message=""):
+    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>BuildCommand AI Login</title>
+    <style>body{{margin:0;background:#0a1017;color:#eef4fb;font-family:Inter,system-ui,sans-serif;padding:28px}}.box{{max-width:460px;margin:6vh auto;background:#111923;border:1px solid #213042;border-radius:16px;padding:26px}}input{{width:100%;box-sizing:border-box;background:#0d1620;color:#eef4fb;border:1px solid #213042;border-radius:9px;padding:12px;margin:8px 0 16px}}button{{background:#f0b44d;border:0;border-radius:9px;padding:11px 16px;font-weight:800}}a{{color:#f0b44d}}.muted{{color:#8fa2b5}}.error{{color:#ff9b9b}}</style></head><body>
+    <div class="box"><div class="muted">Construction Intelligence Platform</div><h1>BuildCommand AI</h1><p class="error">{esc(message)}</p>
+    <form method="post" action="/login"><label>Email</label><input type="email" name="email" required><label>Password</label><input type="password" name="password" required><button type="submit">Sign In</button></form>
+    <p><a href="/register">Create a company account</a></p><p class="muted">Built by Wilson LaHood · © 2026 Wilson LaHood</p></div></body></html>'''
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_get():
+    return login_page()
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_post(email: str = Form(...), password: str = Form(...)):
+    c = db(); user = c.execute("SELECT * FROM users WHERE lower(email)=lower(?)", (email.strip(),)).fetchone(); c.close()
+    if not user or not verify_password(password, user["password_hash"]):
+        return HTMLResponse(login_page("Email or password is incorrect."), status_code=401)
+    raw = create_session(user["id"])
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie("bc_session", raw, httponly=True, secure=os.environ.get("COOKIE_SECURE", "1") == "1", samesite="lax", max_age=2592000)
+    return response
+
+
+@app.get("/register", response_class=HTMLResponse)
+def register_get():
+    return '''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Create BuildCommand Account</title>
+    <style>body{margin:0;background:#0a1017;color:#eef4fb;font-family:Inter,system-ui,sans-serif;padding:28px}.box{max-width:520px;margin:4vh auto;background:#111923;border:1px solid #213042;border-radius:16px;padding:26px}input{width:100%;box-sizing:border-box;background:#0d1620;color:#eef4fb;border:1px solid #213042;border-radius:9px;padding:12px;margin:8px 0 16px}button{background:#f0b44d;border:0;border-radius:9px;padding:11px 16px;font-weight:800}a{color:#f0b44d}.muted{color:#8fa2b5}</style></head><body>
+    <div class="box"><div class="muted">BuildCommand AI</div><h1>Create Company Account</h1><form method="post" action="/register"><label>Company Name</label><input name="company_name" required><label>Your Name</label><input name="display_name" required><label>Email</label><input type="email" name="email" required><label>Password</label><input type="password" name="password" minlength="8" required><button type="submit">Create Account</button></form><p><a href="/login">Back to login</a></p></div></body></html>'''
+
+
+@app.post("/register")
+def register_post(company_name: str = Form(...), display_name: str = Form(...), email: str = Form(...), password: str = Form(...)):
+    if len(password) < 8:
+        return HTMLResponse("Password must be at least 8 characters.", status_code=400)
+    c = db()
+    if c.execute("SELECT id FROM users WHERE lower(email)=lower(?)", (email.strip(),)).fetchone():
+        c.close(); return HTMLResponse("That email is already registered.", status_code=400)
+    c.execute("INSERT INTO companies(name,created) VALUES(?,?)", (company_name.strip(), date.today().isoformat()))
+    company_id = c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    c.execute("INSERT INTO users(company_id,email,display_name,password_hash,role,created) VALUES(?,?,?,?,?,?)",
+              (company_id,email.strip().lower(),display_name.strip(),hash_password(password),"OWNER",date.today().isoformat()))
+    user_id = c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    c.execute("UPDATE projects SET company_id=? WHERE company_id IS NULL", (company_id,))
+    first_project = c.execute("SELECT id FROM projects WHERE company_id=? ORDER BY id LIMIT 1", (company_id,)).fetchone()
+    if first_project:
+        c.execute("INSERT OR REPLACE INTO user_state(user_id,selected_project_id) VALUES(?,?)", (user_id, first_project["id"]))
+    c.commit(); c.close()
+    raw = create_session(user_id)
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie("bc_session", raw, httponly=True, secure=os.environ.get("COOKIE_SECURE", "1") == "1", samesite="lax", max_age=2592000)
+    return response
+
+
+@app.post("/logout")
+def logout(request: Request):
+    raw = request.cookies.get("bc_session")
+    if raw:
+        token_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest(); c = db(); c.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,)); c.commit(); c.close()
+    response = RedirectResponse("/login", status_code=303); response.delete_cookie("bc_session"); return response
+
+
+@app.get("/health")
+def health():
+    return {"status":"ok","app":"BuildCommand AI","version":"26.0"}
+
 @app.get("/projects/new", response_class=HTMLResponse)
 def new_project_form():
     return """
@@ -373,28 +558,8 @@ def new_project_form():
 
 
 @app.post("/projects/new")
-def create_project(
-    name: str = Form(...),
-    number: str = Form(...),
-    status: str = Form(...)
-):
-    c = db()
-
-    c.execute(
-        """
-        INSERT INTO projects(name, number, status)
-        VALUES (?, ?, ?)
-        """,
-        (name, number, status)
-    )
-
-    c.commit()
-    c.close()
-
-    return RedirectResponse(
-        url="/",
-        status_code=303
-    )
+def create_project(name: str = Form(...), number: str = Form(...), status: str = Form(...)):
+    c=db(); c.execute("INSERT INTO projects(name,number,status,company_id) VALUES(?,?,?,?)",(name.strip(),number.strip(),status,current_company_id())); pid=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]; c.execute("INSERT OR REPLACE INTO user_state(user_id,selected_project_id) VALUES(?,?)",(current_user_id(),pid)); c.commit(); c.close(); return RedirectResponse(url="/",status_code=303)
 CSS="""
 :root{--bg:#0a1017;--panel:#111923;--line:#213042;--text:#eef4fb;--muted:#8fa2b5;--gold:#f0b44d}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
@@ -405,177 +570,51 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:850px){.app{grid-template-columns:1fr}.grid4,.grid3,.grid2{grid-template-columns:1fr}.main{padding:14px}}
 """
 
-NAV=[("Daily Command","/"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Project Settings","/project-settings")]
+NAV=[("Daily Command","/"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
 def shell(title, body):
     current_pid = project_id()
-
+    company_id = current_company_id()
+    user = current_user()
     c = db()
-
-    projects = c.execute(
-        "SELECT id,name,number,status FROM projects ORDER BY name"
-    ).fetchall()
-
-    current = c.execute(
-        "SELECT * FROM projects WHERE id=?",
-        (current_pid,)
-    ).fetchone()
-
+    projects = c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name", (company_id,)).fetchall()
+    current = c.execute("SELECT * FROM projects WHERE id=? AND company_id=?", (current_pid, company_id)).fetchone() if current_pid else None
     c.close()
-
-    nav = "".join(
-        f'<a href="{u}">{n}</a>'
-        for n, u in NAV
-    )
-
-    project_options = "".join(
-        f'''
-        <option value="{p["id"]}"
-            {"selected" if p["id"] == current_pid else ""}>
-            {esc(p["number"])} - {esc(p["name"])}
-        </option>
-        '''
-        for p in projects
-    )
-
-    current_name = (
-        esc(current["name"])
-        if current
-        else "No Project Selected"
-    )
-
-    selector = f'''
-    <div style="margin-bottom:20px;">
-
-        <div class="small" style="margin-bottom:6px;">
-            CURRENT PROJECT
-        </div>
-
-        <form method="post" action="/projects/select">
-
-            <select name="project_id"
-                    style="margin-bottom:8px;">
-                {project_options}
-            </select>
-
-            <button type="submit"
-                    style="width:100%;">
-                Switch Project
-            </button>
-
-        </form>
-
-        <div style="margin-top:10px;">
-            <a href="/projects/new"
-               style="color:#f0b44d;
-                      text-decoration:none;
-                      font-weight:700;">
-                + Add Project
-            </a>
-        </div>
-
-    </div>
-    '''
-
-    return f'''
-    <!doctype html>
-    <html>
-
-    <head>
-        <meta name="viewport"
-              content="width=device-width,initial-scale=1">
-
-        <title>{esc(title)}</title>
-
-        <style>
-            {CSS}
-        </style>
-    </head>
-
-    <body>
-
-        <div class="app">
-
-            <aside class="side">
-
-                <div class="brand">
-                    BuildCommand AI
-                </div>
-
-                <div class="company">
-                    Demo Construction Company<br>
-                    {current_name}
-                </div>
-
-                {selector}
-
-                <nav class="nav">
-                    {nav}
-                </nav>
-
-                <div class="creator-footer">
-                    Built by Wilson LaHood<br>
-                    © 2026 Wilson LaHood
-                </div>
-
-            </aside>
-
-            <main class="main">
-                {body}
-            </main>
-
-        </div>
-
-    </body>
-    </html>
-    '''
+    nav = "".join(f'<a href="{u}">{n}</a>' for n,u in NAV)
+    project_options = "".join(f'<option value="{p["id"]}" {"selected" if p["id"]==current_pid else ""}>{esc(p["number"])} - {esc(p["name"])}</option>' for p in projects)
+    current_name = esc(current["name"]) if current else "No Project Selected"
+    company_name = esc(user["company_name"]) if user else "BuildCommand Company"
+    display_name = esc(user["display_name"]) if user else ""
+    selector = f'''<div style="margin-bottom:20px;"><div class="small" style="margin-bottom:6px;">CURRENT PROJECT</div><form method="post" action="/projects/select"><select name="project_id" style="margin-bottom:8px;">{project_options}</select><button type="submit" style="width:100%;">Switch Project</button></form><div style="margin-top:10px;"><a href="/projects/new" style="color:#f0b44d;text-decoration:none;font-weight:700;">+ Add Project</a></div></div>'''
+    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · BuildCommand AI</title><style>{CSS}</style></head><body><div class="app"><aside class="side"><div class="brand">BuildCommand AI</div><div class="company">{company_name}<br>{current_name}</div>{selector}<nav class="nav">{nav}</nav><div class="creator-footer">{display_name}<br>Built by Wilson LaHood<br>© 2026 Wilson LaHood<form method="post" action="/logout" style="margin-top:10px;"><button type="submit" style="width:100%;">Sign Out</button></form></div></aside><main class="main">{body}</main></div></body></html>'''
 
 def project_id():
+    user_id = current_user_id(); company_id = current_company_id()
+    if not user_id or not company_id:
+        return None
     c = db()
-
-    r = c.execute(
-        "SELECT selected_project_id FROM app_state WHERE id=1"
-    ).fetchone()
-
-    if r and r["selected_project_id"]:
-        pid = r["selected_project_id"]
+    state = c.execute("""SELECT us.selected_project_id FROM user_state us JOIN projects p ON p.id=us.selected_project_id WHERE us.user_id=? AND p.company_id=?""", (user_id, company_id)).fetchone()
+    if state and state["selected_project_id"]:
+        pid = state["selected_project_id"]
     else:
-        first = c.execute(
-            "SELECT id FROM projects ORDER BY id LIMIT 1"
-        ).fetchone()
-        pid = first["id"]
-
-    c.close()
-    return pid
+        first = c.execute("SELECT id FROM projects WHERE company_id=? ORDER BY id LIMIT 1", (company_id,)).fetchone()
+        pid = first["id"] if first else None
+        if pid:
+            c.execute("INSERT OR REPLACE INTO user_state(user_id,selected_project_id) VALUES(?,?)", (user_id,pid)); c.commit()
+    c.close(); return pid
 
 
 @app.post("/projects/select")
 def select_project(project_id: int = Form(...)):
-    c = db()
-
-    exists = c.execute(
-        "SELECT id FROM projects WHERE id=?",
-        (project_id,)
-    ).fetchone()
-
+    company_id = current_company_id(); user_id = current_user_id(); c = db()
+    exists = c.execute("SELECT id FROM projects WHERE id=? AND company_id=?", (project_id, company_id)).fetchone()
     if exists:
-        c.execute(
-            """
-            INSERT INTO app_state(id, selected_project_id)
-            VALUES(1, ?)
-            ON CONFLICT(id)
-            DO UPDATE SET selected_project_id=excluded.selected_project_id
-            """,
-            (project_id,)
-        )
-        c.commit()
+        c.execute("INSERT OR REPLACE INTO user_state(user_id,selected_project_id) VALUES(?,?)", (user_id,project_id)); c.commit()
+    c.close(); return RedirectResponse("/", status_code=303)
 
-    c.close()
-
-    return RedirectResponse("/", status_code=303)
 @app.get("/",response_class=HTMLResponse)
 def home():
     pid = project_id()
@@ -2288,6 +2327,7 @@ def portfolio():
         """
         SELECT *
         FROM projects
+        WHERE company_id=?
         ORDER BY
             CASE status
                 WHEN 'ACTIVE' THEN 1
@@ -2297,7 +2337,8 @@ def portfolio():
                 ELSE 5
             END,
             name
-        """
+        """,
+        (current_company_id(),)
     ).fetchall()
 
     cards = []
@@ -8440,3 +8481,188 @@ def edit_meeting(
     c.close()
 
     return RedirectResponse(url="/meetings", status_code=303)
+
+
+def safe_filename(name):
+    base=os.path.basename(name or "upload"); cleaned="".join(ch for ch in base if ch.isalnum() or ch in "._- ")
+    return cleaned[:120] or "upload"
+
+
+def refresh_notifications(pid=None):
+    cid=current_company_id()
+    if not cid or not pid: return
+    c=db(); c.execute("DELETE FROM notifications WHERE company_id=? AND project_id=? AND source='AUTO'",(cid,pid)); today=date.today().isoformat()
+    def add(sev,title,detail):
+        c.execute("INSERT INTO notifications(company_id,project_id,severity,title,detail,source,status,created) VALUES(?,?,?,?,?,'AUTO','UNREAD',?)",(cid,pid,sev,title,detail,datetime.utcnow().isoformat()))
+    for r in c.execute("SELECT * FROM action_items WHERE project_id=? AND status='OPEN' AND due!='' AND due<?",(pid,today)).fetchall(): add(r["priority"] or "HIGH",f'Overdue action: {r["title"]}',f'Owner: {r["owner"] or "Unassigned"} · Due {r["due"]}')
+    for r in c.execute("SELECT * FROM procurement WHERE project_id=? AND status!='DELIVERED' AND promised_date!='' AND required_on_site!='' AND promised_date>required_on_site",(pid,)).fetchall(): add("CRITICAL",f'Late procurement: {r["item"]}',f'Promised {r["promised_date"]}; required {r["required_on_site"]}')
+    for r in c.execute("SELECT * FROM inspections_tracker WHERE project_id=? AND result='FAILED'",(pid,)).fetchall(): add("CRITICAL",f'Failed inspection: {r["inspection_type"]}',r["notes"] or "Correction/reinspection required.")
+    for r in c.execute("SELECT * FROM submittals WHERE project_id=? AND status='REJECTED'",(pid,)).fetchall(): add("HIGH",f'Rejected submittal: {r["title"]}',r["notes"] or "Revise and resubmit.")
+    for r in c.execute("SELECT * FROM safety_items WHERE project_id=? AND status!='CLOSED' AND severity='CRITICAL'",(pid,)).fetchall(): add("CRITICAL",f'Safety: {r["title"]}',r["description"] or "Critical safety item is open.")
+    c.commit(); c.close()
+
+
+@app.get("/notifications",response_class=HTMLResponse)
+def notifications_page():
+    pid=project_id(); refresh_notifications(pid); c=db(); rows=c.execute("SELECT * FROM notifications WHERE company_id=? AND (project_id=? OR project_id IS NULL) ORDER BY CASE severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'WATCH' THEN 3 ELSE 4 END,id DESC LIMIT 100",(current_company_id(),pid)).fetchall(); c.close()
+    cards="".join(f'<div class="card"><span class="badge {r["severity"] if r["severity"] in ["CRITICAL","HIGH","WATCH","LOW","READY"] else "OPEN"}">{esc(r["severity"])}</span><h3>{esc(r["title"])}</h3><p>{esc(r["detail"])}</p><div class="small">{esc(r["created"])}</div></div>' for r in rows) or '<div class="card"><div class="muted">No active notifications.</div></div>'
+    return shell("Notifications",f'<div class="hero"><div class="eyebrow">Notifications</div><h1>What needs your attention?</h1></div><div class="card"><form method="post" action="/notifications/email-digest"><button type="submit">Email My Alert Digest</button></form><div class="small">Requires SMTP settings in Render.</div></div><div class="grid2">{cards}</div>')
+
+
+@app.get("/documents",response_class=HTMLResponse)
+def documents_page():
+    pid=project_id(); c=db(); rows=c.execute("SELECT a.*,u.display_name FROM attachments a LEFT JOIN users u ON u.id=a.created_by WHERE a.company_id=? AND a.project_id=? ORDER BY a.id DESC",(current_company_id(),pid)).fetchall(); c.close()
+    files_html="".join(f'<div class="card"><span class="badge OPEN">{esc(r["category"])}</span><h3>{esc(r["title"] or r["original_name"])}</h3><div class="small">{esc(r["original_name"])} · {(r["size_bytes"] or 0)/1024:.0f} KB</div><p><a href="/documents/{r["id"]}/download" style="color:#f0b44d;font-weight:700;">Download</a></p></div>' for r in rows) or '<div class="card"><div class="muted">No project documents uploaded yet.</div></div>'
+    body=f'''<div class="hero"><div class="eyebrow">Document & Photo Center</div><h1>Keep field evidence with the project.</h1><div class="muted">Set UPLOAD_DIR to a Render persistent-disk path for durable storage.</div></div><div class="grid2"><div class="card"><h2>Upload</h2><form method="post" action="/documents/upload" enctype="multipart/form-data"><label>Category</label><select name="category"><option>PHOTO</option><option>DAILY_REPORT</option><option>RFI</option><option>PUNCH</option><option>SAFETY</option><option>SUBMITTAL</option><option>OTHER</option></select><label>Title</label><input name="title"><label>File</label><input type="file" name="file" required><button type="submit">Upload File</button></form></div><div class="card"><h2>Upload Rules</h2><p>Maximum 10 MB. PDF, image, Office, CSV, and text files are accepted.</p></div></div><div class="grid2">{files_html}</div>'''
+    return shell("Documents",body)
+
+
+@app.post("/documents/upload")
+async def documents_upload(category:str=Form("OTHER"),title:str=Form(""),file:UploadFile=File(...)):
+    pid=project_id(); original=safe_filename(file.filename); ext=Path(original).suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS: return HTMLResponse("File type not allowed.",status_code=400)
+    data=await file.read()
+    if len(data)>MAX_UPLOAD_BYTES: return HTMLResponse("File exceeds the 10 MB limit.",status_code=400)
+    stored=f"{secrets.token_hex(12)}{ext}"; path=os.path.join(UPLOAD_DIR,stored)
+    with open(path,"wb") as f: f.write(data)
+    c=db(); c.execute("INSERT INTO attachments(company_id,project_id,category,title,original_name,stored_name,mime_type,size_bytes,created_by,created) VALUES(?,?,?,?,?,?,?,?,?,?)",(current_company_id(),pid,category,title.strip(),original,stored,file.content_type or mimetypes.guess_type(original)[0] or "application/octet-stream",len(data),current_user_id(),datetime.utcnow().isoformat())); c.commit(); c.close()
+    return RedirectResponse("/documents",status_code=303)
+
+
+@app.get("/documents/{attachment_id}/download")
+def document_download(attachment_id:int):
+    c=db(); row=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=?",(attachment_id,current_company_id())).fetchone(); c.close()
+    if not row: return HTMLResponse("File not found.",status_code=404)
+    path=os.path.join(UPLOAD_DIR,row["stored_name"])
+    if not os.path.isfile(path): return HTMLResponse("Stored file is unavailable. Configure persistent storage.",status_code=404)
+    return FileResponse(path,media_type=row["mime_type"] or "application/octet-stream",filename=row["original_name"])
+
+
+@app.get("/morning-brief",response_class=HTMLResponse)
+def morning_brief_page():
+    pid=project_id(); c=db(); row=c.execute("SELECT * FROM morning_briefs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1",(current_company_id(),pid)).fetchone(); c.close(); brief=esc(row["brief_text"]).replace("\n","<br>") if row else "No AI morning brief has been generated yet."
+    return shell("Morning Brief",f'<div class="hero"><div class="eyebrow">Proactive AI</div><h1>Morning Superintendent Brief</h1></div><div class="card"><form method="post" action="/morning-brief/generate"><button type="submit">Generate Current Brief</button></form></div><div class="card"><div style="line-height:1.65;">{brief}</div></div>')
+
+
+@app.post("/morning-brief/generate")
+def generate_morning_brief():
+    pid=project_id(); api_key=os.environ.get("OPENAI_API_KEY"); context=build_project_context(pid)
+    if api_key and OpenAI is not None:
+        try:
+            client=OpenAI(api_key=api_key); response=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),instructions="You are BuildCommand AI, a construction superintendent morning-command copilot. Use only supplied project facts. Return: HANDLE FIRST, SCHEDULE THREATS, WHO OWES WHAT, TODAY'S VERIFICATIONS, COST / CHANGE EXPOSURE, SAFETY / QUALITY. Do not invent facts.",input=context); brief=response.output_text
+        except Exception as exc: brief=f"AI brief failed: {exc}"
+    else: brief="OPENAI_API_KEY is not configured. The rule-based Daily Command dashboard remains available."
+    c=db(); c.execute("INSERT INTO morning_briefs(company_id,project_id,brief_date,brief_text,created) VALUES(?,?,?,?,?)",(current_company_id(),pid,date.today().isoformat(),brief,datetime.utcnow().isoformat())); c.commit(); c.close(); return RedirectResponse("/morning-brief",status_code=303)
+
+
+@app.get("/team",response_class=HTMLResponse)
+def team_page():
+    user=current_user(); c=db(); rows=c.execute("SELECT * FROM users WHERE company_id=? ORDER BY display_name,email",(current_company_id(),)).fetchall(); c.close(); members="".join(f'<div class="action"><b>{esc(r["display_name"] or r["email"])}</b><div class="small">{esc(r["email"])} · {esc(r["role"])}</div></div>' for r in rows)
+    add=''
+    if user and user["role"] in ["OWNER","ADMIN"]: add='''<div class="card"><h2>Add Team Member</h2><form method="post" action="/team/add"><label>Name</label><input name="display_name" required><label>Email</label><input type="email" name="email" required><label>Temporary Password</label><input type="password" name="password" minlength="8" required><label>Role</label><select name="role"><option>MEMBER</option><option>ADMIN</option></select><button type="submit">Create User</button></form></div>'''
+    return shell("Team",f'<div class="hero"><div class="eyebrow">Accounts</div><h1>Company Team</h1></div><div class="grid2"><div class="card"><h2>Users</h2>{members}</div>{add}</div>')
+
+
+@app.post("/team/add")
+def add_team_member(display_name:str=Form(...),email:str=Form(...),password:str=Form(...),role:str=Form("MEMBER")):
+    user=current_user()
+    if not user or user["role"] not in ["OWNER","ADMIN"]: return HTMLResponse("Not authorized.",status_code=403)
+    if role not in ["MEMBER","ADMIN"]: role="MEMBER"
+    c=db()
+    if c.execute("SELECT id FROM users WHERE lower(email)=lower(?)",(email.strip(),)).fetchone(): c.close(); return HTMLResponse("That email is already in use.",status_code=400)
+    c.execute("INSERT INTO users(company_id,email,display_name,password_hash,role,created) VALUES(?,?,?,?,?,?)",(current_company_id(),email.strip().lower(),display_name.strip(),hash_password(password),role,date.today().isoformat())); c.commit(); c.close(); return RedirectResponse("/team",status_code=303)
+
+
+@app.get("/company-settings",response_class=HTMLResponse)
+def company_settings():
+    u=current_user(); return shell("Company Settings",f'''<div class="hero"><div class="eyebrow">Branding</div><h1>Company Settings</h1></div><div class="card" style="max-width:720px;"><form method="post" action="/company-settings"><label>Company Name</label><input name="name" value="{esc(u["company_name"] if u else "")}" required><label>Logo URL (optional)</label><input name="logo_url" value="{esc(u["logo_url"] if u else "")}"><button type="submit">Save Company Settings</button></form></div>''')
+
+
+@app.post("/company-settings")
+def company_settings_save(name:str=Form(...),logo_url:str=Form("")):
+    u=current_user()
+    if not u or u["role"] not in ["OWNER","ADMIN"]: return HTMLResponse("Not authorized.",status_code=403)
+    c=db(); c.execute("UPDATE companies SET name=?,logo_url=? WHERE id=?",(name.strip(),logo_url.strip(),current_company_id())); c.commit(); c.close(); return RedirectResponse("/company-settings",status_code=303)
+
+
+@app.get("/exports",response_class=HTMLResponse)
+def exports_page():
+    return shell("Exports",'''<div class="hero"><div class="eyebrow">Reports & Exports</div><h1>Take BuildCommand data with you.</h1></div><div class="grid2"><div class="card"><h2>Project CSV</h2><a href="/exports/project.csv" style="color:#f0b44d;font-weight:700;">Download CSV</a></div><div class="card"><h2>Project JSON</h2><a href="/exports/project.json" style="color:#f0b44d;font-weight:700;">Download JSON</a></div><div class="card"><h2>Latest Daily Report PDF</h2><a href="/exports/daily-report.pdf" style="color:#f0b44d;font-weight:700;">Download PDF</a></div><div class="card"><h2>Backup</h2><a href="/backup/download" style="color:#f0b44d;font-weight:700;">Download Backup ZIP</a></div></div>''')
+
+
+@app.get("/exports/project.csv")
+def export_project_csv():
+    pid=project_id(); c=db(); project=c.execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone(); risks=c.execute("SELECT * FROM risks WHERE project_id=? ORDER BY score DESC",(pid,)).fetchall(); actions=c.execute("SELECT * FROM action_items WHERE project_id=? ORDER BY due",(pid,)).fetchall(); c.close(); out=io.StringIO(); w=csv.writer(out); w.writerow(["BuildCommand AI Project Export"]); w.writerow(["Project",project["number"] if project else "",project["name"] if project else ""]); w.writerow([]); w.writerow(["RISKS"]); w.writerow(["Score","Band","Explanation"]); [w.writerow([r["score"],r["band"],r["explanation"]]) for r in risks]; w.writerow([]); w.writerow(["ACTIONS"]); w.writerow(["Title","Owner","Priority","Due","Status","Notes"]); [w.writerow([r["title"],r["owner"],r["priority"],r["due"],r["status"],r["notes"]]) for r in actions]; return Response(out.getvalue(),media_type="text/csv",headers={"Content-Disposition":'attachment; filename="buildcommand_project.csv"'})
+
+
+@app.get("/exports/project.json")
+def export_project_json():
+    pid=project_id(); c=db(); project=c.execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone(); tables=["activities","risks","make_ready","action_items","project_issues","punch_items","inspections_tracker","submittals","safety_items","change_events","meeting_notes","procurement","production","daily_reports","subs","subcontractor_updates"]; payload={"project":dict(project) if project else None}; [payload.__setitem__(t,[dict(r) for r in c.execute(f"SELECT * FROM {t} WHERE project_id=?",(pid,)).fetchall()]) for t in tables]; c.close(); return Response(json.dumps(payload,indent=2,default=str),media_type="application/json",headers={"Content-Disposition":'attachment; filename="buildcommand_project.json"'})
+
+
+@app.get("/exports/daily-report.pdf")
+def export_daily_report_pdf():
+    pid=project_id(); c=db(); project=c.execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone(); report=c.execute("SELECT * FROM daily_reports WHERE project_id=? ORDER BY report_date DESC,id DESC LIMIT 1",(pid,)).fetchone(); c.close()
+    if not report: return HTMLResponse("No daily report is available to export.",status_code=404)
+    if canvas is None: return HTMLResponse("PDF support is not installed. Ensure reportlab is in requirements.txt.",status_code=503)
+    buffer=io.BytesIO(); pdf=canvas.Canvas(buffer); y=742; pdf.setFont("Helvetica-Bold",16); pdf.drawString(45,y,"BuildCommand AI - Daily Superintendent Report"); y-=24; pdf.setFont("Helvetica",10); pdf.drawString(45,y,f'{project["number"]} - {project["name"]}'); y-=18; pdf.drawString(45,y,f'Date: {report["report_date"]}   Manpower: {report["manpower"] or 0}'); y-=26
+    for label,value in [("Weather",report["weather"]),("Work Completed",report["work_completed"]),("Delays / Constraints",report["delays"]),("Deliveries",report["deliveries"]),("Inspections",report["inspections"]),("Safety",report["safety"]),("Tomorrow's Plan",report["tomorrow_plan"])]:
+        pdf.setFont("Helvetica-Bold",10); pdf.drawString(45,y,label); y-=14; pdf.setFont("Helvetica",9); words=str(value or "—").split(); line=""
+        for word in words:
+            test=(line+" "+word).strip()
+            if pdf.stringWidth(test,"Helvetica",9)>510: pdf.drawString(55,y,line); y-=12; line=word
+            else: line=test
+            if y<60: pdf.showPage(); y=742
+        if line: pdf.drawString(55,y,line); y-=12
+        y-=10
+    pdf.setFont("Helvetica",8); pdf.drawString(45,30,"Built by Wilson LaHood · © 2026 Wilson LaHood"); pdf.save(); buffer.seek(0); return Response(buffer.getvalue(),media_type="application/pdf",headers={"Content-Disposition":'attachment; filename="buildcommand_daily_report.pdf"'})
+
+
+@app.get("/backup/download")
+def backup_download():
+    stamp=datetime.utcnow().strftime("%Y%m%d_%H%M%S"); tmp=f"/tmp/bc_{secrets.token_hex(5)}"; os.makedirs(tmp,exist_ok=True); dbcopy=os.path.join(tmp,"buildcommand.db"); s=sqlite3.connect(DB); t=sqlite3.connect(dbcopy); s.backup(t); t.close(); s.close(); zpath=f"/tmp/buildcommand_backup_{stamp}.zip"
+    with zipfile.ZipFile(zpath,"w",zipfile.ZIP_DEFLATED) as z:
+        z.write(dbcopy,arcname="buildcommand.db"); c=db(); files=c.execute("SELECT * FROM attachments WHERE company_id=?",(current_company_id(),)).fetchall(); c.close()
+        for r in files:
+            p=os.path.join(UPLOAD_DIR,r["stored_name"])
+            if os.path.isfile(p): z.write(p,arcname=f'uploads/{r["stored_name"]}')
+    return FileResponse(zpath,media_type="application/zip",filename=f"buildcommand_backup_{stamp}.zip")
+
+
+@app.get("/system-check",response_class=HTMLResponse)
+def system_check():
+    checks=[]
+    try:
+        c=db(); tables=["projects","activities","subs","subcontractor_updates","daily_reports","risks","make_ready","action_items","project_issues","punch_items","inspections_tracker","submittals","safety_items","change_events","meeting_notes","procurement","attachments","users","companies"]
+        for t in tables: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()
+        c.close(); checks.append(("READY","Database schema","Core tables respond successfully."))
+    except Exception as exc: checks.append(("CRITICAL","Database schema",str(exc)))
+    checks.append(("READY" if os.environ.get("OPENAI_API_KEY") else "WATCH","OpenAI connection","OPENAI_API_KEY is configured." if os.environ.get("OPENAI_API_KEY") else "AI key is not configured.")); checks.append(("READY" if os.path.isdir(UPLOAD_DIR) and os.access(UPLOAD_DIR,os.W_OK) else "CRITICAL","Upload storage",f"Upload path: {UPLOAD_DIR}")); checks.append(("WATCH","Database engine","Current engine is SQLite. Company isolation, backups, and migration-readiness are now in code; PostgreSQL should be migrated deliberately after a staging test.")); checks.append(("READY" if os.environ.get("UPLOAD_DIR") else "WATCH","Persistent files","UPLOAD_DIR is explicitly configured." if os.environ.get("UPLOAD_DIR") else "Set UPLOAD_DIR to a Render persistent-disk path for durable files.")); html="".join(f'<div class="card"><span class="badge {b}">{b}</span><h3>{esc(t)}</h3><p>{esc(d)}</p></div>' for b,t,d in checks); return shell("System Check",f'<div class="hero"><div class="eyebrow">Stability</div><h1>BuildCommand System Check</h1></div><div class="grid2">{html}</div>')
+
+
+@app.get("/beta-feedback",response_class=HTMLResponse)
+def beta_feedback_page():
+    c=db(); rows=c.execute("SELECT b.*,u.display_name FROM beta_feedback b LEFT JOIN users u ON u.id=b.user_id WHERE b.company_id=? ORDER BY b.id DESC LIMIT 20",(current_company_id(),)).fetchall(); c.close(); recent="".join(f'<div class="action"><b>{esc(r["category"])}</b> · {r["rating"]}/5<div>{esc(r["feedback"])}</div><div class="small">{esc(r["display_name"] or "")} · {esc(r["created"])}</div></div>' for r in rows) or '<div class="muted">No beta feedback yet.</div>'; return shell("Beta Feedback",f'''<div class="hero"><div class="eyebrow">Beta Program</div><h1>What should BuildCommand improve next?</h1></div><div class="grid2"><div class="card"><form method="post" action="/beta-feedback"><label>Rating</label><select name="rating"><option value="5">5 - Excellent</option><option value="4">4</option><option value="3">3</option><option value="2">2</option><option value="1">1 - Poor</option></select><label>Category</label><select name="category"><option>FIELD_WORKFLOW</option><option>AI</option><option>SCHEDULE</option><option>MOBILE</option><option>REPORTING</option><option>BUG</option><option>OTHER</option></select><label>Feedback</label><textarea name="feedback" required></textarea><button type="submit">Save Feedback</button></form></div><div class="card"><h2>Recent Feedback</h2>{recent}</div></div>''')
+
+
+@app.post("/beta-feedback")
+def beta_feedback_save(rating:int=Form(...),category:str=Form(...),feedback:str=Form(...)):
+    c=db(); c.execute("INSERT INTO beta_feedback(company_id,user_id,project_id,rating,category,feedback,created) VALUES(?,?,?,?,?,?,?)",(current_company_id(),current_user_id(),project_id(),max(1,min(5,rating)),category,feedback.strip(),datetime.utcnow().isoformat())); c.commit(); c.close(); return RedirectResponse("/beta-feedback",status_code=303)
+
+
+@app.post("/notifications/email-digest")
+def notifications_email_digest():
+    import smtplib
+    from email.message import EmailMessage
+    user=current_user(); pid=project_id(); refresh_notifications(pid)
+    host=os.environ.get("SMTP_HOST"); sender=os.environ.get("SMTP_FROM"); smtp_user=os.environ.get("SMTP_USER"); smtp_password=os.environ.get("SMTP_PASSWORD"); port=int(os.environ.get("SMTP_PORT","587"))
+    if not host or not sender:
+        return HTMLResponse(shell("Notifications",'<div class="card"><h2>Email alerts need setup</h2><p>Add SMTP_HOST and SMTP_FROM in Render. If your mail provider requires login, also add SMTP_USER and SMTP_PASSWORD.</p><p><a href="/notifications">Back to Notifications</a></p></div>'),status_code=503)
+    c=db(); rows=c.execute("SELECT * FROM notifications WHERE company_id=? AND project_id=? ORDER BY CASE severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'WATCH' THEN 3 ELSE 4 END,id DESC LIMIT 30",(current_company_id(),pid)).fetchall(); c.close()
+    lines=[f'{r["severity"]}: {r["title"]} — {r["detail"]}' for r in rows]
+    msg=EmailMessage(); msg["Subject"]="BuildCommand AI Alert Digest"; msg["From"]=sender; msg["To"]=user["email"]; msg.set_content("\n".join(lines) or "No active BuildCommand alerts.")
+    with smtplib.SMTP(host,port,timeout=15) as smtp:
+        smtp.starttls()
+        if smtp_user: smtp.login(smtp_user,smtp_password or "")
+        smtp.send_message(msg)
+    return RedirectResponse("/notifications",status_code=303)
