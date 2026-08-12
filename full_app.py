@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 import sqlite3
+import os
 from datetime import date
+from openai import OpenAI
 
 app=FastAPI(title="BuildCommand AI",version="9.0")
 DB="construction_ai_web.db"
@@ -241,7 +243,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:850px){.app{grid-template-columns:1fr}.grid4,.grid3,.grid2{grid-template-columns:1fr}.main{padding:14px}}
 """
 
-NAV=[("Daily Command","/"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
+NAV=[("Daily Command","/"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -1145,3 +1147,280 @@ def ai_analysis():
     """
 
     return shell("AI Analysis", body)
+
+
+def build_project_context(pid):
+    c = db()
+
+    project = c.execute(
+        "SELECT * FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+
+    activities = c.execute(
+        "SELECT * FROM activities WHERE project_id=? ORDER BY start",
+        (pid,)
+    ).fetchall()
+
+    risks = c.execute(
+        """
+        SELECT r.*, a.external_id, a.name activity
+        FROM risks r
+        JOIN activities a ON a.id=r.activity_id
+        WHERE r.project_id=?
+        ORDER BY r.score DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    make_ready_items = c.execute(
+        """
+        SELECT m.*, a.external_id, a.name activity
+        FROM make_ready m
+        JOIN activities a ON a.id=m.activity_id
+        WHERE m.project_id=? AND m.status='OPEN'
+        ORDER BY due
+        """,
+        (pid,)
+    ).fetchall()
+
+    reports = c.execute(
+        """
+        SELECT *
+        FROM daily_reports
+        WHERE project_id=?
+        ORDER BY report_date DESC, id DESC
+        LIMIT 5
+        """,
+        (pid,)
+    ).fetchall()
+
+    subs = c.execute(
+        "SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    lines = []
+
+    if project:
+        lines.append(
+            f'PROJECT: {project["number"]} - {project["name"]} | Status: {project["status"]}'
+        )
+
+    lines.append("\nSCHEDULE ACTIVITIES:")
+    for a in activities:
+        lines.append(
+            f'- {a["external_id"]}: {a["name"]} | Trade: {a["trade"]} | '
+            f'{a["start"]} to {a["finish"]} | {a["pct"]:.0f}% | {a["status"]}'
+        )
+
+    lines.append("\nRISKS:")
+    for r in risks:
+        lines.append(
+            f'- {r["band"]} {r["score"]:.0f}/100 | {r["external_id"]} {r["activity"]}: '
+            f'{r["explanation"]}'
+        )
+
+    lines.append("\nOPEN MAKE-READY ITEMS:")
+    for m in make_ready_items:
+        lines.append(
+            f'- {m["priority"]} | {m["external_id"]} {m["activity"]} | '
+            f'{m["title"]} | Reason: {m["reason"]} | Due: {m["due"]}'
+        )
+
+    lines.append("\nSUBCONTRACTORS:")
+    for s in subs:
+        lines.append(f'- {s["name"]} | Trade: {s["trade"]}')
+
+    lines.append("\nRECENT DAILY REPORTS:")
+    for r in reports:
+        lines.append(
+            f'- Date: {r["report_date"]} | Weather: {r["weather"] or "N/A"} | '
+            f'Manpower: {r["manpower"] or 0}\n'
+            f'  Work completed: {r["work_completed"] or "N/A"}\n'
+            f'  Delays: {r["delays"] or "N/A"}\n'
+            f'  Deliveries: {r["deliveries"] or "N/A"}\n'
+            f'  Inspections: {r["inspections"] or "N/A"}\n'
+            f'  Safety: {r["safety"] or "N/A"}\n'
+            f'  Tomorrow plan: {r["tomorrow_plan"] or "N/A"}'
+        )
+
+    return "\n".join(lines)
+
+
+@app.get("/assistant", response_class=HTMLResponse)
+def assistant_page():
+    pid = project_id()
+    c = db()
+    project = c.execute(
+        "SELECT name,number FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+    c.close()
+
+    project_label = "Current Project"
+    if project:
+        project_label = f'{esc(project["number"])} - {esc(project["name"])}'
+
+    api_ready = bool(os.environ.get("OPENAI_API_KEY"))
+
+    status_html = (
+        '<span class="badge READY">AI CONNECTED</span>'
+        if api_ready
+        else '<span class="badge HIGH">API KEY NEEDED</span>'
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">BuildCommand AI Copilot</div>
+        <h1>Ask the project.</h1>
+        <div class="muted">{project_label}</div>
+        <div style="margin-top:10px;">{status_html}</div>
+    </div>
+
+    <div class="grid2">
+        <div class="card">
+            <h2>Ask BuildCommand</h2>
+
+            <form method="post" action="/assistant">
+                <label>Your Question</label>
+                <textarea
+                    name="question"
+                    placeholder="Example: What should I worry about today?"
+                    required
+                ></textarea>
+
+                <button type="submit">Analyze Project</button>
+            </form>
+
+            <div class="small" style="margin-top:14px;">
+                Try: What should I handle first? Which activity could delay us?
+                What should I ask the MEP subcontractor? What should tomorrow's plan include?
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>How it works</h2>
+            <p>
+                BuildCommand sends the selected project's schedule, risks, open make-ready items,
+                subcontractors, and recent daily reports to the AI with your question.
+            </p>
+            <p class="small">
+                The AI is instructed to stay grounded in project data and clearly identify when
+                information is missing instead of inventing jobsite facts.
+            </p>
+        </div>
+    </div>
+    """
+
+    return shell("AI Assistant", body)
+
+
+@app.post("/assistant", response_class=HTMLResponse)
+def assistant_answer(question: str = Form(...)):
+    pid = project_id()
+
+    c = db()
+    project = c.execute(
+        "SELECT name,number FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+    c.close()
+
+    project_label = "Current Project"
+    if project:
+        project_label = f'{esc(project["number"])} - {esc(project["name"])}'
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+
+    if not api_key:
+        answer = """
+        OPENAI_API_KEY is not configured yet.
+
+        Add the key in Render under your service's Environment settings,
+        then redeploy the service. Do not paste the API key into full_app.py.
+        """
+    else:
+        context = build_project_context(pid)
+
+        instructions = """
+You are BuildCommand AI, a construction superintendent and project-execution copilot.
+
+Use only the project information supplied in the prompt as job-specific facts.
+Do not invent schedule status, subcontractor commitments, inspections, deliveries,
+manpower, safety conditions, or field progress.
+
+Prioritize:
+1. immediate field risk,
+2. schedule impact,
+3. make-ready constraints,
+4. inspections and deliveries,
+5. subcontractor follow-up,
+6. practical next actions.
+
+When useful, structure the answer as:
+- Handle first
+- Why it matters
+- Who to follow up with
+- Next action
+
+Keep answers concise, practical, and written for a working superintendent.
+If the project data is insufficient, clearly say what information is missing.
+"""
+
+        user_input = f"""
+PROJECT DATA
+------------
+{context}
+
+SUPERINTENDENT QUESTION
+-----------------------
+{question}
+"""
+
+        try:
+            client = OpenAI(api_key=api_key)
+            response = client.responses.create(
+                model="gpt-5.6",
+                instructions=instructions,
+                input=user_input
+            )
+            answer = response.output_text
+        except Exception as exc:
+            answer = (
+                "BuildCommand could not reach the AI service. "
+                f"Error: {str(exc)}"
+            )
+
+    answer_html = esc(answer).replace("\n", "<br>")
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">BuildCommand AI Copilot</div>
+        <h1>Project Answer</h1>
+        <div class="muted">{project_label}</div>
+    </div>
+
+    <div class="grid2">
+        <div class="card">
+            <div class="small">YOUR QUESTION</div>
+            <h3>{esc(question)}</h3>
+
+            <a href="/assistant"
+               style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                ← Ask another question
+            </a>
+        </div>
+
+        <div class="card">
+            <div class="small">BUILDCOMMAND AI</div>
+            <div style="margin-top:12px;line-height:1.65;">
+                {answer_html}
+            </div>
+        </div>
+    </div>
+    """
+
+    return shell("AI Assistant", body)
