@@ -3,7 +3,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 import sqlite3
 from datetime import date
 
-app=FastAPI(title="Construction AI",version="8.3")
+app=FastAPI(title="BuildCommand AI",version="9.0")
 DB="construction_ai_web.db"
 
 def db():
@@ -219,7 +219,7 @@ def create_project(
 CSS="""
 :root{--bg:#0a1017;--panel:#111923;--line:#213042;--text:#eef4fb;--muted:#8fa2b5;--gold:#f0b44d}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
-.app{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.side{background:#0c141d;border-right:1px solid var(--line);padding:22px 16px}.brand{font-size:20px;font-weight:800}.company{font-size:12px;color:var(--muted);margin:5px 0 20px}.nav a{display:block;color:#cbd7e3;text-decoration:none;padding:10px;border-radius:9px;margin:2px 0}.nav a:hover{background:#162333}.main{padding:26px;max-width:1400px}
+.app{display:grid;grid-template-columns:260px 1fr;min-height:100vh}.side{background:#0c141d;border-right:1px solid var(--line);padding:22px 16px}.brand{font-size:20px;font-weight:800}.company{font-size:12px;color:var(--muted);margin:5px 0 20px}.nav a{display:block;color:#cbd7e3;text-decoration:none;padding:10px;border-radius:9px;margin:2px 0}.nav a:hover{background:#162333}.creator-footer{margin-top:24px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1.6}.main{padding:26px;max-width:1400px}
 .hero,.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:12px}.hero h1{margin:4px 0}.eyebrow{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:.13em}.muted,.small{color:var(--muted)}.small{font-size:12px}
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.kpi{font-size:28px;font-weight:800}.label{font-size:11px;color:var(--muted);text-transform:uppercase}.badge{display:inline-block;padding:4px 8px;border-radius:999px;font-weight:800;font-size:10px}.CRITICAL,.HOLD{background:#492324;color:#ff9b9b}.HIGH,.WATCH{background:#43381b;color:#ffd779}.READY,.LOW,.COMPLETE{background:#18392c;color:#82e4b5}.OPEN{background:#1d2e44;color:#99c9ff}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line);font-size:13px}th{color:var(--muted)}input,textarea,select{width:100%;background:#0d1620;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px}textarea{min-height:90px}button{background:var(--gold);border:0;border-radius:9px;padding:10px 14px;font-weight:800}.action{padding:12px 0;border-bottom:1px solid var(--line)}
@@ -541,3 +541,78 @@ def portfolio():
     crit=sum(r["band"]=="CRITICAL" for r in risks); high=sum(r["band"]=="HIGH" for r in risks); score=min(100,crit*30+high*15+mr*5)
     body=f'<div class="hero"><div class="eyebrow">Executive Intelligence</div><h1>Which projects need intervention?</h1></div><div class="card"><h2>{esc(p["number"])} - {esc(p["name"])}</h2><div class="grid4"><div><div class="label">Attention</div><div class="kpi">{score}</div></div><div><div class="label">Critical</div><div class="kpi">{crit}</div></div><div><div class="label">High</div><div class="kpi">{high}</div></div><div><div class="label">Make Ready</div><div class="kpi">{mr}</div></div></div><p>The executive view rolls field risk upward without hiding the reasons.</p></div>'
     return shell("Portfolio",body)
+
+@app.get("/activities/new", response_class=HTMLResponse)
+def new_activity_form():
+    pid = project_id()
+    c = db()
+    project = c.execute("SELECT name,number FROM projects WHERE id=?", (pid,)).fetchone()
+    c.close()
+
+    project_label = "Current Project"
+    if project:
+        project_label = f'{esc(project["number"])} - {esc(project["name"])}'
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Schedule</div>
+        <h1>Add Activity</h1>
+        <div class="muted">Add a schedule activity to {project_label}.</div>
+    </div>
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/activities/new">
+            <div class="grid2">
+                <div><label>Activity ID</label><input type="text" name="external_id" placeholder="Example: A600" required></div>
+                <div><label>Trade</label><input type="text" name="trade" placeholder="Example: Electrical" required></div>
+            </div>
+            <label>Activity Name</label>
+            <input type="text" name="name" placeholder="Example: Electrical Rough-In" required>
+            <div class="grid2">
+                <div><label>Start Date</label><input type="date" name="start" required></div>
+                <div><label>Finish Date</label><input type="date" name="finish" required></div>
+            </div>
+            <div class="grid2">
+                <div><label>Percent Complete</label><input type="number" name="pct" min="0" max="100" step="1" value="0" required></div>
+                <div>
+                    <label>Status</label>
+                    <select name="status">
+                        <option value="NOT_STARTED">Not Started</option>
+                        <option value="IN_PROGRESS">In Progress</option>
+                        <option value="COMPLETE">Complete</option>
+                        <option value="HOLD">Hold</option>
+                    </select>
+                </div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Activity</button>
+                <a href="/schedule" style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">Cancel</a>
+            </div>
+        </form>
+    </div>
+    """
+    return shell("Add Activity", body)
+
+
+@app.post("/activities/new")
+def create_activity(
+    external_id: str = Form(...),
+    name: str = Form(...),
+    trade: str = Form(...),
+    start: str = Form(...),
+    finish: str = Form(...),
+    pct: float = Form(0),
+    status: str = Form("NOT_STARTED")
+):
+    pid = project_id()
+    pct = max(0.0, min(100.0, pct))
+    c = db()
+    c.execute(
+        """
+        INSERT INTO activities(project_id,external_id,name,trade,start,finish,pct,status)
+        VALUES(?,?,?,?,?,?,?,?)
+        """,
+        (pid, external_id.strip(), name.strip(), trade.strip(), start, finish, pct, status)
+    )
+    c.commit()
+    c.close()
+    return RedirectResponse(url="/schedule", status_code=303)
