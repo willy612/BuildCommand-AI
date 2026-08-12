@@ -323,7 +323,7 @@ def shell(title, body):
             <aside class="side">
 
                 <div class="brand">
-                    Construction AI
+                    BuildCommand AI
                 </div>
 
                 <div class="company">
@@ -336,6 +336,11 @@ def shell(title, body):
                 <nav class="nav">
                     {nav}
                 </nav>
+
+                <div class="creator-footer">
+                    Built by Wilson LaHood<br>
+                    © 2026 Wilson LaHood
+                </div>
 
             </aside>
 
