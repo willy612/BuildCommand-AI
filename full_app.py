@@ -14,6 +14,10 @@ def db():
 def init():
     c=db()
     c.executescript("""
+    CREATE TABLE IF NOT EXISTS app_state(
+    id INTEGER PRIMARY KEY,
+    selected_project_id INTEGER
+);
     CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY,name TEXT,number TEXT,status TEXT);
     CREATE TABLE IF NOT EXISTS activities(id INTEGER PRIMARY KEY,project_id INTEGER,external_id TEXT,name TEXT,trade TEXT,start TEXT,finish TEXT,pct REAL DEFAULT 0,status TEXT DEFAULT 'NOT_STARTED');
     CREATE TABLE IF NOT EXISTS make_ready(id INTEGER PRIMARY KEY,project_id INTEGER,activity_id INTEGER,title TEXT,reason TEXT,due TEXT,priority TEXT,status TEXT DEFAULT 'OPEN');
@@ -48,7 +52,16 @@ def init():
         for name,trade in [("Apex Concrete","Concrete"),("Metro Steel","Structural"),("Summit MEP","MEP")]:
             c.execute("INSERT INTO subs(project_id,name,trade) VALUES(?,?,?)",(pid,name,trade))
         c.execute("INSERT INTO memory(project_id,category,insight,confidence) VALUES(?,?,?,?)",(pid,"Company Memory","Early access constraints on MEP rough-in should be cleared before manpower is increased.",.72))
-        c.commit()
+        c.commit()if c.execute("SELECT COUNT(*) n FROM app_state").fetchone()["n"] == 0:
+    first_project = c.execute(
+        "SELECT id FROM projects ORDER BY id LIMIT 1"
+    ).fetchone()
+
+    if first_project:
+        c.execute(
+            "INSERT INTO app_state(id, selected_project_id) VALUES(1, ?)",
+            (first_project["id"],)
+        )
     c.close()
 
 init()
@@ -179,16 +192,167 @@ NAV=[("Daily Command","/"),("Schedule","/schedule"),("Make Ready","/make-ready")
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
-def shell(title,body):
-    nav="".join(f'<a href="{u}">{n}</a>' for n,u in NAV)
-    return f'<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)}</title><style>{CSS}</style></head><body><div class="app"><aside class="side"><div class="brand">Construction AI</div><div class="company">Demo Construction Company<br>Canyon Medical Office</div><nav class="nav">{nav}</nav></aside><main class="main">{body}</main></div></body></html>'
+def shell(title, body):
+    current_pid = project_id()
+
+    c = db()
+
+    projects = c.execute(
+        "SELECT id,name,number,status FROM projects ORDER BY name"
+    ).fetchall()
+
+    current = c.execute(
+        "SELECT * FROM projects WHERE id=?",
+        (current_pid,)
+    ).fetchone()
+
+    c.close()
+
+    nav = "".join(
+        f'<a href="{u}">{n}</a>'
+        for n, u in NAV
+    )
+
+    project_options = "".join(
+        f'''
+        <option value="{p["id"]}"
+            {"selected" if p["id"] == current_pid else ""}>
+            {esc(p["number"])} - {esc(p["name"])}
+        </option>
+        '''
+        for p in projects
+    )
+
+    current_name = (
+        esc(current["name"])
+        if current
+        else "No Project Selected"
+    )
+
+    selector = f'''
+    <div style="margin-bottom:20px;">
+
+        <div class="small" style="margin-bottom:6px;">
+            CURRENT PROJECT
+        </div>
+
+        <form method="post" action="/projects/select">
+
+            <select name="project_id"
+                    style="margin-bottom:8px;">
+                {project_options}
+            </select>
+
+            <button type="submit"
+                    style="width:100%;">
+                Switch Project
+            </button>
+
+        </form>
+
+        <div style="margin-top:10px;">
+            <a href="/projects/new"
+               style="color:#f0b44d;
+                      text-decoration:none;
+                      font-weight:700;">
+                + Add Project
+            </a>
+        </div>
+
+    </div>
+    '''
+
+    return f'''
+    <!doctype html>
+    <html>
+
+    <head>
+        <meta name="viewport"
+              content="width=device-width,initial-scale=1">
+
+        <title>{esc(title)}</title>
+
+        <style>
+            {CSS}
+        </style>
+    </head>
+
+    <body>
+
+        <div class="app">
+
+            <aside class="side">
+
+                <div class="brand">
+                    Construction AI
+                </div>
+
+                <div class="company">
+                    Demo Construction Company<br>
+                    {current_name}
+                </div>
+
+                {selector}
+
+                <nav class="nav">
+                    {nav}
+                </nav>
+
+            </aside>
+
+            <main class="main">
+                {body}
+            </main>
+
+        </div>
+
+    </body>
+    </html>
+    '''
 
 def project_id():
-    c=db()
-    r=c.execute("SELECT id FROM projects ORDER BY id LIMIT 1").fetchone()
-    c.close()
-    return r["id"]
+    c = db()
 
+    r = c.execute(
+        "SELECT selected_project_id FROM app_state WHERE id=1"
+    ).fetchone()
+
+    if r and r["selected_project_id"]:
+        pid = r["selected_project_id"]
+    else:
+        first = c.execute(
+            "SELECT id FROM projects ORDER BY id LIMIT 1"
+        ).fetchone()
+
+        pid = first["id"]
+
+    c.close()
+    return pid
+    @app.post("/projects/select")
+def select_project(project_id: int = Form(...)):
+    c = db()
+
+    exists = c.execute(
+        "SELECT id FROM projects WHERE id=?",
+        (project_id,)
+    ).fetchone()
+
+    if exists:
+        c.execute(
+            """
+            INSERT INTO app_state(id, selected_project_id)
+            VALUES(1, ?)
+            ON CONFLICT(id)
+            DO UPDATE SET selected_project_id=excluded.selected_project_id
+            """,
+            (project_id,)
+        )
+
+        c.commit()
+
+    c.close()
+
+    return RedirectResponse("/", status_code=303)
 @app.get("/",response_class=HTMLResponse)
 def home():
     pid=project_id(); c=db()
