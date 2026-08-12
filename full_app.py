@@ -738,7 +738,7 @@ def subcontractors():
 
     updates = c.execute(
         """
-        SELECT u.*, s.name sub_name, s.trade
+        SELECT u.*, s.name AS sub_name, s.trade AS sub_trade
         FROM subcontractor_updates u
         JOIN subs s ON s.id=u.sub_id
         WHERE u.project_id=?
@@ -762,15 +762,14 @@ def subcontractors():
 
         if latest:
             status = latest["status"] or "WATCH"
-            status_badge = status if status in ["CRITICAL","HIGH","WATCH","READY","LOW"] else "OPEN"
-
-            detail = f"""
-            <div class="small">Latest Update: {esc(latest["update_date"])}</div>
-            <p><b>Manpower:</b> {latest["manpower"] or 0}</p>
-            <p><b>Commitment:</b> {esc(latest["commitment"]) or "—"}</p>
-            <p><b>Issue:</b> {esc(latest["issue"]) or "—"}</p>
-            <span class="badge {status_badge}">{esc(status)}</span>
-            """
+            status_badge = status if status in ["CRITICAL", "HIGH", "WATCH", "READY", "LOW"] else "OPEN"
+            detail = (
+                f'<div class="small">Latest Update: {esc(latest["update_date"])}</div>'
+                f'<p><b>Manpower:</b> {latest["manpower"] or 0}</p>'
+                f'<p><b>Commitment:</b> {esc(latest["commitment"]) or "—"}</p>'
+                f'<p><b>Issue:</b> {esc(latest["issue"]) or "—"}</p>'
+                f'<span class="badge {status_badge}">{esc(status)}</span>'
+            )
         else:
             detail = '<div class="muted">No field update recorded yet.</div>'
 
@@ -797,20 +796,24 @@ def subcontractors():
     if not cards:
         cards = '<div class="card"><div class="muted">No subcontractors added yet.</div></div>'
 
-    recent_html = "".join(
-        f"""
-        <div class="action">
-            <span class="badge {u["status"] if u["status"] in ["CRITICAL","HIGH","WATCH","READY","LOW"] else "OPEN"}">
-                {esc(u["status"])}
-            </span>
-            <b>{esc(u["sub_name"])}</b> · {esc(u["trade"])}
-            <div class="small">{esc(u["update_date"])} · Manpower {u["manpower"] or 0}</div>
-            <div>{esc(u["commitment"]) or "No commitment entered."}</div>
-            <div class="small">{esc(u["issue"]) or "No issue entered."}</div>
-        </div>
-        """
-        for u in updates[:12]
-    ) or '<div class="muted">No subcontractor updates yet.</div>'
+    recent_html = ""
+
+    for u in updates[:12]:
+        status = u["status"] or "WATCH"
+        badge = status if status in ["CRITICAL", "HIGH", "WATCH", "READY", "LOW"] else "OPEN"
+
+        recent_html += (
+            f'<div class="action">'
+            f'<span class="badge {badge}">{esc(status)}</span> '
+            f'<b>{esc(u["sub_name"])}</b> · {esc(u["sub_trade"])}'
+            f'<div class="small">{esc(u["update_date"])} · Manpower {u["manpower"] or 0}</div>'
+            f'<div>{esc(u["commitment"]) or "No commitment entered."}</div>'
+            f'<div class="small">{esc(u["issue"]) or "No issue entered."}</div>'
+            f'</div>'
+        )
+
+    if not recent_html:
+        recent_html = '<div class="muted">No subcontractor updates yet.</div>'
 
     body = f"""
     <div class="hero">
@@ -868,7 +871,6 @@ def subcontractor_update_form(sub_id: int):
 
     <div class="card" style="max-width:760px;">
         <form method="post" action="/subcontractors/{sub_id}/update">
-
             <label>Update Date</label>
             <input type="date" name="update_date" value="{date.today().isoformat()}" required>
 
@@ -876,16 +878,10 @@ def subcontractor_update_form(sub_id: int):
             <input type="number" name="manpower" min="0" value="0">
 
             <label>Commitment</label>
-            <textarea
-                name="commitment"
-                placeholder="Example: Complete level 2 overhead rough-in by Friday."
-            ></textarea>
+            <textarea name="commitment" placeholder="Example: Complete level 2 overhead rough-in by Friday."></textarea>
 
             <label>Issue / Constraint</label>
-            <textarea
-                name="issue"
-                placeholder="Example: Waiting on sleeves and access above ceiling."
-            ></textarea>
+            <textarea name="issue" placeholder="Example: Waiting on sleeves and access above ceiling."></textarea>
 
             <label>Status</label>
             <select name="status">
@@ -898,7 +894,6 @@ def subcontractor_update_form(sub_id: int):
 
             <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
                 <button type="submit">Save Update</button>
-
                 <a href="/subcontractors"
                    style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
                     Cancel
@@ -957,7 +952,6 @@ def save_subcontractor_update(
         c.commit()
 
     c.close()
-
     return RedirectResponse(url="/subcontractors", status_code=303)
 
 
@@ -2643,7 +2637,7 @@ def ai_analysis():
             f'<div class="small">{esc(r["explanation"])}</div>'
             f'</div>'
         )
-            for r in risks[:6]
+        for r in risks[:6]
     ) or '<div class="muted">No risk records yet.</div>'
 
     body = f"""
@@ -3524,7 +3518,7 @@ or tomorrow-plan gaps when supported by the report.
             analysis_text,
             created
         )
-            VALUES(?,?,?,?)
+        VALUES(?,?,?,?)
         """,
         (
             pid,
@@ -4454,7 +4448,7 @@ def project_settings_page():
         <div class="muted">
             Manage the selected project's identity and lifecycle.
         </div>
-    </div>
+        </div>
 
     <div class="grid4">
         <div class="card">
@@ -4826,7 +4820,7 @@ def new_procurement_form():
     activities = c.execute(
         """
         SELECT id,external_id,name
-           FROM activities
+        FROM activities
         WHERE project_id=?
         ORDER BY start,name
         """,
@@ -6886,3 +6880,4 @@ def edit_submittal(
     c.close()
 
     return RedirectResponse(url="/submittals", status_code=303)
+    
