@@ -52,7 +52,118 @@ def init():
     c.close()
 
 init()
+@app.get("/projects/new", response_class=HTMLResponse)
+def new_project_form():
+    return """
+    <html>
+    <head>
+        <title>Add Project</title>
+        <style>
+            body {
+                background:#0a1017;
+                color:white;
+                font-family:Arial,sans-serif;
+                padding:40px;
+            }
+            .box {
+                max-width:500px;
+                margin:auto;
+                background:#111923;
+                padding:30px;
+                border-radius:15px;
+            }
+            input, select {
+                width:100%;
+                padding:12px;
+                margin:8px 0 18px;
+                box-sizing:border-box;
+                border-radius:8px;
+                border:1px solid #213042;
+                background:#0d1620;
+                color:white;
+            }
+            button {
+                background:#f0b44d;
+                border:none;
+                padding:12px 20px;
+                border-radius:8px;
+                font-weight:bold;
+                cursor:pointer;
+            }
+            a {
+                color:#f0b44d;
+            }
+        </style>
+    </head>
 
+    <body>
+        <div class="box">
+            <h1>Add New Project</h1>
+
+            <form method="post" action="/projects/new">
+
+                <label>Project Name</label>
+                <input
+                    type="text"
+                    name="name"
+                    placeholder="Example: Phoenix Medical Center"
+                    required
+                >
+
+                <label>Project Number</label>
+                <input
+                    type="text"
+                    name="number"
+                    placeholder="Example: PMC-001"
+                    required
+                >
+
+                <label>Status</label>
+                <select name="status">
+                    <option value="ACTIVE">Active</option>
+                    <option value="PLANNING">Planning</option>
+                    <option value="ON_HOLD">On Hold</option>
+                    <option value="COMPLETE">Complete</option>
+                </select>
+
+                <button type="submit">
+                    Save Project
+                </button>
+
+            </form>
+
+            <p>
+                <a href="/">← Back to Dashboard</a>
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
+
+@app.post("/projects/new")
+def create_project(
+    name: str = Form(...),
+    number: str = Form(...),
+    status: str = Form(...)
+):
+    c = db()
+
+    c.execute(
+        """
+        INSERT INTO projects(name, number, status)
+        VALUES (?, ?, ?)
+        """,
+        (name, number, status)
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(
+        url="/",
+        status_code=303
+    )
 CSS="""
 :root{--bg:#0a1017;--panel:#111923;--line:#213042;--text:#eef4fb;--muted:#8fa2b5;--gold:#f0b44d}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
