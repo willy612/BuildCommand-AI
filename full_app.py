@@ -138,6 +138,49 @@ def init():
         created TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS safety_items(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        activity_id INTEGER,
+        event_date TEXT,
+        item_type TEXT,
+        title TEXT,
+        location TEXT,
+        responsible_party TEXT,
+        severity TEXT,
+        status TEXT DEFAULT 'OPEN',
+        description TEXT,
+        corrective_action TEXT,
+        created TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS change_events(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        activity_id INTEGER,
+        event_type TEXT,
+        title TEXT,
+        responsible_party TEXT,
+        estimated_cost REAL DEFAULT 0,
+        schedule_days REAL DEFAULT 0,
+        status TEXT DEFAULT 'OPEN',
+        description TEXT,
+        created TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS meeting_notes(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        meeting_date TEXT,
+        meeting_type TEXT,
+        title TEXT,
+        attendees TEXT,
+        decisions TEXT,
+        commitments TEXT,
+        follow_up TEXT,
+        created TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS app_state(
         id INTEGER PRIMARY KEY,
         selected_project_id INTEGER
@@ -147,6 +190,18 @@ def init():
     CREATE TABLE IF NOT EXISTS make_ready(id INTEGER PRIMARY KEY,project_id INTEGER,activity_id INTEGER,title TEXT,reason TEXT,due TEXT,priority TEXT,status TEXT DEFAULT 'OPEN');
     CREATE TABLE IF NOT EXISTS risks(id INTEGER PRIMARY KEY,project_id INTEGER,activity_id INTEGER,score REAL,band TEXT,explanation TEXT);
     CREATE TABLE IF NOT EXISTS subs(id INTEGER PRIMARY KEY,project_id INTEGER,name TEXT,trade TEXT);
+
+    CREATE TABLE IF NOT EXISTS subcontractor_updates(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        sub_id INTEGER,
+        update_date TEXT,
+        manpower INTEGER DEFAULT 0,
+        commitment TEXT,
+        issue TEXT,
+        status TEXT,
+        created TEXT
+    );
     CREATE TABLE IF NOT EXISTS production(id INTEGER PRIMARY KEY,project_id INTEGER,activity_id INTEGER,work_date TEXT,crew INTEGER,qty REAL,planned_qty REAL,unit TEXT);
     CREATE TABLE IF NOT EXISTS field_updates(id INTEGER PRIMARY KEY,project_id INTEGER,activity_id INTEGER,update_type TEXT,text TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS memory(id INTEGER PRIMARY KEY,project_id INTEGER,category TEXT,insight TEXT,confidence REAL);
@@ -350,7 +405,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:850px){.app{grid-template-columns:1fr}.grid4,.grid3,.grid2{grid-template-columns:1fr}.main{padding:14px}}
 """
 
-NAV=[("Daily Command","/"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Project Settings","/project-settings")]
+NAV=[("Daily Command","/"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Project Settings","/project-settings")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -523,72 +578,437 @@ def select_project(project_id: int = Form(...)):
     return RedirectResponse("/", status_code=303)
 @app.get("/",response_class=HTMLResponse)
 def home():
-    pid=project_id(); c=db()
-    actions=c.execute("SELECT m.*,a.name activity FROM make_ready m JOIN activities a ON a.id=m.activity_id WHERE m.project_id=? AND m.status='OPEN' ORDER BY due",(pid,)).fetchall()
-    risks=c.execute("SELECT r.*,a.name activity FROM risks r JOIN activities a ON a.id=r.activity_id WHERE r.project_id=? ORDER BY score DESC",(pid,)).fetchall()
-    act_count=c.execute("SELECT COUNT(*) n FROM activities WHERE project_id=?",(pid,)).fetchone()["n"]; c.close()
-    crit=sum(r["band"]=="CRITICAL" for r in risks); high=sum(r["band"]=="HIGH" for r in risks)
-    ah="".join(f'<div class="action"><span class="badge {r["priority"]}">{r["priority"]}</span> <b>{esc(r["title"])}</b><div>{esc(r["reason"])}</div><div class="small">Due {r["due"]}</div></div>' for r in actions)
-    rh="".join(f'<div class="action"><span class="badge {r["band"]}">{r["band"]}</span> <b>{esc(r["activity"])}</b> · {r["score"]:.0f}/100<div class="small">{esc(r["explanation"])}</div></div>' for r in risks)
-    body=f'''
-<div class="hero">
-    <div class="eyebrow">Daily Superintendent Command</div>
+    pid = project_id()
+    c = db()
+    today = date.today().isoformat()
 
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
-        <div>
-            <h1>What needs attention today?</h1>
-            <div class="muted">
-                Risk, constraints, ownership and next action in one view.
+    project = c.execute(
+        "SELECT * FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+
+    activities = c.execute(
+        "SELECT * FROM activities WHERE project_id=? ORDER BY start",
+        (pid,)
+    ).fetchall()
+
+    risks = c.execute(
+        """
+        SELECT r.*, a.external_id, a.name activity
+        FROM risks r
+        JOIN activities a ON a.id=r.activity_id
+        WHERE r.project_id=?
+        ORDER BY r.score DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    make_ready_items = c.execute(
+        """
+        SELECT m.*, a.external_id, a.name activity
+        FROM make_ready m
+        JOIN activities a ON a.id=m.activity_id
+        WHERE m.project_id=? AND m.status='OPEN'
+        ORDER BY m.due
+        """,
+        (pid,)
+    ).fetchall()
+
+    actions = c.execute(
+        """
+        SELECT *
+        FROM action_items
+        WHERE project_id=? AND status='OPEN'
+        ORDER BY due, id
+        """,
+        (pid,)
+    ).fetchall()
+
+    issues = c.execute(
+        """
+        SELECT i.*, a.external_id, a.name activity
+        FROM project_issues i
+        LEFT JOIN activities a ON a.id=i.activity_id
+        WHERE i.project_id=? AND i.status!='CLOSED'
+        ORDER BY i.due, i.id
+        """,
+        (pid,)
+    ).fetchall()
+
+    procurement_rows = c.execute(
+        """
+        SELECT p.*, a.external_id, a.name activity
+        FROM procurement p
+        LEFT JOIN activities a ON a.id=p.activity_id
+        WHERE p.project_id=? AND p.status!='DELIVERED'
+        ORDER BY p.required_on_site, p.id
+        """,
+        (pid,)
+    ).fetchall()
+
+    inspection_rows = c.execute(
+        """
+        SELECT i.*, a.external_id, a.name activity
+        FROM inspections_tracker i
+        LEFT JOIN activities a ON a.id=i.activity_id
+        WHERE i.project_id=? AND i.result!='PASSED'
+        ORDER BY i.scheduled_date, i.id
+        """,
+        (pid,)
+    ).fetchall()
+
+    submittal_rows = c.execute(
+        """
+        SELECT s.*, a.external_id, a.name activity
+        FROM submittals s
+        LEFT JOIN activities a ON a.id=s.activity_id
+        WHERE s.project_id=? AND s.status NOT IN ('APPROVED','APPROVED_AS_NOTED')
+        ORDER BY s.due_date, s.id
+        """,
+        (pid,)
+    ).fetchall()
+
+    safety_rows = c.execute(
+        """
+        SELECT *
+        FROM safety_items
+        WHERE project_id=? AND status!='CLOSED'
+        ORDER BY id DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    change_rows = c.execute(
+        """
+        SELECT *
+        FROM change_events
+        WHERE project_id=? AND status NOT IN ('APPROVED','REJECTED')
+        ORDER BY id DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    latest_report = c.execute(
+        """
+        SELECT *
+        FROM daily_reports
+        WHERE project_id=?
+        ORDER BY report_date DESC,id DESC
+        LIMIT 1
+        """,
+        (pid,)
+    ).fetchone()
+
+    c.close()
+
+    critical_risks = [r for r in risks if r["band"] == "CRITICAL"]
+    high_risks = [r for r in risks if r["band"] == "HIGH"]
+
+    overdue_actions = [
+        a for a in actions
+        if a["due"] and a["due"] < today
+    ]
+
+    overdue_issues = [
+        i for i in issues
+        if i["due"] and i["due"] < today
+    ]
+
+    procurement_critical = []
+    for p in procurement_rows:
+        badge, risk_text = procurement_risk(
+            p["required_on_site"],
+            p["promised_date"],
+            p["status"]
+        )
+        if badge == "CRITICAL":
+            procurement_critical.append((p, risk_text))
+
+    failed_inspections = [
+        i for i in inspection_rows
+        if i["result"] == "FAILED"
+    ]
+
+    overdue_inspections = [
+        i for i in inspection_rows
+        if i["scheduled_date"]
+        and i["scheduled_date"] < today
+        and i["result"] in ["PENDING", "SCHEDULED"]
+    ]
+
+    rejected_submittals = [
+        s for s in submittal_rows
+        if s["status"] == "REJECTED"
+    ]
+
+    overdue_submittals = [
+        s for s in submittal_rows
+        if s["due_date"]
+        and s["due_date"] < today
+        and s["status"] in ["PENDING", "SUBMITTED"]
+    ]
+
+    critical_safety = [
+        s for s in safety_rows
+        if s["severity"] == "CRITICAL"
+    ]
+
+    open_change_cost = sum((r["estimated_cost"] or 0) for r in change_rows)
+    open_change_days = sum((r["schedule_days"] or 0) for r in change_rows)
+
+    attention_score = min(
+        100,
+        len(critical_risks) * 20
+        + len(high_risks) * 10
+        + len(overdue_actions) * 8
+        + len(overdue_issues) * 8
+        + len(procurement_critical) * 12
+        + len(failed_inspections) * 15
+        + len(overdue_inspections) * 8
+        + len(rejected_submittals) * 10
+        + len(overdue_submittals) * 6
+        + len(critical_safety) * 20
+    )
+
+    if attention_score >= 70:
+        overall_badge = "CRITICAL"
+        overall_text = "Immediate Attention"
+    elif attention_score >= 40:
+        overall_badge = "HIGH"
+        overall_text = "Needs Attention"
+    elif attention_score >= 15:
+        overall_badge = "WATCH"
+        overall_text = "Watch"
+    else:
+        overall_badge = "READY"
+        overall_text = "Stable"
+
+    priority_items = []
+
+    for s in critical_safety[:2]:
+        priority_items.append(
+            ("CRITICAL", "Safety", s["title"], f'{s["location"] or "No location"}')
+        )
+
+    for r in critical_risks[:3]:
+        priority_items.append(
+            ("CRITICAL", "Risk", r["activity"], r["explanation"])
+        )
+
+    for i in failed_inspections[:2]:
+        priority_items.append(
+            ("CRITICAL", "Inspection", i["inspection_type"], i["notes"] or "Failed inspection")
+        )
+
+    for p, risk_text in procurement_critical[:2]:
+        priority_items.append(
+            ("CRITICAL", "Procurement", p["item"], risk_text)
+        )
+
+    for a in overdue_actions[:3]:
+        priority_items.append(
+            (
+                a["priority"] if a["priority"] in ["CRITICAL","HIGH","WATCH","LOW"] else "HIGH",
+                "Action",
+                a["title"],
+                f'Owner: {a["owner"] or "Unassigned"} · Due {a["due"]}'
+            )
+        )
+
+    for i in overdue_issues[:2]:
+        priority_items.append(
+            (
+                i["priority"] if i["priority"] in ["CRITICAL","HIGH","WATCH","LOW"] else "HIGH",
+                i["issue_type"],
+                i["title"],
+                f'Owner: {i["owner"] or "Unassigned"} · Due {i["due"]}'
+            )
+        )
+
+    for s in rejected_submittals[:2]:
+        priority_items.append(
+            ("HIGH", "Submittal", s["title"], "Rejected / revise and resubmit")
+        )
+
+    for m in make_ready_items[:3]:
+        priority_items.append(
+            (
+                m["priority"] if m["priority"] in ["CRITICAL","HIGH","WATCH","LOW"] else "HIGH",
+                "Make Ready",
+                m["title"],
+                f'Due {m["due"]}'
+            )
+        )
+
+    if not priority_items:
+        priority_items.append(
+            ("READY", "Command", "No urgent issues detected", "Review today’s plan and upcoming work.")
+        )
+
+    priority_html = "".join(
+        f"""
+        <div class="action">
+            <span class="badge {badge}">{esc(category)}</span>
+            <b>{esc(title)}</b>
+            <div class="small">{esc(detail)}</div>
+        </div>
+        """
+        for badge, category, title, detail in priority_items[:10]
+    )
+
+    latest_report_html = (
+        f"""
+        <div class="small">Latest Daily Report: {esc(latest_report["report_date"])}</div>
+        <p><b>Manpower:</b> {latest_report["manpower"] or 0}</p>
+        <p><b>Work Completed:</b> {esc(latest_report["work_completed"]) or "—"}</p>
+        <p><b>Delays:</b> {esc(latest_report["delays"]) or "—"}</p>
+        <p><b>Tomorrow:</b> {esc(latest_report["tomorrow_plan"]) or "—"}</p>
+        """
+        if latest_report
+        else '<div class="muted">No daily report submitted yet.</div>'
+    )
+
+    project_name = esc(project["name"]) if project else "Current Project"
+    project_number = esc(project["number"]) if project else ""
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;gap:18px;align-items:flex-start;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Morning Command Center</div>
+                <h1>What needs attention today?</h1>
+                <div class="muted">
+                    {project_number} - {project_name}
+                </div>
+            </div>
+
+            <div style="text-align:right;">
+                <span class="badge {overall_badge}">{overall_text}</span>
+                <div class="kpi" style="margin-top:8px;">{attention_score}</div>
+                <div class="small">Project attention score</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Critical Risks</div>
+            <div class="kpi">{len(critical_risks)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Overdue Actions</div>
+            <div class="kpi">{len(overdue_actions)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Open Make-Ready</div>
+            <div class="kpi">{len(make_ready_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Failed Inspections</div>
+            <div class="kpi">{len(failed_inspections)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        <div class="card">
+            <h2>Handle First</h2>
+            {priority_html}
+        </div>
+
+        <div class="card">
+            <h2>Latest Field Signal</h2>
+            {latest_report_html}
+
+            <div style="margin-top:14px;">
+                <a href="/assistant"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Ask BuildCommand AI →
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Procurement Critical</div>
+            <div class="kpi">{len(procurement_critical)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Overdue RFIs / Issues</div>
+            <div class="kpi">{len(overdue_issues)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Submittal Problems</div>
+            <div class="kpi">{len(rejected_submittals) + len(overdue_submittals)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Critical Safety</div>
+            <div class="kpi">{len(critical_safety)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        <div class="card">
+            <h2>Change Exposure</h2>
+
+            <div class="grid2">
+                <div>
+                    <div class="label">Potential Cost</div>
+                    <div class="kpi">${open_change_cost:,.0f}</div>
+                </div>
+
+                <div>
+                    <div class="label">Potential Days</div>
+                    <div class="kpi">{open_change_days:.1f}</div>
+                </div>
+            </div>
+
+            <div style="margin-top:12px;">
+                <a href="/changes"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Review Change Events →
+                </a>
             </div>
         </div>
 
-        <a href="/projects/new"
-           style="background:#f0b44d;
-                  color:#0a1017;
-                  text-decoration:none;
-                  padding:12px 18px;
-                  border-radius:9px;
-                  font-weight:800;">
-            + Add Project
-        </a>
-    </div>
-</div>
+        <div class="card">
+            <h2>Quick Command</h2>
 
-<div class="grid4">
-    <div class="card">
-        <div class="label">Activities</div>
-        <div class="kpi">{act_count}</div>
-    </div>
+            <div class="action">
+                <a href="/daily-report" style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Daily Report →
+                </a>
+            </div>
 
-    <div class="card">
-        <div class="label">Critical risk</div>
-        <div class="kpi">{crit}</div>
-    </div>
+            <div class="action">
+                <a href="/schedule-health" style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Schedule Health →
+                </a>
+            </div>
 
-    <div class="card">
-        <div class="label">High risk</div>
-        <div class="kpi">{high}</div>
-    </div>
+            <div class="action">
+                <a href="/readiness" style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Lookahead Readiness →
+                </a>
+            </div>
 
-    <div class="card">
-        <div class="label">Open make-ready</div>
-        <div class="kpi">{len(actions)}</div>
+            <div class="action">
+                <a href="/actions" style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Action Center →
+                </a>
+            </div>
+        </div>
     </div>
-</div>
+    """
 
-<div class="grid2">
-    <div class="card">
-        <h2>Handle first</h2>
-        {ah}
-    </div>
+    return shell("Daily Command", body)
 
-    <div class="card">
-        <h2>What may hurt next</h2>
-        {rh}
-    </div>
-</div>
-'''
-    return shell("Daily Command",body)
 
 @app.get("/schedule",response_class=HTMLResponse)
 def schedule():
@@ -2871,6 +3291,41 @@ def build_project_context(pid):
         (pid,)
     ).fetchall()
 
+    safety_rows = c.execute(
+        """
+        SELECT s.*, a.external_id, a.name activity
+        FROM safety_items s
+        LEFT JOIN activities a ON a.id=s.activity_id
+        WHERE s.project_id=? AND s.status!='CLOSED'
+        ORDER BY s.event_date DESC, s.id DESC
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
+    change_rows = c.execute(
+        """
+        SELECT ce.*, a.external_id, a.name activity
+        FROM change_events ce
+        LEFT JOIN activities a ON a.id=ce.activity_id
+        WHERE ce.project_id=? AND ce.status NOT IN ('APPROVED','REJECTED')
+        ORDER BY ce.id DESC
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
+    meeting_rows = c.execute(
+        """
+        SELECT *
+        FROM meeting_notes
+        WHERE project_id=?
+        ORDER BY meeting_date DESC, id DESC
+        LIMIT 10
+        """,
+        (pid,)
+    ).fetchall()
+
     c.close()
 
     lines = []
@@ -3043,6 +3498,46 @@ def build_project_context(pid):
             f'{activity_text} | Responsible: {s["responsible_party"] or "Unassigned"} | '
             f'Sent: {s["sent_date"] or "N/A"} | Due: {s["due_date"] or "N/A"} | '
             f'Status: {s["status"]} | Notes: {s["notes"] or "N/A"}'
+        )
+
+    lines.append("\nOPEN SAFETY ITEMS:")
+    for s in safety_rows:
+        activity_text = (
+            f'{s["external_id"]} {s["activity"]}'
+            if s["external_id"]
+            else "No linked activity"
+        )
+        lines.append(
+            f'- {s["severity"]} | {s["item_type"]} | {s["title"]} | '
+            f'Location: {s["location"] or "N/A"} | {activity_text} | '
+            f'Responsible: {s["responsible_party"] or "Unassigned"} | '
+            f'Status: {s["status"]} | Description: {s["description"] or "N/A"} | '
+            f'Corrective action: {s["corrective_action"] or "N/A"}'
+        )
+
+    lines.append("\nOPEN CHANGE EVENTS:")
+    for ce in change_rows:
+        activity_text = (
+            f'{ce["external_id"]} {ce["activity"]}'
+            if ce["external_id"]
+            else "No linked activity"
+        )
+        lines.append(
+            f'- {ce["event_type"]} | {ce["title"]} | {activity_text} | '
+            f'Responsible: {ce["responsible_party"] or "Unassigned"} | '
+            f'Estimated cost: ${ce["estimated_cost"] or 0:,.0f} | '
+            f'Schedule impact: {ce["schedule_days"] or 0:.1f} days | '
+            f'Status: {ce["status"]} | Description: {ce["description"] or "N/A"}'
+        )
+
+    lines.append("\nRECENT MEETING NOTES:")
+    for m in meeting_rows:
+        lines.append(
+            f'- {m["meeting_date"]} | {m["meeting_type"]} | {m["title"]} | '
+            f'Attendees: {m["attendees"] or "N/A"} | '
+            f'Decisions: {m["decisions"] or "N/A"} | '
+            f'Commitments: {m["commitments"] or "N/A"} | '
+            f'Follow-up: {m["follow_up"] or "N/A"}'
         )
 
     lines.append("\nRECENT DAILY REPORTS:")
@@ -4448,7 +4943,7 @@ def project_settings_page():
         <div class="muted">
             Manage the selected project's identity and lifecycle.
         </div>
-        </div>
+    </div>
 
     <div class="grid4">
         <div class="card">
@@ -4599,6 +5094,9 @@ def delete_project_settings(confirm_text: str = Form(...)):
         "punch_items",
         "inspections_tracker",
         "submittals",
+        "safety_items",
+        "change_events",
+        "meeting_notes",
         "field_updates",
         "production",
         "make_ready",
@@ -6880,4 +7378,1065 @@ def edit_submittal(
     c.close()
 
     return RedirectResponse(url="/submittals", status_code=303)
-    
+
+
+@app.get("/safety", response_class=HTMLResponse)
+def safety_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT s.*, a.external_id, a.name activity
+        FROM safety_items s
+        LEFT JOIN activities a ON a.id=s.activity_id
+        WHERE s.project_id=?
+        ORDER BY
+            CASE s.status
+                WHEN 'OPEN' THEN 1
+                WHEN 'CORRECTED' THEN 2
+                WHEN 'CLOSED' THEN 3
+                ELSE 4
+            END,
+            CASE s.severity
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'WATCH' THEN 3
+                ELSE 4
+            END,
+            s.event_date DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    open_items = [r for r in rows if r["status"] == "OPEN"]
+    corrected = [r for r in rows if r["status"] == "CORRECTED"]
+    closed = [r for r in rows if r["status"] == "CLOSED"]
+    critical = [r for r in open_items if r["severity"] == "CRITICAL"]
+
+    cards = ""
+
+    for r in rows:
+        activity_text = (
+            f'{esc(r["external_id"])} - {esc(r["activity"])}'
+            if r["external_id"]
+            else "No linked activity"
+        )
+
+        badge = (
+            r["severity"]
+            if r["severity"] in ["CRITICAL","HIGH","WATCH","LOW"]
+            else "OPEN"
+        )
+
+        if r["status"] == "OPEN":
+            action_button = f"""
+            <form method="post" action="/safety/{r["id"]}/corrected">
+                <button type="submit">Mark Corrected</button>
+            </form>
+            """
+        elif r["status"] == "CORRECTED":
+            action_button = f"""
+            <form method="post" action="/safety/{r["id"]}/closed">
+                <button type="submit">Close Item</button>
+            </form>
+            """
+        else:
+            action_button = '<span class="badge COMPLETE">CLOSED</span>'
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {badge}">{esc(r["severity"])}</span>
+                    <span class="badge OPEN">{esc(r["item_type"]).replace("_"," ")}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["title"])}</h3>
+                    <div class="muted">{esc(r["location"]) or "No location"} · {activity_text}</div>
+                </div>
+
+                <div>{action_button}</div>
+            </div>
+
+            <p>{esc(r["description"]) or "No description entered."}</p>
+
+            <div class="small">
+                Date: {esc(r["event_date"])} ·
+                Responsible: {esc(r["responsible_party"]) or "Unassigned"} ·
+                Status: {esc(r["status"])}
+            </div>
+
+            {"<p><b>Corrective Action:</b> " + esc(r["corrective_action"]) + "</p>" if r["corrective_action"] else ""}
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No safety items logged yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Safety Intelligence</div>
+                <h1>Track observations, near misses, and corrective actions.</h1>
+                <div class="muted">
+                    Keep safety issues visible until they are corrected and closed.
+                </div>
+            </div>
+
+            <a href="/safety/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Safety Item
+            </a>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Open</div>
+            <div class="kpi">{len(open_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Critical</div>
+            <div class="kpi">{len(critical)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Corrected</div>
+            <div class="kpi">{len(corrected)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Closed</div>
+            <div class="kpi">{len(closed)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Safety", body)
+
+
+@app.get("/safety/new", response_class=HTMLResponse)
+def new_safety_form():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    subs = c.execute(
+        """
+        SELECT name,trade
+        FROM subs
+        WHERE project_id=?
+        ORDER BY trade,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    activity_options = '<option value="">No linked activity</option>'
+    activity_options += "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    responsible_options = '<option value="">Unassigned</option>'
+    responsible_options += '<option value="Superintendent">Superintendent</option>'
+    responsible_options += '<option value="Safety Manager">Safety Manager</option>'
+
+    for s in subs:
+        responsible_options += (
+            f'<option value="{esc(s["name"])}">{esc(s["name"])} - {esc(s["trade"])}</option>'
+        )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Safety Intelligence</div>
+        <h1>Add Safety Item</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/safety/new">
+
+            <label>Type</label>
+            <select name="item_type">
+                <option value="OBSERVATION">Observation</option>
+                <option value="NEAR_MISS">Near Miss</option>
+                <option value="INCIDENT">Incident</option>
+                <option value="CORRECTIVE_ACTION">Corrective Action</option>
+            </select>
+
+            <label>Title</label>
+            <input type="text" name="title" placeholder="Example: Missing guardrail at stair opening" required>
+
+            <label>Event Date</label>
+            <input type="date" name="event_date" value="{date.today().isoformat()}" required>
+
+            <label>Location</label>
+            <input type="text" name="location" placeholder="Example: Level 3 west stair">
+
+            <label>Linked Activity</label>
+            <select name="activity_id">
+                {activity_options}
+            </select>
+
+            <label>Responsible Party</label>
+            <select name="responsible_party">
+                {responsible_options}
+            </select>
+
+            <label>Severity</label>
+            <select name="severity">
+                <option value="CRITICAL">Critical</option>
+                <option value="HIGH">High</option>
+                <option value="WATCH">Watch</option>
+                <option value="LOW">Low</option>
+            </select>
+
+            <label>Description</label>
+            <textarea name="description" placeholder="Describe the condition or event." required></textarea>
+
+            <label>Corrective Action</label>
+            <textarea name="corrective_action" placeholder="What must be done to correct or prevent recurrence?"></textarea>
+
+            <button type="submit">Save Safety Item</button>
+        </form>
+    </div>
+    """
+
+    return shell("Add Safety Item", body)
+
+
+@app.post("/safety/new")
+def create_safety_item(
+    item_type: str = Form(...),
+    title: str = Form(...),
+    event_date: str = Form(...),
+    location: str = Form(""),
+    activity_id: str = Form(""),
+    responsible_party: str = Form(""),
+    severity: str = Form("WATCH"),
+    description: str = Form(...),
+    corrective_action: str = Form("")
+):
+    pid = project_id()
+    linked_activity = int(activity_id) if activity_id.strip() else None
+
+    c = db()
+
+    if linked_activity is not None:
+        valid = c.execute(
+            "SELECT id FROM activities WHERE id=? AND project_id=?",
+            (linked_activity, pid)
+        ).fetchone()
+        if not valid:
+            linked_activity = None
+
+    c.execute(
+        """
+        INSERT INTO safety_items(
+            project_id,
+            activity_id,
+            event_date,
+            item_type,
+            title,
+            location,
+            responsible_party,
+            severity,
+            status,
+            description,
+            corrective_action,
+            created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            linked_activity,
+            event_date,
+            item_type,
+            title.strip(),
+            location.strip(),
+            responsible_party.strip(),
+            severity,
+            "OPEN",
+            description.strip(),
+            corrective_action.strip(),
+            date.today().isoformat()
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/safety", status_code=303)
+
+
+@app.post("/safety/{item_id}/corrected")
+def mark_safety_corrected(item_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE safety_items
+        SET status='CORRECTED'
+        WHERE id=? AND project_id=?
+        """,
+        (item_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/safety", status_code=303)
+
+
+@app.post("/safety/{item_id}/closed")
+def mark_safety_closed(item_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE safety_items
+        SET status='CLOSED'
+        WHERE id=? AND project_id=?
+        """,
+        (item_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/safety", status_code=303)
+
+
+@app.get("/changes", response_class=HTMLResponse)
+def changes_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT ce.*, a.external_id, a.name activity
+        FROM change_events ce
+        LEFT JOIN activities a ON a.id=ce.activity_id
+        WHERE ce.project_id=?
+        ORDER BY
+            CASE ce.status
+                WHEN 'OPEN' THEN 1
+                WHEN 'PRICING' THEN 2
+                WHEN 'SUBMITTED' THEN 3
+                WHEN 'APPROVED' THEN 4
+                WHEN 'REJECTED' THEN 5
+                ELSE 6
+            END,
+            ce.id DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    open_items = [r for r in rows if r["status"] in ["OPEN", "PRICING", "SUBMITTED"]]
+    approved = [r for r in rows if r["status"] == "APPROVED"]
+    rejected = [r for r in rows if r["status"] == "REJECTED"]
+
+    open_cost = sum((r["estimated_cost"] or 0) for r in open_items)
+    open_days = sum((r["schedule_days"] or 0) for r in open_items)
+
+    cards = ""
+
+    for r in rows:
+        activity_text = (
+            f'{esc(r["external_id"])} - {esc(r["activity"])}'
+            if r["external_id"]
+            else "No linked activity"
+        )
+
+        if r["status"] == "APPROVED":
+            badge = "READY"
+        elif r["status"] == "REJECTED":
+            badge = "LOW"
+        elif r["status"] == "SUBMITTED":
+            badge = "WATCH"
+        elif r["status"] == "PRICING":
+            badge = "HIGH"
+        else:
+            badge = "OPEN"
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {badge}">{esc(r["status"])}</span>
+                    <span class="badge OPEN">{esc(r["event_type"]).replace("_"," ")}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["title"])}</h3>
+                    <div class="muted">{activity_text}</div>
+                </div>
+
+                <a href="/changes/{r["id"]}/edit"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Edit
+                </a>
+            </div>
+
+            <div class="grid3" style="margin-top:16px;">
+                <div>
+                    <div class="label">Estimated Cost</div>
+                    <div class="kpi">${(r["estimated_cost"] or 0):,.0f}</div>
+                </div>
+
+                <div>
+                    <div class="label">Schedule Impact</div>
+                    <div class="kpi">{(r["schedule_days"] or 0):.1f}</div>
+                    <div class="small">days</div>
+                </div>
+
+                <div>
+                    <div class="label">Responsible</div>
+                    <div>{esc(r["responsible_party"]) or "Unassigned"}</div>
+                </div>
+            </div>
+
+            <p>{esc(r["description"]) or "No description entered."}</p>
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No change events logged yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Change Intelligence</div>
+                <h1>Track field changes before cost and schedule impact get lost.</h1>
+                <div class="muted">
+                    Capture scope changes, owner decisions, design changes, and potential change orders.
+                </div>
+            </div>
+
+            <a href="/changes/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Change Event
+            </a>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Open Events</div>
+            <div class="kpi">{len(open_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Open Exposure</div>
+            <div class="kpi">${open_cost:,.0f}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Potential Days</div>
+            <div class="kpi">{open_days:.1f}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Approved</div>
+            <div class="kpi">{len(approved)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Change Events", body)
+
+
+@app.get("/changes/new", response_class=HTMLResponse)
+def new_change_form():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    subs = c.execute(
+        """
+        SELECT name,trade
+        FROM subs
+        WHERE project_id=?
+        ORDER BY trade,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    activity_options = '<option value="">No linked activity</option>'
+    activity_options += "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    responsible_options = '<option value="">Unassigned</option>'
+    responsible_options += '<option value="Owner">Owner</option>'
+    responsible_options += '<option value="Architect / Engineer">Architect / Engineer</option>'
+    responsible_options += '<option value="General Contractor">General Contractor</option>'
+
+    for s in subs:
+        responsible_options += (
+            f'<option value="{esc(s["name"])}">{esc(s["name"])} - {esc(s["trade"])}</option>'
+        )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Change Intelligence</div>
+        <h1>Add Change Event</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/changes/new">
+
+            <label>Change Type</label>
+            <select name="event_type">
+                <option value="OWNER_CHANGE">Owner Change</option>
+                <option value="DESIGN_CHANGE">Design Change</option>
+                <option value="SCOPE_GAP">Scope Gap</option>
+                <option value="FIELD_CONDITION">Field Condition</option>
+                <option value="RFI_IMPACT">RFI Impact</option>
+                <option value="POTENTIAL_CHANGE_ORDER">Potential Change Order</option>
+            </select>
+
+            <label>Title</label>
+            <input
+                type="text"
+                name="title"
+                placeholder="Example: Added power for imaging equipment"
+                required
+            >
+
+            <label>Linked Activity</label>
+            <select name="activity_id">
+                {activity_options}
+            </select>
+
+            <label>Responsible Party</label>
+            <select name="responsible_party">
+                {responsible_options}
+            </select>
+
+            <div class="grid2">
+                <div>
+                    <label>Estimated Cost Impact</label>
+                    <input
+                        type="number"
+                        name="estimated_cost"
+                        min="0"
+                        step="100"
+                        value="0"
+                    >
+                </div>
+
+                <div>
+                    <label>Schedule Impact (Days)</label>
+                    <input
+                        type="number"
+                        name="schedule_days"
+                        min="0"
+                        step="0.5"
+                        value="0"
+                    >
+                </div>
+            </div>
+
+            <label>Status</label>
+            <select name="status">
+                <option value="OPEN">Open</option>
+                <option value="PRICING">Pricing</option>
+                <option value="SUBMITTED">Submitted</option>
+                <option value="APPROVED">Approved</option>
+                <option value="REJECTED">Rejected</option>
+            </select>
+
+            <label>Description</label>
+            <textarea
+                name="description"
+                placeholder="Describe the change, cause, scope, cost exposure, and schedule impact."
+                required
+            ></textarea>
+
+            <button type="submit">Save Change Event</button>
+        </form>
+    </div>
+    """
+
+    return shell("Add Change Event", body)
+
+
+@app.post("/changes/new")
+def create_change_event(
+    event_type: str = Form(...),
+    title: str = Form(...),
+    activity_id: str = Form(""),
+    responsible_party: str = Form(""),
+    estimated_cost: float = Form(0),
+    schedule_days: float = Form(0),
+    status: str = Form("OPEN"),
+    description: str = Form(...)
+):
+    pid = project_id()
+    linked_activity = int(activity_id) if activity_id.strip() else None
+
+    estimated_cost = max(0.0, estimated_cost)
+    schedule_days = max(0.0, schedule_days)
+
+    c = db()
+
+    if linked_activity is not None:
+        valid = c.execute(
+            "SELECT id FROM activities WHERE id=? AND project_id=?",
+            (linked_activity, pid)
+        ).fetchone()
+        if not valid:
+            linked_activity = None
+
+    c.execute(
+        """
+        INSERT INTO change_events(
+            project_id,
+            activity_id,
+            event_type,
+            title,
+            responsible_party,
+            estimated_cost,
+            schedule_days,
+            status,
+            description,
+            created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            linked_activity,
+            event_type,
+            title.strip(),
+            responsible_party.strip(),
+            estimated_cost,
+            schedule_days,
+            status,
+            description.strip(),
+            date.today().isoformat()
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/changes", status_code=303)
+
+
+@app.get("/changes/{change_id}/edit", response_class=HTMLResponse)
+def edit_change_form(change_id: int):
+    pid = project_id()
+    c = db()
+
+    item = c.execute(
+        "SELECT * FROM change_events WHERE id=? AND project_id=?",
+        (change_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not item:
+        return RedirectResponse(url="/changes", status_code=303)
+
+    statuses = ["OPEN", "PRICING", "SUBMITTED", "APPROVED", "REJECTED"]
+    status_options = "".join(
+        f'<option value="{s}" {"selected" if item["status"] == s else ""}>{s.title()}</option>'
+        for s in statuses
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Change Intelligence</div>
+        <h1>Edit Change Event</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/changes/{change_id}/edit">
+
+            <label>Title</label>
+            <input type="text" name="title" value="{esc(item["title"])}" required>
+
+            <label>Responsible Party</label>
+            <input type="text" name="responsible_party" value="{esc(item["responsible_party"])}">
+
+            <div class="grid2">
+                <div>
+                    <label>Estimated Cost</label>
+                    <input
+                        type="number"
+                        name="estimated_cost"
+                        min="0"
+                        step="100"
+                        value="{item["estimated_cost"] or 0}"
+                    >
+                </div>
+
+                <div>
+                    <label>Schedule Impact (Days)</label>
+                    <input
+                        type="number"
+                        name="schedule_days"
+                        min="0"
+                        step="0.5"
+                        value="{item["schedule_days"] or 0}"
+                    >
+                </div>
+            </div>
+
+            <label>Status</label>
+            <select name="status">
+                {status_options}
+            </select>
+
+            <label>Description</label>
+            <textarea name="description" required>{esc(item["description"])}</textarea>
+
+            <button type="submit">Save Changes</button>
+        </form>
+    </div>
+    """
+
+    return shell("Edit Change Event", body)
+
+
+@app.post("/changes/{change_id}/edit")
+def edit_change_event(
+    change_id: int,
+    title: str = Form(...),
+    responsible_party: str = Form(""),
+    estimated_cost: float = Form(0),
+    schedule_days: float = Form(0),
+    status: str = Form("OPEN"),
+    description: str = Form(...)
+):
+    pid = project_id()
+
+    estimated_cost = max(0.0, estimated_cost)
+    schedule_days = max(0.0, schedule_days)
+
+    c = db()
+    c.execute(
+        """
+        UPDATE change_events
+        SET title=?,
+            responsible_party=?,
+            estimated_cost=?,
+            schedule_days=?,
+            status=?,
+            description=?
+        WHERE id=? AND project_id=?
+        """,
+        (
+            title.strip(),
+            responsible_party.strip(),
+            estimated_cost,
+            schedule_days,
+            status,
+            description.strip(),
+            change_id,
+            pid
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/changes", status_code=303)
+
+
+@app.get("/meetings", response_class=HTMLResponse)
+def meetings_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT *
+        FROM meeting_notes
+        WHERE project_id=?
+        ORDER BY meeting_date DESC, id DESC
+        LIMIT 30
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    cards = ""
+
+    for r in rows:
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge OPEN">{esc(r["meeting_type"]).replace("_"," ")}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["title"])}</h3>
+                    <div class="muted">{esc(r["meeting_date"])}</div>
+                </div>
+
+                <a href="/meetings/{r["id"]}/edit"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Edit
+                </a>
+            </div>
+
+            <div class="small">Attendees</div>
+            <p>{esc(r["attendees"]) or "—"}</p>
+
+            <div class="small">Decisions</div>
+            <p>{esc(r["decisions"]) or "—"}</p>
+
+            <div class="small">Commitments</div>
+            <p>{esc(r["commitments"]) or "—"}</p>
+
+            <div class="small">Follow-Up</div>
+            <p>{esc(r["follow_up"]) or "—"}</p>
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No meeting notes logged yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Meeting Intelligence</div>
+                <h1>Capture decisions and commitments before they disappear into notes.</h1>
+                <div class="muted">
+                    Track OAC meetings, trade coordination, owner decisions, and follow-up.
+                </div>
+            </div>
+
+            <a href="/meetings/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Meeting Notes
+            </a>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Meetings", body)
+
+
+@app.get("/meetings/new", response_class=HTMLResponse)
+def new_meeting_form():
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Meeting Intelligence</div>
+        <h1>Add Meeting Notes</h1>
+    </div>
+
+    <div class="card" style="max-width:820px;">
+        <form method="post" action="/meetings/new">
+
+            <label>Meeting Date</label>
+            <input type="date" name="meeting_date" value="{date.today().isoformat()}" required>
+
+            <label>Meeting Type</label>
+            <select name="meeting_type">
+                <option value="OAC">OAC</option>
+                <option value="SUBCONTRACTOR_COORDINATION">Subcontractor Coordination</option>
+                <option value="OWNER_MEETING">Owner Meeting</option>
+                <option value="INTERNAL">Internal</option>
+                <option value="SAFETY">Safety</option>
+                <option value="PREINSTALL">Pre-Installation</option>
+            </select>
+
+            <label>Title</label>
+            <input type="text" name="title" placeholder="Example: Weekly OAC Meeting" required>
+
+            <label>Attendees</label>
+            <textarea name="attendees" placeholder="Who attended?"></textarea>
+
+            <label>Decisions Made</label>
+            <textarea name="decisions" placeholder="What was decided?"></textarea>
+
+            <label>Commitments</label>
+            <textarea name="commitments" placeholder="Who committed to what and by when?"></textarea>
+
+            <label>Follow-Up</label>
+            <textarea name="follow_up" placeholder="What needs to happen next?"></textarea>
+
+            <button type="submit">Save Meeting Notes</button>
+        </form>
+    </div>
+    """
+
+    return shell("Add Meeting Notes", body)
+
+
+@app.post("/meetings/new")
+def create_meeting(
+    meeting_date: str = Form(...),
+    meeting_type: str = Form(...),
+    title: str = Form(...),
+    attendees: str = Form(""),
+    decisions: str = Form(""),
+    commitments: str = Form(""),
+    follow_up: str = Form("")
+):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        INSERT INTO meeting_notes(
+            project_id,
+            meeting_date,
+            meeting_type,
+            title,
+            attendees,
+            decisions,
+            commitments,
+            follow_up,
+            created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            meeting_date,
+            meeting_type,
+            title.strip(),
+            attendees.strip(),
+            decisions.strip(),
+            commitments.strip(),
+            follow_up.strip(),
+            date.today().isoformat()
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/meetings", status_code=303)
+
+
+@app.get("/meetings/{meeting_id}/edit", response_class=HTMLResponse)
+def edit_meeting_form(meeting_id: int):
+    pid = project_id()
+    c = db()
+
+    item = c.execute(
+        "SELECT * FROM meeting_notes WHERE id=? AND project_id=?",
+        (meeting_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not item:
+        return RedirectResponse(url="/meetings", status_code=303)
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Meeting Intelligence</div>
+        <h1>Edit Meeting Notes</h1>
+    </div>
+
+    <div class="card" style="max-width:820px;">
+        <form method="post" action="/meetings/{meeting_id}/edit">
+
+            <label>Meeting Date</label>
+            <input type="date" name="meeting_date" value="{esc(item["meeting_date"])}" required>
+
+            <label>Title</label>
+            <input type="text" name="title" value="{esc(item["title"])}" required>
+
+            <label>Attendees</label>
+            <textarea name="attendees">{esc(item["attendees"])}</textarea>
+
+            <label>Decisions Made</label>
+            <textarea name="decisions">{esc(item["decisions"])}</textarea>
+
+            <label>Commitments</label>
+            <textarea name="commitments">{esc(item["commitments"])}</textarea>
+
+            <label>Follow-Up</label>
+            <textarea name="follow_up">{esc(item["follow_up"])}</textarea>
+
+            <button type="submit">Save Changes</button>
+        </form>
+    </div>
+    """
+
+    return shell("Edit Meeting Notes", body)
+
+
+@app.post("/meetings/{meeting_id}/edit")
+def edit_meeting(
+    meeting_id: int,
+    meeting_date: str = Form(...),
+    title: str = Form(...),
+    attendees: str = Form(""),
+    decisions: str = Form(""),
+    commitments: str = Form(""),
+    follow_up: str = Form("")
+):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE meeting_notes
+        SET meeting_date=?,
+            title=?,
+            attendees=?,
+            decisions=?,
+            commitments=?,
+            follow_up=?
+        WHERE id=? AND project_id=?
+        """,
+        (
+            meeting_date,
+            title.strip(),
+            attendees.strip(),
+            decisions.strip(),
+            commitments.strip(),
+            follow_up.strip(),
+            meeting_id,
+            pid
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/meetings", status_code=303)
