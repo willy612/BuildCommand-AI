@@ -14,6 +14,21 @@ def db():
 def init():
     c = db()
     c.executescript("""
+    CREATE TABLE IF NOT EXISTS daily_reports(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        report_date TEXT,
+        weather TEXT,
+        manpower INTEGER DEFAULT 0,
+        work_completed TEXT,
+        delays TEXT,
+        deliveries TEXT,
+        inspections TEXT,
+        safety TEXT,
+        tomorrow_plan TEXT,
+        created TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS app_state(
         id INTEGER PRIMARY KEY,
         selected_project_id INTEGER
@@ -226,7 +241,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:850px){.app{grid-template-columns:1fr}.grid4,.grid3,.grid2{grid-template-columns:1fr}.main{padding:14px}}
 """
 
-NAV=[("Daily Command","/"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
+NAV=[("Daily Command","/"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -820,3 +835,138 @@ def create_subcontractor(
     c.commit()
     c.close()
     return RedirectResponse(url="/subcontractors", status_code=303)
+
+
+@app.get("/daily-report", response_class=HTMLResponse)
+def daily_report():
+    pid = project_id()
+    c = db()
+    project = c.execute(
+        "SELECT name,number FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+    reports = c.execute(
+        "SELECT * FROM daily_reports WHERE project_id=? ORDER BY report_date DESC, id DESC LIMIT 10",
+        (pid,)
+    ).fetchall()
+    c.close()
+
+    project_label = "Current Project"
+    if project:
+        project_label = f'{esc(project["number"])} - {esc(project["name"])}'
+
+    report_cards = ""
+    for r in reports:
+        report_cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+                <div>
+                    <div class="eyebrow">Daily Report</div>
+                    <h3 style="margin:6px 0;">{esc(r["report_date"])}</h3>
+                </div>
+                <div class="badge OPEN">{r["manpower"] or 0} workers</div>
+            </div>
+            <div class="small">Weather</div><p>{esc(r["weather"]) or "—"}</p>
+            <div class="small">Work Completed</div><p>{esc(r["work_completed"]) or "—"}</p>
+            <div class="small">Delays / Constraints</div><p>{esc(r["delays"]) or "—"}</p>
+            <div class="small">Deliveries</div><p>{esc(r["deliveries"]) or "—"}</p>
+            <div class="small">Inspections</div><p>{esc(r["inspections"]) or "—"}</p>
+            <div class="small">Safety</div><p>{esc(r["safety"]) or "—"}</p>
+            <div class="small">Tomorrow's Plan</div><p>{esc(r["tomorrow_plan"]) or "—"}</p>
+        </div>
+        """
+
+    if not report_cards:
+        report_cards = '<div class="card"><div class="muted">No daily reports yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Daily Superintendent Report</div>
+        <h1>Capture the job today so the app can learn tomorrow.</h1>
+        <div class="muted">{project_label}</div>
+    </div>
+
+    <div class="grid2">
+        <div class="card">
+            <h2>New Daily Report</h2>
+            <form method="post" action="/daily-report">
+                <label>Report Date</label>
+                <input type="date" name="report_date" value="{date.today().isoformat()}" required>
+
+                <label>Weather</label>
+                <input type="text" name="weather" placeholder="Example: Clear, 96°F">
+
+                <label>Total Manpower</label>
+                <input type="number" name="manpower" min="0" value="0">
+
+                <label>Work Completed</label>
+                <textarea name="work_completed" placeholder="What got completed today?"></textarea>
+
+                <label>Delays / Constraints</label>
+                <textarea name="delays" placeholder="Access issues, missing material, RFIs, manpower problems, etc."></textarea>
+
+                <label>Deliveries</label>
+                <textarea name="deliveries" placeholder="What arrived or failed to arrive?"></textarea>
+
+                <label>Inspections</label>
+                <textarea name="inspections" placeholder="Passed, failed, scheduled, or pending inspections."></textarea>
+
+                <label>Safety Notes</label>
+                <textarea name="safety" placeholder="Incidents, observations, toolbox talks, corrective actions."></textarea>
+
+                <label>Tomorrow's Plan</label>
+                <textarea name="tomorrow_plan" placeholder="What needs to happen tomorrow?"></textarea>
+
+                <button type="submit">Save Daily Report</button>
+            </form>
+        </div>
+
+        <div>
+            <h2 style="margin-top:0;">Recent Reports</h2>
+            {report_cards}
+        </div>
+    </div>
+    """
+
+    return shell("Daily Report", body)
+
+
+@app.post("/daily-report")
+def save_daily_report(
+    report_date: str = Form(...),
+    weather: str = Form(""),
+    manpower: int = Form(0),
+    work_completed: str = Form(""),
+    delays: str = Form(""),
+    deliveries: str = Form(""),
+    inspections: str = Form(""),
+    safety: str = Form(""),
+    tomorrow_plan: str = Form("")
+):
+    pid = project_id()
+    c = db()
+    c.execute(
+        """
+        INSERT INTO daily_reports(
+            project_id, report_date, weather, manpower, work_completed,
+            delays, deliveries, inspections, safety, tomorrow_plan, created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            report_date,
+            weather.strip(),
+            manpower,
+            work_completed.strip(),
+            delays.strip(),
+            deliveries.strip(),
+            inspections.strip(),
+            safety.strip(),
+            tomorrow_plan.strip(),
+            date.today().isoformat()
+        )
+    )
+    c.commit()
+    c.close()
+    return RedirectResponse(url="/daily-report", status_code=303)
