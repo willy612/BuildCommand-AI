@@ -2643,7 +2643,7 @@ def ai_analysis():
             f'<div class="small">{esc(r["explanation"])}</div>'
             f'</div>'
         )
-        for r in risks[:6]
+            for r in risks[:6]
     ) or '<div class="muted">No risk records yet.</div>'
 
     body = f"""
@@ -3524,7 +3524,7 @@ or tomorrow-plan gaps when supported by the report.
             analysis_text,
             created
         )
-        VALUES(?,?,?,?)
+            VALUES(?,?,?,?)
         """,
         (
             pid,
@@ -4826,7 +4826,7 @@ def new_procurement_form():
     activities = c.execute(
         """
         SELECT id,external_id,name
-        FROM activities
+           FROM activities
         WHERE project_id=?
         ORDER BY start,name
         """,
