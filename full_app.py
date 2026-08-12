@@ -198,7 +198,64 @@ def home():
     crit=sum(r["band"]=="CRITICAL" for r in risks); high=sum(r["band"]=="HIGH" for r in risks)
     ah="".join(f'<div class="action"><span class="badge {r["priority"]}">{r["priority"]}</span> <b>{esc(r["title"])}</b><div>{esc(r["reason"])}</div><div class="small">Due {r["due"]}</div></div>' for r in actions)
     rh="".join(f'<div class="action"><span class="badge {r["band"]}">{r["band"]}</span> <b>{esc(r["activity"])}</b> · {r["score"]:.0f}/100<div class="small">{esc(r["explanation"])}</div></div>' for r in risks)
-    body=f'<div class="hero"><div class="eyebrow">Daily Superintendent Command</div><h1>What needs attention today?</h1><div class="muted">Risk, constraints, ownership and next action in one view.</div></div><div class="grid4"><div class="card"><div class="label">Activities</div><div class="kpi">{act_count}</div></div><div class="card"><div class="label">Critical risk</div><div class="kpi">{crit}</div></div><div class="card"><div class="label">High risk</div><div class="kpi">{high}</div></div><div class="card"><div class="label">Open make-ready</div><div class="kpi">{len(actions)}</div></div></div><div class="grid2"><div class="card"><h2>Handle first</h2>{ah}</div><div class="card"><h2>What may hurt next</h2>{rh}</div></div>'
+    body=f'''
+<div class="hero">
+    <div class="eyebrow">Daily Superintendent Command</div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+        <div>
+            <h1>What needs attention today?</h1>
+            <div class="muted">
+                Risk, constraints, ownership and next action in one view.
+            </div>
+        </div>
+
+        <a href="/projects/new"
+           style="background:#f0b44d;
+                  color:#0a1017;
+                  text-decoration:none;
+                  padding:12px 18px;
+                  border-radius:9px;
+                  font-weight:800;">
+            + Add Project
+        </a>
+    </div>
+</div>
+
+<div class="grid4">
+    <div class="card">
+        <div class="label">Activities</div>
+        <div class="kpi">{act_count}</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Critical risk</div>
+        <div class="kpi">{crit}</div>
+    </div>
+
+    <div class="card">
+        <div class="label">High risk</div>
+        <div class="kpi">{high}</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Open make-ready</div>
+        <div class="kpi">{len(actions)}</div>
+    </div>
+</div>
+
+<div class="grid2">
+    <div class="card">
+        <h2>Handle first</h2>
+        {ah}
+    </div>
+
+    <div class="card">
+        <h2>What may hurt next</h2>
+        {rh}
+    </div>
+</div>
+'''
     return shell("Daily Command",body)
 
 @app.get("/schedule",response_class=HTMLResponse)
