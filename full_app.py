@@ -51,21 +51,30 @@ def init():
             c.execute("INSERT INTO risks(project_id,activity_id,score,band,explanation) VALUES(?,?,?,?,?)",(pid,aid,score,band,why))
         for name,trade in [("Apex Concrete","Concrete"),("Metro Steel","Structural"),("Summit MEP","MEP")]:
             c.execute("INSERT INTO subs(project_id,name,trade) VALUES(?,?,?)",(pid,name,trade))
-        c.execute("INSERT INTO memory(project_id,category,insight,confidence) VALUES(?,?,?,?)",(pid,"Company Memory","Early access constraints on MEP rough-in should be cleared before manpower is increased.",.72))
-c.commit()
-
-if c.execute("SELECT COUNT(*) n FROM app_state").fetchone()["n"] == 0:
-    first_project = c.execute(
-        "SELECT id FROM projects ORDER BY id LIMIT 1"
-    ).fetchone()
-
-    if first_project:
-        c.execute(
-            "INSERT INTO app_state(id, selected_project_id) VALUES(1, ?)",
-            (first_project["id"],)
+         c.execute(
+            "INSERT INTO memory(project_id,category,insight,confidence) VALUES(?,?,?,?)",
+            (
+                pid,
+                "Company Memory",
+                "Early access constraints on MEP rough-in should be cleared before manpower is increased.",
+                .72
+            )
         )
 
-c.commit()
+    if c.execute("SELECT COUNT(*) n FROM app_state").fetchone()["n"] == 0:
+        first_project = c.execute(
+            "SELECT id FROM projects ORDER BY id LIMIT 1"
+        ).fetchone()
+
+        if first_project:
+            c.execute(
+                "INSERT INTO app_state(id, selected_project_id) VALUES(1, ?)",
+                (first_project["id"],)
+            )
+
+    c.commit()
+    c.close()
+
 
 init()
 @app.get("/projects/new", response_class=HTMLResponse)
