@@ -311,23 +311,6 @@ def shell(title, body):
     '''
 
 def project_id():
-    c = db()
-
-    r = c.execute(
-        "SELECT selected_project_id FROM app_state WHERE id=1"
-    ).fetchone()
-
-    if r and r["selected_project_id"]:
-        pid = r["selected_project_id"]
-    else:
-        first = c.execute(
-            "SELECT id FROM projects ORDER BY id LIMIT 1"
-        ).fetchone()
-
-        pid = first["id"]
-
-    c.close()
-    return pid
     @app.post("/projects/select")
 def select_project(project_id: int = Form(...)):
     c = db()
@@ -353,6 +336,23 @@ def select_project(project_id: int = Form(...)):
     c.close()
 
     return RedirectResponse("/", status_code=303)
+    c = db()
+
+    r = c.execute(
+        "SELECT selected_project_id FROM app_state WHERE id=1"
+    ).fetchone()
+
+    if r and r["selected_project_id"]:
+        pid = r["selected_project_id"]
+    else:
+        first = c.execute(
+            "SELECT id FROM projects ORDER BY id LIMIT 1"
+        ).fetchone()
+
+        pid = first["id"]
+
+    c.close()
+    return pid
 @app.get("/",response_class=HTMLResponse)
 def home():
     pid=project_id(); c=db()
