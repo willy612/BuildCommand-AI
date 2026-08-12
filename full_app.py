@@ -51,6 +51,93 @@ def init():
         created TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS activity_readiness(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        activity_id INTEGER,
+        drawings INTEGER DEFAULT 0,
+        material INTEGER DEFAULT 0,
+        manpower INTEGER DEFAULT 0,
+        predecessor INTEGER DEFAULT 0,
+        access_ready INTEGER DEFAULT 0,
+        inspection INTEGER DEFAULT 0,
+        equipment INTEGER DEFAULT 0,
+        notes TEXT,
+        updated TEXT,
+        UNIQUE(project_id, activity_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS procurement(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        activity_id INTEGER,
+        item TEXT,
+        vendor TEXT,
+        required_on_site TEXT,
+        promised_date TEXT,
+        status TEXT,
+        notes TEXT,
+        created TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS project_issues(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        activity_id INTEGER,
+        issue_type TEXT,
+        title TEXT,
+        owner TEXT,
+        due TEXT,
+        priority TEXT,
+        status TEXT DEFAULT 'OPEN',
+        description TEXT,
+        response TEXT,
+        created TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS punch_items(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        activity_id INTEGER,
+        title TEXT,
+        location TEXT,
+        trade TEXT,
+        owner TEXT,
+        priority TEXT,
+        due TEXT,
+        status TEXT DEFAULT 'OPEN',
+        description TEXT,
+        resolution TEXT,
+        created TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS inspections_tracker(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        activity_id INTEGER,
+        inspection_type TEXT,
+        authority TEXT,
+        scheduled_date TEXT,
+        result TEXT DEFAULT 'PENDING',
+        reinspection_date TEXT,
+        notes TEXT,
+        created TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS submittals(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        activity_id INTEGER,
+        title TEXT,
+        spec_section TEXT,
+        responsible_party TEXT,
+        sent_date TEXT,
+        due_date TEXT,
+        status TEXT DEFAULT 'PENDING',
+        notes TEXT,
+        created TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS app_state(
         id INTEGER PRIMARY KEY,
         selected_project_id INTEGER
@@ -263,7 +350,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:850px){.app{grid-template-columns:1fr}.grid4,.grid3,.grid2{grid-template-columns:1fr}.main{padding:14px}}
 """
 
-NAV=[("Daily Command","/"),("Action Center","/actions"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
+NAV=[("Daily Command","/"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Project Settings","/project-settings")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -2718,6 +2805,78 @@ def build_project_context(pid):
         (pid,)
     ).fetchall()
 
+    readiness_rows = c.execute(
+        """
+        SELECT ar.*, a.external_id, a.name activity, a.start
+        FROM activity_readiness ar
+        JOIN activities a ON a.id=ar.activity_id
+        WHERE ar.project_id=?
+        ORDER BY a.start
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
+    procurement_rows = c.execute(
+        """
+        SELECT p.*, a.external_id, a.name activity
+        FROM procurement p
+        LEFT JOIN activities a ON a.id=p.activity_id
+        WHERE p.project_id=?
+        ORDER BY p.required_on_site, p.id
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
+    issue_rows = c.execute(
+        """
+        SELECT i.*, a.external_id, a.name activity
+        FROM project_issues i
+        LEFT JOIN activities a ON a.id=i.activity_id
+        WHERE i.project_id=? AND i.status!='CLOSED'
+        ORDER BY i.due, i.id
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
+    punch_rows = c.execute(
+        """
+        SELECT p.*, a.external_id, a.name activity
+        FROM punch_items p
+        LEFT JOIN activities a ON a.id=p.activity_id
+        WHERE p.project_id=? AND p.status!='VERIFIED'
+        ORDER BY p.due, p.id
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
+    inspection_rows = c.execute(
+        """
+        SELECT i.*, a.external_id, a.name activity
+        FROM inspections_tracker i
+        LEFT JOIN activities a ON a.id=i.activity_id
+        WHERE i.project_id=? AND i.result!='PASSED'
+        ORDER BY i.scheduled_date, i.id
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
+    submittal_rows = c.execute(
+        """
+        SELECT s.*, a.external_id, a.name activity
+        FROM submittals s
+        LEFT JOIN activities a ON a.id=s.activity_id
+        WHERE s.project_id=? AND s.status NOT IN ('APPROVED','APPROVED_AS_NOTED')
+        ORDER BY s.due_date, s.id
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
     c.close()
 
     lines = []
@@ -2787,6 +2946,109 @@ def build_project_context(pid):
         lines.append(
             f'- {a["priority"]} | {a["title"]} | Owner: {a["owner"] or "Unassigned"} | '
             f'Due: {a["due"]} | Notes: {a["notes"] or "N/A"}'
+        )
+
+    lines.append("\nACTIVITY READINESS:")
+    for r in readiness_rows:
+        pct, status, _ = readiness_result(r)
+        lines.append(
+            f'- {r["external_id"]} {r["activity"]} | Starts {r["start"]} | '
+            f'Readiness {pct}% | Status: {status} | Notes: {r["notes"] or "N/A"}'
+        )
+
+    lines.append("\nSCHEDULE HEALTH:")
+    readiness_map = {r["activity_id"]: r for r in readiness_rows}
+
+    for a in activities:
+        score, status, _, reasons = schedule_health_status(
+            a,
+            readiness_map.get(a["id"]),
+            production_rows,
+            risks
+        )
+        lines.append(
+            f'- {a["external_id"]} {a["name"]} | Health score {score} | '
+            f'Status: {status} | Reasons: {"; ".join(reasons)}'
+        )
+
+    lines.append("\nPROCUREMENT / LONG LEAD:")
+    for p in procurement_rows:
+        badge, risk_text = procurement_risk(
+            p["required_on_site"],
+            p["promised_date"],
+            p["status"]
+        )
+        activity_text = (
+            f'{p["external_id"]} {p["activity"]}'
+            if p["external_id"]
+            else "No linked activity"
+        )
+        lines.append(
+            f'- {p["item"]} | {activity_text} | Vendor: {p["vendor"] or "N/A"} | '
+            f'Required: {p["required_on_site"] or "N/A"} | '
+            f'Promised: {p["promised_date"] or "N/A"} | '
+            f'Status: {p["status"] or "N/A"} | Risk: {risk_text} | '
+            f'Notes: {p["notes"] or "N/A"}'
+        )
+
+    lines.append("\nOPEN RFIS / ISSUES:")
+    for i in issue_rows:
+        activity_text = (
+            f'{i["external_id"]} {i["activity"]}'
+            if i["external_id"]
+            else "No linked activity"
+        )
+        lines.append(
+            f'- {i["issue_type"]} | {i["priority"]} | {i["title"]} | '
+            f'{activity_text} | Owner: {i["owner"] or "Unassigned"} | '
+            f'Due: {i["due"] or "N/A"} | Status: {i["status"]} | '
+            f'Description: {i["description"] or "N/A"} | '
+            f'Response: {i["response"] or "N/A"}'
+        )
+
+    lines.append("\nOPEN QUALITY / PUNCH ITEMS:")
+    for p in punch_rows:
+        activity_text = (
+            f'{p["external_id"]} {p["activity"]}'
+            if p["external_id"]
+            else "No linked activity"
+        )
+        lines.append(
+            f'- {p["priority"]} | {p["title"]} | Location: {p["location"] or "N/A"} | '
+            f'Trade: {p["trade"] or "N/A"} | {activity_text} | '
+            f'Owner: {p["owner"] or "Unassigned"} | Due: {p["due"] or "N/A"} | '
+            f'Status: {p["status"]} | Description: {p["description"] or "N/A"} | '
+            f'Resolution: {p["resolution"] or "N/A"}'
+        )
+
+    lines.append("\nOPEN / FAILED INSPECTIONS:")
+    for i in inspection_rows:
+        activity_text = (
+            f'{i["external_id"]} {i["activity"]}'
+            if i["external_id"]
+            else "No linked activity"
+        )
+        lines.append(
+            f'- {i["inspection_type"]} | {activity_text} | '
+            f'Authority: {i["authority"] or "N/A"} | '
+            f'Scheduled: {i["scheduled_date"] or "N/A"} | '
+            f'Result: {i["result"]} | '
+            f'Reinspection: {i["reinspection_date"] or "N/A"} | '
+            f'Notes: {i["notes"] or "N/A"}'
+        )
+
+    lines.append("\nOPEN SUBMITTALS:")
+    for s in submittal_rows:
+        activity_text = (
+            f'{s["external_id"]} {s["activity"]}'
+            if s["external_id"]
+            else "No linked activity"
+        )
+        lines.append(
+            f'- {s["title"]} | Spec: {s["spec_section"] or "N/A"} | '
+            f'{activity_text} | Responsible: {s["responsible_party"] or "Unassigned"} | '
+            f'Sent: {s["sent_date"] or "N/A"} | Due: {s["due_date"] or "N/A"} | '
+            f'Status: {s["status"]} | Notes: {s["notes"] or "N/A"}'
         )
 
     lines.append("\nRECENT DAILY REPORTS:")
@@ -3573,3 +3835,3041 @@ def complete_action(action_id: int):
     c.close()
 
     return RedirectResponse(url="/actions", status_code=303)
+
+
+def readiness_result(row):
+    checks = [
+        row["drawings"],
+        row["material"],
+        row["manpower"],
+        row["predecessor"],
+        row["access_ready"],
+        row["inspection"],
+        row["equipment"],
+    ]
+
+    complete = sum(1 for x in checks if x)
+    pct = round((complete / len(checks)) * 100)
+
+    critical_ready = bool(
+        row["drawings"]
+        and row["material"]
+        and row["manpower"]
+        and row["predecessor"]
+        and row["access_ready"]
+    )
+
+    if complete == len(checks):
+        status = "READY"
+        badge = "READY"
+    elif critical_ready and complete >= 5:
+        status = "AT RISK"
+        badge = "WATCH"
+    else:
+        status = "NOT READY"
+        badge = "CRITICAL"
+
+    return pct, status, badge
+
+
+@app.get("/readiness", response_class=HTMLResponse)
+def readiness_page():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT *
+        FROM activities
+        WHERE project_id=? AND status!='COMPLETE'
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    readiness_rows = c.execute(
+        """
+        SELECT *
+        FROM activity_readiness
+        WHERE project_id=?
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    readiness_by_activity = {
+        r["activity_id"]: r
+        for r in readiness_rows
+    }
+
+    cards = ""
+    ready_count = 0
+    risk_count = 0
+    not_ready_count = 0
+
+    for a in activities:
+        r = readiness_by_activity.get(a["id"])
+
+        if r:
+            pct, status, badge = readiness_result(r)
+            notes = esc(r["notes"]) or "No readiness notes."
+        else:
+            pct, status, badge = 0, "NOT READY", "CRITICAL"
+            notes = "Readiness has not been reviewed."
+
+        if status == "READY":
+            ready_count += 1
+        elif status == "AT RISK":
+            risk_count += 1
+        else:
+            not_ready_count += 1
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <div class="eyebrow">{esc(a["external_id"])}</div>
+                    <h3 style="margin:6px 0;">{esc(a["name"])}</h3>
+                    <div class="muted">{esc(a["trade"])} · Starts {esc(a["start"])}</div>
+                </div>
+
+                <span class="badge {badge}">{status}</span>
+            </div>
+
+            <div style="margin-top:14px;">
+                <div class="label">Readiness</div>
+                <div class="kpi">{pct}%</div>
+            </div>
+
+            <p>{notes}</p>
+
+            <a href="/readiness/{a["id"]}"
+               style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                Review Readiness →
+            </a>
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No incomplete activities found.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Lookahead Readiness</div>
+        <h1>Is upcoming work actually ready to start?</h1>
+        <div class="muted">
+            Verify the conditions that must be true before crews hit the field.
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Activities Reviewed</div>
+            <div class="kpi">{len(activities)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Ready</div>
+            <div class="kpi">{ready_count}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">At Risk</div>
+            <div class="kpi">{risk_count}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Not Ready</div>
+            <div class="kpi">{not_ready_count}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Readiness", body)
+
+
+@app.get("/readiness/{activity_id}", response_class=HTMLResponse)
+def readiness_form(activity_id: int):
+    pid = project_id()
+    c = db()
+
+    activity = c.execute(
+        """
+        SELECT *
+        FROM activities
+        WHERE id=? AND project_id=?
+        """,
+        (activity_id, pid)
+    ).fetchone()
+
+    row = c.execute(
+        """
+        SELECT *
+        FROM activity_readiness
+        WHERE activity_id=? AND project_id=?
+        """,
+        (activity_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not activity:
+        return RedirectResponse(url="/readiness", status_code=303)
+
+    def checked(field):
+        return "checked" if row and row[field] else ""
+
+    notes = esc(row["notes"]) if row else ""
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Lookahead Readiness</div>
+        <h1>{esc(activity["external_id"])} - {esc(activity["name"])}</h1>
+        <div class="muted">
+            {esc(activity["trade"])} · {esc(activity["start"])} to {esc(activity["finish"])}
+        </div>
+    </div>
+
+    <div class="card" style="max-width:820px;">
+        <h2>Start Readiness Checklist</h2>
+
+        <form method="post" action="/readiness/{activity_id}">
+            <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="drawings" value="1" {checked("drawings")}>
+                <span class="form-check-label">Drawings / approved information are available</span>
+            </label>
+
+            <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="material" value="1" {checked("material")}>
+                <span class="form-check-label">Required material is on site or confirmed</span>
+            </label>
+
+            <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="manpower" value="1" {checked("manpower")}>
+                <span class="form-check-label">Manpower is committed</span>
+            </label>
+
+            <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="predecessor" value="1" {checked("predecessor")}>
+                <span class="form-check-label">Predecessor work is complete</span>
+            </label>
+
+            <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="access_ready" value="1" {checked("access_ready")}>
+                <span class="form-check-label">Work area and access are ready</span>
+            </label>
+
+            <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="inspection" value="1" {checked("inspection")}>
+                <span class="form-check-label">Required inspections / prerequisites are cleared</span>
+            </label>
+
+            <label class="form-check">
+                <input class="form-check-input" type="checkbox" name="equipment" value="1" {checked("equipment")}>
+                <span class="form-check-label">Required equipment / tools are available</span>
+            </label>
+
+            <label style="display:block;margin-top:18px;">Readiness Notes</label>
+            <textarea
+                name="notes"
+                placeholder="What is missing, who owns it, or what needs to happen before start?"
+            >{notes}</textarea>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Readiness</button>
+
+                <a href="/readiness"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Back
+                </a>
+            </div>
+        </form>
+    </div>
+    """
+
+    return shell("Readiness Review", body)
+
+
+@app.post("/readiness/{activity_id}")
+def save_readiness(
+    activity_id: int,
+    drawings: int = Form(0),
+    material: int = Form(0),
+    manpower: int = Form(0),
+    predecessor: int = Form(0),
+    access_ready: int = Form(0),
+    inspection: int = Form(0),
+    equipment: int = Form(0),
+    notes: str = Form("")
+):
+    pid = project_id()
+    c = db()
+
+    activity = c.execute(
+        "SELECT id FROM activities WHERE id=? AND project_id=?",
+        (activity_id, pid)
+    ).fetchone()
+
+    if activity:
+        c.execute(
+            """
+            INSERT INTO activity_readiness(
+                project_id,
+                activity_id,
+                drawings,
+                material,
+                manpower,
+                predecessor,
+                access_ready,
+                inspection,
+                equipment,
+                notes,
+                updated
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(project_id, activity_id)
+            DO UPDATE SET
+                drawings=excluded.drawings,
+                material=excluded.material,
+                manpower=excluded.manpower,
+                predecessor=excluded.predecessor,
+                access_ready=excluded.access_ready,
+                inspection=excluded.inspection,
+                equipment=excluded.equipment,
+                notes=excluded.notes,
+                updated=excluded.updated
+            """,
+            (
+                pid,
+                activity_id,
+                1 if drawings else 0,
+                1 if material else 0,
+                1 if manpower else 0,
+                1 if predecessor else 0,
+                1 if access_ready else 0,
+                1 if inspection else 0,
+                1 if equipment else 0,
+                notes.strip(),
+                date.today().isoformat()
+            )
+        )
+        c.commit()
+
+    c.close()
+
+    return RedirectResponse(url="/readiness", status_code=303)
+
+
+def schedule_health_status(activity, readiness_row, production_rows, risk_rows):
+    today = date.today().isoformat()
+
+    pct = activity["pct"] or 0
+    start = activity["start"] or ""
+    finish = activity["finish"] or ""
+
+    reasons = []
+    score = 0
+
+    if finish and finish < today and pct < 100:
+        score += 40
+        reasons.append("Finish date has passed and activity is incomplete.")
+
+    if start and start <= today and pct == 0 and activity["status"] != "COMPLETE":
+        score += 20
+        reasons.append("Activity has started by date but shows 0% complete.")
+
+    if readiness_row:
+        readiness_pct, readiness_status, _ = readiness_result(readiness_row)
+
+        if readiness_status == "NOT READY":
+            score += 25
+            reasons.append(f"Readiness is only {readiness_pct}% and activity is NOT READY.")
+        elif readiness_status == "AT RISK":
+            score += 12
+            reasons.append(f"Readiness is {readiness_pct}% and activity is AT RISK.")
+
+    related_risks = [
+        r for r in risk_rows
+        if r["activity_id"] == activity["id"]
+    ]
+
+    for r in related_risks:
+        if r["band"] == "CRITICAL":
+            score += 25
+            reasons.append("Critical risk is open.")
+        elif r["band"] == "HIGH":
+            score += 15
+            reasons.append("High risk is open.")
+
+    related_prod = [
+        p for p in production_rows
+        if p["activity_id"] == activity["id"]
+    ]
+
+    if related_prod:
+        latest = related_prod[0]
+        qty = latest["qty"] or 0
+        plan = latest["planned_qty"] or 0
+
+        if plan > 0:
+            prod_pct = (qty / plan) * 100
+
+            if prod_pct < 90:
+                score += 20
+                reasons.append(f"Latest production is {prod_pct:.0f}% of plan.")
+            elif prod_pct < 100:
+                score += 8
+                reasons.append(f"Latest production is {prod_pct:.0f}% of plan.")
+
+    score = min(100, score)
+
+    if score >= 60:
+        status = "CRITICAL"
+        badge = "CRITICAL"
+    elif score >= 35:
+        status = "HIGH"
+        badge = "HIGH"
+    elif score >= 15:
+        status = "WATCH"
+        badge = "WATCH"
+    else:
+        status = "STABLE"
+        badge = "READY"
+
+    if not reasons:
+        reasons.append("No significant schedule-health warning signals found.")
+
+    return score, status, badge, reasons
+
+
+@app.get("/schedule-health", response_class=HTMLResponse)
+def schedule_health_page():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT *
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    readiness_rows = c.execute(
+        """
+        SELECT *
+        FROM activity_readiness
+        WHERE project_id=?
+        """,
+        (pid,)
+    ).fetchall()
+
+    production_rows = c.execute(
+        """
+        SELECT *
+        FROM production
+        WHERE project_id=?
+        ORDER BY work_date DESC,id DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    risk_rows = c.execute(
+        """
+        SELECT *
+        FROM risks
+        WHERE project_id=?
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    readiness_by_activity = {
+        r["activity_id"]: r
+        for r in readiness_rows
+    }
+
+    health_rows = []
+
+    for a in activities:
+        score, status, badge, reasons = schedule_health_status(
+            a,
+            readiness_by_activity.get(a["id"]),
+            production_rows,
+            risk_rows
+        )
+
+        health_rows.append(
+            (score, a, status, badge, reasons)
+        )
+
+    health_rows.sort(key=lambda x: x[0], reverse=True)
+
+    critical_count = sum(1 for x in health_rows if x[2] == "CRITICAL")
+    high_count = sum(1 for x in health_rows if x[2] == "HIGH")
+    watch_count = sum(1 for x in health_rows if x[2] == "WATCH")
+    stable_count = sum(1 for x in health_rows if x[2] == "STABLE")
+
+    cards = ""
+
+    for score, a, status, badge, reasons in health_rows:
+        reason_html = "".join(
+            f'<div class="small">• {esc(reason)}</div>'
+            for reason in reasons
+        )
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <div class="eyebrow">{esc(a["external_id"])}</div>
+                    <h3 style="margin:6px 0;">{esc(a["name"])}</h3>
+                    <div class="muted">
+                        {esc(a["trade"])} · {esc(a["start"])} to {esc(a["finish"])}
+                    </div>
+                </div>
+
+                <span class="badge {badge}">{status}</span>
+            </div>
+
+            <div class="grid3" style="margin-top:16px;">
+                <div>
+                    <div class="label">Health Score</div>
+                    <div class="kpi">{score}</div>
+                </div>
+
+                <div>
+                    <div class="label">Complete</div>
+                    <div class="kpi">{(a["pct"] or 0):.0f}%</div>
+                </div>
+
+                <div>
+                    <div class="label">Status</div>
+                    <div style="font-size:18px;font-weight:800;">
+                        {esc(a["status"]).replace("_"," ").title()}
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top:14px;">
+                {reason_html}
+            </div>
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No schedule activities found.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Schedule Health</div>
+        <h1>Which activities are drifting before the schedule update catches it?</h1>
+        <div class="muted">
+            Combines schedule dates, progress, readiness, production, and risk signals.
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Critical</div>
+            <div class="kpi">{critical_count}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">High</div>
+            <div class="kpi">{high_count}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Watch</div>
+            <div class="kpi">{watch_count}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Stable</div>
+            <div class="kpi">{stable_count}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Schedule Health", body)
+
+
+@app.get("/project-settings", response_class=HTMLResponse)
+def project_settings_page():
+    pid = project_id()
+    c = db()
+
+    project = c.execute(
+        "SELECT * FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+
+    counts = {
+        "activities": c.execute(
+            "SELECT COUNT(*) n FROM activities WHERE project_id=?",
+            (pid,)
+        ).fetchone()["n"],
+        "risks": c.execute(
+            "SELECT COUNT(*) n FROM risks WHERE project_id=?",
+            (pid,)
+        ).fetchone()["n"],
+        "make_ready": c.execute(
+            "SELECT COUNT(*) n FROM make_ready WHERE project_id=?",
+            (pid,)
+        ).fetchone()["n"],
+        "daily_reports": c.execute(
+            "SELECT COUNT(*) n FROM daily_reports WHERE project_id=?",
+            (pid,)
+        ).fetchone()["n"],
+    }
+
+    c.close()
+
+    if not project:
+        return RedirectResponse(url="/", status_code=303)
+
+    statuses = ["ACTIVE", "PLANNING", "ON_HOLD", "COMPLETE"]
+    status_options = "".join(
+        f'<option value="{s}" {"selected" if project["status"] == s else ""}>{s.replace("_"," ").title()}</option>'
+        for s in statuses
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Project Settings</div>
+        <h1>{esc(project["number"])} - {esc(project["name"])}</h1>
+        <div class="muted">
+            Manage the selected project's identity and lifecycle.
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Activities</div>
+            <div class="kpi">{counts["activities"]}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Risks</div>
+            <div class="kpi">{counts["risks"]}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Make Ready</div>
+            <div class="kpi">{counts["make_ready"]}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Daily Reports</div>
+            <div class="kpi">{counts["daily_reports"]}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        <div class="card">
+            <h2>Edit Project</h2>
+
+            <form method="post" action="/project-settings/edit">
+                <label>Project Name</label>
+                <input
+                    type="text"
+                    name="name"
+                    value="{esc(project["name"])}"
+                    required
+                >
+
+                <label>Project Number</label>
+                <input
+                    type="text"
+                    name="number"
+                    value="{esc(project["number"])}"
+                    required
+                >
+
+                <label>Status</label>
+                <select name="status">
+                    {status_options}
+                </select>
+
+                <button type="submit">Save Project Changes</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2>Delete Project</h2>
+
+            <p>
+                Deleting a project removes its schedule activities, risks, make-ready items,
+                field updates, production records, daily reports, subcontractor updates,
+                actions, readiness records, recovery scenarios, and saved analyses.
+            </p>
+
+            <div class="small">
+                This cannot be undone.
+            </div>
+
+            <form method="post"
+                  action="/project-settings/delete"
+                  style="margin-top:18px;">
+                <label>Type DELETE to confirm</label>
+                <input
+                    type="text"
+                    name="confirm_text"
+                    placeholder="DELETE"
+                    required
+                >
+
+                <button type="submit"
+                        style="background:#492324;color:#ffb0b0;">
+                    Delete Project
+                </button>
+            </form>
+        </div>
+    </div>
+    """
+
+    return shell("Project Settings", body)
+
+
+@app.post("/project-settings/edit")
+def edit_project_settings(
+    name: str = Form(...),
+    number: str = Form(...),
+    status: str = Form(...)
+):
+    pid = project_id()
+
+    allowed_statuses = {"ACTIVE", "PLANNING", "ON_HOLD", "COMPLETE"}
+    if status not in allowed_statuses:
+        status = "ACTIVE"
+
+    c = db()
+    c.execute(
+        """
+        UPDATE projects
+        SET name=?, number=?, status=?
+        WHERE id=?
+        """,
+        (
+            name.strip(),
+            number.strip(),
+            status,
+            pid
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/project-settings", status_code=303)
+
+
+@app.post("/project-settings/delete")
+def delete_project_settings(confirm_text: str = Form(...)):
+    pid = project_id()
+
+    if confirm_text.strip().upper() != "DELETE":
+        return RedirectResponse(url="/project-settings", status_code=303)
+
+    c = db()
+
+    activity_ids = [
+        r["id"]
+        for r in c.execute(
+            "SELECT id FROM activities WHERE project_id=?",
+            (pid,)
+        ).fetchall()
+    ]
+
+    # Delete project-scoped tables first.
+    tables = [
+        "daily_report_analysis",
+        "daily_reports",
+        "subcontractor_updates",
+        "action_items",
+        "activity_readiness",
+        "procurement",
+        "project_issues",
+        "punch_items",
+        "inspections_tracker",
+        "submittals",
+        "field_updates",
+        "production",
+        "make_ready",
+        "risks",
+        "recovery",
+        "memory",
+        "subs",
+    ]
+
+    for table in tables:
+        c.execute(
+            f"DELETE FROM {table} WHERE project_id=?",
+            (pid,)
+        )
+
+    c.execute(
+        "DELETE FROM activities WHERE project_id=?",
+        (pid,)
+    )
+
+    c.execute(
+        "DELETE FROM projects WHERE id=?",
+        (pid,)
+    )
+
+    next_project = c.execute(
+        "SELECT id FROM projects ORDER BY id LIMIT 1"
+    ).fetchone()
+
+    if next_project:
+        c.execute(
+            """
+            INSERT INTO app_state(id, selected_project_id)
+            VALUES(1, ?)
+            ON CONFLICT(id)
+            DO UPDATE SET selected_project_id=excluded.selected_project_id
+            """,
+            (next_project["id"],)
+        )
+    else:
+        c.execute(
+            "DELETE FROM app_state WHERE id=1"
+        )
+
+    c.commit()
+    c.close()
+
+    if next_project:
+        return RedirectResponse(url="/", status_code=303)
+
+    return RedirectResponse(url="/projects/new", status_code=303)
+
+
+def procurement_risk(required_on_site, promised_date, status):
+    if status == "DELIVERED":
+        return "READY", "DELIVERED"
+
+    if not required_on_site:
+        return "WATCH", "NO REQUIRED DATE"
+
+    if not promised_date:
+        return "CRITICAL", "NO PROMISED DATE"
+
+    if promised_date > required_on_site:
+        return "CRITICAL", "LATE"
+
+    if status in ["RELEASED", "FABRICATION", "SHIPPED"]:
+        return "WATCH", status
+
+    return "HIGH", status or "OPEN"
+
+
+@app.get("/procurement", response_class=HTMLResponse)
+def procurement_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT p.*, a.external_id, a.name activity
+        FROM procurement p
+        LEFT JOIN activities a ON a.id=p.activity_id
+        WHERE p.project_id=?
+        ORDER BY
+            CASE p.status
+                WHEN 'DELIVERED' THEN 5
+                WHEN 'SHIPPED' THEN 4
+                WHEN 'FABRICATION' THEN 3
+                WHEN 'RELEASED' THEN 2
+                ELSE 1
+            END,
+            p.required_on_site
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    critical = 0
+    watch = 0
+    delivered = 0
+
+    cards = ""
+
+    for r in rows:
+        badge, risk_text = procurement_risk(
+            r["required_on_site"],
+            r["promised_date"],
+            r["status"]
+        )
+
+        if badge == "CRITICAL":
+            critical += 1
+        elif badge == "WATCH":
+            watch += 1
+
+        if r["status"] == "DELIVERED":
+            delivered += 1
+
+        activity_text = (
+            f'{esc(r["external_id"])} - {esc(r["activity"])}'
+            if r["external_id"]
+            else "No linked activity"
+        )
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {badge}">{risk_text}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["item"])}</h3>
+                    <div class="muted">{activity_text}</div>
+                </div>
+
+                <a href="/procurement/{r["id"]}/edit"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Edit
+                </a>
+            </div>
+
+            <div class="grid3" style="margin-top:16px;">
+                <div>
+                    <div class="label">Vendor / Sub</div>
+                    <div>{esc(r["vendor"]) or "—"}</div>
+                </div>
+
+                <div>
+                    <div class="label">Required On Site</div>
+                    <div>{esc(r["required_on_site"]) or "—"}</div>
+                </div>
+
+                <div>
+                    <div class="label">Promised</div>
+                    <div>{esc(r["promised_date"]) or "—"}</div>
+                </div>
+            </div>
+
+            <p>{esc(r["notes"]) or "No notes entered."}</p>
+            <div class="small">Status: {esc(r["status"]).replace("_"," ").title()}</div>
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No procurement items added yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Procurement Intelligence</div>
+                <h1>Know what material can hurt the schedule before it arrives late.</h1>
+                <div class="muted">
+                    Track required-on-site dates, vendor commitments, and long-lead exposure.
+                </div>
+            </div>
+
+            <a href="/procurement/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Procurement Item
+            </a>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Items</div>
+            <div class="kpi">{len(rows)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Critical</div>
+            <div class="kpi">{critical}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Watch</div>
+            <div class="kpi">{watch}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Delivered</div>
+            <div class="kpi">{delivered}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Procurement", body)
+
+
+@app.get("/procurement/new", response_class=HTMLResponse)
+def new_procurement_form():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    options = '<option value="">No linked activity</option>'
+    options += "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Procurement Intelligence</div>
+        <h1>Add Procurement Item</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/procurement/new">
+
+            <label>Material / Equipment</label>
+            <input
+                type="text"
+                name="item"
+                placeholder="Example: Main electrical switchgear"
+                required
+            >
+
+            <label>Linked Activity</label>
+            <select name="activity_id">
+                {options}
+            </select>
+
+            <label>Vendor / Subcontractor</label>
+            <input
+                type="text"
+                name="vendor"
+                placeholder="Example: Valley Electric / Eaton"
+            >
+
+            <div class="grid2">
+                <div>
+                    <label>Required On Site</label>
+                    <input type="date" name="required_on_site" required>
+                </div>
+
+                <div>
+                    <label>Promised Date</label>
+                    <input type="date" name="promised_date">
+                </div>
+            </div>
+
+            <label>Status</label>
+            <select name="status">
+                <option value="NOT_RELEASED">Not Released</option>
+                <option value="RELEASED">Released</option>
+                <option value="FABRICATION">Fabrication</option>
+                <option value="SHIPPED">Shipped</option>
+                <option value="DELIVERED">Delivered</option>
+            </select>
+
+            <label>Notes</label>
+            <textarea
+                name="notes"
+                placeholder="Lead time, submittal status, release issue, delivery commitment, etc."
+            ></textarea>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Procurement Item</button>
+
+                <a href="/procurement"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+    """
+
+    return shell("Add Procurement", body)
+
+
+@app.post("/procurement/new")
+def create_procurement(
+    item: str = Form(...),
+    activity_id: str = Form(""),
+    vendor: str = Form(""),
+    required_on_site: str = Form(...),
+    promised_date: str = Form(""),
+    status: str = Form("NOT_RELEASED"),
+    notes: str = Form("")
+):
+    pid = project_id()
+
+    linked_activity = int(activity_id) if activity_id.strip() else None
+
+    c = db()
+
+    if linked_activity is not None:
+        valid_activity = c.execute(
+            "SELECT id FROM activities WHERE id=? AND project_id=?",
+            (linked_activity, pid)
+        ).fetchone()
+
+        if not valid_activity:
+            linked_activity = None
+
+    c.execute(
+        """
+        INSERT INTO procurement(
+            project_id,
+            activity_id,
+            item,
+            vendor,
+            required_on_site,
+            promised_date,
+            status,
+            notes,
+            created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            linked_activity,
+            item.strip(),
+            vendor.strip(),
+            required_on_site,
+            promised_date,
+            status,
+            notes.strip(),
+            date.today().isoformat()
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/procurement", status_code=303)
+
+
+@app.get("/procurement/{item_id}/edit", response_class=HTMLResponse)
+def edit_procurement_form(item_id: int):
+    pid = project_id()
+    c = db()
+
+    item = c.execute(
+        """
+        SELECT *
+        FROM procurement
+        WHERE id=? AND project_id=?
+        """,
+        (item_id, pid)
+    ).fetchone()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    if not item:
+        return RedirectResponse(url="/procurement", status_code=303)
+
+    activity_options = '<option value="">No linked activity</option>'
+
+    for a in activities:
+        selected = "selected" if item["activity_id"] == a["id"] else ""
+        activity_options += (
+            f'<option value="{a["id"]}" {selected}>'
+            f'{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        )
+
+    statuses = [
+        "NOT_RELEASED",
+        "RELEASED",
+        "FABRICATION",
+        "SHIPPED",
+        "DELIVERED"
+    ]
+
+    status_options = "".join(
+        f'<option value="{s}" {"selected" if item["status"] == s else ""}>'
+        f'{s.replace("_"," ").title()}</option>'
+        for s in statuses
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Procurement Intelligence</div>
+        <h1>Edit Procurement Item</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/procurement/{item_id}/edit">
+
+            <label>Material / Equipment</label>
+            <input type="text" name="item" value="{esc(item["item"])}" required>
+
+            <label>Linked Activity</label>
+            <select name="activity_id">
+                {activity_options}
+            </select>
+
+            <label>Vendor / Subcontractor</label>
+            <input type="text" name="vendor" value="{esc(item["vendor"])}">
+
+            <div class="grid2">
+                <div>
+                    <label>Required On Site</label>
+                    <input type="date" name="required_on_site" value="{esc(item["required_on_site"])}" required>
+                </div>
+
+                <div>
+                    <label>Promised Date</label>
+                    <input type="date" name="promised_date" value="{esc(item["promised_date"])}">
+                </div>
+            </div>
+
+            <label>Status</label>
+            <select name="status">
+                {status_options}
+            </select>
+
+            <label>Notes</label>
+            <textarea name="notes">{esc(item["notes"])}</textarea>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Changes</button>
+
+                <a href="/procurement"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Cancel
+                </a>
+            </div>
+        </form>
+
+        <form method="post"
+              action="/procurement/{item_id}/delete"
+              style="margin-top:22px;padding-top:18px;border-top:1px solid #213042;">
+            <button type="submit"
+                    style="background:#492324;color:#ffb0b0;">
+                Delete Procurement Item
+            </button>
+        </form>
+    </div>
+    """
+
+    return shell("Edit Procurement", body)
+
+
+@app.post("/procurement/{item_id}/edit")
+def edit_procurement(
+    item_id: int,
+    item: str = Form(...),
+    activity_id: str = Form(""),
+    vendor: str = Form(""),
+    required_on_site: str = Form(...),
+    promised_date: str = Form(""),
+    status: str = Form("NOT_RELEASED"),
+    notes: str = Form("")
+):
+    pid = project_id()
+    linked_activity = int(activity_id) if activity_id.strip() else None
+
+    c = db()
+
+    if linked_activity is not None:
+        valid_activity = c.execute(
+            "SELECT id FROM activities WHERE id=? AND project_id=?",
+            (linked_activity, pid)
+        ).fetchone()
+
+        if not valid_activity:
+            linked_activity = None
+
+    c.execute(
+        """
+        UPDATE procurement
+        SET activity_id=?,
+            item=?,
+            vendor=?,
+            required_on_site=?,
+            promised_date=?,
+            status=?,
+            notes=?
+        WHERE id=? AND project_id=?
+        """,
+        (
+            linked_activity,
+            item.strip(),
+            vendor.strip(),
+            required_on_site,
+            promised_date,
+            status,
+            notes.strip(),
+            item_id,
+            pid
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/procurement", status_code=303)
+
+
+@app.post("/procurement/{item_id}/delete")
+def delete_procurement(item_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        "DELETE FROM procurement WHERE id=? AND project_id=?",
+        (item_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/procurement", status_code=303)
+
+
+@app.get("/issues", response_class=HTMLResponse)
+def issues_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT i.*, a.external_id, a.name activity
+        FROM project_issues i
+        LEFT JOIN activities a ON a.id=i.activity_id
+        WHERE i.project_id=?
+        ORDER BY
+            CASE i.status
+                WHEN 'OPEN' THEN 1
+                WHEN 'ANSWERED' THEN 2
+                WHEN 'CLOSED' THEN 3
+                ELSE 4
+            END,
+            CASE i.priority
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'WATCH' THEN 3
+                ELSE 4
+            END,
+            i.due
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    today = date.today().isoformat()
+    open_items = [r for r in rows if r["status"] == "OPEN"]
+    overdue = [r for r in open_items if r["due"] and r["due"] < today]
+    answered = [r for r in rows if r["status"] == "ANSWERED"]
+
+    cards = ""
+
+    for r in rows:
+        activity_text = (
+            f'{esc(r["external_id"])} - {esc(r["activity"])}'
+            if r["external_id"]
+            else "No linked activity"
+        )
+
+        overdue_text = ""
+        if r["status"] == "OPEN" and r["due"] and r["due"] < today:
+            overdue_text = " · OVERDUE"
+
+        badge = r["priority"] if r["priority"] in ["CRITICAL","HIGH","WATCH","LOW"] else "OPEN"
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {badge}">{esc(r["priority"])}</span>
+                    <span class="badge OPEN">{esc(r["issue_type"])}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["title"])}</h3>
+                    <div class="muted">{activity_text}</div>
+                </div>
+
+                <a href="/issues/{r["id"]}/edit"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Edit
+                </a>
+            </div>
+
+            <p>{esc(r["description"]) or "No description entered."}</p>
+            <div class="small">
+                Owner: {esc(r["owner"]) or "Unassigned"} · Due {esc(r["due"]) or "—"}{overdue_text}
+            </div>
+
+            <div class="small" style="margin-top:8px;">
+                Status: {esc(r["status"])}
+            </div>
+
+            {"<p><b>Response:</b> " + esc(r["response"]) + "</p>" if r["response"] else ""}
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No RFIs or project issues logged yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">RFIs / Issues</div>
+                <h1>Track unanswered questions before they stop the field.</h1>
+                <div class="muted">
+                    Capture ownership, due dates, responses, and schedule exposure.
+                </div>
+            </div>
+
+            <a href="/issues/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add RFI / Issue
+            </a>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Open</div>
+            <div class="kpi">{len(open_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Overdue</div>
+            <div class="kpi">{len(overdue)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Answered</div>
+            <div class="kpi">{len(answered)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Total</div>
+            <div class="kpi">{len(rows)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("RFIs / Issues", body)
+
+
+@app.get("/issues/new", response_class=HTMLResponse)
+def new_issue_form():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    subs = c.execute(
+        """
+        SELECT name,trade
+        FROM subs
+        WHERE project_id=?
+        ORDER BY trade,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    activity_options = '<option value="">No linked activity</option>'
+    activity_options += "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    owner_options = '<option value="">Unassigned</option>'
+    owner_options += '<option value="Architect / Engineer">Architect / Engineer</option>'
+    owner_options += '<option value="Owner">Owner</option>'
+    owner_options += '<option value="Project Manager">Project Manager</option>'
+    owner_options += '<option value="Superintendent">Superintendent</option>'
+
+    for s in subs:
+        owner_options += (
+            f'<option value="{esc(s["name"])}">{esc(s["name"])} - {esc(s["trade"])}</option>'
+        )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">RFIs / Issues</div>
+        <h1>Add RFI or Project Issue</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/issues/new">
+
+            <label>Type</label>
+            <select name="issue_type">
+                <option value="RFI">RFI</option>
+                <option value="FIELD_ISSUE">Field Issue</option>
+                <option value="DESIGN">Design Issue</option>
+                <option value="COORDINATION">Coordination</option>
+                <option value="OWNER_DECISION">Owner Decision</option>
+            </select>
+
+            <label>Title</label>
+            <input
+                type="text"
+                name="title"
+                placeholder="Example: RFI - Beam conflict with duct route"
+                required
+            >
+
+            <label>Linked Activity</label>
+            <select name="activity_id">
+                {activity_options}
+            </select>
+
+            <label>Owner / Responsible Party</label>
+            <select name="owner">
+                {owner_options}
+            </select>
+
+            <div class="grid2">
+                <div>
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="WATCH">Watch</option>
+                        <option value="LOW">Low</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Due Date</label>
+                    <input type="date" name="due" required>
+                </div>
+            </div>
+
+            <label>Description</label>
+            <textarea
+                name="description"
+                placeholder="What is the question, conflict, or decision needed?"
+                required
+            ></textarea>
+
+            <button type="submit">Save RFI / Issue</button>
+        </form>
+    </div>
+    """
+
+    return shell("Add RFI / Issue", body)
+
+
+@app.post("/issues/new")
+def create_issue(
+    issue_type: str = Form(...),
+    title: str = Form(...),
+    activity_id: str = Form(""),
+    owner: str = Form(""),
+    priority: str = Form("HIGH"),
+    due: str = Form(...),
+    description: str = Form(...)
+):
+    pid = project_id()
+    linked_activity = int(activity_id) if activity_id.strip() else None
+
+    c = db()
+
+    if linked_activity is not None:
+        valid = c.execute(
+            "SELECT id FROM activities WHERE id=? AND project_id=?",
+            (linked_activity, pid)
+        ).fetchone()
+
+        if not valid:
+            linked_activity = None
+
+    c.execute(
+        """
+        INSERT INTO project_issues(
+            project_id,
+            activity_id,
+            issue_type,
+            title,
+            owner,
+            due,
+            priority,
+            status,
+            description,
+            response,
+            created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            linked_activity,
+            issue_type,
+            title.strip(),
+            owner.strip(),
+            due,
+            priority,
+            "OPEN",
+            description.strip(),
+            "",
+            date.today().isoformat()
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/issues", status_code=303)
+
+
+@app.get("/issues/{issue_id}/edit", response_class=HTMLResponse)
+def edit_issue_form(issue_id: int):
+    pid = project_id()
+    c = db()
+
+    item = c.execute(
+        """
+        SELECT *
+        FROM project_issues
+        WHERE id=? AND project_id=?
+        """,
+        (issue_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not item:
+        return RedirectResponse(url="/issues", status_code=303)
+
+    statuses = ["OPEN", "ANSWERED", "CLOSED"]
+    status_options = "".join(
+        f'<option value="{s}" {"selected" if item["status"] == s else ""}>{s.title()}</option>'
+        for s in statuses
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">RFIs / Issues</div>
+        <h1>Edit {esc(item["issue_type"])}</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/issues/{issue_id}/edit">
+
+            <label>Title</label>
+            <input type="text" name="title" value="{esc(item["title"])}" required>
+
+            <label>Owner / Responsible Party</label>
+            <input type="text" name="owner" value="{esc(item["owner"])}">
+
+            <div class="grid2">
+                <div>
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="CRITICAL" {"selected" if item["priority"]=="CRITICAL" else ""}>Critical</option>
+                        <option value="HIGH" {"selected" if item["priority"]=="HIGH" else ""}>High</option>
+                        <option value="WATCH" {"selected" if item["priority"]=="WATCH" else ""}>Watch</option>
+                        <option value="LOW" {"selected" if item["priority"]=="LOW" else ""}>Low</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Due Date</label>
+                    <input type="date" name="due" value="{esc(item["due"])}" required>
+                </div>
+            </div>
+
+            <label>Description</label>
+            <textarea name="description" required>{esc(item["description"])}</textarea>
+
+            <label>Response / Resolution</label>
+            <textarea name="response">{esc(item["response"])}</textarea>
+
+            <label>Status</label>
+            <select name="status">
+                {status_options}
+            </select>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Changes</button>
+                <a href="/issues"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+    """
+
+    return shell("Edit RFI / Issue", body)
+
+
+@app.post("/issues/{issue_id}/edit")
+def edit_issue(
+    issue_id: int,
+    title: str = Form(...),
+    owner: str = Form(""),
+    priority: str = Form("HIGH"),
+    due: str = Form(...),
+    description: str = Form(...),
+    response: str = Form(""),
+    status: str = Form("OPEN")
+):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE project_issues
+        SET title=?,
+            owner=?,
+            priority=?,
+            due=?,
+            description=?,
+            response=?,
+            status=?
+        WHERE id=? AND project_id=?
+        """,
+        (
+            title.strip(),
+            owner.strip(),
+            priority,
+            due,
+            description.strip(),
+            response.strip(),
+            status,
+            issue_id,
+            pid
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/issues", status_code=303)
+
+
+@app.get("/punch", response_class=HTMLResponse)
+def punch_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT p.*, a.external_id, a.name activity
+        FROM punch_items p
+        LEFT JOIN activities a ON a.id=p.activity_id
+        WHERE p.project_id=?
+        ORDER BY
+            CASE p.status
+                WHEN 'OPEN' THEN 1
+                WHEN 'CORRECTED' THEN 2
+                WHEN 'VERIFIED' THEN 3
+                ELSE 4
+            END,
+            CASE p.priority
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'WATCH' THEN 3
+                ELSE 4
+            END,
+            p.due
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    today = date.today().isoformat()
+
+    open_items = [r for r in rows if r["status"] == "OPEN"]
+    corrected_items = [r for r in rows if r["status"] == "CORRECTED"]
+    verified_items = [r for r in rows if r["status"] == "VERIFIED"]
+    overdue_items = [
+        r for r in open_items
+        if r["due"] and r["due"] < today
+    ]
+
+    cards = ""
+
+    for r in rows:
+        activity_text = (
+            f'{esc(r["external_id"])} - {esc(r["activity"])}'
+            if r["external_id"]
+            else "No linked activity"
+        )
+
+        badge = (
+            r["priority"]
+            if r["priority"] in ["CRITICAL", "HIGH", "WATCH", "LOW"]
+            else "OPEN"
+        )
+
+        overdue_text = ""
+        if r["status"] == "OPEN" and r["due"] and r["due"] < today:
+            overdue_text = " · OVERDUE"
+
+        if r["status"] == "OPEN":
+            action_buttons = f"""
+            <form method="post" action="/punch/{r["id"]}/corrected">
+                <button type="submit">Mark Corrected</button>
+            </form>
+            """
+        elif r["status"] == "CORRECTED":
+            action_buttons = f"""
+            <form method="post" action="/punch/{r["id"]}/verified">
+                <button type="submit">Verify Complete</button>
+            </form>
+            """
+        else:
+            action_buttons = '<span class="badge COMPLETE">VERIFIED</span>'
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {badge}">{esc(r["priority"])}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["title"])}</h3>
+                    <div class="muted">
+                        {esc(r["location"]) or "No location"} · {esc(r["trade"]) or "No trade"}
+                    </div>
+                </div>
+
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    {action_buttons}
+                    <a href="/punch/{r["id"]}/edit"
+                       style="color:#f0b44d;text-decoration:none;font-weight:700;padding:10px 2px;">
+                        Edit
+                    </a>
+                </div>
+            </div>
+
+            <p>{esc(r["description"]) or "No description entered."}</p>
+
+            <div class="small">
+                {activity_text}
+            </div>
+
+            <div class="small">
+                Owner: {esc(r["owner"]) or "Unassigned"} ·
+                Due {esc(r["due"]) or "—"}{overdue_text} ·
+                Status: {esc(r["status"])}
+            </div>
+
+            {"<p><b>Resolution:</b> " + esc(r["resolution"]) + "</p>" if r["resolution"] else ""}
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No punch or quality items logged yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Quality / Punch List</div>
+                <h1>Track deficiencies until they are corrected and verified.</h1>
+                <div class="muted">
+                    Assign ownership, due dates, location, trade, and final resolution.
+                </div>
+            </div>
+
+            <a href="/punch/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Punch Item
+            </a>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Open</div>
+            <div class="kpi">{len(open_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Overdue</div>
+            <div class="kpi">{len(overdue_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Corrected</div>
+            <div class="kpi">{len(corrected_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Verified</div>
+            <div class="kpi">{len(verified_items)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Punch List", body)
+
+
+@app.get("/punch/new", response_class=HTMLResponse)
+def new_punch_form():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    subs = c.execute(
+        """
+        SELECT name,trade
+        FROM subs
+        WHERE project_id=?
+        ORDER BY trade,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    activity_options = '<option value="">No linked activity</option>'
+    activity_options += "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    owner_options = '<option value="">Unassigned</option>'
+    owner_options += '<option value="Superintendent">Superintendent</option>'
+    owner_options += '<option value="Project Manager">Project Manager</option>'
+
+    for s in subs:
+        owner_options += (
+            f'<option value="{esc(s["name"])}">{esc(s["name"])} - {esc(s["trade"])}</option>'
+        )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Quality / Punch List</div>
+        <h1>Add Punch Item</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/punch/new">
+
+            <label>Item Title</label>
+            <input
+                type="text"
+                name="title"
+                placeholder="Example: Repair damaged drywall at Room 214"
+                required
+            >
+
+            <label>Location</label>
+            <input
+                type="text"
+                name="location"
+                placeholder="Example: Level 2 - Room 214"
+            >
+
+            <label>Linked Activity</label>
+            <select name="activity_id">
+                {activity_options}
+            </select>
+
+            <label>Trade</label>
+            <input
+                type="text"
+                name="trade"
+                placeholder="Example: Drywall"
+            >
+
+            <label>Owner / Responsible Party</label>
+            <select name="owner">
+                {owner_options}
+            </select>
+
+            <div class="grid2">
+                <div>
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="WATCH">Watch</option>
+                        <option value="LOW">Low</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Due Date</label>
+                    <input type="date" name="due" required>
+                </div>
+            </div>
+
+            <label>Description</label>
+            <textarea
+                name="description"
+                placeholder="Describe the deficiency and what acceptable correction looks like."
+                required
+            ></textarea>
+
+            <button type="submit">Save Punch Item</button>
+        </form>
+    </div>
+    """
+
+    return shell("Add Punch Item", body)
+
+
+@app.post("/punch/new")
+def create_punch(
+    title: str = Form(...),
+    location: str = Form(""),
+    activity_id: str = Form(""),
+    trade: str = Form(""),
+    owner: str = Form(""),
+    priority: str = Form("HIGH"),
+    due: str = Form(...),
+    description: str = Form(...)
+):
+    pid = project_id()
+    linked_activity = int(activity_id) if activity_id.strip() else None
+
+    c = db()
+
+    if linked_activity is not None:
+        valid = c.execute(
+            "SELECT id FROM activities WHERE id=? AND project_id=?",
+            (linked_activity, pid)
+        ).fetchone()
+
+        if not valid:
+            linked_activity = None
+
+    c.execute(
+        """
+        INSERT INTO punch_items(
+            project_id,
+            activity_id,
+            title,
+            location,
+            trade,
+            owner,
+            priority,
+            due,
+            status,
+            description,
+            resolution,
+            created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            linked_activity,
+            title.strip(),
+            location.strip(),
+            trade.strip(),
+            owner.strip(),
+            priority,
+            due,
+            "OPEN",
+            description.strip(),
+            "",
+            date.today().isoformat()
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/punch", status_code=303)
+
+
+@app.get("/punch/{item_id}/edit", response_class=HTMLResponse)
+def edit_punch_form(item_id: int):
+    pid = project_id()
+    c = db()
+
+    item = c.execute(
+        """
+        SELECT *
+        FROM punch_items
+        WHERE id=? AND project_id=?
+        """,
+        (item_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not item:
+        return RedirectResponse(url="/punch", status_code=303)
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Quality / Punch List</div>
+        <h1>Edit Punch Item</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/punch/{item_id}/edit">
+
+            <label>Item Title</label>
+            <input type="text" name="title" value="{esc(item["title"])}" required>
+
+            <label>Location</label>
+            <input type="text" name="location" value="{esc(item["location"])}">
+
+            <label>Trade</label>
+            <input type="text" name="trade" value="{esc(item["trade"])}">
+
+            <label>Owner</label>
+            <input type="text" name="owner" value="{esc(item["owner"])}">
+
+            <div class="grid2">
+                <div>
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="CRITICAL" {"selected" if item["priority"]=="CRITICAL" else ""}>Critical</option>
+                        <option value="HIGH" {"selected" if item["priority"]=="HIGH" else ""}>High</option>
+                        <option value="WATCH" {"selected" if item["priority"]=="WATCH" else ""}>Watch</option>
+                        <option value="LOW" {"selected" if item["priority"]=="LOW" else ""}>Low</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Due Date</label>
+                    <input type="date" name="due" value="{esc(item["due"])}" required>
+                </div>
+            </div>
+
+            <label>Description</label>
+            <textarea name="description" required>{esc(item["description"])}</textarea>
+
+            <label>Resolution</label>
+            <textarea name="resolution">{esc(item["resolution"])}</textarea>
+
+            <button type="submit">Save Changes</button>
+        </form>
+    </div>
+    """
+
+    return shell("Edit Punch Item", body)
+
+
+@app.post("/punch/{item_id}/edit")
+def edit_punch(
+    item_id: int,
+    title: str = Form(...),
+    location: str = Form(""),
+    trade: str = Form(""),
+    owner: str = Form(""),
+    priority: str = Form("HIGH"),
+    due: str = Form(...),
+    description: str = Form(...),
+    resolution: str = Form("")
+):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE punch_items
+        SET title=?,
+            location=?,
+            trade=?,
+            owner=?,
+            priority=?,
+            due=?,
+            description=?,
+            resolution=?
+        WHERE id=? AND project_id=?
+        """,
+        (
+            title.strip(),
+            location.strip(),
+            trade.strip(),
+            owner.strip(),
+            priority,
+            due,
+            description.strip(),
+            resolution.strip(),
+            item_id,
+            pid
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/punch", status_code=303)
+
+
+@app.post("/punch/{item_id}/corrected")
+def mark_punch_corrected(item_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE punch_items
+        SET status='CORRECTED'
+        WHERE id=? AND project_id=?
+        """,
+        (item_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/punch", status_code=303)
+
+
+@app.post("/punch/{item_id}/verified")
+def mark_punch_verified(item_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE punch_items
+        SET status='VERIFIED'
+        WHERE id=? AND project_id=?
+        """,
+        (item_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/punch", status_code=303)
+
+
+@app.get("/inspections", response_class=HTMLResponse)
+def inspections_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT i.*, a.external_id, a.name activity
+        FROM inspections_tracker i
+        LEFT JOIN activities a ON a.id=i.activity_id
+        WHERE i.project_id=?
+        ORDER BY
+            CASE i.result
+                WHEN 'FAILED' THEN 1
+                WHEN 'PENDING' THEN 2
+                WHEN 'SCHEDULED' THEN 3
+                WHEN 'PASSED' THEN 4
+                ELSE 5
+            END,
+            i.scheduled_date
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    today = date.today().isoformat()
+
+    pending = [r for r in rows if r["result"] in ["PENDING", "SCHEDULED"]]
+    failed = [r for r in rows if r["result"] == "FAILED"]
+    passed = [r for r in rows if r["result"] == "PASSED"]
+    overdue = [
+        r for r in pending
+        if r["scheduled_date"] and r["scheduled_date"] < today
+    ]
+
+    cards = ""
+
+    for r in rows:
+        activity_text = (
+            f'{esc(r["external_id"])} - {esc(r["activity"])}'
+            if r["external_id"]
+            else "No linked activity"
+        )
+
+        if r["result"] == "PASSED":
+            badge = "READY"
+        elif r["result"] == "FAILED":
+            badge = "CRITICAL"
+        elif r["result"] == "SCHEDULED":
+            badge = "WATCH"
+        else:
+            badge = "OPEN"
+
+        reinspection = (
+            f' · Reinspection {esc(r["reinspection_date"])}'
+            if r["reinspection_date"]
+            else ""
+        )
+
+        overdue_text = ""
+        if r["result"] in ["PENDING", "SCHEDULED"] and r["scheduled_date"] and r["scheduled_date"] < today:
+            overdue_text = " · OVERDUE"
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {badge}">{esc(r["result"])}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["inspection_type"])}</h3>
+                    <div class="muted">{activity_text}</div>
+                </div>
+
+                <a href="/inspections/{r["id"]}/edit"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Edit
+                </a>
+            </div>
+
+            <p>{esc(r["notes"]) or "No notes entered."}</p>
+
+            <div class="small">
+                Authority: {esc(r["authority"]) or "—"} ·
+                Scheduled {esc(r["scheduled_date"]) or "—"}{overdue_text}{reinspection}
+            </div>
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No inspections logged yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Inspection Intelligence</div>
+                <h1>Know which inspection can stop the next activity.</h1>
+                <div class="muted">
+                    Track scheduled inspections, pass/fail results, authorities, and reinspections.
+                </div>
+            </div>
+
+            <a href="/inspections/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Inspection
+            </a>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Pending</div>
+            <div class="kpi">{len(pending)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Overdue</div>
+            <div class="kpi">{len(overdue)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Failed</div>
+            <div class="kpi">{len(failed)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Passed</div>
+            <div class="kpi">{len(passed)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Inspections", body)
+
+
+@app.get("/inspections/new", response_class=HTMLResponse)
+def new_inspection_form():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    activity_options = '<option value="">No linked activity</option>'
+    activity_options += "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Inspection Intelligence</div>
+        <h1>Add Inspection</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/inspections/new">
+
+            <label>Inspection Type</label>
+            <input
+                type="text"
+                name="inspection_type"
+                placeholder="Example: Above Ceiling Inspection"
+                required
+            >
+
+            <label>Linked Activity</label>
+            <select name="activity_id">
+                {activity_options}
+            </select>
+
+            <label>Authority / Inspector</label>
+            <input
+                type="text"
+                name="authority"
+                placeholder="Example: City of Phoenix"
+            >
+
+            <label>Scheduled Date</label>
+            <input type="date" name="scheduled_date" required>
+
+            <label>Result</label>
+            <select name="result">
+                <option value="PENDING">Pending</option>
+                <option value="SCHEDULED">Scheduled</option>
+                <option value="PASSED">Passed</option>
+                <option value="FAILED">Failed</option>
+            </select>
+
+            <label>Reinspection Date</label>
+            <input type="date" name="reinspection_date">
+
+            <label>Notes</label>
+            <textarea
+                name="notes"
+                placeholder="Required corrections, prerequisites, inspector comments, etc."
+            ></textarea>
+
+            <button type="submit">Save Inspection</button>
+        </form>
+    </div>
+    """
+
+    return shell("Add Inspection", body)
+
+
+@app.post("/inspections/new")
+def create_inspection(
+    inspection_type: str = Form(...),
+    activity_id: str = Form(""),
+    authority: str = Form(""),
+    scheduled_date: str = Form(...),
+    result: str = Form("PENDING"),
+    reinspection_date: str = Form(""),
+    notes: str = Form("")
+):
+    pid = project_id()
+    linked_activity = int(activity_id) if activity_id.strip() else None
+
+    c = db()
+
+    if linked_activity is not None:
+        valid = c.execute(
+            "SELECT id FROM activities WHERE id=? AND project_id=?",
+            (linked_activity, pid)
+        ).fetchone()
+        if not valid:
+            linked_activity = None
+
+    c.execute(
+        """
+        INSERT INTO inspections_tracker(
+            project_id,
+            activity_id,
+            inspection_type,
+            authority,
+            scheduled_date,
+            result,
+            reinspection_date,
+            notes,
+            created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            linked_activity,
+            inspection_type.strip(),
+            authority.strip(),
+            scheduled_date,
+            result,
+            reinspection_date,
+            notes.strip(),
+            date.today().isoformat()
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/inspections", status_code=303)
+
+
+@app.get("/inspections/{inspection_id}/edit", response_class=HTMLResponse)
+def edit_inspection_form(inspection_id: int):
+    pid = project_id()
+    c = db()
+
+    item = c.execute(
+        """
+        SELECT *
+        FROM inspections_tracker
+        WHERE id=? AND project_id=?
+        """,
+        (inspection_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not item:
+        return RedirectResponse(url="/inspections", status_code=303)
+
+    results = ["PENDING", "SCHEDULED", "PASSED", "FAILED"]
+    result_options = "".join(
+        f'<option value="{r}" {"selected" if item["result"] == r else ""}>{r.title()}</option>'
+        for r in results
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Inspection Intelligence</div>
+        <h1>Edit Inspection</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/inspections/{inspection_id}/edit">
+
+            <label>Inspection Type</label>
+            <input type="text" name="inspection_type" value="{esc(item["inspection_type"])}" required>
+
+            <label>Authority / Inspector</label>
+            <input type="text" name="authority" value="{esc(item["authority"])}">
+
+            <label>Scheduled Date</label>
+            <input type="date" name="scheduled_date" value="{esc(item["scheduled_date"])}" required>
+
+            <label>Result</label>
+            <select name="result">
+                {result_options}
+            </select>
+
+            <label>Reinspection Date</label>
+            <input type="date" name="reinspection_date" value="{esc(item["reinspection_date"])}">
+
+            <label>Notes</label>
+            <textarea name="notes">{esc(item["notes"])}</textarea>
+
+            <button type="submit">Save Changes</button>
+        </form>
+    </div>
+    """
+
+    return shell("Edit Inspection", body)
+
+
+@app.post("/inspections/{inspection_id}/edit")
+def edit_inspection(
+    inspection_id: int,
+    inspection_type: str = Form(...),
+    authority: str = Form(""),
+    scheduled_date: str = Form(...),
+    result: str = Form("PENDING"),
+    reinspection_date: str = Form(""),
+    notes: str = Form("")
+):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE inspections_tracker
+        SET inspection_type=?,
+            authority=?,
+            scheduled_date=?,
+            result=?,
+            reinspection_date=?,
+            notes=?
+        WHERE id=? AND project_id=?
+        """,
+        (
+            inspection_type.strip(),
+            authority.strip(),
+            scheduled_date,
+            result,
+            reinspection_date,
+            notes.strip(),
+            inspection_id,
+            pid
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/inspections", status_code=303)
+
+
+@app.get("/submittals", response_class=HTMLResponse)
+def submittals_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT s.*, a.external_id, a.name activity
+        FROM submittals s
+        LEFT JOIN activities a ON a.id=s.activity_id
+        WHERE s.project_id=?
+        ORDER BY
+            CASE s.status
+                WHEN 'REJECTED' THEN 1
+                WHEN 'PENDING' THEN 2
+                WHEN 'SUBMITTED' THEN 3
+                WHEN 'APPROVED_AS_NOTED' THEN 4
+                WHEN 'APPROVED' THEN 5
+                ELSE 6
+            END,
+            s.due_date
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    today = date.today().isoformat()
+
+    pending = [r for r in rows if r["status"] in ["PENDING", "SUBMITTED"]]
+    rejected = [r for r in rows if r["status"] == "REJECTED"]
+    approved = [r for r in rows if r["status"] in ["APPROVED", "APPROVED_AS_NOTED"]]
+    overdue = [
+        r for r in pending
+        if r["due_date"] and r["due_date"] < today
+    ]
+
+    cards = ""
+
+    for r in rows:
+        activity_text = (
+            f'{esc(r["external_id"])} - {esc(r["activity"])}'
+            if r["external_id"]
+            else "No linked activity"
+        )
+
+        if r["status"] == "REJECTED":
+            badge = "CRITICAL"
+        elif r["status"] in ["PENDING", "SUBMITTED"]:
+            badge = "WATCH"
+        elif r["status"] in ["APPROVED", "APPROVED_AS_NOTED"]:
+            badge = "READY"
+        else:
+            badge = "OPEN"
+
+        overdue_text = ""
+        if r["status"] in ["PENDING", "SUBMITTED"] and r["due_date"] and r["due_date"] < today:
+            overdue_text = " · OVERDUE"
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {badge}">{esc(r["status"]).replace("_"," ")}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["title"])}</h3>
+                    <div class="muted">{activity_text}</div>
+                </div>
+
+                <a href="/submittals/{r["id"]}/edit"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Edit
+                </a>
+            </div>
+
+            <div class="grid3" style="margin-top:14px;">
+                <div>
+                    <div class="label">Spec Section</div>
+                    <div>{esc(r["spec_section"]) or "—"}</div>
+                </div>
+
+                <div>
+                    <div class="label">Responsible</div>
+                    <div>{esc(r["responsible_party"]) or "—"}</div>
+                </div>
+
+                <div>
+                    <div class="label">Due</div>
+                    <div>{esc(r["due_date"]) or "—"}{overdue_text}</div>
+                </div>
+            </div>
+
+            <p>{esc(r["notes"]) or "No notes entered."}</p>
+            <div class="small">Sent: {esc(r["sent_date"]) or "—"}</div>
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No submittals logged yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Document Control</div>
+                <h1>Track submittals before approvals become schedule blockers.</h1>
+                <div class="muted">
+                    Monitor due dates, approval status, responsible party, and linked work.
+                </div>
+            </div>
+
+            <a href="/submittals/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Submittal
+            </a>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Pending</div>
+            <div class="kpi">{len(pending)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Overdue</div>
+            <div class="kpi">{len(overdue)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Rejected</div>
+            <div class="kpi">{len(rejected)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Approved</div>
+            <div class="kpi">{len(approved)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards}
+    </div>
+    """
+
+    return shell("Submittals", body)
+
+
+@app.get("/submittals/new", response_class=HTMLResponse)
+def new_submittal_form():
+    pid = project_id()
+    c = db()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    subs = c.execute(
+        """
+        SELECT name,trade
+        FROM subs
+        WHERE project_id=?
+        ORDER BY trade,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    activity_options = '<option value="">No linked activity</option>'
+    activity_options += "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    responsible_options = '<option value="">Unassigned</option>'
+    responsible_options += '<option value="Project Manager">Project Manager</option>'
+    responsible_options += '<option value="Architect / Engineer">Architect / Engineer</option>'
+
+    for s in subs:
+        responsible_options += (
+            f'<option value="{esc(s["name"])}">{esc(s["name"])} - {esc(s["trade"])}</option>'
+        )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Document Control</div>
+        <h1>Add Submittal</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/submittals/new">
+
+            <label>Submittal Title</label>
+            <input type="text" name="title" placeholder="Example: Electrical Switchgear Product Data" required>
+
+            <label>Spec Section</label>
+            <input type="text" name="spec_section" placeholder="Example: 26 24 16">
+
+            <label>Linked Activity</label>
+            <select name="activity_id">
+                {activity_options}
+            </select>
+
+            <label>Responsible Party</label>
+            <select name="responsible_party">
+                {responsible_options}
+            </select>
+
+            <div class="grid2">
+                <div>
+                    <label>Sent Date</label>
+                    <input type="date" name="sent_date">
+                </div>
+
+                <div>
+                    <label>Due Date</label>
+                    <input type="date" name="due_date" required>
+                </div>
+            </div>
+
+            <label>Status</label>
+            <select name="status">
+                <option value="PENDING">Pending</option>
+                <option value="SUBMITTED">Submitted</option>
+                <option value="APPROVED">Approved</option>
+                <option value="APPROVED_AS_NOTED">Approved As Noted</option>
+                <option value="REJECTED">Rejected / Revise & Resubmit</option>
+            </select>
+
+            <label>Notes</label>
+            <textarea name="notes" placeholder="Review comments, lead-time impact, release constraints, etc."></textarea>
+
+            <button type="submit">Save Submittal</button>
+        </form>
+    </div>
+    """
+
+    return shell("Add Submittal", body)
+
+
+@app.post("/submittals/new")
+def create_submittal(
+    title: str = Form(...),
+    spec_section: str = Form(""),
+    activity_id: str = Form(""),
+    responsible_party: str = Form(""),
+    sent_date: str = Form(""),
+    due_date: str = Form(...),
+    status: str = Form("PENDING"),
+    notes: str = Form("")
+):
+    pid = project_id()
+    linked_activity = int(activity_id) if activity_id.strip() else None
+
+    c = db()
+
+    if linked_activity is not None:
+        valid = c.execute(
+            "SELECT id FROM activities WHERE id=? AND project_id=?",
+            (linked_activity, pid)
+        ).fetchone()
+        if not valid:
+            linked_activity = None
+
+    c.execute(
+        """
+        INSERT INTO submittals(
+            project_id, activity_id, title, spec_section, responsible_party,
+            sent_date, due_date, status, notes, created
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            linked_activity,
+            title.strip(),
+            spec_section.strip(),
+            responsible_party.strip(),
+            sent_date,
+            due_date,
+            status,
+            notes.strip(),
+            date.today().isoformat()
+        )
+    )
+
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/submittals", status_code=303)
+
+
+@app.get("/submittals/{submittal_id}/edit", response_class=HTMLResponse)
+def edit_submittal_form(submittal_id: int):
+    pid = project_id()
+    c = db()
+
+    item = c.execute(
+        "SELECT * FROM submittals WHERE id=? AND project_id=?",
+        (submittal_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not item:
+        return RedirectResponse(url="/submittals", status_code=303)
+
+    statuses = ["PENDING", "SUBMITTED", "APPROVED", "APPROVED_AS_NOTED", "REJECTED"]
+    status_options = "".join(
+        f'<option value="{s}" {"selected" if item["status"] == s else ""}>{s.replace("_"," ").title()}</option>'
+        for s in statuses
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Document Control</div>
+        <h1>Edit Submittal</h1>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/submittals/{submittal_id}/edit">
+
+            <label>Submittal Title</label>
+            <input type="text" name="title" value="{esc(item["title"])}" required>
+
+            <label>Spec Section</label>
+            <input type="text" name="spec_section" value="{esc(item["spec_section"])}">
+
+            <label>Responsible Party</label>
+            <input type="text" name="responsible_party" value="{esc(item["responsible_party"])}">
+
+            <div class="grid2">
+                <div>
+                    <label>Sent Date</label>
+                    <input type="date" name="sent_date" value="{esc(item["sent_date"])}">
+                </div>
+
+                <div>
+                    <label>Due Date</label>
+                    <input type="date" name="due_date" value="{esc(item["due_date"])}" required>
+                </div>
+            </div>
+
+            <label>Status</label>
+            <select name="status">
+                {status_options}
+            </select>
+
+            <label>Notes</label>
+            <textarea name="notes">{esc(item["notes"])}</textarea>
+
+            <button type="submit">Save Changes</button>
+        </form>
+    </div>
+    """
+
+    return shell("Edit Submittal", body)
+
+
+@app.post("/submittals/{submittal_id}/edit")
+def edit_submittal(
+    submittal_id: int,
+    title: str = Form(...),
+    spec_section: str = Form(""),
+    responsible_party: str = Form(""),
+    sent_date: str = Form(""),
+    due_date: str = Form(...),
+    status: str = Form("PENDING"),
+    notes: str = Form("")
+):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE submittals
+        SET title=?,
+            spec_section=?,
+            responsible_party=?,
+            sent_date=?,
+            due_date=?,
+            status=?,
+            notes=?
+        WHERE id=? AND project_id=?
+        """,
+        (
+            title.strip(),
+            spec_section.strip(),
+            responsible_party.strip(),
+            sent_date,
+            due_date,
+            status,
+            notes.strip(),
+            submittal_id,
+            pid
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/submittals", status_code=303)
