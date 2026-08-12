@@ -31,6 +31,26 @@ def init():
         created TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS daily_report_analysis(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        report_id INTEGER,
+        analysis_text TEXT,
+        created TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS action_items(
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER,
+        title TEXT,
+        owner TEXT,
+        priority TEXT,
+        due TEXT,
+        status TEXT DEFAULT 'OPEN',
+        notes TEXT,
+        created TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS app_state(
         id INTEGER PRIMARY KEY,
         selected_project_id INTEGER
@@ -243,7 +263,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:850px){.app{grid-template-columns:1fr}.grid4,.grid3,.grid2{grid-template-columns:1fr}.main{padding:14px}}
 """
 
-NAV=[("Daily Command","/"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
+NAV=[("Daily Command","/"),("Action Center","/actions"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -616,30 +636,439 @@ def add_field(activity_id:int=Form(...),update_type:str=Form(...),text:str=Form(
 
 @app.get("/subcontractors",response_class=HTMLResponse)
 def subcontractors():
-    pid=project_id()
-    c=db()
-    rows=c.execute("SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",(pid,)).fetchall()
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT *
+        FROM subs
+        WHERE project_id=?
+        ORDER BY trade,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    updates = c.execute(
+        """
+        SELECT u.*, s.name sub_name, s.trade
+        FROM subcontractor_updates u
+        JOIN subs s ON s.id=u.sub_id
+        WHERE u.project_id=?
+        ORDER BY u.update_date DESC, u.id DESC
+        LIMIT 25
+        """,
+        (pid,)
+    ).fetchall()
+
     c.close()
-    html="".join(
-        f'<div class="card"><h3>{esc(r["name"])}</h3><div class="muted">{esc(r["trade"])}</div>'
-        f'<p>Commitments, manpower, production, constraints and early-warning behavior feed the operating loop.</p></div>'
-        for r in rows
-    ) or '<div class="card"><div class="muted">No subcontractors added yet.</div></div>'
-    body = (
-        '<div class="hero"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">'
-        '<div><div class="eyebrow">Subcontractor Intelligence</div><h1>Trade partners in the execution loop.</h1></div>'
-        '<a href="/subcontractors/new" style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">+ Add Subcontractor</a>'
-        '</div></div><div class="grid3">'+html+'</div>'
-    )
+
+    latest_by_sub = {}
+    for u in updates:
+        if u["sub_id"] not in latest_by_sub:
+            latest_by_sub[u["sub_id"]] = u
+
+    cards = ""
+
+    for r in rows:
+        latest = latest_by_sub.get(r["id"])
+
+        if latest:
+            status = latest["status"] or "WATCH"
+            status_badge = status if status in ["CRITICAL","HIGH","WATCH","READY","LOW"] else "OPEN"
+
+            detail = f"""
+            <div class="small">Latest Update: {esc(latest["update_date"])}</div>
+            <p><b>Manpower:</b> {latest["manpower"] or 0}</p>
+            <p><b>Commitment:</b> {esc(latest["commitment"]) or "—"}</p>
+            <p><b>Issue:</b> {esc(latest["issue"]) or "—"}</p>
+            <span class="badge {status_badge}">{esc(status)}</span>
+            """
+        else:
+            detail = '<div class="muted">No field update recorded yet.</div>'
+
+        cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">
+                <div>
+                    <h3 style="margin-top:0;">{esc(r["name"])}</h3>
+                    <div class="muted">{esc(r["trade"])}</div>
+                </div>
+
+                <a href="/subcontractors/{r["id"]}/update"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Log Update
+                </a>
+            </div>
+
+            <div style="margin-top:14px;">
+                {detail}
+            </div>
+        </div>
+        """
+
+    if not cards:
+        cards = '<div class="card"><div class="muted">No subcontractors added yet.</div></div>'
+
+    recent_html = "".join(
+        f"""
+        <div class="action">
+            <span class="badge {u["status"] if u["status"] in ["CRITICAL","HIGH","WATCH","READY","LOW"] else "OPEN"}">
+                {esc(u["status"])}
+            </span>
+            <b>{esc(u["sub_name"])}</b> · {esc(u["trade"])}
+            <div class="small">{esc(u["update_date"])} · Manpower {u["manpower"] or 0}</div>
+            <div>{esc(u["commitment"]) or "No commitment entered."}</div>
+            <div class="small">{esc(u["issue"]) or "No issue entered."}</div>
+        </div>
+        """
+        for u in updates[:12]
+    ) or '<div class="muted">No subcontractor updates yet.</div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Subcontractor Intelligence</div>
+                <h1>Know who is committed, who is staffed, and who needs attention.</h1>
+            </div>
+
+            <a href="/subcontractors/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Subcontractor
+            </a>
+        </div>
+    </div>
+
+    <div class="grid3">
+        {cards}
+    </div>
+
+    <div class="card">
+        <h2>Recent Trade Partner Updates</h2>
+        {recent_html}
+    </div>
+    """
+
     return shell("Subcontractors", body)
+
+
+@app.get("/subcontractors/{sub_id}/update", response_class=HTMLResponse)
+def subcontractor_update_form(sub_id: int):
+    pid = project_id()
+    c = db()
+
+    sub = c.execute(
+        """
+        SELECT *
+        FROM subs
+        WHERE id=? AND project_id=?
+        """,
+        (sub_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not sub:
+        return RedirectResponse(url="/subcontractors", status_code=303)
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Subcontractor Intelligence</div>
+        <h1>Log Trade Partner Update</h1>
+        <div class="muted">{esc(sub["name"])} · {esc(sub["trade"])}</div>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/subcontractors/{sub_id}/update">
+
+            <label>Update Date</label>
+            <input type="date" name="update_date" value="{date.today().isoformat()}" required>
+
+            <label>Manpower</label>
+            <input type="number" name="manpower" min="0" value="0">
+
+            <label>Commitment</label>
+            <textarea
+                name="commitment"
+                placeholder="Example: Complete level 2 overhead rough-in by Friday."
+            ></textarea>
+
+            <label>Issue / Constraint</label>
+            <textarea
+                name="issue"
+                placeholder="Example: Waiting on sleeves and access above ceiling."
+            ></textarea>
+
+            <label>Status</label>
+            <select name="status">
+                <option value="READY">Ready / On Track</option>
+                <option value="WATCH">Watch</option>
+                <option value="HIGH">High Concern</option>
+                <option value="CRITICAL">Critical</option>
+                <option value="LOW">Low Concern</option>
+            </select>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Update</button>
+
+                <a href="/subcontractors"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+    """
+
+    return shell("Subcontractor Update", body)
+
+
+@app.post("/subcontractors/{sub_id}/update")
+def save_subcontractor_update(
+    sub_id: int,
+    update_date: str = Form(...),
+    manpower: int = Form(0),
+    commitment: str = Form(""),
+    issue: str = Form(""),
+    status: str = Form("WATCH")
+):
+    pid = project_id()
+    c = db()
+
+    sub = c.execute(
+        "SELECT id FROM subs WHERE id=? AND project_id=?",
+        (sub_id, pid)
+    ).fetchone()
+
+    if sub:
+        c.execute(
+            """
+            INSERT INTO subcontractor_updates(
+                project_id,
+                sub_id,
+                update_date,
+                manpower,
+                commitment,
+                issue,
+                status,
+                created
+            )
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (
+                pid,
+                sub_id,
+                update_date,
+                manpower,
+                commitment.strip(),
+                issue.strip(),
+                status,
+                date.today().isoformat()
+            )
+        )
+        c.commit()
+
+    c.close()
+
+    return RedirectResponse(url="/subcontractors", status_code=303)
+
 
 @app.get("/production",response_class=HTMLResponse)
 def production():
-    pid=project_id(); c=db(); acts=c.execute("SELECT id,external_id,name FROM activities WHERE project_id=?",(pid,)).fetchall(); rows=c.execute("SELECT p.*,a.name activity FROM production p JOIN activities a ON a.id=p.activity_id WHERE p.project_id=? ORDER BY p.id DESC LIMIT 20",(pid,)).fetchall(); c.close()
-    opts="".join(f'<option value="{a["id"]}">{a["external_id"]} - {esc(a["name"])}</option>' for a in acts)
-    tr="".join(f'<tr><td>{r["work_date"]}</td><td>{esc(r["activity"])}</td><td>{r["crew"]}</td><td>{r["qty"]}</td><td>{r["unit"]}</td><td>{r["planned_qty"]}</td></tr>' for r in rows)
-    body=f'<div class="hero"><div class="eyebrow">Production Intelligence</div><h1>Measure the job before the schedule update does.</h1></div><div class="grid2"><div class="card"><form method="post" action="/production/add"><select name="activity_id">{opts}</select><br><br><input name="crew" type="number" placeholder="Crew size"><br><br><input name="qty" type="number" step="0.1" placeholder="Installed quantity"><br><br><input name="planned_qty" type="number" step="0.1" placeholder="Planned quantity"><br><br><input name="unit" placeholder="LF / SF / CY / EA"><br><br><button>Record production</button></form></div><div class="card"><table><tr><th>Date</th><th>Activity</th><th>Crew</th><th>Qty</th><th>Unit</th><th>Plan</th></tr>{tr}</table></div></div>'
-    return shell("Production",body)
+    pid = project_id()
+    c = db()
+
+    acts = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    rows = c.execute(
+        """
+        SELECT p.*,a.external_id,a.name activity
+        FROM production p
+        JOIN activities a ON a.id=p.activity_id
+        WHERE p.project_id=?
+        ORDER BY p.work_date DESC,p.id DESC
+        LIMIT 30
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    opts = "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in acts
+    )
+
+    total_qty = sum((r["qty"] or 0) for r in rows)
+    total_plan = sum((r["planned_qty"] or 0) for r in rows)
+
+    overall_pct = 0
+    if total_plan > 0:
+        overall_pct = (total_qty / total_plan) * 100
+
+    behind_count = 0
+    onplan_count = 0
+
+    tr = ""
+
+    for r in rows:
+        qty = r["qty"] or 0
+        plan = r["planned_qty"] or 0
+
+        if plan > 0:
+            pct = (qty / plan) * 100
+            variance = qty - plan
+
+            if pct < 90:
+                status = "BEHIND"
+                badge = "CRITICAL"
+                behind_count += 1
+            elif pct < 100:
+                status = "WATCH"
+                badge = "WATCH"
+            else:
+                status = "ON PLAN"
+                badge = "READY"
+                onplan_count += 1
+        else:
+            pct = 0
+            variance = qty
+            status = "NO PLAN"
+            badge = "OPEN"
+
+        tr += f"""
+        <tr>
+            <td>{esc(r["work_date"])}</td>
+            <td><b>{esc(r["external_id"])} - {esc(r["activity"])}</b></td>
+            <td>{r["crew"] or 0}</td>
+            <td>{qty:g}</td>
+            <td>{plan:g}</td>
+            <td>{esc(r["unit"])}</td>
+            <td>{pct:.0f}%</td>
+            <td>{variance:+g}</td>
+            <td><span class="badge {badge}">{status}</span></td>
+        </tr>
+        """
+
+    if not tr:
+        tr = '<tr><td colspan="9" class="muted">No production records yet.</td></tr>'
+
+    if not opts:
+        form_html = """
+        <div class="muted">
+            Add a schedule activity before recording production.
+        </div>
+        <div style="margin-top:12px;">
+            <a href="/activities/new"
+               style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                + Add Activity
+            </a>
+        </div>
+        """
+    else:
+        form_html = f"""
+        <form method="post" action="/production/add">
+            <label>Activity</label>
+            <select name="activity_id" required>{opts}</select>
+
+            <label>Crew Size</label>
+            <input name="crew" type="number" min="0" placeholder="Example: 6">
+
+            <label>Installed Quantity</label>
+            <input name="qty" type="number" step="0.1" placeholder="Example: 420">
+
+            <label>Planned Quantity</label>
+            <input name="planned_qty" type="number" step="0.1" placeholder="Example: 500">
+
+            <label>Unit</label>
+            <input name="unit" placeholder="LF / SF / CY / EA">
+
+            <button type="submit">Record Production</button>
+        </form>
+        """
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Production Intelligence</div>
+        <h1>Measure the job before the schedule update does.</h1>
+        <div class="muted">
+            Track actual production against plan and flag underperformance early.
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Production Records</div>
+            <div class="kpi">{len(rows)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Overall To Plan</div>
+            <div class="kpi">{overall_pct:.0f}%</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Behind Plan</div>
+            <div class="kpi">{behind_count}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">On / Above Plan</div>
+            <div class="kpi">{onplan_count}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        <div class="card">
+            <h2>Record Production</h2>
+            {form_html}
+        </div>
+
+        <div class="card">
+            <h2>How BuildCommand Reads It</h2>
+            <p>
+                Below 90% of planned production is flagged as <b>Behind</b>.
+                Between 90% and 99% is flagged as <b>Watch</b>.
+                At or above plan is shown as <b>On Plan</b>.
+            </p>
+            <div class="small">
+                These records can be used by the AI Assistant when evaluating field performance and schedule risk.
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Production History</h2>
+
+        <table>
+            <tr>
+                <th>Date</th>
+                <th>Activity</th>
+                <th>Crew</th>
+                <th>Actual</th>
+                <th>Plan</th>
+                <th>Unit</th>
+                <th>% Plan</th>
+                <th>Variance</th>
+                <th>Status</th>
+            </tr>
+
+            {tr}
+        </table>
+    </div>
+    """
+
+    return shell("Production", body)
+
 
 @app.post("/production/add")
 def add_prod(activity_id:int=Form(...),crew:int=Form(0),qty:float=Form(0),planned_qty:float=Form(0),unit:str=Form("")):
@@ -648,22 +1077,695 @@ def add_prod(activity_id:int=Form(...),crew:int=Form(0),qty:float=Form(0),planne
 
 @app.get("/risk",response_class=HTMLResponse)
 def risk():
-    pid=project_id(); c=db(); rows=c.execute("SELECT r.*,a.name activity FROM risks r JOIN activities a ON a.id=r.activity_id WHERE r.project_id=? ORDER BY score DESC",(pid,)).fetchall(); c.close()
-    html="".join(f'<div class="card"><span class="badge {r["band"]}">{r["band"]}</span><h3>{esc(r["activity"])} - {r["score"]:.0f}/100</h3><p>{esc(r["explanation"])}</p></div>' for r in rows)
-    return shell("Predictive Risk",'<div class="hero"><div class="eyebrow">Predictive Risk</div><h1>What is most likely to hurt the job next?</h1><div class="muted">Explainable risk screening, not a fake probability promise.</div></div>'+html)
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT r.*, a.external_id, a.name activity
+        FROM risks r
+        JOIN activities a ON a.id=r.activity_id
+        WHERE r.project_id=?
+        ORDER BY r.score DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    html = "".join(
+        f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {r["band"]}">{r["band"]}</span>
+                    <b>{esc(r["external_id"])} - {esc(r["activity"])}</b>
+                </div>
+
+                <a href="/risk/{r["id"]}/edit"
+                   style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                    Edit
+                </a>
+            </div>
+
+            <h3>{r["score"]:.0f}/100</h3>
+            <p>{esc(r["explanation"])}</p>
+        </div>
+        """
+        for r in rows
+    ) or '<div class="card"><div class="muted">No risks entered for this project yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Predictive Risk</div>
+                <h1>What is most likely to hurt the job next?</h1>
+                <div class="muted">
+                    Track field and schedule risk with an explainable score.
+                </div>
+            </div>
+
+            <a href="/risk/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Risk
+            </a>
+        </div>
+    </div>
+
+    {html}
+    """
+
+    return shell("Predictive Risk", body)
+
+
+@app.get("/risk/new", response_class=HTMLResponse)
+def new_risk_form():
+    pid = project_id()
+    c = db()
+
+    project = c.execute(
+        "SELECT name,number FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    project_label = "Current Project"
+    if project:
+        project_label = f'{esc(project["number"])} - {esc(project["name"])}'
+
+    options = "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    if not options:
+        body = """
+        <div class="hero">
+            <div class="eyebrow">Predictive Risk</div>
+            <h1>Add Risk</h1>
+        </div>
+
+        <div class="card">
+            <p>This project has no schedule activities yet. Add an activity first.</p>
+            <a href="/activities/new"
+               style="color:#f0b44d;font-weight:700;text-decoration:none;">
+                + Add Activity
+            </a>
+        </div>
+        """
+        return shell("Add Risk", body)
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Predictive Risk</div>
+        <h1>Add Risk</h1>
+        <div class="muted">{project_label}</div>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/risk/new">
+
+            <label>Activity</label>
+            <select name="activity_id" required>
+                {options}
+            </select>
+
+            <div class="grid2">
+                <div>
+                    <label>Risk Score</label>
+                    <input
+                        type="number"
+                        name="score"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value="50"
+                        required
+                    >
+                </div>
+
+                <div>
+                    <label>Risk Band</label>
+                    <select name="band">
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="WATCH">Watch</option>
+                        <option value="LOW">Low</option>
+                    </select>
+                </div>
+            </div>
+
+            <label>Why Is This a Risk?</label>
+            <textarea
+                name="explanation"
+                placeholder="Example: Material release is late and threatens the rough-in start."
+                required
+            ></textarea>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Risk</button>
+
+                <a href="/risk"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+    """
+
+    return shell("Add Risk", body)
+
+
+@app.post("/risk/new")
+def create_risk(
+    activity_id: int = Form(...),
+    score: float = Form(...),
+    band: str = Form(...),
+    explanation: str = Form(...)
+):
+    pid = project_id()
+    score = max(0.0, min(100.0, score))
+
+    c = db()
+
+    activity = c.execute(
+        "SELECT id FROM activities WHERE id=? AND project_id=?",
+        (activity_id, pid)
+    ).fetchone()
+
+    if activity:
+        c.execute(
+            """
+            INSERT INTO risks(
+                project_id,
+                activity_id,
+                score,
+                band,
+                explanation
+            )
+            VALUES(?,?,?,?,?)
+            """,
+            (
+                pid,
+                activity_id,
+                score,
+                band,
+                explanation.strip()
+            )
+        )
+        c.commit()
+
+    c.close()
+
+    return RedirectResponse(url="/risk", status_code=303)
+
+
+@app.get("/risk/{risk_id}/edit", response_class=HTMLResponse)
+def edit_risk_form(risk_id: int):
+    pid = project_id()
+    c = db()
+
+    item = c.execute(
+        """
+        SELECT r.*, a.external_id, a.name activity
+        FROM risks r
+        JOIN activities a ON a.id=r.activity_id
+        WHERE r.id=? AND r.project_id=?
+        """,
+        (risk_id, pid)
+    ).fetchone()
+
+    c.close()
+
+    if not item:
+        return RedirectResponse(url="/risk", status_code=303)
+
+    bands = ["CRITICAL", "HIGH", "WATCH", "LOW"]
+    band_options = "".join(
+        f'<option value="{b}" {"selected" if item["band"] == b else ""}>{b.title()}</option>'
+        for b in bands
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Predictive Risk</div>
+        <h1>Edit Risk</h1>
+        <div class="muted">
+            {esc(item["external_id"])} - {esc(item["activity"])}
+        </div>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/risk/{risk_id}/edit">
+
+            <div class="grid2">
+                <div>
+                    <label>Risk Score</label>
+                    <input
+                        type="number"
+                        name="score"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value="{item["score"]:.0f}"
+                        required
+                    >
+                </div>
+
+                <div>
+                    <label>Risk Band</label>
+                    <select name="band">
+                        {band_options}
+                    </select>
+                </div>
+            </div>
+
+            <label>Explanation</label>
+            <textarea name="explanation" required>{esc(item["explanation"])}</textarea>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Changes</button>
+
+                <a href="/risk"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Cancel
+                </a>
+            </div>
+        </form>
+
+        <form method="post"
+              action="/risk/{risk_id}/delete"
+              style="margin-top:22px;padding-top:18px;border-top:1px solid #213042;">
+            <button type="submit"
+                    style="background:#492324;color:#ffb0b0;">
+                Delete Risk
+            </button>
+        </form>
+    </div>
+    """
+
+    return shell("Edit Risk", body)
+
+
+@app.post("/risk/{risk_id}/edit")
+def edit_risk(
+    risk_id: int,
+    score: float = Form(...),
+    band: str = Form(...),
+    explanation: str = Form(...)
+):
+    pid = project_id()
+    score = max(0.0, min(100.0, score))
+
+    c = db()
+    c.execute(
+        """
+        UPDATE risks
+        SET score=?, band=?, explanation=?
+        WHERE id=? AND project_id=?
+        """,
+        (
+            score,
+            band,
+            explanation.strip(),
+            risk_id,
+            pid
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/risk", status_code=303)
+
+
+@app.post("/risk/{risk_id}/delete")
+def delete_risk(risk_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        "DELETE FROM risks WHERE id=? AND project_id=?",
+        (risk_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/risk", status_code=303)
+
 
 @app.get("/recovery",response_class=HTMLResponse)
 def recovery():
-    pid=project_id(); c=db(); rows=c.execute("SELECT r.*,a.name activity FROM recovery r JOIN activities a ON a.id=r.activity_id WHERE r.project_id=? ORDER BY r.id DESC",(pid,)).fetchall(); acts=c.execute("SELECT id,external_id,name FROM activities WHERE project_id=?",(pid,)).fetchall(); c.close()
-    opts="".join(f'<option value="{a["id"]}">{a["external_id"]} - {esc(a["name"])}</option>' for a in acts)
-    html="".join(f'<div class="card"><b>{esc(r["activity"])}</b><h3>{esc(r["scenario"])}</h3><div>Modeled recovery: {r["days_recovered"]:.1f} day(s)</div><div>Screening cost: ${r["est_cost"]:,.0f}</div><div class="small">{r["status"]}</div></div>' for r in rows)
-    form=f'<div class="card"><h2>Test recovery idea</h2><form method="post" action="/recovery/add"><select name="activity_id">{opts}</select><br><br><select name="scenario"><option>ADD_CREW</option><option>OVERTIME</option><option>WORK_SATURDAY</option><option>RESEQUENCE</option><option>CLEAR_CONSTRAINT</option></select><br><br><input name="days_recovered" type="number" step="0.1" placeholder="Modeled days recovered"><br><br><input name="est_cost" type="number" step="100" placeholder="Estimated cost"><br><br><button>Save screening scenario</button></form></div>'
-    return shell("Recovery",'<div class="hero"><div class="eyebrow">Recovery Intelligence</div><h1>Test recovery before spending money.</h1></div><div class="grid2">'+form+'<div>'+html+'</div></div>')
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT r.*, a.external_id, a.name activity
+        FROM recovery r
+        JOIN activities a ON a.id=r.activity_id
+        WHERE r.project_id=?
+        ORDER BY
+            CASE r.status
+                WHEN 'APPROVED' THEN 1
+                WHEN 'PROPOSED' THEN 2
+                WHEN 'REJECTED' THEN 3
+                ELSE 4
+            END,
+            r.days_recovered DESC,
+            r.est_cost ASC
+        """,
+        (pid,)
+    ).fetchall()
+
+    acts = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    opts = "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in acts
+    )
+
+    total_scenarios = len(rows)
+    approved = sum(1 for r in rows if r["status"] == "APPROVED")
+    proposed = sum(1 for r in rows if r["status"] == "PROPOSED")
+
+    best_value = None
+    best_value_score = None
+
+    scenario_cards = ""
+
+    for r in rows:
+        days = r["days_recovered"] or 0
+        cost = r["est_cost"] or 0
+
+        if days > 0:
+            cost_per_day = cost / days
+            value_text = f'${cost_per_day:,.0f} / recovered day'
+
+            if best_value_score is None or cost_per_day < best_value_score:
+                best_value_score = cost_per_day
+                best_value = r["id"]
+        else:
+            cost_per_day = None
+            value_text = "No recovered days entered"
+
+        status_badge = (
+            "READY" if r["status"] == "APPROVED"
+            else "HIGH" if r["status"] == "REJECTED"
+            else "OPEN"
+        )
+
+        best_badge = (
+            '<span class="badge READY">BEST VALUE</span>'
+            if best_value == r["id"]
+            else ""
+        )
+
+        scenario_cards += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {status_badge}">{esc(r["status"])}</span>
+                    {best_badge}
+                    <h3 style="margin:10px 0 4px;">{esc(r["scenario"]).replace("_"," ").title()}</h3>
+                    <div class="muted">{esc(r["external_id"])} - {esc(r["activity"])}</div>
+                </div>
+
+                <form method="post" action="/recovery/{r["id"]}/delete">
+                    <button type="submit" style="background:#492324;color:#ffb0b0;">
+                        Delete
+                    </button>
+                </form>
+            </div>
+
+            <div class="grid3" style="margin-top:14px;">
+                <div>
+                    <div class="label">Days Recovered</div>
+                    <div class="kpi">{days:.1f}</div>
+                </div>
+
+                <div>
+                    <div class="label">Estimated Cost</div>
+                    <div class="kpi">${cost:,.0f}</div>
+                </div>
+
+                <div>
+                    <div class="label">Cost / Day</div>
+                    <div style="font-size:20px;font-weight:800;">{value_text}</div>
+                </div>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">
+                <form method="post" action="/recovery/{r["id"]}/approve">
+                    <button type="submit">Approve</button>
+                </form>
+
+                <form method="post" action="/recovery/{r["id"]}/reject">
+                    <button type="submit" style="background:#43381b;color:#ffd779;">
+                        Reject
+                    </button>
+                </form>
+            </div>
+        </div>
+        """
+
+    if not scenario_cards:
+        scenario_cards = '<div class="card"><div class="muted">No recovery scenarios saved yet.</div></div>'
+
+    if opts:
+        form = f"""
+        <div class="card">
+            <h2>Test Recovery Idea</h2>
+
+            <form method="post" action="/recovery/add">
+                <label>Activity</label>
+                <select name="activity_id" required>
+                    {opts}
+                </select>
+
+                <label>Scenario</label>
+                <select name="scenario">
+                    <option value="ADD_CREW">Add Crew</option>
+                    <option value="OVERTIME">Overtime</option>
+                    <option value="WORK_SATURDAY">Work Saturday</option>
+                    <option value="RESEQUENCE">Resequence Work</option>
+                    <option value="CLEAR_CONSTRAINT">Clear Constraint</option>
+                    <option value="SECOND_SHIFT">Second Shift</option>
+                </select>
+
+                <label>Modeled Days Recovered</label>
+                <input
+                    name="days_recovered"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    placeholder="Example: 2.5"
+                >
+
+                <label>Estimated Cost</label>
+                <input
+                    name="est_cost"
+                    type="number"
+                    step="100"
+                    min="0"
+                    placeholder="Example: 7500"
+                >
+
+                <button type="submit">Save Recovery Scenario</button>
+            </form>
+        </div>
+        """
+    else:
+        form = """
+        <div class="card">
+            <h2>Test Recovery Idea</h2>
+            <p>Add a schedule activity before creating a recovery scenario.</p>
+            <a href="/activities/new"
+               style="color:#f0b44d;text-decoration:none;font-weight:700;">
+                + Add Activity
+            </a>
+        </div>
+        """
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Recovery Intelligence</div>
+        <h1>Compare recovery before spending money.</h1>
+        <div class="muted">
+            Model time recovered, cost, and decision status before committing resources.
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Scenarios</div>
+            <div class="kpi">{total_scenarios}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Proposed</div>
+            <div class="kpi">{proposed}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Approved</div>
+            <div class="kpi">{approved}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Best Cost / Day</div>
+            <div class="kpi">
+                {"$"+format(best_value_score,",.0f") if best_value_score is not None else "—"}
+            </div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {form}
+
+        <div class="card">
+            <h2>How To Use Recovery Intelligence</h2>
+            <p>
+                Compare options by how many schedule days they recover and what each recovered day costs.
+                Approve the option you intend to execute and reject scenarios you no longer want considered.
+            </p>
+            <div class="small">
+                BuildCommand AI can use these recovery scenarios when evaluating project risk and next actions.
+            </div>
+        </div>
+    </div>
+
+    <div>
+        <h2>Recovery Scenarios</h2>
+        {scenario_cards}
+    </div>
+    """
+
+    return shell("Recovery", body)
+
 
 @app.post("/recovery/add")
-def add_recovery(activity_id:int=Form(...),scenario:str=Form(...),days_recovered:float=Form(0),est_cost:float=Form(0)):
-    pid=project_id(); c=db(); c.execute("INSERT INTO recovery(project_id,activity_id,scenario,days_recovered,est_cost,status) VALUES(?,?,?,?,?,?)",(pid,activity_id,scenario,days_recovered,est_cost,"PROPOSED")); c.commit(); c.close()
-    return RedirectResponse("/recovery",303)
+def add_recovery(
+    activity_id: int = Form(...),
+    scenario: str = Form(...),
+    days_recovered: float = Form(0),
+    est_cost: float = Form(0)
+):
+    pid = project_id()
+
+    days_recovered = max(0.0, days_recovered)
+    est_cost = max(0.0, est_cost)
+
+    c = db()
+
+    activity = c.execute(
+        "SELECT id FROM activities WHERE id=? AND project_id=?",
+        (activity_id, pid)
+    ).fetchone()
+
+    if activity:
+        c.execute(
+            """
+            INSERT INTO recovery(
+                project_id,
+                activity_id,
+                scenario,
+                days_recovered,
+                est_cost,
+                status
+            )
+            VALUES(?,?,?,?,?,?)
+            """,
+            (
+                pid,
+                activity_id,
+                scenario,
+                days_recovered,
+                est_cost,
+                "PROPOSED"
+            )
+        )
+        c.commit()
+
+    c.close()
+
+    return RedirectResponse("/recovery", 303)
+
+
+@app.post("/recovery/{scenario_id}/approve")
+def approve_recovery(scenario_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE recovery
+        SET status='APPROVED'
+        WHERE id=? AND project_id=?
+        """,
+        (scenario_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse("/recovery", 303)
+
+
+@app.post("/recovery/{scenario_id}/reject")
+def reject_recovery(scenario_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE recovery
+        SET status='REJECTED'
+        WHERE id=? AND project_id=?
+        """,
+        (scenario_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse("/recovery", 303)
+
+
+@app.post("/recovery/{scenario_id}/delete")
+def delete_recovery(scenario_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        "DELETE FROM recovery WHERE id=? AND project_id=?",
+        (scenario_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse("/recovery", 303)
+
 
 @app.get("/memory",response_class=HTMLResponse)
 def memory():
@@ -678,10 +1780,220 @@ def playbooks():
 
 @app.get("/portfolio",response_class=HTMLResponse)
 def portfolio():
-    pid=project_id(); c=db(); p=c.execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone(); risks=c.execute("SELECT * FROM risks WHERE project_id=?",(pid,)).fetchall(); mr=c.execute("SELECT COUNT(*) n FROM make_ready WHERE project_id=? AND status='OPEN'",(pid,)).fetchone()["n"]; c.close()
-    crit=sum(r["band"]=="CRITICAL" for r in risks); high=sum(r["band"]=="HIGH" for r in risks); score=min(100,crit*30+high*15+mr*5)
-    body=f'<div class="hero"><div class="eyebrow">Executive Intelligence</div><h1>Which projects need intervention?</h1></div><div class="card"><h2>{esc(p["number"])} - {esc(p["name"])}</h2><div class="grid4"><div><div class="label">Attention</div><div class="kpi">{score}</div></div><div><div class="label">Critical</div><div class="kpi">{crit}</div></div><div><div class="label">High</div><div class="kpi">{high}</div></div><div><div class="label">Make Ready</div><div class="kpi">{mr}</div></div></div><p>The executive view rolls field risk upward without hiding the reasons.</p></div>'
-    return shell("Portfolio",body)
+    current_pid = project_id()
+    c = db()
+
+    projects = c.execute(
+        """
+        SELECT *
+        FROM projects
+        ORDER BY
+            CASE status
+                WHEN 'ACTIVE' THEN 1
+                WHEN 'PLANNING' THEN 2
+                WHEN 'ON_HOLD' THEN 3
+                WHEN 'COMPLETE' THEN 4
+                ELSE 5
+            END,
+            name
+        """
+    ).fetchall()
+
+    cards = []
+    portfolio_scores = []
+
+    for p in projects:
+        pid = p["id"]
+
+        risks = c.execute(
+            "SELECT * FROM risks WHERE project_id=?",
+            (pid,)
+        ).fetchall()
+
+        mr = c.execute(
+            """
+            SELECT COUNT(*) n
+            FROM make_ready
+            WHERE project_id=? AND status='OPEN'
+            """,
+            (pid,)
+        ).fetchone()["n"]
+
+        activities = c.execute(
+            """
+            SELECT COUNT(*) n
+            FROM activities
+            WHERE project_id=?
+            """,
+            (pid,)
+        ).fetchone()["n"]
+
+        active_activities = c.execute(
+            """
+            SELECT COUNT(*) n
+            FROM activities
+            WHERE project_id=? AND status='IN_PROGRESS'
+            """,
+            (pid,)
+        ).fetchone()["n"]
+
+        report = c.execute(
+            """
+            SELECT report_date, manpower, delays
+            FROM daily_reports
+            WHERE project_id=?
+            ORDER BY report_date DESC, id DESC
+            LIMIT 1
+            """,
+            (pid,)
+        ).fetchone()
+
+        crit = sum(r["band"] == "CRITICAL" for r in risks)
+        high = sum(r["band"] == "HIGH" for r in risks)
+        watch = sum(r["band"] == "WATCH" for r in risks)
+
+        score = min(
+            100,
+            crit * 30 +
+            high * 15 +
+            watch * 5 +
+            mr * 5
+        )
+
+        portfolio_scores.append(score)
+
+        if score >= 70:
+            attention_band = "CRITICAL"
+            attention_text = "Immediate Attention"
+        elif score >= 40:
+            attention_band = "HIGH"
+            attention_text = "Needs Attention"
+        elif score >= 15:
+            attention_band = "WATCH"
+            attention_text = "Watch"
+        else:
+            attention_band = "READY"
+            attention_text = "Stable"
+
+        selected_badge = (
+            '<span class="badge READY">CURRENT</span>'
+            if pid == current_pid
+            else ""
+        )
+
+        latest_report = esc(report["report_date"]) if report else "No report"
+        latest_manpower = report["manpower"] if report else 0
+        latest_delay = esc(report["delays"]) if report and report["delays"] else "No delay noted"
+
+        card = f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <div class="eyebrow">{esc(p["number"])}</div>
+                    <h2 style="margin:5px 0;">{esc(p["name"])}</h2>
+                    <div class="muted">{esc(p["status"]).replace("_"," ").title()}</div>
+                </div>
+
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    {selected_badge}
+                    <span class="badge {attention_band}">{attention_text}</span>
+                </div>
+            </div>
+
+            <div class="grid4" style="margin-top:16px;">
+                <div>
+                    <div class="label">Attention</div>
+                    <div class="kpi">{score}</div>
+                </div>
+                <div>
+                    <div class="label">Critical</div>
+                    <div class="kpi">{crit}</div>
+                </div>
+                <div>
+                    <div class="label">High</div>
+                    <div class="kpi">{high}</div>
+                </div>
+                <div>
+                    <div class="label">Make Ready</div>
+                    <div class="kpi">{mr}</div>
+                </div>
+            </div>
+
+            <div style="margin-top:16px;">
+                <div class="small">
+                    Activities: {activities} · Active: {active_activities}
+                </div>
+                <div class="small">
+                    Latest report: {latest_report} · Manpower: {latest_manpower or 0}
+                </div>
+                <div class="small">
+                    Latest delay signal: {latest_delay}
+                </div>
+            </div>
+
+            <form method="post" action="/projects/select" style="margin-top:16px;">
+                <input type="hidden" name="project_id" value="{pid}">
+                <button type="submit">Open Project</button>
+            </form>
+        </div>
+        """
+
+        cards.append((score, card))
+
+    c.close()
+
+    cards.sort(key=lambda x: x[0], reverse=True)
+    cards_html = "".join(card for _, card in cards)
+
+    total_projects = len(projects)
+    active_projects = sum(p["status"] == "ACTIVE" for p in projects)
+    high_attention = sum(score >= 40 for score in portfolio_scores)
+    avg_score = (
+        sum(portfolio_scores) / len(portfolio_scores)
+        if portfolio_scores
+        else 0
+    )
+
+    if not cards_html:
+        cards_html = '<div class="card"><div class="muted">No projects created yet.</div></div>'
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Executive Intelligence</div>
+        <h1>Which projects need intervention?</h1>
+        <div class="muted">
+            Portfolio-wide risk, make-ready, field reporting, and schedule attention in one view.
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Projects</div>
+            <div class="kpi">{total_projects}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Active Projects</div>
+            <div class="kpi">{active_projects}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Need Attention</div>
+            <div class="kpi">{high_attention}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Avg Attention</div>
+            <div class="kpi">{avg_score:.0f}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        {cards_html}
+    </div>
+    """
+
+    return shell("Portfolio", body)
 
 @app.get("/activities/new", response_class=HTMLResponse)
 def new_activity_form():
@@ -937,38 +2249,102 @@ def create_subcontractor(
 def daily_report():
     pid = project_id()
     c = db()
+
     project = c.execute(
         "SELECT name,number FROM projects WHERE id=?",
         (pid,)
     ).fetchone()
+
     reports = c.execute(
-        "SELECT * FROM daily_reports WHERE project_id=? ORDER BY report_date DESC, id DESC LIMIT 10",
+        """
+        SELECT *
+        FROM daily_reports
+        WHERE project_id=?
+        ORDER BY report_date DESC, id DESC
+        LIMIT 10
+        """,
         (pid,)
     ).fetchall()
+
+    analyses = c.execute(
+        """
+        SELECT *
+        FROM daily_report_analysis
+        WHERE project_id=?
+        ORDER BY id DESC
+        """,
+        (pid,)
+    ).fetchall()
+
     c.close()
+
+    analysis_by_report = {}
+    for a in analyses:
+        if a["report_id"] not in analysis_by_report:
+            analysis_by_report[a["report_id"]] = a
 
     project_label = "Current Project"
     if project:
         project_label = f'{esc(project["number"])} - {esc(project["name"])}'
 
     report_cards = ""
+
     for r in reports:
+        analysis = analysis_by_report.get(r["id"])
+
+        if analysis:
+            analysis_html = (
+                '<div style="margin-top:16px;padding-top:14px;border-top:1px solid #213042;">'
+                '<div class="small">BUILDCOMMAND ANALYSIS</div>'
+                f'<div style="margin-top:8px;line-height:1.6;">{esc(analysis["analysis_text"]).replace(chr(10), "<br>")}</div>'
+                '</div>'
+            )
+            analyze_button = (
+                f'<form method="post" action="/daily-report/{r["id"]}/analyze">'
+                '<button type="submit">Analyze Again</button>'
+                '</form>'
+            )
+        else:
+            analysis_html = ""
+            analyze_button = (
+                f'<form method="post" action="/daily-report/{r["id"]}/analyze">'
+                '<button type="submit">Analyze Report</button>'
+                '</form>'
+            )
+
         report_cards += f"""
         <div class="card">
-            <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+            <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:flex-start;">
                 <div>
                     <div class="eyebrow">Daily Report</div>
                     <h3 style="margin:6px 0;">{esc(r["report_date"])}</h3>
+                    <div class="badge OPEN">{r["manpower"] or 0} workers</div>
                 </div>
-                <div class="badge OPEN">{r["manpower"] or 0} workers</div>
+                <div>{analyze_button}</div>
             </div>
-            <div class="small">Weather</div><p>{esc(r["weather"]) or "—"}</p>
-            <div class="small">Work Completed</div><p>{esc(r["work_completed"]) or "—"}</p>
-            <div class="small">Delays / Constraints</div><p>{esc(r["delays"]) or "—"}</p>
-            <div class="small">Deliveries</div><p>{esc(r["deliveries"]) or "—"}</p>
-            <div class="small">Inspections</div><p>{esc(r["inspections"]) or "—"}</p>
-            <div class="small">Safety</div><p>{esc(r["safety"]) or "—"}</p>
-            <div class="small">Tomorrow's Plan</div><p>{esc(r["tomorrow_plan"]) or "—"}</p>
+
+            <div class="small" style="margin-top:14px;">Weather</div>
+            <p>{esc(r["weather"]) or "—"}</p>
+
+            <div class="small">Work Completed</div>
+            <p>{esc(r["work_completed"]) or "—"}</p>
+
+            <div class="small">Delays / Constraints</div>
+            <p>{esc(r["delays"]) or "—"}</p>
+
+            <div class="small">Deliveries</div>
+            <p>{esc(r["deliveries"]) or "—"}</p>
+
+            <div class="small">Inspections</div>
+            <p>{esc(r["inspections"]) or "—"}</p>
+
+            <div class="small">Safety</div>
+            <p>{esc(r["safety"]) or "—"}</p>
+
+            <div class="small">Tomorrow's Plan</div>
+            <p>{esc(r["tomorrow_plan"]) or "—"}</p>
+
+            {analysis_html}
         </div>
         """
 
@@ -978,13 +2354,14 @@ def daily_report():
     body = f"""
     <div class="hero">
         <div class="eyebrow">Daily Superintendent Report</div>
-        <h1>Capture the job today so the app can learn tomorrow.</h1>
+        <h1>Capture the job today so BuildCommand can analyze tomorrow.</h1>
         <div class="muted">{project_label}</div>
     </div>
 
     <div class="grid2">
         <div class="card">
             <h2>New Daily Report</h2>
+
             <form method="post" action="/daily-report">
                 <label>Report Date</label>
                 <input type="date" name="report_date" value="{date.today().isoformat()}" required>
@@ -1294,6 +2671,53 @@ def build_project_context(pid):
         (pid,)
     ).fetchall()
 
+    production_rows = c.execute(
+        """
+        SELECT p.*, a.external_id, a.name activity
+        FROM production p
+        JOIN activities a ON a.id=p.activity_id
+        WHERE p.project_id=?
+        ORDER BY p.work_date DESC, p.id DESC
+        LIMIT 12
+        """,
+        (pid,)
+    ).fetchall()
+
+    sub_updates = c.execute(
+        """
+        SELECT u.*, s.name sub_name, s.trade
+        FROM subcontractor_updates u
+        JOIN subs s ON s.id=u.sub_id
+        WHERE u.project_id=?
+        ORDER BY u.update_date DESC, u.id DESC
+        LIMIT 15
+        """,
+        (pid,)
+    ).fetchall()
+
+    recovery_rows = c.execute(
+        """
+        SELECT r.*, a.external_id, a.name activity
+        FROM recovery r
+        JOIN activities a ON a.id=r.activity_id
+        WHERE r.project_id=?
+        ORDER BY r.id DESC
+        LIMIT 12
+        """,
+        (pid,)
+    ).fetchall()
+
+    action_rows = c.execute(
+        """
+        SELECT *
+        FROM action_items
+        WHERE project_id=? AND status='OPEN'
+        ORDER BY due, id
+        LIMIT 20
+        """,
+        (pid,)
+    ).fetchall()
+
     c.close()
 
     lines = []
@@ -1327,6 +2751,43 @@ def build_project_context(pid):
     lines.append("\nSUBCONTRACTORS:")
     for s in subs:
         lines.append(f'- {s["name"]} | Trade: {s["trade"]}')
+
+    lines.append("\nRECENT PRODUCTION:")
+    for p in production_rows:
+        qty = p["qty"] or 0
+        plan = p["planned_qty"] or 0
+        pct = (qty / plan * 100) if plan > 0 else 0
+        lines.append(
+            f'- {p["work_date"]} | {p["external_id"]} {p["activity"]} | '
+            f'Crew {p["crew"] or 0} | Actual {qty:g} {p["unit"] or ""} | '
+            f'Plan {plan:g} | {pct:.0f}% of plan'
+        )
+
+    lines.append("\nRECENT SUBCONTRACTOR UPDATES:")
+    for u in sub_updates:
+        lines.append(
+            f'- {u["update_date"]} | {u["sub_name"]} | Trade: {u["trade"]} | '
+            f'Manpower: {u["manpower"] or 0} | Status: {u["status"] or "N/A"} | '
+            f'Commitment: {u["commitment"] or "N/A"} | Issue: {u["issue"] or "N/A"}'
+        )
+
+    lines.append("\nRECOVERY SCENARIOS:")
+    for r in recovery_rows:
+        days = r["days_recovered"] or 0
+        cost = r["est_cost"] or 0
+        cpd = (cost / days) if days > 0 else 0
+        lines.append(
+            f'- {r["external_id"]} {r["activity"]} | '
+            f'{r["scenario"]} | Days recovered: {days:.1f} | '
+            f'Cost: ${cost:,.0f} | Cost/day: ${cpd:,.0f} | Status: {r["status"]}'
+        )
+
+    lines.append("\nOPEN ACTION ITEMS:")
+    for a in action_rows:
+        lines.append(
+            f'- {a["priority"]} | {a["title"]} | Owner: {a["owner"] or "Unassigned"} | '
+            f'Due: {a["due"]} | Notes: {a["notes"] or "N/A"}'
+        )
 
     lines.append("\nRECENT DAILY REPORTS:")
     for r in reports:
@@ -1693,3 +3154,422 @@ def close_make_ready(item_id: int):
     c.close()
 
     return RedirectResponse(url="/make-ready", status_code=303)
+
+
+@app.post("/daily-report/{report_id}/analyze")
+def analyze_daily_report(report_id: int):
+    pid = project_id()
+    c = db()
+
+    report = c.execute(
+        """
+        SELECT *
+        FROM daily_reports
+        WHERE id=? AND project_id=?
+        """,
+        (report_id, pid)
+    ).fetchone()
+
+    project = c.execute(
+        "SELECT * FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+
+    activities = c.execute(
+        "SELECT * FROM activities WHERE project_id=? ORDER BY start",
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    if not report:
+        return RedirectResponse(url="/daily-report", status_code=303)
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+
+    if not api_key:
+        analysis_text = (
+            "OPENAI_API_KEY is not configured. Add the key in Render Environment settings "
+            "to enable automatic report analysis."
+        )
+    else:
+        schedule_lines = []
+        for a in activities:
+            schedule_lines.append(
+                f'{a["external_id"]} | {a["name"]} | {a["trade"]} | '
+                f'{a["start"]} to {a["finish"]} | {a["pct"]:.0f}% | {a["status"]}'
+            )
+
+        schedule_text = "\n".join(schedule_lines) or "No schedule activities entered."
+
+        prompt = f"""
+PROJECT
+{project["number"] if project else ""} - {project["name"] if project else ""}
+
+SCHEDULE
+{schedule_text}
+
+DAILY REPORT
+Date: {report["report_date"]}
+Weather: {report["weather"] or "N/A"}
+Manpower: {report["manpower"] or 0}
+Work completed: {report["work_completed"] or "N/A"}
+Delays / constraints: {report["delays"] or "N/A"}
+Deliveries: {report["deliveries"] or "N/A"}
+Inspections: {report["inspections"] or "N/A"}
+Safety: {report["safety"] or "N/A"}
+Tomorrow plan: {report["tomorrow_plan"] or "N/A"}
+"""
+
+        instructions = """
+You are BuildCommand AI, a construction superintendent field-intelligence copilot.
+
+Analyze the daily report against the schedule information provided.
+Do not invent facts that are not present.
+
+Return a concise superintendent review with these headings:
+HANDLE FIRST
+SCHEDULE IMPACT
+SUBCONTRACTOR / FOLLOW-UP
+TOMORROW READINESS
+MISSING INFORMATION
+
+Call out specific delays, inspection issues, delivery risks, manpower concerns,
+or tomorrow-plan gaps when supported by the report.
+"""
+
+        try:
+            client = OpenAI(api_key=api_key)
+            response = client.responses.create(
+                model="gpt-5.6",
+                instructions=instructions,
+                input=prompt
+            )
+            analysis_text = response.output_text
+        except Exception as exc:
+            analysis_text = f"AI analysis failed: {str(exc)}"
+
+    c = db()
+    c.execute(
+        "DELETE FROM daily_report_analysis WHERE project_id=? AND report_id=?",
+        (pid, report_id)
+    )
+    c.execute(
+        """
+        INSERT INTO daily_report_analysis(
+            project_id,
+            report_id,
+            analysis_text,
+            created
+        )
+        VALUES(?,?,?,?)
+        """,
+        (
+            pid,
+            report_id,
+            analysis_text,
+            date.today().isoformat()
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/daily-report", status_code=303)
+
+
+@app.get("/actions", response_class=HTMLResponse)
+def actions_page():
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT *
+        FROM action_items
+        WHERE project_id=?
+        ORDER BY
+            CASE status
+                WHEN 'OPEN' THEN 1
+                WHEN 'COMPLETE' THEN 2
+                ELSE 3
+            END,
+            CASE priority
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'WATCH' THEN 3
+                WHEN 'LOW' THEN 4
+                ELSE 5
+            END,
+            due
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    today = date.today().isoformat()
+
+    open_items = [r for r in rows if r["status"] == "OPEN"]
+    complete_items = [r for r in rows if r["status"] == "COMPLETE"]
+    overdue_items = [
+        r for r in open_items
+        if r["due"] and r["due"] < today
+    ]
+
+    open_html = ""
+
+    for r in open_items:
+        overdue = bool(r["due"] and r["due"] < today)
+        due_text = f'Due {esc(r["due"])}'
+
+        if overdue:
+            due_text += " · OVERDUE"
+
+        badge = r["priority"] if r["priority"] in ["CRITICAL","HIGH","WATCH","LOW"] else "OPEN"
+
+        open_html += f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {badge}">{esc(r["priority"])}</span>
+                    <h3 style="margin:10px 0 4px;">{esc(r["title"])}</h3>
+                    <div class="muted">Owner: {esc(r["owner"]) or "Unassigned"}</div>
+                </div>
+
+                <form method="post" action="/actions/{r["id"]}/complete">
+                    <button type="submit">Mark Complete</button>
+                </form>
+            </div>
+
+            <p>{esc(r["notes"]) or "No notes entered."}</p>
+            <div class="small">{due_text}</div>
+        </div>
+        """
+
+    if not open_html:
+        open_html = '<div class="card"><div class="muted">No open action items.</div></div>'
+
+    complete_html = "".join(
+        f"""
+        <div class="action">
+            <span class="badge COMPLETE">COMPLETE</span>
+            <b>{esc(r["title"])}</b>
+            <div class="small">
+                Owner: {esc(r["owner"]) or "Unassigned"} · Due {esc(r["due"]) or "—"}
+            </div>
+        </div>
+        """
+        for r in complete_items[:12]
+    ) or '<div class="muted">No completed actions yet.</div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Action Center</div>
+                <h1>Turn project intelligence into accountable action.</h1>
+                <div class="muted">
+                    Assign ownership, due dates, and priority to the work that cannot fall through the cracks.
+                </div>
+            </div>
+
+            <a href="/actions/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Action
+            </a>
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Open Actions</div>
+            <div class="kpi">{len(open_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Overdue</div>
+            <div class="kpi">{len(overdue_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Critical</div>
+            <div class="kpi">{sum(r["priority"] == "CRITICAL" for r in open_items)}</div>
+        </div>
+
+        <div class="card">
+            <div class="label">Completed</div>
+            <div class="kpi">{len(complete_items)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        <div>
+            <h2>Open Actions</h2>
+            {open_html}
+        </div>
+
+        <div class="card">
+            <h2>Recently Completed</h2>
+            {complete_html}
+        </div>
+    </div>
+    """
+
+    return shell("Action Center", body)
+
+
+@app.get("/actions/new", response_class=HTMLResponse)
+def new_action_form():
+    pid = project_id()
+    c = db()
+
+    subs = c.execute(
+        """
+        SELECT name,trade
+        FROM subs
+        WHERE project_id=?
+        ORDER BY trade,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    project = c.execute(
+        "SELECT name,number FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+
+    c.close()
+
+    owner_options = '<option value="">Unassigned</option>'
+    owner_options += '<option value="Superintendent">Superintendent</option>'
+    owner_options += '<option value="Project Manager">Project Manager</option>'
+
+    for s in subs:
+        owner_options += (
+            f'<option value="{esc(s["name"])}">{esc(s["name"])} - {esc(s["trade"])}</option>'
+        )
+
+    project_label = "Current Project"
+    if project:
+        project_label = f'{esc(project["number"])} - {esc(project["name"])}'
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Action Center</div>
+        <h1>Add Action Item</h1>
+        <div class="muted">{project_label}</div>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/actions/new">
+
+            <label>Action</label>
+            <input
+                type="text"
+                name="title"
+                placeholder="Example: Confirm switchgear delivery date"
+                required
+            >
+
+            <label>Owner</label>
+            <select name="owner">
+                {owner_options}
+            </select>
+
+            <div class="grid2">
+                <div>
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="WATCH">Watch</option>
+                        <option value="LOW">Low</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label>Due Date</label>
+                    <input type="date" name="due" required>
+                </div>
+            </div>
+
+            <label>Notes</label>
+            <textarea
+                name="notes"
+                placeholder="What specifically needs to happen?"
+            ></textarea>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Action</button>
+
+                <a href="/actions"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+    """
+
+    return shell("Add Action", body)
+
+
+@app.post("/actions/new")
+def create_action(
+    title: str = Form(...),
+    owner: str = Form(""),
+    priority: str = Form("HIGH"),
+    due: str = Form(...),
+    notes: str = Form("")
+):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        INSERT INTO action_items(
+            project_id,
+            title,
+            owner,
+            priority,
+            due,
+            status,
+            notes,
+            created
+        )
+        VALUES(?,?,?,?,?,?,?,?)
+        """,
+        (
+            pid,
+            title.strip(),
+            owner.strip(),
+            priority,
+            due,
+            "OPEN",
+            notes.strip(),
+            date.today().isoformat()
+        )
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/actions", status_code=303)
+
+
+@app.post("/actions/{action_id}/complete")
+def complete_action(action_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE action_items
+        SET status='COMPLETE'
+        WHERE id=? AND project_id=?
+        """,
+        (action_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/actions", status_code=303)
