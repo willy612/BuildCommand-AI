@@ -1,10 +1,17 @@
 from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, FileResponse
 import sqlite3
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:
+    psycopg = None
+    dict_row = None
 import os
 import io
 import csv
 import json
+import re
 import secrets
 import hashlib
 import hmac
@@ -23,7 +30,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="26.0")
+app=FastAPI(title="BuildCommand AI",version="27.0")
 DB="construction_ai_web.db"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR","/tmp/buildcommand_uploads")
 os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -32,7 +39,53 @@ _current_company_id=ContextVar("buildcommand_company_id",default=None)
 MAX_UPLOAD_BYTES=10*1024*1024
 ALLOWED_UPLOAD_EXTENSIONS={".pdf",".png",".jpg",".jpeg",".webp",".doc",".docx",".xls",".xlsx",".csv",".txt"}
 
+DATABASE_URL=os.environ.get("DATABASE_URL","").strip()
+DATABASE_KIND="postgres" if DATABASE_URL.startswith(("postgres://","postgresql://")) else "sqlite"
+
+class PgCompatConnection:
+    def __init__(self,conn):
+        self.conn=conn
+        self.last_insert_id=None
+    def _sql(self,sql):
+        if sql.strip().lower().startswith("select last_insert_rowid()"):
+            return None
+        sql=sql.replace("?","%s")
+        sql=re.sub(r"INSERT OR REPLACE INTO user_state\s*\(user_id,selected_project_id\)\s*VALUES\(%s,%s\)","INSERT INTO user_state(user_id,selected_project_id) VALUES(%s,%s) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=EXCLUDED.selected_project_id",sql,flags=re.I|re.S)
+        sql=re.sub(r"INSERT OR REPLACE INTO app_state\s*\(id,selected_project_id\)\s*VALUES\(%s,%s\)","INSERT INTO app_state(id,selected_project_id) VALUES(%s,%s) ON CONFLICT(id) DO UPDATE SET selected_project_id=EXCLUDED.selected_project_id",sql,flags=re.I|re.S)
+        return sql
+    def execute(self,sql,params=()):
+        translated=self._sql(sql)
+        if translated is None:
+            class OneRow:
+                def __init__(self,v): self.v=v
+                def fetchone(self): return {"id":self.v}
+                def fetchall(self): return [{"id":self.v}]
+                def __iter__(self): return iter([{"id":self.v}])
+            return OneRow(self.last_insert_id)
+        cur=self.conn.cursor()
+        m=re.match(r"\s*INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_]*)",translated,re.I)
+        if m and "RETURNING" not in translated.upper() and m.group(1).lower() not in {"user_state"}:
+            try:
+                cur.execute(translated.rstrip().rstrip(";")+" RETURNING id",params)
+                row=cur.fetchone()
+                if row and "id" in row: self.last_insert_id=row["id"]
+                return cur
+            except Exception:
+                self.conn.rollback(); cur=self.conn.cursor()
+        cur.execute(translated,params)
+        return cur
+    def executescript(self,script):
+        ddl=re.sub(r"\bid INTEGER PRIMARY KEY\b","id BIGSERIAL PRIMARY KEY",script,flags=re.I)
+        for stmt in [s.strip() for s in ddl.split(";") if s.strip()]: self.execute(stmt)
+        return self
+    def commit(self): self.conn.commit()
+    def rollback(self): self.conn.rollback()
+    def close(self): self.conn.close()
+
 def db():
+    if DATABASE_KIND=="postgres":
+        if psycopg is None: raise RuntimeError("PostgreSQL DATABASE_URL is set but psycopg is not installed")
+        return PgCompatConnection(psycopg.connect(DATABASE_URL,row_factory=dict_row))
     conn=sqlite3.connect(DB)
     conn.row_factory=sqlite3.Row
     return conn
@@ -48,6 +101,8 @@ def init():
     CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER,severity TEXT,title TEXT,detail TEXT,source TEXT,status TEXT DEFAULT 'UNREAD',created TEXT);
     CREATE TABLE IF NOT EXISTS morning_briefs(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,brief_date TEXT,brief_text TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS beta_feedback(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER,project_id INTEGER,rating INTEGER,category TEXT,feedback TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS invitations(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,email TEXT NOT NULL,role TEXT DEFAULT 'FIELD_USER',token_hash TEXT NOT NULL UNIQUE,expires TEXT,accepted INTEGER DEFAULT 0,created_by INTEGER,created TEXT);
+    CREATE TABLE IF NOT EXISTS company_settings(company_id INTEGER PRIMARY KEY,auto_ai_brief INTEGER DEFAULT 1,email_alerts INTEGER DEFAULT 0,beta_mode INTEGER DEFAULT 1,onboarding_complete INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS daily_reports(
         id INTEGER PRIMARY KEY,
         project_id INTEGER,
@@ -310,7 +365,10 @@ def init():
                 (first_project["id"],)
             )
 
-    project_columns={row["name"] for row in c.execute("PRAGMA table_info(projects)").fetchall()}
+    if DATABASE_KIND=="postgres":
+        project_columns={row["column_name"] for row in c.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='projects'").fetchall()}
+    else:
+        project_columns={row["name"] for row in c.execute("PRAGMA table_info(projects)").fetchall()}
     if "company_id" not in project_columns:
         c.execute("ALTER TABLE projects ADD COLUMN company_id INTEGER")
 
@@ -359,6 +417,32 @@ def current_user():
     c.close()
     return row
 
+
+ROLE_ORDER={"READ_ONLY":0,"FIELD_USER":1,"MEMBER":1,"SUPERINTENDENT":2,"PROJECT_MANAGER":3,"ADMIN":4,"OWNER":5}
+
+def role_level(role):
+    return ROLE_ORDER.get((role or "").upper(),0)
+
+def require_role(min_role):
+    u=current_user()
+    return bool(u and role_level(u["role"])>=role_level(min_role))
+
+def ensure_company_settings(company_id):
+    if not company_id: return
+    c=db()
+    row=c.execute("SELECT company_id FROM company_settings WHERE company_id=?",(company_id,)).fetchone()
+    if not row:
+        c.execute("INSERT INTO company_settings(company_id,auto_ai_brief,email_alerts,beta_mode,onboarding_complete) VALUES(?,?,?,?,?)",(company_id,1,0,1,0))
+        c.commit()
+    c.close()
+
+def company_setting(name,default=0):
+    cid=current_company_id()
+    if not cid: return default
+    ensure_company_settings(cid)
+    c=db(); row=c.execute("SELECT * FROM company_settings WHERE company_id=?",(cid,)).fetchone(); c.close()
+    try: return row[name]
+    except Exception: return default
 
 def create_session(user_id):
     raw = secrets.token_urlsafe(40)
@@ -448,7 +532,7 @@ def register_post(company_name: str = Form(...), display_name: str = Form(...), 
     c.execute("UPDATE projects SET company_id=? WHERE company_id IS NULL", (company_id,))
     first_project = c.execute("SELECT id FROM projects WHERE company_id=? ORDER BY id LIMIT 1", (company_id,)).fetchone()
     if first_project:
-        c.execute("INSERT OR REPLACE INTO user_state(user_id,selected_project_id) VALUES(?,?)", (user_id, first_project["id"]))
+        c.execute("INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id", (user_id, first_project["id"]))
     c.commit(); c.close()
     raw = create_session(user_id)
     response = RedirectResponse("/", status_code=303)
@@ -559,7 +643,7 @@ def new_project_form():
 
 @app.post("/projects/new")
 def create_project(name: str = Form(...), number: str = Form(...), status: str = Form(...)):
-    c=db(); c.execute("INSERT INTO projects(name,number,status,company_id) VALUES(?,?,?,?)",(name.strip(),number.strip(),status,current_company_id())); pid=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]; c.execute("INSERT OR REPLACE INTO user_state(user_id,selected_project_id) VALUES(?,?)",(current_user_id(),pid)); c.commit(); c.close(); return RedirectResponse(url="/",status_code=303)
+    c=db(); c.execute("INSERT INTO projects(name,number,status,company_id) VALUES(?,?,?,?)",(name.strip(),number.strip(),status,current_company_id())); pid=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]; c.execute("INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id",(current_user_id(),pid)); c.commit(); c.close(); return RedirectResponse(url="/",status_code=303)
 CSS="""
 :root{--bg:#0a1017;--panel:#111923;--line:#213042;--text:#eef4fb;--muted:#8fa2b5;--gold:#f0b44d}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
@@ -568,9 +652,12 @@ CSS="""
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.kpi{font-size:28px;font-weight:800}.label{font-size:11px;color:var(--muted);text-transform:uppercase}.badge{display:inline-block;padding:4px 8px;border-radius:999px;font-weight:800;font-size:10px}.CRITICAL,.HOLD{background:#492324;color:#ff9b9b}.HIGH,.WATCH{background:#43381b;color:#ffd779}.READY,.LOW,.COMPLETE{background:#18392c;color:#82e4b5}.OPEN{background:#1d2e44;color:#99c9ff}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line);font-size:13px}th{color:var(--muted)}input,textarea,select{width:100%;background:#0d1620;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px}textarea{min-height:90px}button{background:var(--gold);border:0;border-radius:9px;padding:10px 14px;font-weight:800}.action{padding:12px 0;border-bottom:1px solid var(--line)}
 @media(max-width:850px){.app{grid-template-columns:1fr}.grid4,.grid3,.grid2{grid-template-columns:1fr}.main{padding:14px}}
+
+.mobile-menu-btn{display:none}
+@media(max-width:900px){.app{grid-template-columns:1fr}.side{position:relative;border-right:0;border-bottom:1px solid var(--line)}.grid4,.grid3,.grid2{grid-template-columns:1fr}.mobile-menu-btn{display:block;width:100%;margin:12px 0}.nav{display:none}.nav.mobile-open{display:block}}
 """
 
-NAV=[("Daily Command","/"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback")]
+NAV=[("Daily Command","/"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Beta Checklist","/beta-checklist")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -589,7 +676,7 @@ def shell(title, body):
     company_name = esc(user["company_name"]) if user else "BuildCommand Company"
     display_name = esc(user["display_name"]) if user else ""
     selector = f'''<div style="margin-bottom:20px;"><div class="small" style="margin-bottom:6px;">CURRENT PROJECT</div><form method="post" action="/projects/select"><select name="project_id" style="margin-bottom:8px;">{project_options}</select><button type="submit" style="width:100%;">Switch Project</button></form><div style="margin-top:10px;"><a href="/projects/new" style="color:#f0b44d;text-decoration:none;font-weight:700;">+ Add Project</a></div></div>'''
-    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · BuildCommand AI</title><style>{CSS}</style></head><body><div class="app"><aside class="side"><div class="brand">BuildCommand AI</div><div class="company">{company_name}<br>{current_name}</div>{selector}<nav class="nav">{nav}</nav><div class="creator-footer">{display_name}<br>Built by Wilson LaHood<br>© 2026 Wilson LaHood<form method="post" action="/logout" style="margin-top:10px;"><button type="submit" style="width:100%;">Sign Out</button></form></div></aside><main class="main">{body}</main></div></body></html>'''
+    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · BuildCommand AI</title><style>{CSS}</style></head><body><div class="app"><aside class="side"><div class="brand">BuildCommand AI</div><div class="company">{company_name}<br>{current_name}</div>{selector}<button type="button" class="mobile-menu-btn" onclick="document.getElementById('bcnav').classList.toggle('mobile-open')">☰ Menu</button><nav class="nav" id="bcnav">{nav}</nav><div class="creator-footer">{display_name}<br>Built by Wilson LaHood<br>© 2026 Wilson LaHood<form method="post" action="/logout" style="margin-top:10px;"><button type="submit" style="width:100%;">Sign Out</button></form></div></aside><main class="main">{body}</main></div></body></html>'''
 
 def project_id():
     user_id = current_user_id(); company_id = current_company_id()
@@ -603,7 +690,7 @@ def project_id():
         first = c.execute("SELECT id FROM projects WHERE company_id=? ORDER BY id LIMIT 1", (company_id,)).fetchone()
         pid = first["id"] if first else None
         if pid:
-            c.execute("INSERT OR REPLACE INTO user_state(user_id,selected_project_id) VALUES(?,?)", (user_id,pid)); c.commit()
+            c.execute("INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id", (user_id,pid)); c.commit()
     c.close(); return pid
 
 
@@ -612,12 +699,13 @@ def select_project(project_id: int = Form(...)):
     company_id = current_company_id(); user_id = current_user_id(); c = db()
     exists = c.execute("SELECT id FROM projects WHERE id=? AND company_id=?", (project_id, company_id)).fetchone()
     if exists:
-        c.execute("INSERT OR REPLACE INTO user_state(user_id,selected_project_id) VALUES(?,?)", (user_id,project_id)); c.commit()
+        c.execute("INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id", (user_id,project_id)); c.commit()
     c.close(); return RedirectResponse("/", status_code=303)
 
 @app.get("/",response_class=HTMLResponse)
 def home():
     pid = project_id()
+    ensure_today_morning_brief(pid)
     c = db()
     today = date.today().isoformat()
 
@@ -8666,3 +8754,246 @@ def notifications_email_digest():
         if smtp_user: smtp.login(smtp_user,smtp_password or "")
         smtp.send_message(msg)
     return RedirectResponse("/notifications",status_code=303)
+
+
+def ensure_today_morning_brief(pid):
+    if not pid or not company_setting("auto_ai_brief", 1):
+        return
+    cid = current_company_id()
+    c = db()
+    existing = c.execute(
+        "SELECT id FROM morning_briefs WHERE company_id=? AND project_id=? AND brief_date=? LIMIT 1",
+        (cid, pid, date.today().isoformat()),
+    ).fetchone()
+    c.close()
+    if existing or not os.environ.get("OPENAI_API_KEY") or OpenAI is None:
+        return
+    try:
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        response = client.responses.create(
+            model=os.environ.get("OPENAI_MODEL", "gpt-5.6"),
+            instructions=(
+                "You are BuildCommand AI. Create a concise superintendent morning brief grounded only in "
+                "supplied project data. Use HANDLE FIRST, SCHEDULE THREATS, WHO OWES WHAT, TODAY'S "
+                "VERIFICATIONS, COST / CHANGE EXPOSURE, SAFETY / QUALITY."
+            ),
+            input=build_project_context(pid),
+        )
+        brief = response.output_text
+    except Exception:
+        return
+    c = db()
+    c.execute(
+        "INSERT INTO morning_briefs(company_id,project_id,brief_date,brief_text,created) VALUES(?,?,?,?,?)",
+        (cid, pid, date.today().isoformat(), brief, datetime.utcnow().isoformat()),
+    )
+    c.commit()
+    c.close()
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_wizard():
+    cid = current_company_id()
+    ensure_company_settings(cid)
+    u = current_user()
+    c = db()
+    pc = c.execute("SELECT COUNT(*) n FROM projects WHERE company_id=?", (cid,)).fetchone()["n"]
+    tc = c.execute("SELECT COUNT(*) n FROM users WHERE company_id=?", (cid,)).fetchone()["n"]
+    c.close()
+    body = f"""
+    <div class="hero"><div class="eyebrow">Customer Setup</div><h1>Finish your BuildCommand workspace.</h1></div>
+    <div class="grid2">
+      <div class="card"><h2>1. Company</h2><p>{esc(u['company_name'])}</p><a href="/company-settings">Edit Company →</a></div>
+      <div class="card"><h2>2. Project</h2><p>{pc} project(s)</p><a href="/projects/new">Add Project →</a></div>
+      <div class="card"><h2>3. Team</h2><p>{tc} user(s)</p><a href="/invitations">Invite Team →</a></div>
+      <div class="card"><h2>4. Field Setup</h2><a href="/subcontractors">Add Subcontractors →</a><br><a href="/activities/new">Add Schedule Activity →</a></div>
+    </div>
+    <div class="card"><form method="post" action="/setup/complete"><button type="submit">Finish Setup</button></form></div>
+    """
+    return shell("Setup", body)
+
+
+@app.post("/setup/complete")
+def setup_complete():
+    cid = current_company_id()
+    ensure_company_settings(cid)
+    c = db()
+    c.execute("UPDATE company_settings SET onboarding_complete=1 WHERE company_id=?", (cid,))
+    c.commit()
+    c.close()
+    return RedirectResponse("/", 303)
+
+
+@app.get("/invitations", response_class=HTMLResponse)
+def invitations_page():
+    if not require_role("ADMIN"):
+        return HTMLResponse("Not authorized.", 403)
+    c = db()
+    rows = c.execute(
+        "SELECT * FROM invitations WHERE company_id=? ORDER BY id DESC LIMIT 30",
+        (current_company_id(),),
+    ).fetchall()
+    c.close()
+    hist = "".join(
+        f"<div class='action'><b>{esc(r['email'])}</b> · {esc(r['role'])}<div class='small'>{'Accepted' if r['accepted'] else 'Pending'} · Expires {esc(r['expires'])}</div></div>"
+        for r in rows
+    ) or "<div class='muted'>No invitations yet.</div>"
+    form = """
+    <div class='card'><h2>Create Invitation</h2><form method='post' action='/invitations'>
+    <label>Email</label><input type='email' name='email' required>
+    <label>Role</label><select name='role'>
+      <option value='READ_ONLY'>Read Only</option><option value='FIELD_USER'>Field User</option>
+      <option value='SUPERINTENDENT'>Superintendent</option><option value='PROJECT_MANAGER'>Project Manager</option>
+      <option value='ADMIN'>Admin</option>
+    </select><button type='submit'>Create Invite</button></form></div>
+    """
+    return shell(
+        "Invitations",
+        f"<div class='hero'><div class='eyebrow'>Team Invitations</div><h1>Invite the project team.</h1></div><div class='grid2'>{form}<div class='card'><h2>Recent</h2>{hist}</div></div>",
+    )
+
+
+@app.post("/invitations")
+def create_invitation(email: str = Form(...), role: str = Form("FIELD_USER")):
+    if not require_role("ADMIN"):
+        return HTMLResponse("Not authorized.", 403)
+    valid = {"READ_ONLY", "FIELD_USER", "SUPERINTENDENT", "PROJECT_MANAGER", "ADMIN"}
+    role = role if role in valid else "FIELD_USER"
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    expires = (datetime.utcnow() + timedelta(days=7)).isoformat()
+    c = db()
+    c.execute(
+        "INSERT INTO invitations(company_id,email,role,token_hash,expires,accepted,created_by,created) VALUES(?,?,?,?,?,?,?,?)",
+        (current_company_id(), email.strip().lower(), role, token_hash, expires, 0, current_user_id(), datetime.utcnow().isoformat()),
+    )
+    c.commit()
+    c.close()
+    link = f"/accept-invite?token={raw}"
+    return HTMLResponse(
+        shell(
+            "Invitation Created",
+            f"<div class='card'><h2>Invitation created</h2><p>Send this link to {esc(email)}. It expires in 7 days.</p><input value='{esc(link)}' readonly><p><a href='/invitations'>Back</a></p></div>",
+        )
+    )
+
+
+@app.get("/accept-invite", response_class=HTMLResponse)
+def accept_invite_get(token: str):
+    th = hashlib.sha256(token.encode()).hexdigest()
+    c = db()
+    inv = c.execute(
+        "SELECT i.*,c.name company_name FROM invitations i JOIN companies c ON c.id=i.company_id WHERE i.token_hash=? AND i.accepted=0 AND i.expires>?",
+        (th, datetime.utcnow().isoformat()),
+    ).fetchone()
+    c.close()
+    if not inv:
+        return HTMLResponse("Invitation invalid or expired.", 400)
+    return f"""
+    <!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>{CSS}</style></head>
+    <body><main class='main'><div class='card'><h1>Join {esc(inv['company_name'])}</h1>
+    <form method='post' action='/accept-invite'><input type='hidden' name='token' value='{esc(token)}'>
+    <label>Name</label><input name='display_name' required><label>Password</label><input type='password' name='password' minlength='8' required>
+    <button type='submit'>Create Account</button></form></div></main></body></html>
+    """
+
+
+@app.post("/accept-invite")
+def accept_invite_post(token: str = Form(...), display_name: str = Form(...), password: str = Form(...)):
+    if len(password) < 8:
+        return HTMLResponse("Password must be at least 8 characters.", 400)
+    th = hashlib.sha256(token.encode()).hexdigest()
+    c = db()
+    inv = c.execute(
+        "SELECT * FROM invitations WHERE token_hash=? AND accepted=0 AND expires>?",
+        (th, datetime.utcnow().isoformat()),
+    ).fetchone()
+    if not inv:
+        c.close()
+        return HTMLResponse("Invitation invalid or expired.", 400)
+    if c.execute("SELECT id FROM users WHERE lower(email)=lower(?)", (inv["email"],)).fetchone():
+        c.close()
+        return HTMLResponse("Email already registered.", 400)
+    c.execute(
+        "INSERT INTO users(company_id,email,display_name,password_hash,role,created) VALUES(?,?,?,?,?,?)",
+        (inv["company_id"], inv["email"], display_name.strip(), hash_password(password), inv["role"], date.today().isoformat()),
+    )
+    uid = c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    c.execute("UPDATE invitations SET accepted=1 WHERE id=?", (inv["id"],))
+    fp = c.execute("SELECT id FROM projects WHERE company_id=? ORDER BY id LIMIT 1", (inv["company_id"],)).fetchone()
+    if fp:
+        c.execute(
+            "INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id",
+            (uid, fp["id"]),
+        )
+    c.commit()
+    c.close()
+    raw = create_session(uid)
+    resp = RedirectResponse("/", 303)
+    resp.set_cookie("bc_session", raw, httponly=True, secure=os.environ.get("COOKIE_SECURE", "1") == "1", samesite="lax", max_age=2592000)
+    return resp
+
+
+@app.get("/production-settings", response_class=HTMLResponse)
+def production_settings_page():
+    if not require_role("ADMIN"):
+        return HTMLResponse("Not authorized.", 403)
+    cid = current_company_id()
+    ensure_company_settings(cid)
+    c = db()
+    s = c.execute("SELECT * FROM company_settings WHERE company_id=?", (cid,)).fetchone()
+    c.close()
+    body = f"""
+    <div class='hero'><div class='eyebrow'>Production Controls</div><h1>Automation & beta settings</h1></div>
+    <div class='card'><form method='post' action='/production-settings'>
+    <label>Automatic AI Morning Brief</label><select name='auto_ai_brief'>
+      <option value='1' {'selected' if s['auto_ai_brief'] else ''}>Enabled</option><option value='0' {'selected' if not s['auto_ai_brief'] else ''}>Disabled</option></select>
+    <label>Email Alerts</label><select name='email_alerts'>
+      <option value='1' {'selected' if s['email_alerts'] else ''}>Enabled</option><option value='0' {'selected' if not s['email_alerts'] else ''}>Disabled</option></select>
+    <label>Beta Mode</label><select name='beta_mode'>
+      <option value='1' {'selected' if s['beta_mode'] else ''}>Enabled</option><option value='0' {'selected' if not s['beta_mode'] else ''}>Disabled</option></select>
+    <button type='submit'>Save Settings</button></form></div>
+    """
+    return shell("Production Settings", body)
+
+
+@app.post("/production-settings")
+def production_settings_save(auto_ai_brief: int = Form(1), email_alerts: int = Form(0), beta_mode: int = Form(1)):
+    if not require_role("ADMIN"):
+        return HTMLResponse("Not authorized.", 403)
+    cid = current_company_id()
+    ensure_company_settings(cid)
+    c = db()
+    c.execute(
+        "UPDATE company_settings SET auto_ai_brief=?,email_alerts=?,beta_mode=? WHERE company_id=?",
+        (1 if auto_ai_brief else 0, 1 if email_alerts else 0, 1 if beta_mode else 0, cid),
+    )
+    c.commit()
+    c.close()
+    return RedirectResponse("/production-settings", 303)
+
+
+@app.get("/beta-checklist", response_class=HTMLResponse)
+def beta_checklist():
+    pid = project_id()
+    c = db()
+    checks = {
+        "Project created": bool(pid),
+        "Schedule activity entered": c.execute("SELECT COUNT(*) n FROM activities WHERE project_id=?", (pid,)).fetchone()["n"] > 0 if pid else False,
+        "Subcontractor entered": c.execute("SELECT COUNT(*) n FROM subs WHERE project_id=?", (pid,)).fetchone()["n"] > 0 if pid else False,
+        "Daily report submitted": c.execute("SELECT COUNT(*) n FROM daily_reports WHERE project_id=?", (pid,)).fetchone()["n"] > 0 if pid else False,
+        "Risk entered": c.execute("SELECT COUNT(*) n FROM risks WHERE project_id=?", (pid,)).fetchone()["n"] > 0 if pid else False,
+        "AI configured": bool(os.environ.get("OPENAI_API_KEY")),
+        "Persistent upload path configured": bool(os.environ.get("UPLOAD_DIR")),
+        "PostgreSQL connected": DATABASE_KIND == "postgres",
+    }
+    c.close()
+    complete = sum(1 for v in checks.values() if v)
+    html = "".join(
+        f"<div class='action'><span class='badge {'READY' if ok else 'WATCH'}'>{'DONE' if ok else 'TODO'}</span> {esc(name)}</div>"
+        for name, ok in checks.items()
+    )
+    return shell(
+        "Beta Checklist",
+        f"<div class='hero'><div class='eyebrow'>Beta Readiness</div><h1>{complete}/{len(checks)} launch checks complete</h1></div><div class='card'>{html}</div><div class='card'><a href='/beta-feedback'>Record Beta Feedback →</a></div>",
+    )
