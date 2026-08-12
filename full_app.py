@@ -503,9 +503,103 @@ def schedule():
 
 @app.get("/make-ready",response_class=HTMLResponse)
 def make_ready():
-    pid=project_id(); c=db(); rows=c.execute("SELECT m.*,a.name activity FROM make_ready m JOIN activities a ON a.id=m.activity_id WHERE m.project_id=? ORDER BY due",(pid,)).fetchall(); c.close()
-    html="".join(f'<div class="card"><span class="badge {r["priority"]}">{r["priority"]}</span> <b>{esc(r["activity"])}</b><h3>{esc(r["title"])}</h3><p>{esc(r["reason"])}</p><div class="small">Clear by {r["due"]}</div></div>' for r in rows)
-    return shell("Make Ready",'<div class="hero"><div class="eyebrow">Predictive Make-Ready</div><h1>Clear tomorrow blockers before they hit the field.</h1></div>'+html)
+    pid = project_id()
+    c = db()
+
+    rows = c.execute(
+        """
+        SELECT m.*, a.external_id, a.name activity
+        FROM make_ready m
+        JOIN activities a ON a.id=m.activity_id
+        WHERE m.project_id=? AND m.status='OPEN'
+        ORDER BY
+            CASE m.priority
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'WATCH' THEN 3
+                ELSE 4
+            END,
+            m.due
+        """,
+        (pid,)
+    ).fetchall()
+
+    closed = c.execute(
+        """
+        SELECT m.*, a.external_id, a.name activity
+        FROM make_ready m
+        JOIN activities a ON a.id=m.activity_id
+        WHERE m.project_id=? AND m.status='COMPLETE'
+        ORDER BY m.id DESC
+        LIMIT 10
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    open_html = "".join(
+        f"""
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+                <div>
+                    <span class="badge {r["priority"]}">{r["priority"]}</span>
+                    <b>{esc(r["external_id"])} - {esc(r["activity"])}</b>
+                </div>
+
+                <form method="post" action="/make-ready/{r["id"]}/close">
+                    <button type="submit">Mark Cleared</button>
+                </form>
+            </div>
+
+            <h3>{esc(r["title"])}</h3>
+            <p>{esc(r["reason"])}</p>
+            <div class="small">Clear by {esc(r["due"])}</div>
+        </div>
+        """
+        for r in rows
+    ) or '<div class="card"><div class="muted">No open make-ready items. Nice work.</div></div>'
+
+    closed_html = "".join(
+        f"""
+        <div class="action">
+            <span class="badge COMPLETE">CLEARED</span>
+            <b>{esc(r["external_id"])} - {esc(r["activity"])}</b>
+            <div>{esc(r["title"])}</div>
+        </div>
+        """
+        for r in closed
+    ) or '<div class="muted">No recently cleared items.</div>'
+
+    body = f"""
+    <div class="hero">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+            <div>
+                <div class="eyebrow">Predictive Make-Ready</div>
+                <h1>Clear tomorrow's blockers before they hit the field.</h1>
+            </div>
+
+            <a href="/make-ready/new"
+               style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">
+                + Add Make-Ready
+            </a>
+        </div>
+    </div>
+
+    <div class="grid2">
+        <div>
+            <h2>Open Blockers</h2>
+            {open_html}
+        </div>
+
+        <div class="card">
+            <h2>Recently Cleared</h2>
+            {closed_html}
+        </div>
+    </div>
+    """
+
+    return shell("Make Ready", body)
 
 @app.get("/field",response_class=HTMLResponse)
 def field():
@@ -1424,3 +1518,178 @@ SUPERINTENDENT QUESTION
     """
 
     return shell("AI Assistant", body)
+
+
+@app.get("/make-ready/new", response_class=HTMLResponse)
+def new_make_ready_form():
+    pid = project_id()
+    c = db()
+
+    project = c.execute(
+        "SELECT name,number FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+
+    activities = c.execute(
+        """
+        SELECT id,external_id,name
+        FROM activities
+        WHERE project_id=?
+        ORDER BY start,name
+        """,
+        (pid,)
+    ).fetchall()
+
+    c.close()
+
+    project_label = "Current Project"
+    if project:
+        project_label = f'{esc(project["number"])} - {esc(project["name"])}'
+
+    options = "".join(
+        f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>'
+        for a in activities
+    )
+
+    if not options:
+        body = """
+        <div class="hero">
+            <div class="eyebrow">Make Ready</div>
+            <h1>Add Make-Ready Item</h1>
+        </div>
+        <div class="card">
+            <p>This project has no activities yet. Add a schedule activity first.</p>
+            <a href="/activities/new" style="color:#f0b44d;font-weight:700;text-decoration:none;">
+                + Add Activity
+            </a>
+        </div>
+        """
+        return shell("Add Make-Ready", body)
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Make Ready</div>
+        <h1>Add Make-Ready Item</h1>
+        <div class="muted">{project_label}</div>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/make-ready/new">
+
+            <label>Activity</label>
+            <select name="activity_id" required>
+                {options}
+            </select>
+
+            <label>Blocker / Action Title</label>
+            <input
+                type="text"
+                name="title"
+                placeholder="Example: Confirm electrical gear delivery"
+                required
+            >
+
+            <label>Why It Matters</label>
+            <textarea
+                name="reason"
+                placeholder="Describe the constraint, dependency, or field impact."
+                required
+            ></textarea>
+
+            <div class="grid2">
+                <div>
+                    <label>Clear By</label>
+                    <input type="date" name="due" required>
+                </div>
+
+                <div>
+                    <label>Priority</label>
+                    <select name="priority">
+                        <option value="CRITICAL">Critical</option>
+                        <option value="HIGH">High</option>
+                        <option value="WATCH">Watch</option>
+                        <option value="LOW">Low</option>
+                    </select>
+                </div>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Make-Ready Item</button>
+
+                <a href="/make-ready"
+                   style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">
+                    Cancel
+                </a>
+            </div>
+        </form>
+    </div>
+    """
+
+    return shell("Add Make-Ready", body)
+
+
+@app.post("/make-ready/new")
+def create_make_ready(
+    activity_id: int = Form(...),
+    title: str = Form(...),
+    reason: str = Form(...),
+    due: str = Form(...),
+    priority: str = Form("HIGH")
+):
+    pid = project_id()
+
+    c = db()
+
+    activity = c.execute(
+        "SELECT id FROM activities WHERE id=? AND project_id=?",
+        (activity_id, pid)
+    ).fetchone()
+
+    if activity:
+        c.execute(
+            """
+            INSERT INTO make_ready(
+                project_id,
+                activity_id,
+                title,
+                reason,
+                due,
+                priority,
+                status
+            )
+            VALUES(?,?,?,?,?,?,?)
+            """,
+            (
+                pid,
+                activity_id,
+                title.strip(),
+                reason.strip(),
+                due,
+                priority,
+                "OPEN"
+            )
+        )
+        c.commit()
+
+    c.close()
+
+    return RedirectResponse(url="/make-ready", status_code=303)
+
+
+@app.post("/make-ready/{item_id}/close")
+def close_make_ready(item_id: int):
+    pid = project_id()
+
+    c = db()
+    c.execute(
+        """
+        UPDATE make_ready
+        SET status='COMPLETE'
+        WHERE id=? AND project_id=?
+        """,
+        (item_id, pid)
+    )
+    c.commit()
+    c.close()
+
+    return RedirectResponse(url="/make-ready", status_code=303)
