@@ -469,8 +469,20 @@ def home():
 @app.get("/schedule",response_class=HTMLResponse)
 def schedule():
     pid=project_id(); c=db(); rows=c.execute("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,)).fetchall(); c.close()
-    tr="".join(f'<tr><td>{r["external_id"]}</td><td><b>{esc(r["name"])}</b></td><td>{r["trade"]}</td><td>{r["start"]}</td><td>{r["finish"]}</td><td>{r["pct"]:.0f}%</td><td>{r["status"]}</td></tr>' for r in rows)
-    return shell("Schedule",f'<div class="hero"><div class="eyebrow">Schedule + Lookahead</div><h1>Field execution plan</h1></div><div class="card"><table><tr><th>ID</th><th>Activity</th><th>Trade</th><th>Start</th><th>Finish</th><th>%</th><th>Status</th></tr>{tr}</table></div>')
+    tr="".join(
+        f'<tr>'
+        f'<td>{esc(r["external_id"])}</td>'
+        f'<td><b>{esc(r["name"])}</b></td>'
+        f'<td>{esc(r["trade"])}</td>'
+        f'<td>{r["start"]}</td>'
+        f'<td>{r["finish"]}</td>'
+        f'<td>{r["pct"]:.0f}%</td>'
+        f'<td>{esc(r["status"])}</td>'
+        f'<td><a href="/activities/{r["id"]}/edit" style="color:#f0b44d;text-decoration:none;font-weight:700;">Edit</a></td>'
+        f'</tr>'
+        for r in rows
+    )
+    return shell("Schedule",f'<div class="hero"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;"><div><div class="eyebrow">Schedule + Lookahead</div><h1>Field execution plan</h1></div><a href="/activities/new" style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">+ Add Activity</a></div></div><div class="card"><table><tr><th>ID</th><th>Activity</th><th>Trade</th><th>Start</th><th>Finish</th><th>%</th><th>Status</th><th>Action</th></tr>{tr}</table></div>')
 
 @app.get("/make-ready",response_class=HTMLResponse)
 def make_ready():
@@ -493,9 +505,22 @@ def add_field(activity_id:int=Form(...),update_type:str=Form(...),text:str=Form(
 
 @app.get("/subcontractors",response_class=HTMLResponse)
 def subcontractors():
-    pid=project_id(); c=db(); rows=c.execute("SELECT * FROM subs WHERE project_id=?",(pid,)).fetchall(); c.close()
-    html="".join(f'<div class="card"><h3>{esc(r["name"])}</h3><div class="muted">{esc(r["trade"])}</div><p>Commitments, manpower, production, constraints and early-warning behavior feed the operating loop.</p></div>' for r in rows)
-    return shell("Subcontractors",'<div class="hero"><div class="eyebrow">Subcontractor Intelligence</div><h1>Trade partners in the execution loop.</h1></div><div class="grid3">'+html+'</div>')
+    pid=project_id()
+    c=db()
+    rows=c.execute("SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",(pid,)).fetchall()
+    c.close()
+    html="".join(
+        f'<div class="card"><h3>{esc(r["name"])}</h3><div class="muted">{esc(r["trade"])}</div>'
+        f'<p>Commitments, manpower, production, constraints and early-warning behavior feed the operating loop.</p></div>'
+        for r in rows
+    ) or '<div class="card"><div class="muted">No subcontractors added yet.</div></div>'
+    body = (
+        '<div class="hero"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">'
+        '<div><div class="eyebrow">Subcontractor Intelligence</div><h1>Trade partners in the execution loop.</h1></div>'
+        '<a href="/subcontractors/new" style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">+ Add Subcontractor</a>'
+        '</div></div><div class="grid3">'+html+'</div>'
+    )
+    return shell("Subcontractors", body)
 
 @app.get("/production",response_class=HTMLResponse)
 def production():
@@ -621,3 +646,177 @@ def create_activity(
     c.commit()
     c.close()
     return RedirectResponse(url="/schedule", status_code=303)
+
+
+@app.get("/activities/{activity_id}/edit", response_class=HTMLResponse)
+def edit_activity_form(activity_id: int):
+    pid = project_id()
+    c = db()
+    activity = c.execute(
+        "SELECT * FROM activities WHERE id=? AND project_id=?",
+        (activity_id, pid)
+    ).fetchone()
+    c.close()
+
+    if not activity:
+        return RedirectResponse(url="/schedule", status_code=303)
+
+    statuses = ["NOT_STARTED", "IN_PROGRESS", "COMPLETE", "HOLD"]
+    options = "".join(
+        f'<option value="{s}" {"selected" if activity["status"] == s else ""}>{s.replace("_"," ").title()}</option>'
+        for s in statuses
+    )
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Schedule</div>
+        <h1>Edit Activity</h1>
+        <div class="muted">Update schedule information for this activity.</div>
+    </div>
+
+    <div class="card" style="max-width:760px;">
+        <form method="post" action="/activities/{activity_id}/edit">
+            <div class="grid2">
+                <div>
+                    <label>Activity ID</label>
+                    <input type="text" name="external_id" value="{esc(activity["external_id"])}" required>
+                </div>
+                <div>
+                    <label>Trade</label>
+                    <input type="text" name="trade" value="{esc(activity["trade"])}" required>
+                </div>
+            </div>
+
+            <label>Activity Name</label>
+            <input type="text" name="name" value="{esc(activity["name"])}" required>
+
+            <div class="grid2">
+                <div>
+                    <label>Start Date</label>
+                    <input type="date" name="start" value="{activity["start"]}" required>
+                </div>
+                <div>
+                    <label>Finish Date</label>
+                    <input type="date" name="finish" value="{activity["finish"]}" required>
+                </div>
+            </div>
+
+            <div class="grid2">
+                <div>
+                    <label>Percent Complete</label>
+                    <input type="number" name="pct" min="0" max="100" step="1" value="{activity["pct"]:.0f}" required>
+                </div>
+                <div>
+                    <label>Status</label>
+                    <select name="status">{options}</select>
+                </div>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Changes</button>
+                <a href="/schedule" style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">Cancel</a>
+            </div>
+        </form>
+
+        <form method="post" action="/activities/{activity_id}/delete" style="margin-top:22px;padding-top:18px;border-top:1px solid #213042;">
+            <button type="submit" style="background:#492324;color:#ffb0b0;">Delete Activity</button>
+        </form>
+    </div>
+    """
+    return shell("Edit Activity", body)
+
+
+@app.post("/activities/{activity_id}/edit")
+def edit_activity(
+    activity_id: int,
+    external_id: str = Form(...),
+    name: str = Form(...),
+    trade: str = Form(...),
+    start: str = Form(...),
+    finish: str = Form(...),
+    pct: float = Form(0),
+    status: str = Form("NOT_STARTED")
+):
+    pid = project_id()
+    pct = max(0.0, min(100.0, pct))
+    c = db()
+    c.execute(
+        """
+        UPDATE activities
+        SET external_id=?, name=?, trade=?, start=?, finish=?, pct=?, status=?
+        WHERE id=? AND project_id=?
+        """,
+        (external_id.strip(), name.strip(), trade.strip(), start, finish, pct, status, activity_id, pid)
+    )
+    c.commit()
+    c.close()
+    return RedirectResponse(url="/schedule", status_code=303)
+
+
+@app.post("/activities/{activity_id}/delete")
+def delete_activity(activity_id: int):
+    pid = project_id()
+    c = db()
+
+    c.execute("DELETE FROM field_updates WHERE activity_id=? AND project_id=?", (activity_id, pid))
+    c.execute("DELETE FROM production WHERE activity_id=? AND project_id=?", (activity_id, pid))
+    c.execute("DELETE FROM make_ready WHERE activity_id=? AND project_id=?", (activity_id, pid))
+    c.execute("DELETE FROM risks WHERE activity_id=? AND project_id=?", (activity_id, pid))
+    c.execute("DELETE FROM recovery WHERE activity_id=? AND project_id=?", (activity_id, pid))
+    c.execute("DELETE FROM activities WHERE id=? AND project_id=?", (activity_id, pid))
+
+    c.commit()
+    c.close()
+    return RedirectResponse(url="/schedule", status_code=303)
+
+
+@app.get("/subcontractors/new", response_class=HTMLResponse)
+def new_subcontractor_form():
+    pid = project_id()
+    c = db()
+    project = c.execute("SELECT name,number FROM projects WHERE id=?", (pid,)).fetchone()
+    c.close()
+
+    project_label = "Current Project"
+    if project:
+        project_label = f'{esc(project["number"])} - {esc(project["name"])}'
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">Subcontractors</div>
+        <h1>Add Subcontractor</h1>
+        <div class="muted">Add a trade partner to {project_label}.</div>
+    </div>
+
+    <div class="card" style="max-width:680px;">
+        <form method="post" action="/subcontractors/new">
+            <label>Company Name</label>
+            <input type="text" name="name" placeholder="Example: Valley Electric" required>
+
+            <label>Trade</label>
+            <input type="text" name="trade" placeholder="Example: Electrical" required>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;">
+                <button type="submit">Save Subcontractor</button>
+                <a href="/subcontractors" style="display:inline-block;color:#f0b44d;text-decoration:none;padding:10px 4px;font-weight:700;">Cancel</a>
+            </div>
+        </form>
+    </div>
+    """
+    return shell("Add Subcontractor", body)
+
+
+@app.post("/subcontractors/new")
+def create_subcontractor(
+    name: str = Form(...),
+    trade: str = Form(...)
+):
+    pid = project_id()
+    c = db()
+    c.execute(
+        "INSERT INTO subs(project_id,name,trade) VALUES(?,?,?)",
+        (pid, name.strip(), trade.strip())
+    )
+    c.commit()
+    c.close()
+    return RedirectResponse(url="/subcontractors", status_code=303)
