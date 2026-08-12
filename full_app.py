@@ -6675,10 +6675,18 @@ def new_submittal_form():
                 {activity_options}
             </select>
 
-            <label>Responsible Party</label>
-            <select name="responsible_party">
-                {responsible_options}
-            </select>
+            <label>Subcontractor / Responsible Party</label>
+            <input
+                type="text"
+                name="responsible_party"
+                list="responsible_parties"
+                placeholder="Type or select a subcontractor"
+            >
+            <datalist id="responsible_parties">
+                <option value="Project Manager">
+                <option value="Architect / Engineer">
+                {''.join(f'<option value="{esc(s["name"])}">{esc(s["trade"])}</option>' for s in subs)}
+            </datalist>
 
             <div class="grid2">
                 <div>
@@ -6800,8 +6808,13 @@ def edit_submittal_form(submittal_id: int):
             <label>Spec Section</label>
             <input type="text" name="spec_section" value="{esc(item["spec_section"])}">
 
-            <label>Responsible Party</label>
-            <input type="text" name="responsible_party" value="{esc(item["responsible_party"])}">
+            <label>Subcontractor / Responsible Party</label>
+            <input
+                type="text"
+                name="responsible_party"
+                value="{esc(item["responsible_party"])}"
+                placeholder="Type subcontractor or responsible party"
+            >
 
             <div class="grid2">
                 <div>
