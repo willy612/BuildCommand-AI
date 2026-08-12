@@ -241,7 +241,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:850px){.app{grid-template-columns:1fr}.grid4,.grid3,.grid2{grid-template-columns:1fr}.main{padding:14px}}
 """
 
-NAV=[("Daily Command","/"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
+NAV=[("Daily Command","/"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -970,3 +970,178 @@ def save_daily_report(
     c.commit()
     c.close()
     return RedirectResponse(url="/daily-report", status_code=303)
+
+
+@app.get("/ai-analysis", response_class=HTMLResponse)
+def ai_analysis():
+    pid = project_id()
+    c = db()
+
+    project = c.execute(
+        "SELECT * FROM projects WHERE id=?",
+        (pid,)
+    ).fetchone()
+
+    activities = c.execute(
+        "SELECT * FROM activities WHERE project_id=? ORDER BY start",
+        (pid,)
+    ).fetchall()
+
+    risks = c.execute(
+        """
+        SELECT r.*, a.name activity
+        FROM risks r
+        JOIN activities a ON a.id=r.activity_id
+        WHERE r.project_id=?
+        ORDER BY r.score DESC
+        """,
+        (pid,)
+    ).fetchall()
+
+    make_ready_items = c.execute(
+        """
+        SELECT m.*, a.name activity
+        FROM make_ready m
+        JOIN activities a ON a.id=m.activity_id
+        WHERE m.project_id=? AND m.status='OPEN'
+        ORDER BY due
+        """,
+        (pid,)
+    ).fetchall()
+
+    report = c.execute(
+        """
+        SELECT *
+        FROM daily_reports
+        WHERE project_id=?
+        ORDER BY report_date DESC, id DESC
+        LIMIT 1
+        """,
+        (pid,)
+    ).fetchone()
+
+    c.close()
+
+    project_name = esc(project["name"]) if project else "Current Project"
+
+    critical = [r for r in risks if r["band"] == "CRITICAL"]
+    high = [r for r in risks if r["band"] == "HIGH"]
+    in_progress = [a for a in activities if a["status"] == "IN_PROGRESS"]
+
+    top_actions = []
+
+    for r in critical[:3]:
+        top_actions.append(
+            f'CRITICAL: {esc(r["activity"])} — {esc(r["explanation"])}'
+        )
+
+    for item in make_ready_items[:3]:
+        top_actions.append(
+            f'MAKE READY: {esc(item["title"])} — due {esc(item["due"])}'
+        )
+
+    if report:
+        delays = (report["delays"] or "").strip()
+        inspections = (report["inspections"] or "").strip()
+        tomorrow = (report["tomorrow_plan"] or "").strip()
+
+        if delays:
+            top_actions.append(f'FIELD DELAY: {esc(delays)}')
+
+        if inspections:
+            top_actions.append(f'INSPECTION: {esc(inspections)}')
+
+        if tomorrow:
+            top_actions.append(f'TOMORROW: {esc(tomorrow)}')
+
+    if not top_actions:
+        top_actions.append(
+            "No immediate high-priority issues were found in the current project data."
+        )
+
+    action_html = "".join(
+        f'<div class="action">{item}</div>'
+        for item in top_actions[:7]
+    )
+
+    if report:
+        report_summary = (
+            f'<div class="small">Latest Report: {esc(report["report_date"])}</div>'
+            f'<p><b>Manpower:</b> {report["manpower"] or 0}</p>'
+            f'<p><b>Work Completed:</b> {esc(report["work_completed"]) or "—"}</p>'
+            f'<p><b>Delays:</b> {esc(report["delays"]) or "—"}</p>'
+            f'<p><b>Tomorrow:</b> {esc(report["tomorrow_plan"]) or "—"}</p>'
+        )
+    else:
+        report_summary = '<div class="muted">No daily report has been submitted yet.</div>'
+
+    risk_html = "".join(
+        (
+            f'<div class="action">'
+            f'<span class="badge {r["band"]}">{r["band"]}</span> '
+            f'<b>{esc(r["activity"])}</b> · {r["score"]:.0f}/100'
+            f'<div class="small">{esc(r["explanation"])}</div>'
+            f'</div>'
+        )
+        for r in risks[:6]
+    ) or '<div class="muted">No risk records yet.</div>'
+
+    body = f"""
+    <div class="hero">
+        <div class="eyebrow">BuildCommand Intelligence</div>
+        <h1>What needs attention now?</h1>
+        <div class="muted">
+            Current project analysis for {project_name}.
+        </div>
+    </div>
+
+    <div class="grid4">
+        <div class="card">
+            <div class="label">Critical Risks</div>
+            <div class="kpi">{len(critical)}</div>
+        </div>
+        <div class="card">
+            <div class="label">High Risks</div>
+            <div class="kpi">{len(high)}</div>
+        </div>
+        <div class="card">
+            <div class="label">Open Make-Ready</div>
+            <div class="kpi">{len(make_ready_items)}</div>
+        </div>
+        <div class="card">
+            <div class="label">Active Activities</div>
+            <div class="kpi">{len(in_progress)}</div>
+        </div>
+    </div>
+
+    <div class="grid2">
+        <div class="card">
+            <h2>Handle First</h2>
+            {action_html}
+        </div>
+
+        <div class="card">
+            <h2>Latest Field Signal</h2>
+            {report_summary}
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Risk Intelligence</h2>
+        {risk_html}
+    </div>
+
+    <div class="card">
+        <h2>BuildCommand Recommendation</h2>
+        <p>
+            Focus first on critical risks and open make-ready items, then verify field delays,
+            inspections, and tomorrow's plan before committing additional manpower or recovery cost.
+        </p>
+        <div class="small">
+            This is the first intelligence layer. The next version can connect a live AI model
+            so BuildCommand can answer natural-language questions about the project.
+        </div>
+    </div>
+    """
+
+    return shell("AI Analysis", body)
