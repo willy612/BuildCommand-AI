@@ -334,8 +334,6 @@ def project_id():
 
 @app.post("/projects/select")
 def select_project(project_id: int = Form(...)):
-@app.post("/projects/select")
-def select_project(project_id: int = Form(...)):
     c = db()
 
     exists = c.execute(
@@ -358,7 +356,6 @@ def select_project(project_id: int = Form(...)):
     c.close()
 
     return RedirectResponse("/", status_code=303)
-
 @app.get("/",response_class=HTMLResponse)
 def home():
     pid=project_id(); c=db()
