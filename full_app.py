@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="31.0")
+app=FastAPI(title="BuildCommand AI",version="31.1")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -584,7 +584,7 @@ def logout(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status":"ok","app":"BuildCommand AI","version":"26.0"}
+    return {"status":"ok","app":"BuildCommand AI","version":"31.1"}
 
 @app.get("/projects/new", response_class=HTMLResponse)
 def new_project_form():
@@ -757,7 +757,7 @@ def shell(title, body):
     display_name = esc(user["display_name"]) if user else ""
     selector = f'''<div style="margin-bottom:20px;"><div class="small" style="margin-bottom:6px;">CURRENT PROJECT</div><form method="post" action="/projects/select"><select name="project_id" style="margin-bottom:8px;">{project_options}</select><button type="submit" style="width:100%;">Switch Project</button></form><div style="margin-top:10px;"><a href="/projects/new" style="color:#f0b44d;text-decoration:none;font-weight:700;">+ Add Project</a></div></div>'''
     return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · BuildCommand AI</title><style>{CSS}
-.nav-group{border-bottom:1px solid rgba(255,255,255,.08);padding:2px 0}.nav-group summary{cursor:pointer;padding:11px 10px;font-weight:800;color:#f4f4f4;list-style:none;border-radius:8px}.nav-group summary::-webkit-details-marker{display:none}.nav-group summary:after{content:"▾";float:right;opacity:.7}.nav-group[open] summary:after{content:"▴"}.nav-items{padding:0 0 8px 8px}.nav-items a{display:block;padding:8px 10px;font-size:13px}.search-result{padding:12px 0;border-bottom:1px solid var(--line)}
+.nav-group{{border-bottom:1px solid rgba(255,255,255,.08);padding:2px 0}}.nav-group summary{{cursor:pointer;padding:11px 10px;font-weight:800;color:#f4f4f4;list-style:none;border-radius:8px}}.nav-group summary::-webkit-details-marker{{display:none}}.nav-group summary:after{{content:"▾";float:right;opacity:.7}}.nav-group[open] summary:after{{content:"▴"}}.nav-items{{padding:0 0 8px 8px}}.nav-items a{{display:block;padding:8px 10px;font-size:13px}}.search-result{{padding:12px 0;border-bottom:1px solid var(--line)}}
 </style></head><body><div class="app"><aside class="side"><div class="brand">BuildCommand AI</div><div class="company">{company_name}<br>{current_name}</div>{selector}<button type="button" class="mobile-menu-btn" onclick="document.getElementById('bcnav').classList.toggle('mobile-open')">☰ Menu</button><nav class="nav" id="bcnav">{nav}</nav><div class="creator-footer">{display_name}<br>Built by Wilson LaHood<br>© 2026 Wilson LaHood<form method="post" action="/logout" style="margin-top:10px;"><button type="submit" style="width:100%;">Sign Out</button></form></div></aside><main class="main">{body}</main></div></body></html>'''
 
 def project_id():
