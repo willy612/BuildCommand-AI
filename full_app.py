@@ -30,7 +30,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="29.1")
+app=FastAPI(title="BuildCommand AI",version="29.2")
 DB="construction_ai_web.db"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR","/tmp/buildcommand_uploads")
 os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -9309,7 +9309,30 @@ def ensure_v29_tables():
 def photo_intelligence():
     ensure_v29_tables()
     pid=project_id(); c=db()
-    photos=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? AND (lower(COALESCE(mime_type,'')) LIKE 'image/%' OR lower(COALESCE(original_name,'')) LIKE '%.jpg' OR lower(COALESCE(original_name,'')) LIKE '%.jpeg' OR lower(COALESCE(original_name,'')) LIKE '%.png' OR lower(COALESCE(original_name,'')) LIKE '%.webp') ORDER BY id DESC",(current_company_id(),pid)).fetchall()
+    photos=c.execute(
+        """
+        SELECT *
+        FROM attachments
+        WHERE company_id=? AND project_id=?
+          AND (
+            lower(COALESCE(mime_type,'')) LIKE ?
+            OR lower(COALESCE(original_name,'')) LIKE ?
+            OR lower(COALESCE(original_name,'')) LIKE ?
+            OR lower(COALESCE(original_name,'')) LIKE ?
+            OR lower(COALESCE(original_name,'')) LIKE ?
+          )
+        ORDER BY id DESC
+        """,
+        (
+            current_company_id(),
+            pid,
+            "image/%",
+            "%.jpg",
+            "%.jpeg",
+            "%.png",
+            "%.webp"
+        )
+    ).fetchall()
     obs=c.execute("SELECT p.*,a.original_name FROM photo_observations p LEFT JOIN attachments a ON a.id=p.attachment_id WHERE p.company_id=? AND p.project_id=? ORDER BY p.id DESC LIMIT 25",(current_company_id(),pid)).fetchall()
     c.close()
     opts="".join(f'<option value="{p["id"]}">{esc(p["original_name"])}</option>' for p in photos) or '<option value="">No photos uploaded</option>'
