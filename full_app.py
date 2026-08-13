@@ -30,7 +30,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="28.0")
+app=FastAPI(title="BuildCommand AI",version="29.0")
 DB="construction_ai_web.db"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR","/tmp/buildcommand_uploads")
 os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -104,7 +104,13 @@ def init():
     CREATE TABLE IF NOT EXISTS invitations(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,email TEXT NOT NULL,role TEXT DEFAULT 'FIELD_USER',token_hash TEXT NOT NULL UNIQUE,expires TEXT,accepted INTEGER DEFAULT 0,created_by INTEGER,created TEXT);
     CREATE TABLE IF NOT EXISTS company_settings(company_id INTEGER PRIMARY KEY,auto_ai_brief INTEGER DEFAULT 1,email_alerts INTEGER DEFAULT 0,beta_mode INTEGER DEFAULT 1,onboarding_complete INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS weekly_ai_reports(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,week_ending TEXT,report_text TEXT,created TEXT);
-    CREATE TABLE IF NOT EXISTS quick_entries(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,user_id INTEGER,entry_type TEXT,text TEXT,routed_to TEXT,created TEXT);
+    
+    CREATE TABLE IF NOT EXISTS weather_impacts(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,activity_id INTEGER,impact_date TEXT,weather_type TEXT,lost_hours REAL DEFAULT 0,description TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS schedule_import_batches(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,file_name TEXT,row_count INTEGER DEFAULT 0,imported_count INTEGER DEFAULT 0,created TEXT);
+    CREATE TABLE IF NOT EXISTS photo_observations(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,attachment_id INTEGER,activity_id INTEGER,observation TEXT,severity TEXT DEFAULT 'WATCH',created TEXT);
+    CREATE TABLE IF NOT EXISTS communication_drafts(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,sub_id INTEGER,draft_type TEXT,subject TEXT,body TEXT,status TEXT DEFAULT 'DRAFT',created TEXT);
+    CREATE TABLE IF NOT EXISTS meeting_ai_summaries(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,source_text TEXT,summary_text TEXT,created TEXT);
+CREATE TABLE IF NOT EXISTS quick_entries(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,user_id INTEGER,entry_type TEXT,text TEXT,routed_to TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS daily_reports(
         id INTEGER PRIMARY KEY,
         project_id INTEGER,
@@ -659,7 +665,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:900px){.app{grid-template-columns:1fr}.side{position:relative;border-right:0;border-bottom:1px solid var(--line)}.grid4,.grid3,.grid2{grid-template-columns:1fr}.mobile-menu-btn{display:block;width:100%;margin:12px 0}.nav{display:none}.nav.mobile-open{display:block}}
 """
 
-NAV=[("Daily Command","/"),("AI Command","/ai-command"),("3-Week Lookahead","/lookahead-intelligence"),("Project Health","/project-health"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Sub Scorecards","/sub-scorecards"),("RFI Impact","/rfi-impact"),("Procurement Warning","/procurement-warning"),("Recovery Planner","/ai-recovery"),("Quick Entry","/quick-entry"),("Weekly AI Report","/weekly-report"),("Beta Checklist","/beta-checklist")]
+NAV=[("Daily Command","/"),("AI Command","/ai-command"),("Plans & Specs AI","/plans-specs-ai"),("Schedule Import","/schedule-import"),("Photo Intelligence","/photo-intelligence"),("3-Week Lookahead","/lookahead-intelligence"),("Project Health","/project-health"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Sub Scorecards","/sub-scorecards"),("RFI Impact","/rfi-impact"),("Procurement Warning","/procurement-warning"),("Recovery Planner","/ai-recovery"),("Quick Entry","/quick-entry"),("Weekly AI Report","/weekly-report"),("RFI Drafting","/rfi-drafting"),("Sub Communications","/sub-communications"),("AI Meeting Minutes","/meeting-minutes-ai"),("Weather Impacts","/weather-impacts"),("PDF Reports","/pdf-reports"),("Cost Intelligence","/cost-intelligence"),("Mobile Home","/mobile-home"),("Beta Checklist","/beta-checklist")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -9214,3 +9220,228 @@ def ai_command_page():
         d=parse_iso_date(i["due"])
         if d and d<today: sig.append((70,i["priority"] or "HIGH",i["issue_type"],i["title"],"Response/decision overdue"))
     sig.sort(key=lambda x:x[0],reverse=True); sh=''.join(f'<div class="action"><span class="badge {b if b in ["CRITICAL","HIGH","WATCH","READY","LOW"] else "HIGH"}">{esc(cat)}</span> <b>{esc(t)}</b><div class="small">{esc(d)}</div></div>' for _,b,cat,t,d in sig[:12]) or '<div class="muted">No major automated warning signals detected.</div>'; return shell("AI Command",f'<div class="hero"><div class="eyebrow">AI Daily Command Center</div><h1>Project Health {h["overall"]}/100</h1></div><div class="grid2"><div class="card"><h2>Handle First</h2>{sh}</div><div class="card"><h2>Command Tools</h2><p><a href="/lookahead-intelligence">3-Week Lookahead</a></p><p><a href="/ai-recovery">Recovery Planner</a></p><p><a href="/quick-entry">Quick / Voice Entry</a></p><p><a href="/weekly-report">Weekly AI Report</a></p></div></div>')
+
+def _attachment_text(row):
+    if not row:
+        return ""
+    path=os.path.join(UPLOAD_DIR,row["stored_name"])
+    ext=Path(row["original_name"] or "").suffix.lower()
+    if ext in {".txt",".csv"} and os.path.isfile(path):
+        try:
+            return Path(path).read_text(errors="ignore")[:120000]
+        except Exception:
+            return ""
+    return ""
+
+
+@app.get("/plans-specs-ai",response_class=HTMLResponse)
+def plans_specs_ai():
+    pid=project_id(); c=db()
+    docs=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",(current_company_id(),pid)).fetchall()
+    c.close()
+    opts="".join(f'<option value="{d["id"]}">{esc(d["original_name"])}</option>' for d in docs) or '<option value="">No documents uploaded</option>'
+    body=f'''<div class="hero"><div class="eyebrow">Plans & Specs AI</div><h1>Ask project-document questions.</h1><div class="muted">TXT/CSV can be read directly in v29. PDF/Office files stay available in Documents for future deep extraction.</div></div>
+    <div class="card"><form method="post" action="/plans-specs-ai"><label>Document</label><select name="attachment_id">{opts}</select><label>Question</label><textarea name="question" required></textarea><button>Ask Document AI</button></form></div>'''
+    return shell("Plans & Specs AI",body)
+
+
+@app.post("/plans-specs-ai",response_class=HTMLResponse)
+def plans_specs_ai_answer(attachment_id:int=Form(...),question:str=Form(...)):
+    pid=project_id(); c=db()
+    d=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",(attachment_id,current_company_id(),pid)).fetchone()
+    c.close()
+    if not d: return HTMLResponse("Document not found",404)
+    content=_attachment_text(d)
+    if not content:
+        answer=f'BuildCommand can see "{d["original_name"]}", but v29 only directly extracts TXT/CSV text.'
+    elif not os.environ.get("OPENAI_API_KEY"):
+        answer="OPENAI_API_KEY is not configured."
+    else:
+        try:
+            client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            r=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),instructions="Answer only from the supplied document. Say when unsupported.",input=f"DOCUMENT:\n{content}\nQUESTION:\n{question}")
+            answer=r.output_text
+        except Exception as e:
+            answer=f"Document AI failed: {e}"
+    return shell("Plans & Specs AI",f'<div class="hero"><h1>{esc(d["original_name"])}</h1></div><div class="card"><h2>Answer</h2><div style="white-space:pre-wrap">{esc(answer)}</div></div>')
+
+
+@app.get("/schedule-import",response_class=HTMLResponse)
+def schedule_import_page():
+    return shell("Schedule Import",'''<div class="hero"><div class="eyebrow">Schedule Import</div><h1>Import schedule activities from CSV.</h1><div class="muted">Headers: external_id,name,trade,start,finish,pct,status</div></div><div class="card"><form method="post" action="/schedule-import" enctype="multipart/form-data"><input type="file" name="file" accept=".csv" required><button>Import Schedule</button></form></div>''')
+
+
+@app.post("/schedule-import")
+async def schedule_import(file:UploadFile=File(...)):
+    pid=project_id(); raw=await file.read()
+    try: decoded=raw.decode("utf-8-sig")
+    except Exception: return HTMLResponse("CSV must be UTF-8",400)
+    reader=csv.DictReader(io.StringIO(decoded)); req={"external_id","name","trade","start","finish","pct","status"}
+    if not req.issubset(set(reader.fieldnames or [])): return HTMLResponse("CSV missing required headers",400)
+    rows=list(reader); c=db(); imported=0
+    for row in rows:
+        ext=(row.get("external_id") or "").strip(); name=(row.get("name") or "").strip()
+        if not ext or not name: continue
+        trade=(row.get("trade") or "").strip(); start=(row.get("start") or "").strip(); finish=(row.get("finish") or "").strip(); pct=float(row.get("pct") or 0); status=(row.get("status") or "NOT_STARTED").strip().upper()
+        ex=c.execute("SELECT id FROM activities WHERE project_id=? AND external_id=?",(pid,ext)).fetchone()
+        if ex:
+            c.execute("UPDATE activities SET name=?,trade=?,start=?,finish=?,pct=?,status=? WHERE id=? AND project_id=?",(name,trade,start,finish,pct,status,ex["id"],pid))
+        else:
+            c.execute("INSERT INTO activities(project_id,external_id,name,trade,start,finish,pct,status) VALUES(?,?,?,?,?,?,?,?)",(pid,ext,name,trade,start,finish,pct,status))
+        imported+=1
+    c.execute("INSERT INTO schedule_import_batches(company_id,project_id,file_name,row_count,imported_count,created) VALUES(?,?,?,?,?,?)",(current_company_id(),pid,safe_filename(file.filename),len(rows),imported,datetime.utcnow().isoformat()))
+    c.commit(); c.close()
+    return RedirectResponse("/schedule",303)
+
+
+@app.get("/photo-intelligence",response_class=HTMLResponse)
+def photo_intelligence():
+    pid=project_id(); c=db()
+    photos=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? AND lower(mime_type) LIKE 'image/%' ORDER BY id DESC",(current_company_id(),pid)).fetchall()
+    obs=c.execute("SELECT p.*,a.original_name FROM photo_observations p LEFT JOIN attachments a ON a.id=p.attachment_id WHERE p.company_id=? AND p.project_id=? ORDER BY p.id DESC LIMIT 25",(current_company_id(),pid)).fetchall()
+    c.close()
+    opts="".join(f'<option value="{p["id"]}">{esc(p["original_name"])}</option>' for p in photos) or '<option value="">No photos uploaded</option>'
+    recent="".join(f'<div class="action"><span class="badge {o["severity"]}">{esc(o["severity"])}</span> <b>{esc(o["original_name"] or "Photo")}</b><div>{esc(o["observation"])}</div></div>' for o in obs) or '<div class="muted">No observations yet.</div>'
+    return shell("Photo Intelligence",f'''<div class="hero"><div class="eyebrow">Field Photo Intelligence</div><h1>Document photo observations.</h1></div><div class="grid2"><div class="card"><form method="post" action="/photo-intelligence"><select name="attachment_id">{opts}</select><textarea name="observation" required></textarea><select name="severity"><option>LOW</option><option selected>WATCH</option><option>HIGH</option><option>CRITICAL</option></select><button>Save Observation</button></form></div><div class="card">{recent}</div></div>''')
+
+
+@app.post("/photo-intelligence")
+def photo_intelligence_save(attachment_id:int=Form(...),observation:str=Form(...),severity:str=Form("WATCH")):
+    pid=project_id(); c=db()
+    c.execute("INSERT INTO photo_observations(company_id,project_id,attachment_id,activity_id,observation,severity,created) VALUES(?,?,?,NULL,?,?,?)",(current_company_id(),pid,attachment_id,observation.strip(),severity,datetime.utcnow().isoformat()))
+    c.commit(); c.close(); return RedirectResponse("/photo-intelligence",303)
+
+
+@app.get("/rfi-drafting",response_class=HTMLResponse)
+def rfi_drafting():
+    return shell("RFI Drafting",'''<div class="hero"><div class="eyebrow">AI RFI Drafting</div><h1>Turn a field issue into a professional RFI.</h1></div><div class="card"><form method="post" action="/rfi-drafting"><textarea name="field_issue" required></textarea><button>Draft RFI</button></form></div>''')
+
+
+@app.post("/rfi-drafting",response_class=HTMLResponse)
+def rfi_drafting_generate(field_issue:str=Form(...)):
+    context=build_project_context(project_id())
+    if os.environ.get("OPENAI_API_KEY"):
+        try:
+            client=OpenAI(api_key=os.environ["OPENAI_API_KEY"]); r=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),instructions="Draft a professional construction RFI. Return SUBJECT, BACKGROUND, QUESTION, POTENTIAL IMPACT. Do not invent drawing/spec numbers, dates or costs.",input=f"{context}\nFIELD ISSUE:\n{field_issue}"); draft=r.output_text
+        except Exception as e: draft=f"AI RFI drafting failed: {e}"
+    else: draft="OPENAI_API_KEY is not configured."
+    return shell("RFI Drafting",f'''<div class="hero"><h1>Draft Ready</h1></div><div class="card"><div style="white-space:pre-wrap">{esc(draft)}</div></div><div class="card"><form method="post" action="/rfi-drafting/save"><input type="hidden" name="title" value="{esc(field_issue[:120])}"><textarea name="description">{esc(draft)}</textarea><button>Save to RFIs</button></form></div>''')
+
+
+@app.post("/rfi-drafting/save")
+def rfi_drafting_save(title:str=Form(...),description:str=Form(...)):
+    pid=project_id(); c=db()
+    c.execute("INSERT INTO project_issues(project_id,activity_id,issue_type,title,owner,due,priority,status,description,response,created) VALUES(?,NULL,'RFI',?,'',?,'WATCH','OPEN',?,'',?)",(pid,title.strip(),date.today().isoformat(),description.strip(),date.today().isoformat()))
+    c.commit(); c.close(); return RedirectResponse("/issues",303)
+
+
+@app.get("/sub-communications",response_class=HTMLResponse)
+def sub_communications():
+    pid=project_id(); c=db(); subs=c.execute("SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",(pid,)).fetchall(); drafts=c.execute("SELECT d.*,s.name sub_name FROM communication_drafts d LEFT JOIN subs s ON s.id=d.sub_id WHERE d.company_id=? AND d.project_id=? ORDER BY d.id DESC LIMIT 20",(current_company_id(),pid)).fetchall(); c.close()
+    opts="".join(f'<option value="{s["id"]}">{esc(s["name"])} - {esc(s["trade"])}</option>' for s in subs)
+    recent="".join(f'<div class="action"><b>{esc(d["draft_type"])}</b> · {esc(d["sub_name"] or "")}<div>{esc(d["subject"])}</div></div>' for d in drafts) or '<div class="muted">No drafts yet.</div>'
+    return shell("Sub Communications",f'''<div class="hero"><div class="eyebrow">Subcontractor Communications</div><h1>Generate field follow-ups.</h1></div><div class="grid2"><div class="card"><form method="post" action="/sub-communications"><select name="sub_id">{opts}</select><select name="draft_type"><option>MANPOWER_REQUEST</option><option>DELAY_NOTICE</option><option>COORDINATION</option><option>FOLLOW_UP</option></select><textarea name="prompt" required></textarea><button>Generate Draft</button></form></div><div class="card">{recent}</div></div>''')
+
+
+@app.post("/sub-communications",response_class=HTMLResponse)
+def sub_communications_generate(sub_id:int=Form(...),draft_type:str=Form(...),prompt:str=Form(...)):
+    pid=project_id(); c=db(); sub=c.execute("SELECT * FROM subs WHERE id=? AND project_id=?",(sub_id,pid)).fetchone(); c.close()
+    if os.environ.get("OPENAI_API_KEY") and sub:
+        try:
+            client=OpenAI(api_key=os.environ["OPENAI_API_KEY"]); r=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),instructions="Write a concise professional subcontractor communication. Firm, collaborative, no invented dates or contract terms.",input=f"SUB: {sub['name']} {sub['trade']}\nTYPE: {draft_type}\nNEED: {prompt}"); body=r.output_text
+        except Exception as e: body=f"AI communication failed: {e}"
+    else: body=prompt
+    subject=f"{draft_type.replace('_',' ').title()} - {sub['name'] if sub else 'Subcontractor'}"
+    c=db(); c.execute("INSERT INTO communication_drafts(company_id,project_id,sub_id,draft_type,subject,body,status,created) VALUES(?,?,?,?,?,?,'DRAFT',?)",(current_company_id(),pid,sub_id,draft_type,subject,body,datetime.utcnow().isoformat())); c.commit(); c.close()
+    return shell("Sub Communications",f'<div class="hero"><h1>{esc(subject)}</h1></div><div class="card"><div style="white-space:pre-wrap">{esc(body)}</div></div>')
+
+
+@app.get("/meeting-minutes-ai",response_class=HTMLResponse)
+def meeting_minutes_ai():
+    return shell("AI Meeting Minutes",'''<div class="hero"><div class="eyebrow">Meeting Minutes AI</div><h1>Turn raw notes into decisions and actions.</h1></div><div class="card"><form method="post" action="/meeting-minutes-ai"><textarea name="source_text" required style="min-height:250px"></textarea><button>Generate Minutes</button></form></div>''')
+
+
+@app.post("/meeting-minutes-ai",response_class=HTMLResponse)
+def meeting_minutes_ai_generate(source_text:str=Form(...)):
+    pid=project_id()
+    if os.environ.get("OPENAI_API_KEY"):
+        try:
+            client=OpenAI(api_key=os.environ["OPENAI_API_KEY"]); r=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),instructions="Convert construction meeting notes into DECISIONS, COMMITMENTS, ACTION ITEMS, RISKS/ISSUES, FOLLOW-UP. Do not invent owners or dates.",input=source_text); summary=r.output_text
+        except Exception as e: summary=f"AI minutes failed: {e}"
+    else: summary=source_text
+    c=db(); c.execute("INSERT INTO meeting_ai_summaries(company_id,project_id,source_text,summary_text,created) VALUES(?,?,?,?,?)",(current_company_id(),pid,source_text,summary,datetime.utcnow().isoformat())); c.commit(); c.close()
+    return shell("AI Meeting Minutes",f'''<div class="hero"><h1>Minutes Ready</h1></div><div class="card"><div style="white-space:pre-wrap">{esc(summary)}</div></div><div class="card"><form method="post" action="/meeting-minutes-ai/save"><textarea name="summary">{esc(summary)}</textarea><button>Save to Meetings</button></form></div>''')
+
+
+@app.post("/meeting-minutes-ai/save")
+def meeting_minutes_ai_save(summary:str=Form(...)):
+    pid=project_id(); c=db(); c.execute("INSERT INTO meeting_notes(project_id,meeting_date,meeting_type,title,attendees,decisions,commitments,follow_up,created) VALUES(?,?,'COORDINATION','AI Meeting Minutes','',?,'','',?)",(pid,date.today().isoformat(),summary.strip(),date.today().isoformat())); c.commit(); c.close(); return RedirectResponse("/meetings",303)
+
+
+@app.get("/weather-impacts",response_class=HTMLResponse)
+def weather_impacts():
+    pid=project_id(); c=db(); acts=c.execute("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,)).fetchall(); rows=c.execute("SELECT w.*,a.external_id,a.name activity FROM weather_impacts w LEFT JOIN activities a ON a.id=w.activity_id WHERE w.company_id=? AND w.project_id=? ORDER BY w.impact_date DESC",(current_company_id(),pid)).fetchall(); c.close()
+    opts='<option value="">No linked activity</option>'+''.join(f'<option value="{a["id"]}">{esc(a["external_id"])} - {esc(a["name"])}</option>' for a in acts)
+    hist=''.join(f'<div class="action"><b>{esc(r["impact_date"])} · {esc(r["weather_type"])}</b><div>{r["lost_hours"] or 0} lost hour(s) · {esc(r["external_id"] or "")} {esc(r["activity"] or "")}</div><div class="small">{esc(r["description"])}</div></div>' for r in rows) or '<div class="muted">No impacts logged.</div>'
+    return shell("Weather Impacts",f'''<div class="hero"><div class="eyebrow">Weather Impact Log</div><h1>Document weather-related delay.</h1></div><div class="grid2"><div class="card"><form method="post" action="/weather-impacts"><input type="date" name="impact_date" value="{date.today().isoformat()}" required><select name="weather_type"><option>RAIN</option><option>HEAT</option><option>WIND</option><option>LIGHTNING</option><option>COLD</option><option>OTHER</option></select><select name="activity_id">{opts}</select><input type="number" step="0.5" min="0" name="lost_hours" value="0"><textarea name="description"></textarea><button>Log Impact</button></form></div><div class="card">{hist}</div></div>''')
+
+
+@app.post("/weather-impacts")
+def weather_impacts_save(impact_date:str=Form(...),weather_type:str=Form(...),activity_id:str=Form(""),lost_hours:float=Form(0),description:str=Form("")):
+    pid=project_id(); linked=int(activity_id) if str(activity_id).strip() else None; c=db(); c.execute("INSERT INTO weather_impacts(company_id,project_id,activity_id,impact_date,weather_type,lost_hours,description,created) VALUES(?,?,?,?,?,?,?,?)",(current_company_id(),pid,linked,impact_date,weather_type,max(0,lost_hours),description.strip(),datetime.utcnow().isoformat())); c.commit(); c.close(); return RedirectResponse("/weather-impacts",303)
+
+
+def _simple_pdf(title,lines,filename):
+    if canvas is None: return HTMLResponse("reportlab is not installed",500)
+    buf=io.BytesIO(); pdf=canvas.Canvas(buf); y=744; pdf.setFont("Helvetica-Bold",16); pdf.drawString(42,y,title); y-=28; pdf.setFont("Helvetica",9)
+    for line in lines:
+        words=str(line).split(); cur=""
+        for word in words:
+            test=(cur+" "+word).strip()
+            if pdf.stringWidth(test,"Helvetica",9)>520:
+                pdf.drawString(48,y,cur); y-=12; cur=word
+                if y<50: pdf.showPage(); y=744; pdf.setFont("Helvetica",9)
+            else: cur=test
+        if cur: pdf.drawString(48,y,cur); y-=14
+    pdf.setFont("Helvetica",8); pdf.drawString(42,28,"BuildCommand AI · Built by Wilson LaHood"); pdf.save(); buf.seek(0)
+    return Response(buf.getvalue(),media_type="application/pdf",headers={"Content-Disposition":f'attachment; filename="{filename}"'})
+
+
+@app.get("/pdf-reports",response_class=HTMLResponse)
+def pdf_reports():
+    return shell("PDF Reports",'''<div class="hero"><div class="eyebrow">Professional Reports</div><h1>Export project reports.</h1></div><div class="grid2"><div class="card"><a href="/pdf-reports/project-health.pdf">Project Health PDF</a></div><div class="card"><a href="/pdf-reports/lookahead.pdf">3-Week Lookahead PDF</a></div><div class="card"><a href="/pdf-reports/weekly.pdf">Weekly AI Report PDF</a></div><div class="card"><a href="/exports/daily-report.pdf">Daily Report PDF</a></div></div>''')
+
+
+@app.get("/pdf-reports/project-health.pdf")
+def pdf_health():
+    h=project_health_snapshot(project_id()); return _simple_pdf("BuildCommand AI - Project Health",[f'Overall: {h["overall"]}/100',f'Schedule: {h["schedule"]}',f'Readiness: {h["readiness"]}',f'Procurement: {h["procurement"]}',f'Risk: {h["risk"]}',f'Field: {h["field"]}'],"buildcommand_project_health.pdf")
+
+
+@app.get("/pdf-reports/lookahead.pdf")
+def pdf_lookahead():
+    pid=project_id(); today=date.today(); horizon=today+timedelta(days=21); c=db(); acts=c.execute("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,)).fetchall(); c.close(); lines=[f"Window: {today} through {horizon}"]
+    for a in acts:
+        s=parse_iso_date(a["start"])
+        if s and today<=s<=horizon: lines.append(f'{a["external_id"]} - {a["name"]} | {a["trade"]} | {a["start"]} to {a["finish"]} | {a["pct"] or 0}%')
+    return _simple_pdf("BuildCommand AI - 3 Week Lookahead",lines,"buildcommand_lookahead.pdf")
+
+
+@app.get("/pdf-reports/weekly.pdf")
+def pdf_weekly():
+    pid=project_id(); c=db(); r=c.execute("SELECT * FROM weekly_ai_reports WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1",(current_company_id(),pid)).fetchone(); c.close()
+    if not r: return HTMLResponse("Generate a Weekly AI Report first.",404)
+    return _simple_pdf("BuildCommand AI - Weekly Project Report",(r["report_text"] or "").splitlines(),"buildcommand_weekly_report.pdf")
+
+
+@app.get("/cost-intelligence",response_class=HTMLResponse)
+def cost_intelligence():
+    pid=project_id(); c=db(); rows=c.execute("SELECT ce.*,a.external_id,a.name activity FROM change_events ce LEFT JOIN activities a ON a.id=ce.activity_id WHERE ce.project_id=? ORDER BY ce.id DESC",(pid,)).fetchall(); c.close()
+    open_rows=[r for r in rows if r["status"] not in ["APPROVED","REJECTED"]]; approved=[r for r in rows if r["status"]=="APPROVED"]; open_cost=sum(float(r["estimated_cost"] or 0) for r in open_rows); approved_cost=sum(float(r["estimated_cost"] or 0) for r in approved); days=sum(float(r["schedule_days"] or 0) for r in open_rows)
+    cards=''.join(f'<div class="card"><span class="badge {"READY" if r["status"]=="APPROVED" else "WATCH"}">{esc(r["status"])}</span><h3>{esc(r["title"])}</h3><p>${(r["estimated_cost"] or 0):,.0f} · {(r["schedule_days"] or 0):.1f} day(s)</p></div>' for r in rows) or '<div class="card">No change events.</div>'
+    return shell("Cost Intelligence",f'''<div class="hero"><div class="eyebrow">Cost & Change Intelligence</div><h1>Change exposure in dollars and days.</h1></div><div class="grid3"><div class="card"><div class="label">Open Exposure</div><div class="kpi">${open_cost:,.0f}</div></div><div class="card"><div class="label">Approved</div><div class="kpi">${approved_cost:,.0f}</div></div><div class="card"><div class="label">Open Days</div><div class="kpi">{days:.1f}</div></div></div><div class="grid2">{cards}</div>''')
+
+
+@app.get("/mobile-home",response_class=HTMLResponse)
+def mobile_home():
+    h=project_health_snapshot(project_id())
+    return shell("Mobile Home",f'''<div class="hero"><div class="eyebrow">Superintendent Mobile</div><h1>Today in the Field</h1><div class="kpi">{h["overall"]}/100</div></div><div class="grid2"><div class="card"><a href="/quick-entry">🎤 Speak / Quick Note</a></div><div class="card"><a href="/documents">📷 Add Photo / Document</a></div><div class="card"><a href="/daily-report">📝 Daily Report</a></div><div class="card"><a href="/issues">⚠️ Issue / RFI</a></div><div class="card"><a href="/ai-command">📌 View Today</a></div><div class="card"><a href="/assistant">🤖 AI Assistant</a></div></div>''')
