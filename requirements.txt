@@ -4,3 +4,5 @@ python-multipart
 openai
 reportlab
 psycopg[binary]
+openpyxl
+pypdf
