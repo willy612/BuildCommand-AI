@@ -42,9 +42,10 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="30.0")
+app=FastAPI(title="BuildCommand AI",version="31.0")
 DB="construction_ai_web.db"
-UPLOAD_DIR=os.environ.get("UPLOAD_DIR","/tmp/buildcommand_uploads")
+DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
+UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR,exist_ok=True)
 _current_user_id=ContextVar("buildcommand_user_id",default=None)
 _current_company_id=ContextVar("buildcommand_company_id",default=None)
@@ -113,6 +114,13 @@ def init():
     CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER,severity TEXT,title TEXT,detail TEXT,source TEXT,status TEXT DEFAULT 'UNREAD',created TEXT);
     CREATE TABLE IF NOT EXISTS morning_briefs(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,brief_date TEXT,brief_text TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS beta_feedback(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER,project_id INTEGER,rating INTEGER,category TEXT,feedback TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS user_favorites(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER NOT NULL,tool_name TEXT,tool_url TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS project_archive_state(project_id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,archived INTEGER DEFAULT 0,archived_at TEXT);
+    CREATE TABLE IF NOT EXISTS attachment_tags(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,attachment_id INTEGER NOT NULL,tag TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS notification_rules(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,rule_name TEXT,enabled INTEGER DEFAULT 1,severity TEXT DEFAULT 'HIGH',threshold_value REAL DEFAULT 0,created TEXT);
+    CREATE TABLE IF NOT EXISTS health_history(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,snapshot_date TEXT,overall REAL,schedule REAL,readiness REAL,procurement REAL,risk REAL,field REAL,created TEXT);
+    CREATE TABLE IF NOT EXISTS admin_audit_log(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER,project_id INTEGER,action TEXT,detail TEXT,created TEXT);
+
     CREATE TABLE IF NOT EXISTS invitations(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,email TEXT NOT NULL,role TEXT DEFAULT 'FIELD_USER',token_hash TEXT NOT NULL UNIQUE,expires TEXT,accepted INTEGER DEFAULT 0,created_by INTEGER,created TEXT);
     CREATE TABLE IF NOT EXISTS company_settings(company_id INTEGER PRIMARY KEY,auto_ai_brief INTEGER DEFAULT 1,email_alerts INTEGER DEFAULT 0,beta_mode INTEGER DEFAULT 1,onboarding_complete INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS weekly_ai_reports(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,week_ending TEXT,report_text TEXT,created TEXT);
@@ -685,6 +693,52 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 
 NAV=[("Daily Command","/"),("AI Command","/ai-command"),("Plans & Specs AI","/plans-specs-ai"),("Deep Document AI","/document-ai"),("Schedule Import","/schedule-import"),("Advanced Schedule Import","/advanced-schedule-import"),("Photo Intelligence","/photo-intelligence"),("AI Photo Analysis","/photo-ai"),("3-Week Lookahead","/lookahead-intelligence"),("Project Health","/project-health"),("Predictive Forecast","/predictive-forecast"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Auto Daily Report","/auto-daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Owner Dashboard","/owner-dashboard"),("Portfolio Intelligence","/portfolio-intelligence"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Sub Scorecards","/sub-scorecards"),("Sub Risk","/sub-risk"),("RFI Impact","/rfi-impact"),("Procurement Warning","/procurement-warning"),("Recovery Planner","/ai-recovery"),("Quick Entry","/quick-entry"),("Weekly AI Report","/weekly-report"),("RFI Drafting","/rfi-drafting"),("Sub Communications","/sub-communications"),("AI Meeting Minutes","/meeting-minutes-ai"),("Weather Impacts","/weather-impacts"),("PDF Reports","/pdf-reports"),("Cost Intelligence","/cost-intelligence"),("Change Package","/change-package"),("Mobile Home","/mobile-home"),("Mobile Field+","/mobile-field-plus"),("Beta Checklist","/beta-checklist")]
 
+
+NAV_GROUPS=[
+    ('🏠 Home',[
+        ('Daily Command','/'),('AI Command','/ai-command'),('Morning Brief','/morning-brief'),('Action Center','/actions'),
+        ('Global Search','/global-search'),('Favorites','/favorites'),('Recent Activity','/recent-activity'),('Mobile Field+','/mobile-field-plus')
+    ]),
+    ('📅 Schedule & Production',[
+        ('Schedule','/schedule'),('Schedule Import','/schedule-import'),('Advanced Schedule Import','/advanced-schedule-import'),
+        ('3-Week Lookahead','/lookahead-intelligence'),('Schedule Health','/schedule-health'),('Predictive Forecast','/predictive-forecast'),
+        ('Production','/production'),('Readiness','/readiness'),('Make Ready','/make-ready'),('Procurement','/procurement'),
+        ('Procurement Warning','/procurement-warning'),('Recovery','/recovery'),('Recovery Planner','/ai-recovery'),('Predictive Risk','/risk')
+    ]),
+    ('👷 Field Operations',[
+        ('Field','/field'),('Quick Entry','/quick-entry'),('Daily Report','/daily-report'),('Auto Daily Report','/auto-daily-report'),
+        ('Photo Intelligence','/photo-intelligence'),('AI Photo Analysis','/photo-ai'),('Weather Impacts','/weather-impacts'),
+        ('Safety','/safety'),('Inspections','/inspections'),('Punch List','/punch')
+    ]),
+    ('📄 Documents & AI',[
+        ('Documents','/documents'),('Document Tags','/document-tags'),('Plans & Specs AI','/plans-specs-ai'),('Deep Document AI','/document-ai'),
+        ('RFIs / Issues','/issues'),('RFI Drafting','/rfi-drafting'),('RFI Impact','/rfi-impact'),('Submittals','/submittals'),
+        ('Meetings','/meetings'),('AI Meeting Minutes','/meeting-minutes-ai'),('AI Assistant','/assistant'),('AI Analysis','/ai-analysis'),
+        ('Weekly AI Report','/weekly-report'),('PDF Reports','/pdf-reports')
+    ]),
+    ('🤝 Subs & Communication',[
+        ('Subcontractors','/subcontractors'),('Sub Scorecards','/sub-scorecards'),('Sub Risk','/sub-risk'),
+        ('Sub Communications','/sub-communications'),('Notifications','/notifications'),('Notification Rules','/notification-rules')
+    ]),
+    ('💰 Management & Executive',[
+        ('Project Health','/project-health'),('Health History','/health-history'),('Change Events','/changes'),('Cost Intelligence','/cost-intelligence'),
+        ('Change Package','/change-package'),('Owner Dashboard','/owner-dashboard'),('Portfolio','/portfolio'),('Portfolio Intelligence','/portfolio-intelligence'),
+        ('Company Memory','/memory'),('Playbooks','/playbooks'),('Bulk Export','/bulk-export')
+    ]),
+    ('⚙️ Admin',[
+        ('Team','/team'),('Invitations','/invitations'),('Company Settings','/company-settings'),('Project Settings','/project-settings'),
+        ('Clone Project','/project-clone'),('Archive Projects','/project-archive'),('Storage Status','/storage-status'),('Audit Log','/audit-log'),
+        ('Setup','/setup'),('System Check','/system-check'),('Beta Feedback','/beta-feedback'),('Beta Checklist','/beta-checklist')
+    ])
+]
+
+def categorized_nav():
+    groups=[]
+    for group_name,items in NAV_GROUPS:
+        links=''.join(f'<a href="{u}">{esc(n)}</a>' for n,u in items)
+        groups.append(f'<details class="nav-group"><summary>{esc(group_name)}</summary><div class="nav-items">{links}</div></details>')
+    return ''.join(groups)
+
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
@@ -693,16 +747,18 @@ def shell(title, body):
     company_id = current_company_id()
     user = current_user()
     c = db()
-    projects = c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name", (company_id,)).fetchall()
+    projects = c.execute("SELECT p.id,p.name,p.number,p.status FROM projects p LEFT JOIN project_archive_state a ON a.project_id=p.id WHERE p.company_id=? AND COALESCE(a.archived,0)=0 ORDER BY p.name", (company_id,)).fetchall()
     current = c.execute("SELECT * FROM projects WHERE id=? AND company_id=?", (current_pid, company_id)).fetchone() if current_pid else None
     c.close()
-    nav = "".join(f'<a href="{u}">{n}</a>' for n,u in NAV)
+    nav = categorized_nav()
     project_options = "".join(f'<option value="{p["id"]}" {"selected" if p["id"]==current_pid else ""}>{esc(p["number"])} - {esc(p["name"])}</option>' for p in projects)
     current_name = esc(current["name"]) if current else "No Project Selected"
     company_name = esc(user["company_name"]) if user else "BuildCommand Company"
     display_name = esc(user["display_name"]) if user else ""
     selector = f'''<div style="margin-bottom:20px;"><div class="small" style="margin-bottom:6px;">CURRENT PROJECT</div><form method="post" action="/projects/select"><select name="project_id" style="margin-bottom:8px;">{project_options}</select><button type="submit" style="width:100%;">Switch Project</button></form><div style="margin-top:10px;"><a href="/projects/new" style="color:#f0b44d;text-decoration:none;font-weight:700;">+ Add Project</a></div></div>'''
-    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · BuildCommand AI</title><style>{CSS}</style></head><body><div class="app"><aside class="side"><div class="brand">BuildCommand AI</div><div class="company">{company_name}<br>{current_name}</div>{selector}<button type="button" class="mobile-menu-btn" onclick="document.getElementById('bcnav').classList.toggle('mobile-open')">☰ Menu</button><nav class="nav" id="bcnav">{nav}</nav><div class="creator-footer">{display_name}<br>Built by Wilson LaHood<br>© 2026 Wilson LaHood<form method="post" action="/logout" style="margin-top:10px;"><button type="submit" style="width:100%;">Sign Out</button></form></div></aside><main class="main">{body}</main></div></body></html>'''
+    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · BuildCommand AI</title><style>{CSS}
+.nav-group{border-bottom:1px solid rgba(255,255,255,.08);padding:2px 0}.nav-group summary{cursor:pointer;padding:11px 10px;font-weight:800;color:#f4f4f4;list-style:none;border-radius:8px}.nav-group summary::-webkit-details-marker{display:none}.nav-group summary:after{content:"▾";float:right;opacity:.7}.nav-group[open] summary:after{content:"▴"}.nav-items{padding:0 0 8px 8px}.nav-items a{display:block;padding:8px 10px;font-size:13px}.search-result{padding:12px 0;border-bottom:1px solid var(--line)}
+</style></head><body><div class="app"><aside class="side"><div class="brand">BuildCommand AI</div><div class="company">{company_name}<br>{current_name}</div>{selector}<button type="button" class="mobile-menu-btn" onclick="document.getElementById('bcnav').classList.toggle('mobile-open')">☰ Menu</button><nav class="nav" id="bcnav">{nav}</nav><div class="creator-footer">{display_name}<br>Built by Wilson LaHood<br>© 2026 Wilson LaHood<form method="post" action="/logout" style="margin-top:10px;"><button type="submit" style="width:100%;">Sign Out</button></form></div></aside><main class="main">{body}</main></div></body></html>'''
 
 def project_id():
     user_id = current_user_id(); company_id = current_company_id()
@@ -713,7 +769,7 @@ def project_id():
     if state and state["selected_project_id"]:
         pid = state["selected_project_id"]
     else:
-        first = c.execute("SELECT id FROM projects WHERE company_id=? ORDER BY id LIMIT 1", (company_id,)).fetchone()
+        first = c.execute("SELECT p.id FROM projects p LEFT JOIN project_archive_state a ON a.project_id=p.id WHERE p.company_id=? AND COALESCE(a.archived,0)=0 ORDER BY p.id LIMIT 1", (company_id,)).fetchone()
         pid = first["id"] if first else None
         if pid:
             c.execute("INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id", (user_id,pid)); c.commit()
@@ -8751,7 +8807,7 @@ def system_check():
         for t in tables: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()
         c.close(); checks.append(("READY","Database schema","Core tables respond successfully."))
     except Exception as exc: checks.append(("CRITICAL","Database schema",str(exc)))
-    checks.append(("READY" if os.environ.get("OPENAI_API_KEY") else "WATCH","OpenAI connection","OPENAI_API_KEY is configured." if os.environ.get("OPENAI_API_KEY") else "AI key is not configured.")); checks.append(("READY" if os.path.isdir(UPLOAD_DIR) and os.access(UPLOAD_DIR,os.W_OK) else "CRITICAL","Upload storage",f"Upload path: {UPLOAD_DIR}")); checks.append(("WATCH","Database engine","Current engine is SQLite. Company isolation, backups, and migration-readiness are now in code; PostgreSQL should be migrated deliberately after a staging test.")); checks.append(("READY" if os.environ.get("UPLOAD_DIR") else "WATCH","Persistent files","UPLOAD_DIR is explicitly configured." if os.environ.get("UPLOAD_DIR") else "Set UPLOAD_DIR to a Render persistent-disk path for durable files.")); html="".join(f'<div class="card"><span class="badge {b}">{b}</span><h3>{esc(t)}</h3><p>{esc(d)}</p></div>' for b,t,d in checks); return shell("System Check",f'<div class="hero"><div class="eyebrow">Stability</div><h1>BuildCommand System Check</h1></div><div class="grid2">{html}</div>')
+    checks.append(("READY" if os.environ.get("OPENAI_API_KEY") else "WATCH","OpenAI connection","OPENAI_API_KEY is configured." if os.environ.get("OPENAI_API_KEY") else "AI key is not configured.")); checks.append(("READY" if os.path.isdir(UPLOAD_DIR) and os.access(UPLOAD_DIR,os.W_OK) else "CRITICAL","Upload storage",f"Upload path: {UPLOAD_DIR}")); checks.append(("READY" if DATABASE_KIND=="postgres" else "WATCH","Database engine",f"Current engine: {DATABASE_KIND}.")); checks.append(("READY" if os.environ.get("UPLOAD_DIR") else "WATCH","Persistent files","UPLOAD_DIR is explicitly configured." if os.environ.get("UPLOAD_DIR") else "Set UPLOAD_DIR to a Render persistent-disk path for durable files.")); html="".join(f'<div class="card"><span class="badge {b}">{b}</span><h3>{esc(t)}</h3><p>{esc(d)}</p></div>' for b,t,d in checks); return shell("System Check",f'<div class="hero"><div class="eyebrow">Stability</div><h1>BuildCommand System Check</h1></div><div class="grid2">{html}</div>')
 
 
 @app.get("/beta-feedback",response_class=HTMLResponse)
@@ -9761,3 +9817,135 @@ def v30_mobile_field_plus():
     <div class="card"><a href="/predictive-forecast">📈 Forecast</a></div>
     <div class="card"><a href="/sub-risk">👷 Sub Risk</a></div>
     <div class="card"><a href="/assistant">🤖 Ask AI</a></div></div>""")
+
+def audit_event(action,detail='',pid=None):
+    try:
+        c=db(); c.execute('INSERT INTO admin_audit_log(company_id,user_id,project_id,action,detail,created) VALUES(?,?,?,?,?,?)',(current_company_id(),current_user_id(),pid if pid is not None else project_id(),action,detail,datetime.utcnow().isoformat())); c.commit(); c.close()
+    except Exception: pass
+
+@app.get('/storage-status',response_class=HTMLResponse)
+def storage_status_page():
+    pid=project_id(); c=db(); rows=c.execute('SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC',(current_company_id(),pid)).fetchall(); c.close()
+    present=sum(1 for r in rows if os.path.isfile(os.path.join(UPLOAD_DIR,r['stored_name']))); missing=len(rows)-present; persistent=not os.path.abspath(UPLOAD_DIR).startswith('/tmp/'); band='READY' if persistent and missing==0 else 'WATCH'
+    return shell('Storage Status',f'''<div class="hero"><div class="eyebrow">Persistent Storage</div><h1><span class="badge {band}">{band}</span> {present}/{len(rows)} project file(s) present</h1></div><div class="grid2"><div class="card"><h2>Upload Path</h2><p>{esc(UPLOAD_DIR)}</p><p class="small">{'Persistent path detected.' if persistent else 'Temporary /tmp path detected.'}</p></div><div class="card"><h2>Missing Files</h2><div class="kpi">{missing}</div></div></div>''')
+
+@app.get('/global-search',response_class=HTMLResponse)
+def global_search_page(q:str=''):
+    pid=project_id(); results=[]; q=q.strip()
+    if q:
+        like=f'%{q.lower()}%'; c=db(); specs=[('Schedule','activities','name','/schedule'),('RFI / Issue','project_issues','title','/issues'),('Action','action_items','title','/actions'),('Subcontractor','subs','name','/subcontractors'),('Document','attachments','original_name','/documents'),('Change','change_events','title','/changes')]
+        for kind,table,column,url in specs:
+            if table=='attachments': rows=c.execute(f'SELECT id,{column} label FROM {table} WHERE project_id=? AND company_id=? AND lower(COALESCE({column},'')) LIKE ? ORDER BY id DESC LIMIT 20',(pid,current_company_id(),like)).fetchall()
+            else: rows=c.execute(f'SELECT id,{column} label FROM {table} WHERE project_id=? AND lower(COALESCE({column},'')) LIKE ? ORDER BY id DESC LIMIT 20',(pid,like)).fetchall()
+            for r in rows: results.append((kind,r['label'],url))
+        c.close()
+    html=''.join(f'<div class="search-result"><b>{esc(k)}</b> · <a href="{u}" style="color:#f0b44d">{esc(l)}</a></div>' for k,l,u in results) or ('<div class="muted">No matching project records.</div>' if q else '')
+    return shell('Global Search',f'''<div class="hero"><div class="eyebrow">Global Search</div><h1>Search this project.</h1></div><div class="card"><form method="get" action="/global-search"><input name="q" value="{esc(q)}" placeholder="Search schedule, RFIs, actions, subs, documents, changes"><button type="submit">Search</button></form></div><div class="card">{html}</div>''')
+
+@app.get('/favorites',response_class=HTMLResponse)
+def favorites_page():
+    c=db(); rows=c.execute('SELECT * FROM user_favorites WHERE company_id=? AND user_id=? ORDER BY id DESC',(current_company_id(),current_user_id())).fetchall(); c.close()
+    options=''.join(f'<option value="{esc(u)}|{esc(n)}">{esc(n)}</option>' for n,u in NAV)
+    cards=''.join(f'<div class="action"><a href="{esc(r["tool_url"])}" style="color:#f0b44d;font-weight:700">{esc(r["tool_name"])}</a><form method="post" action="/favorites/remove"><input type="hidden" name="favorite_id" value="{r["id"]}"><button type="submit">Remove</button></form></div>' for r in rows) or '<div class="muted">No pinned tools yet.</div>'
+    return shell('Favorites',f'''<div class="hero"><div class="eyebrow">Favorites</div><h1>Pin your most-used tools.</h1></div><div class="grid2"><div class="card"><form method="post" action="/favorites"><select name="tool">{options}</select><button type="submit">Pin Tool</button></form></div><div class="card">{cards}</div></div>''')
+
+@app.post('/favorites')
+def favorites_add(tool:str=Form(...)):
+    try: url,name=tool.split('|',1)
+    except Exception: return RedirectResponse('/favorites',303)
+    c=db(); ex=c.execute('SELECT id FROM user_favorites WHERE company_id=? AND user_id=? AND tool_url=?',(current_company_id(),current_user_id(),url)).fetchone()
+    if not ex: c.execute('INSERT INTO user_favorites(company_id,user_id,tool_name,tool_url,created) VALUES(?,?,?,?,?)',(current_company_id(),current_user_id(),name,url,datetime.utcnow().isoformat())); c.commit()
+    c.close(); audit_event('PIN_TOOL',name); return RedirectResponse('/favorites',303)
+
+@app.post('/favorites/remove')
+def favorites_remove(favorite_id:int=Form(...)):
+    c=db(); c.execute('DELETE FROM user_favorites WHERE id=? AND company_id=? AND user_id=?',(favorite_id,current_company_id(),current_user_id())); c.commit(); c.close(); audit_event('UNPIN_TOOL',str(favorite_id)); return RedirectResponse('/favorites',303)
+
+@app.get('/recent-activity',response_class=HTMLResponse)
+def recent_activity_page():
+    pid=project_id(); c=db(); entries=[]; sources=[('Action','action_items','title','created','/actions'),('RFI / Issue','project_issues','title','created','/issues'),('Document','attachments','original_name','created','/documents'),('Change','change_events','title','created','/changes'),('Daily Report','daily_reports','report_date','created','/daily-report')]
+    for kind,table,label_col,date_col,url in sources:
+        if table=='attachments': rows=c.execute(f'SELECT {label_col} label,{date_col} stamp FROM {table} WHERE project_id=? AND company_id=? ORDER BY id DESC LIMIT 12',(pid,current_company_id())).fetchall()
+        else: rows=c.execute(f'SELECT {label_col} label,{date_col} stamp FROM {table} WHERE project_id=? ORDER BY id DESC LIMIT 12',(pid,)).fetchall()
+        for r in rows: entries.append((r['stamp'] or '',kind,r['label'],url))
+    c.close(); entries.sort(key=lambda x:x[0],reverse=True); html=''.join(f'<div class="action"><b>{esc(k)}</b> · <a href="{u}" style="color:#f0b44d">{esc(l)}</a><div class="small">{esc(s)}</div></div>' for s,k,l,u in entries[:40]) or '<div class="muted">No recent project activity.</div>'
+    return shell('Recent Activity',f'<div class="hero"><div class="eyebrow">Recent Activity</div><h1>What changed recently?</h1></div><div class="card">{html}</div>')
+
+@app.get('/project-clone',response_class=HTMLResponse)
+def project_clone_page():
+    pid=project_id(); c=db(); p=c.execute('SELECT * FROM projects WHERE id=? AND company_id=?',(pid,current_company_id())).fetchone(); c.close()
+    return shell('Clone Project',f'''<div class="hero"><div class="eyebrow">Project Template</div><h1>Clone {esc(p['name'] if p else 'current project')}</h1></div><div class="card"><form method="post" action="/project-clone"><input name="name" placeholder="New Project Name" required><input name="number" placeholder="New Project Number" required><button type="submit">Clone Project Setup</button></form><p class="small">Copies schedule activities and subcontractor list only.</p></div>''')
+
+@app.post('/project-clone')
+def project_clone(name:str=Form(...),number:str=Form(...)):
+    source=project_id(); cid=current_company_id(); c=db(); c.execute('INSERT INTO projects(name,number,status,company_id) VALUES(?,?,?,?)',(name.strip(),number.strip(),'PLANNING',cid)); new_id=c.execute('SELECT last_insert_rowid() id').fetchone()['id']
+    for a in c.execute('SELECT * FROM activities WHERE project_id=? ORDER BY id',(source,)).fetchall(): c.execute("INSERT INTO activities(project_id,external_id,name,trade,start,finish,pct,status) VALUES(?,?,?,?,?,?,0,'NOT_STARTED')",(new_id,a['external_id'],a['name'],a['trade'],a['start'],a['finish']))
+    for s in c.execute('SELECT * FROM subs WHERE project_id=? ORDER BY id',(source,)).fetchall(): c.execute('INSERT INTO subs(project_id,name,trade) VALUES(?,?,?)',(new_id,s['name'],s['trade']))
+    c.commit(); c.close(); audit_event('CLONE_PROJECT',f'{source} -> {new_id}',new_id); return RedirectResponse('/',303)
+
+@app.get('/project-archive',response_class=HTMLResponse)
+def project_archive_page():
+    cid=current_company_id(); c=db(); rows=c.execute('SELECT p.*,COALESCE(a.archived,0) archived FROM projects p LEFT JOIN project_archive_state a ON a.project_id=p.id WHERE p.company_id=? ORDER BY p.name',(cid,)).fetchall(); c.close()
+    cards=''.join(f'''<div class="action"><b>{esc(r['number'])} - {esc(r['name'])}</b><div class="small">{'ARCHIVED' if r['archived'] else 'ACTIVE'}</div><form method="post" action="/project-archive"><input type="hidden" name="project_id_value" value="{r['id']}"><input type="hidden" name="archived" value="{0 if r['archived'] else 1}"><button type="submit">{'Restore' if r['archived'] else 'Archive'}</button></form></div>''' for r in rows)
+    return shell('Archive Projects',f'<div class="hero"><div class="eyebrow">Project Lifecycle</div><h1>Archive or restore projects.</h1></div><div class="card">{cards}</div>')
+
+@app.post('/project-archive')
+def project_archive_save(project_id_value:int=Form(...),archived:int=Form(...)):
+    cid=current_company_id(); c=db(); valid=c.execute('SELECT id FROM projects WHERE id=? AND company_id=?',(project_id_value,cid)).fetchone()
+    if valid:
+        ex=c.execute('SELECT project_id FROM project_archive_state WHERE project_id=?',(project_id_value,)).fetchone()
+        if ex: c.execute('UPDATE project_archive_state SET archived=?,archived_at=? WHERE project_id=?',(1 if archived else 0,datetime.utcnow().isoformat() if archived else None,project_id_value))
+        else: c.execute('INSERT INTO project_archive_state(project_id,company_id,archived,archived_at) VALUES(?,?,?,?)',(project_id_value,cid,1 if archived else 0,datetime.utcnow().isoformat() if archived else None))
+        c.commit()
+    c.close(); audit_event('ARCHIVE_PROJECT' if archived else 'RESTORE_PROJECT',str(project_id_value),project_id_value); return RedirectResponse('/project-archive',303)
+
+@app.get('/document-tags',response_class=HTMLResponse)
+def document_tags_page():
+    pid=project_id(); c=db(); docs=c.execute('SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC',(current_company_id(),pid)).fetchall(); tags=c.execute('SELECT t.*,a.original_name FROM attachment_tags t JOIN attachments a ON a.id=t.attachment_id WHERE t.company_id=? AND a.project_id=? ORDER BY t.id DESC',(current_company_id(),pid)).fetchall(); c.close()
+    options=''.join(f'<option value="{d["id"]}">{esc(d["original_name"])}</option>' for d in docs); recent=''.join(f'<div class="action"><b>{esc(t["tag"])}</b> · {esc(t["original_name"])}</div>' for t in tags) or '<div class="muted">No document tags yet.</div>'
+    return shell('Document Tags',f'''<div class="hero"><div class="eyebrow">Document Organization</div><h1>Tag project files.</h1></div><div class="grid2"><div class="card"><form method="post" action="/document-tags"><select name="attachment_id">{options}</select><input name="tag" placeholder="electrical, permit, owner" required><button type="submit">Add Tag</button></form></div><div class="card">{recent}</div></div>''')
+
+@app.post('/document-tags')
+def document_tags_add(attachment_id:int=Form(...),tag:str=Form(...)):
+    c=db(); valid=c.execute('SELECT id FROM attachments WHERE id=? AND company_id=?',(attachment_id,current_company_id())).fetchone()
+    if valid: c.execute('INSERT INTO attachment_tags(company_id,attachment_id,tag,created) VALUES(?,?,?,?)',(current_company_id(),attachment_id,tag.strip().lower(),datetime.utcnow().isoformat())); c.commit()
+    c.close(); audit_event('TAG_DOCUMENT',tag); return RedirectResponse('/document-tags',303)
+
+@app.get('/notification-rules',response_class=HTMLResponse)
+def notification_rules_page():
+    c=db(); rows=c.execute('SELECT * FROM notification_rules WHERE company_id=? ORDER BY id DESC',(current_company_id(),)).fetchall(); c.close()
+    recent=''.join(f'<div class="action"><span class="badge {esc(r["severity"])}">{esc(r["severity"])}</span> <b>{esc(r["rule_name"])}</b><div class="small">Threshold {r["threshold_value"]} - {"Enabled" if r["enabled"] else "Disabled"}</div></div>' for r in rows) or '<div class="muted">No custom notification rules yet.</div>'
+    return shell('Notification Rules',f'''<div class="hero"><div class="eyebrow">Alert Rules</div><h1>Control what deserves attention.</h1></div><div class="grid2"><div class="card"><form method="post" action="/notification-rules"><input name="rule_name" placeholder="High schedule delay" required><select name="severity"><option>WATCH</option><option selected>HIGH</option><option>CRITICAL</option></select><input type="number" step="0.1" name="threshold_value" value="0"><button type="submit">Add Rule</button></form></div><div class="card">{recent}</div></div>''')
+
+@app.post('/notification-rules')
+def notification_rules_add(rule_name:str=Form(...),severity:str=Form('HIGH'),threshold_value:float=Form(0)):
+    c=db(); c.execute('INSERT INTO notification_rules(company_id,rule_name,enabled,severity,threshold_value,created) VALUES(?,?,1,?,?,?)',(current_company_id(),rule_name.strip(),severity,threshold_value,datetime.utcnow().isoformat())); c.commit(); c.close(); audit_event('ADD_NOTIFICATION_RULE',rule_name); return RedirectResponse('/notification-rules',303)
+
+@app.get('/health-history',response_class=HTMLResponse)
+def health_history_page():
+    pid=project_id(); h=project_health_snapshot(pid); c=db(); ex=c.execute('SELECT id FROM health_history WHERE company_id=? AND project_id=? AND snapshot_date=?',(current_company_id(),pid,date.today().isoformat())).fetchone()
+    if not ex: c.execute('INSERT INTO health_history(company_id,project_id,snapshot_date,overall,schedule,readiness,procurement,risk,field,created) VALUES(?,?,?,?,?,?,?,?,?,?)',(current_company_id(),pid,date.today().isoformat(),h['overall'],h['schedule'],h['readiness'],h['procurement'],h['risk'],h['field'],datetime.utcnow().isoformat())); c.commit()
+    rows=c.execute('SELECT * FROM health_history WHERE company_id=? AND project_id=? ORDER BY snapshot_date DESC,id DESC LIMIT 30',(current_company_id(),pid)).fetchall(); c.close()
+    history=''.join(f'<div class="action"><b>{esc(r["snapshot_date"])}</b> - Overall {r["overall"]:.0f}/100<div class="small">Schedule {r["schedule"]:.0f} · Readiness {r["readiness"]:.0f} · Procurement {r["procurement"]:.0f} · Risk {r["risk"]:.0f} · Field {r["field"]:.0f}</div></div>' for r in rows)
+    return shell('Health History',f'<div class="hero"><div class="eyebrow">Project Trend</div><h1>Health history</h1></div><div class="card">{history}</div>')
+
+@app.get('/bulk-export')
+def bulk_export():
+    pid=project_id(); cid=current_company_id(); stamp=datetime.utcnow().strftime('%Y%m%d_%H%M%S'); zpath=f'/tmp/buildcommand_project_export_{stamp}.zip'; tables=['projects','activities','subs','action_items','project_issues','daily_reports','procurement','risks','change_events','attachments']; c=db()
+    with zipfile.ZipFile(zpath,'w',zipfile.ZIP_DEFLATED) as z:
+        for table in tables:
+            if table=='projects': rows=c.execute('SELECT * FROM projects WHERE id=? AND company_id=?',(pid,cid)).fetchall()
+            elif table=='attachments': rows=c.execute('SELECT * FROM attachments WHERE project_id=? AND company_id=?',(pid,cid)).fetchall()
+            else: rows=c.execute(f'SELECT * FROM {table} WHERE project_id=?',(pid,)).fetchall()
+            if not rows: continue
+            headers=list(rows[0].keys()); sio=io.StringIO(); writer=csv.writer(sio); writer.writerow(headers)
+            for r in rows: writer.writerow([r[h] for h in headers])
+            z.writestr(f'{table}.csv',sio.getvalue())
+    c.close(); audit_event('BULK_EXPORT',f'project {pid}',pid); return FileResponse(zpath,media_type='application/zip',filename=f'buildcommand_project_export_{stamp}.zip')
+
+@app.get('/audit-log',response_class=HTMLResponse)
+def audit_log_page():
+    if not require_role('ADMIN'): return HTMLResponse('Not authorized.',status_code=403)
+    c=db(); rows=c.execute('SELECT l.*,u.display_name FROM admin_audit_log l LEFT JOIN users u ON u.id=l.user_id WHERE l.company_id=? ORDER BY l.id DESC LIMIT 100',(current_company_id(),)).fetchall(); c.close()
+    html=''.join(f'<div class="action"><b>{esc(r["action"])}</b> - {esc(r["display_name"] or "System")}<div>{esc(r["detail"])}</div><div class="small">{esc(r["created"])}</div></div>' for r in rows) or '<div class="muted">No v31 audit events yet.</div>'
+    return shell('Audit Log',f'<div class="hero"><div class="eyebrow">Admin Audit Log</div><h1>Track important workspace changes.</h1></div><div class="card">{html}</div>')
