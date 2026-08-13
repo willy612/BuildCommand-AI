@@ -30,7 +30,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="29.0")
+app=FastAPI(title="BuildCommand AI",version="29.1")
 DB="construction_ai_web.db"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR","/tmp/buildcommand_uploads")
 os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -9294,10 +9294,22 @@ async def schedule_import(file:UploadFile=File(...)):
     return RedirectResponse("/schedule",303)
 
 
+
+
+def ensure_v29_tables():
+    c=db()
+    c.execute("CREATE TABLE IF NOT EXISTS photo_observations(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,attachment_id INTEGER,activity_id INTEGER,observation TEXT,severity TEXT DEFAULT 'WATCH',created TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS weather_impacts(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,activity_id INTEGER,impact_date TEXT,weather_type TEXT,lost_hours REAL DEFAULT 0,description TEXT,created TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS schedule_import_batches(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,file_name TEXT,row_count INTEGER DEFAULT 0,imported_count INTEGER DEFAULT 0,created TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS communication_drafts(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,sub_id INTEGER,draft_type TEXT,subject TEXT,body TEXT,status TEXT DEFAULT 'DRAFT',created TEXT)")
+    c.execute("CREATE TABLE IF NOT EXISTS meeting_ai_summaries(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,source_text TEXT,summary_text TEXT,created TEXT)")
+    c.commit(); c.close()
+
 @app.get("/photo-intelligence",response_class=HTMLResponse)
 def photo_intelligence():
+    ensure_v29_tables()
     pid=project_id(); c=db()
-    photos=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? AND lower(mime_type) LIKE 'image/%' ORDER BY id DESC",(current_company_id(),pid)).fetchall()
+    photos=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? AND (lower(COALESCE(mime_type,'')) LIKE 'image/%' OR lower(COALESCE(original_name,'')) LIKE '%.jpg' OR lower(COALESCE(original_name,'')) LIKE '%.jpeg' OR lower(COALESCE(original_name,'')) LIKE '%.png' OR lower(COALESCE(original_name,'')) LIKE '%.webp') ORDER BY id DESC",(current_company_id(),pid)).fetchall()
     obs=c.execute("SELECT p.*,a.original_name FROM photo_observations p LEFT JOIN attachments a ON a.id=p.attachment_id WHERE p.company_id=? AND p.project_id=? ORDER BY p.id DESC LIMIT 25",(current_company_id(),pid)).fetchall()
     c.close()
     opts="".join(f'<option value="{p["id"]}">{esc(p["original_name"])}</option>' for p in photos) or '<option value="">No photos uploaded</option>'
@@ -9307,6 +9319,7 @@ def photo_intelligence():
 
 @app.post("/photo-intelligence")
 def photo_intelligence_save(attachment_id:int=Form(...),observation:str=Form(...),severity:str=Form("WATCH")):
+    ensure_v29_tables()
     pid=project_id(); c=db()
     c.execute("INSERT INTO photo_observations(company_id,project_id,attachment_id,activity_id,observation,severity,created) VALUES(?,?,?,NULL,?,?,?)",(current_company_id(),pid,attachment_id,observation.strip(),severity,datetime.utcnow().isoformat()))
     c.commit(); c.close(); return RedirectResponse("/photo-intelligence",303)
