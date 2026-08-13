@@ -1,6 +1,17 @@
 from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, FileResponse
 import sqlite3
+
+try:
+    import openpyxl
+except Exception:
+    openpyxl = None
+
+try:
+    from pypdf import PdfReader
+except Exception:
+    PdfReader = None
+
 try:
     import psycopg
     from psycopg.rows import dict_row
@@ -11,6 +22,7 @@ import os
 import io
 import csv
 import json
+import base64
 import re
 import secrets
 import hashlib
@@ -30,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="29.2")
+app=FastAPI(title="BuildCommand AI",version="30.0")
 DB="construction_ai_web.db"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR","/tmp/buildcommand_uploads")
 os.makedirs(UPLOAD_DIR,exist_ok=True)
@@ -110,6 +122,12 @@ def init():
     CREATE TABLE IF NOT EXISTS photo_observations(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,attachment_id INTEGER,activity_id INTEGER,observation TEXT,severity TEXT DEFAULT 'WATCH',created TEXT);
     CREATE TABLE IF NOT EXISTS communication_drafts(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,sub_id INTEGER,draft_type TEXT,subject TEXT,body TEXT,status TEXT DEFAULT 'DRAFT',created TEXT);
     CREATE TABLE IF NOT EXISTS meeting_ai_summaries(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,source_text TEXT,summary_text TEXT,created TEXT);
+
+    CREATE TABLE IF NOT EXISTS document_ai_chunks(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,attachment_id INTEGER NOT NULL,chunk_index INTEGER,text_content TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS schedule_import_sources(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,source_type TEXT,file_name TEXT,imported_count INTEGER DEFAULT 0,created TEXT);
+    CREATE TABLE IF NOT EXISTS forecast_snapshots(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,snapshot_date TEXT,health_score REAL,projected_delay_days REAL,confidence REAL,explanation TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS sub_risk_snapshots(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,sub_id INTEGER NOT NULL,risk_score REAL,risk_band TEXT,explanation TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS change_packages(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,change_event_id INTEGER,package_text TEXT,created TEXT);
 CREATE TABLE IF NOT EXISTS quick_entries(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,user_id INTEGER,entry_type TEXT,text TEXT,routed_to TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS daily_reports(
         id INTEGER PRIMARY KEY,
@@ -665,7 +683,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:900px){.app{grid-template-columns:1fr}.side{position:relative;border-right:0;border-bottom:1px solid var(--line)}.grid4,.grid3,.grid2{grid-template-columns:1fr}.mobile-menu-btn{display:block;width:100%;margin:12px 0}.nav{display:none}.nav.mobile-open{display:block}}
 """
 
-NAV=[("Daily Command","/"),("AI Command","/ai-command"),("Plans & Specs AI","/plans-specs-ai"),("Schedule Import","/schedule-import"),("Photo Intelligence","/photo-intelligence"),("3-Week Lookahead","/lookahead-intelligence"),("Project Health","/project-health"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Sub Scorecards","/sub-scorecards"),("RFI Impact","/rfi-impact"),("Procurement Warning","/procurement-warning"),("Recovery Planner","/ai-recovery"),("Quick Entry","/quick-entry"),("Weekly AI Report","/weekly-report"),("RFI Drafting","/rfi-drafting"),("Sub Communications","/sub-communications"),("AI Meeting Minutes","/meeting-minutes-ai"),("Weather Impacts","/weather-impacts"),("PDF Reports","/pdf-reports"),("Cost Intelligence","/cost-intelligence"),("Mobile Home","/mobile-home"),("Beta Checklist","/beta-checklist")]
+NAV=[("Daily Command","/"),("AI Command","/ai-command"),("Plans & Specs AI","/plans-specs-ai"),("Deep Document AI","/document-ai"),("Schedule Import","/schedule-import"),("Advanced Schedule Import","/advanced-schedule-import"),("Photo Intelligence","/photo-intelligence"),("AI Photo Analysis","/photo-ai"),("3-Week Lookahead","/lookahead-intelligence"),("Project Health","/project-health"),("Predictive Forecast","/predictive-forecast"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Auto Daily Report","/auto-daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Owner Dashboard","/owner-dashboard"),("Portfolio Intelligence","/portfolio-intelligence"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Sub Scorecards","/sub-scorecards"),("Sub Risk","/sub-risk"),("RFI Impact","/rfi-impact"),("Procurement Warning","/procurement-warning"),("Recovery Planner","/ai-recovery"),("Quick Entry","/quick-entry"),("Weekly AI Report","/weekly-report"),("RFI Drafting","/rfi-drafting"),("Sub Communications","/sub-communications"),("AI Meeting Minutes","/meeting-minutes-ai"),("Weather Impacts","/weather-impacts"),("PDF Reports","/pdf-reports"),("Cost Intelligence","/cost-intelligence"),("Change Package","/change-package"),("Mobile Home","/mobile-home"),("Mobile Field+","/mobile-field-plus"),("Beta Checklist","/beta-checklist")]
 
 def esc(x):
     return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -9481,3 +9499,265 @@ def cost_intelligence():
 def mobile_home():
     h=project_health_snapshot(project_id())
     return shell("Mobile Home",f'''<div class="hero"><div class="eyebrow">Superintendent Mobile</div><h1>Today in the Field</h1><div class="kpi">{h["overall"]}/100</div></div><div class="grid2"><div class="card"><a href="/quick-entry">🎤 Speak / Quick Note</a></div><div class="card"><a href="/documents">📷 Add Photo / Document</a></div><div class="card"><a href="/daily-report">📝 Daily Report</a></div><div class="card"><a href="/issues">⚠️ Issue / RFI</a></div><div class="card"><a href="/ai-command">📌 View Today</a></div><div class="card"><a href="/assistant">🤖 AI Assistant</a></div></div>''')
+
+def v30_extract_text(row):
+    if not row:
+        return ""
+    path=os.path.join(UPLOAD_DIR,row["stored_name"])
+    ext=Path(row["original_name"] or "").suffix.lower()
+    if not os.path.isfile(path):
+        return ""
+    try:
+        if ext in {".txt",".csv"}:
+            return Path(path).read_text(errors="ignore")[:250000]
+        if ext==".pdf" and PdfReader is not None:
+            return "\n".join((p.extract_text() or "") for p in PdfReader(path).pages[:200])[:300000]
+        if ext in {".xlsx",".xlsm"} and openpyxl is not None:
+            wb=openpyxl.load_workbook(path,read_only=True,data_only=True)
+            lines=[]
+            for ws in wb.worksheets[:20]:
+                lines.append("SHEET: "+ws.title)
+                for vals in ws.iter_rows(values_only=True):
+                    lines.append(" | ".join("" if v is None else str(v) for v in vals))
+                    if len(lines)>20000:
+                        break
+            return "\n".join(lines)[:300000]
+    except Exception:
+        return ""
+    return ""
+
+@app.get("/document-ai",response_class=HTMLResponse)
+def v30_document_ai_page():
+    pid=project_id(); c=db()
+    docs=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 100",(current_company_id(),pid)).fetchall()
+    c.close()
+    options="".join(f'<option value="{d["id"]}">{esc(d["original_name"])}</option>' for d in docs) or '<option value="">No uploaded documents</option>'
+    return shell("Deep Document AI",f"""
+    <div class="hero"><div class="eyebrow">Deep Plans & Specs AI</div><h1>Read PDF, Excel, TXT, and CSV project documents.</h1></div>
+    <div class="card"><form method="post" action="/document-ai"><select name="attachment_id">{options}</select>
+    <textarea name="question" required placeholder="Ask a question about this document"></textarea>
+    <button type="submit">Analyze Document</button></form></div>""")
+
+@app.post("/document-ai",response_class=HTMLResponse)
+def v30_document_ai_answer(attachment_id:int=Form(...),question:str=Form(...)):
+    pid=project_id(); c=db()
+    doc=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",(attachment_id,current_company_id(),pid)).fetchone()
+    c.close()
+    if not doc:
+        return HTMLResponse("Document not found.",status_code=404)
+    extracted=v30_extract_text(doc)
+    if not extracted:
+        answer="No readable text could be extracted from this file."
+    else:
+        try:
+            client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            response=client.responses.create(
+                model=os.environ.get("OPENAI_MODEL","gpt-5.6"),
+                instructions="Answer only from the supplied construction document text. Do not invent drawing numbers or spec sections.",
+                input=f"DOCUMENT: {doc['original_name']}\n\n{extracted[:96000]}\n\nQUESTION: {question}"
+            )
+            answer=response.output_text
+        except Exception as exc:
+            answer=f"Document AI failed: {exc}"
+    return shell("Deep Document AI",f"""<div class="hero"><h1>{esc(doc["original_name"])}</h1></div>
+    <div class="card"><div style="white-space:pre-wrap">{esc(answer)}</div></div>""")
+
+@app.get("/advanced-schedule-import",response_class=HTMLResponse)
+def v30_schedule_import_page():
+    return shell("Advanced Schedule Import","""
+    <div class="hero"><div class="eyebrow">Advanced Schedule Import</div><h1>Import CSV or Excel schedules.</h1></div>
+    <div class="card"><form method="post" action="/advanced-schedule-import" enctype="multipart/form-data">
+    <input type="file" name="file" accept=".csv,.xlsx" required><button type="submit">Import Schedule</button></form></div>""")
+
+@app.post("/advanced-schedule-import")
+async def v30_schedule_import(file:UploadFile=File(...)):
+    pid=project_id(); filename=safe_filename(file.filename); ext=Path(filename).suffix.lower(); raw=await file.read(); rows=[]
+    if ext==".csv":
+        rows=list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
+    elif ext==".xlsx":
+        if openpyxl is None:
+            return HTMLResponse("Excel support is unavailable.",status_code=500)
+        tmp=tempfile.NamedTemporaryFile(delete=False,suffix=".xlsx"); tmp.write(raw); tmp.close()
+        try:
+            wb=openpyxl.load_workbook(tmp.name,read_only=True,data_only=True); ws=wb[wb.sheetnames[0]]
+            vals=list(ws.iter_rows(values_only=True))
+            if vals:
+                headers=[str(v or "").strip() for v in vals[0]]
+                rows=[{headers[i]:r[i] for i in range(min(len(headers),len(r)))} for r in vals[1:]]
+        finally:
+            try: os.unlink(tmp.name)
+            except Exception: pass
+    else:
+        return HTMLResponse("Use CSV or XLSX.",status_code=400)
+    required={"external_id","name","trade","start","finish","pct","status"}
+    if rows and not required.issubset(set(rows[0].keys())):
+        return HTMLResponse("Schedule file is missing required headers.",status_code=400)
+    c=db(); imported=0
+    for row in rows:
+        eid=str(row.get("external_id") or "").strip(); name=str(row.get("name") or "").strip()
+        if not eid or not name: continue
+        existing=c.execute("SELECT id FROM activities WHERE project_id=? AND external_id=?",(pid,eid)).fetchone()
+        trade=str(row.get("trade") or "").strip(); start=str(row.get("start") or "").split(" ")[0]; finish=str(row.get("finish") or "").split(" ")[0]
+        try: pct=float(row.get("pct") or 0)
+        except Exception: pct=0
+        status=str(row.get("status") or "NOT_STARTED").strip().upper()
+        if existing:
+            c.execute("UPDATE activities SET name=?,trade=?,start=?,finish=?,pct=?,status=? WHERE id=? AND project_id=?",(name,trade,start,finish,pct,status,existing["id"],pid))
+        else:
+            c.execute("INSERT INTO activities(project_id,external_id,name,trade,start,finish,pct,status) VALUES(?,?,?,?,?,?,?,?)",(pid,eid,name,trade,start,finish,pct,status))
+        imported+=1
+    c.execute("INSERT INTO schedule_import_sources(company_id,project_id,source_type,file_name,imported_count,created) VALUES(?,?,?,?,?,?)",(current_company_id(),pid,ext.replace(".","").upper(),filename,imported,datetime.utcnow().isoformat()))
+    c.commit(); c.close()
+    return RedirectResponse("/schedule",status_code=303)
+
+@app.get("/photo-ai",response_class=HTMLResponse)
+def v30_photo_ai_page():
+    pid=project_id(); c=db()
+    photos=c.execute("""SELECT * FROM attachments WHERE company_id=? AND project_id=? AND
+    (lower(COALESCE(mime_type,'')) LIKE ? OR lower(COALESCE(original_name,'')) LIKE ? OR lower(COALESCE(original_name,'')) LIKE ? OR lower(COALESCE(original_name,'')) LIKE ? OR lower(COALESCE(original_name,'')) LIKE ?)
+    ORDER BY id DESC LIMIT 50""",(current_company_id(),pid,"image/%","%.jpg","%.jpeg","%.png","%.webp")).fetchall(); c.close()
+    options="".join(f'<option value="{p["id"]}">{esc(p["original_name"])}</option>' for p in photos) or '<option value="">No photos uploaded</option>'
+    return shell("AI Photo Analysis",f"""<div class="hero"><div class="eyebrow">AI Photo Analysis</div><h1>Analyze field photos.</h1></div>
+    <div class="card"><form method="post" action="/photo-ai"><select name="attachment_id">{options}</select>
+    <select name="focus"><option>GENERAL</option><option>SAFETY</option><option>QUALITY</option><option>PROGRESS</option></select>
+    <button type="submit">Analyze Photo</button></form></div>""")
+
+@app.post("/photo-ai",response_class=HTMLResponse)
+def v30_photo_ai(attachment_id:int=Form(...),focus:str=Form("GENERAL")):
+    pid=project_id(); c=db()
+    row=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",(attachment_id,current_company_id(),pid)).fetchone(); c.close()
+    if not row: return HTMLResponse("Photo not found.",status_code=404)
+    path=os.path.join(UPLOAD_DIR,row["stored_name"])
+    if not os.path.isfile(path): return HTMLResponse("Stored photo unavailable.",status_code=404)
+    try:
+        data=Path(path).read_bytes(); mime=row["mime_type"] or "image/jpeg"; b64=base64.b64encode(data).decode("ascii")
+        client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        response=client.responses.create(
+            model=os.environ.get("OPENAI_VISION_MODEL",os.environ.get("OPENAI_MODEL","gpt-5.6")),
+            instructions=f"Describe only visible construction facts. Focus: {focus}. Treat possible concerns as observations, not definitive code violations.",
+            input=[{"role":"user","content":[{"type":"input_text","text":"Analyze this construction field photo."},{"type":"input_image","image_url":f"data:{mime};base64,{b64}"}]}]
+        )
+        result=response.output_text
+    except Exception as exc:
+        result=f"Photo AI failed: {exc}"
+    return shell("AI Photo Analysis",f"""<div class="hero"><h1>{esc(row["original_name"])}</h1></div><div class="card"><div style="white-space:pre-wrap">{esc(result)}</div></div>""")
+
+@app.get("/auto-daily-report",response_class=HTMLResponse)
+def v30_auto_daily_page():
+    return shell("Auto Daily Report","""<div class="hero"><div class="eyebrow">Automatic Daily Report</div><h1>Generate today's report from BuildCommand activity.</h1></div>
+    <div class="card"><form method="post" action="/auto-daily-report/generate"><button type="submit">Generate Draft Daily Report</button></form></div>""")
+
+@app.post("/auto-daily-report/generate",response_class=HTMLResponse)
+def v30_auto_daily_generate():
+    context=build_project_context(project_id())
+    try:
+        client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        response=client.responses.create(
+            model=os.environ.get("OPENAI_MODEL","gpt-5.6"),
+            instructions="Draft a superintendent daily report using only supplied project data. Sections: WORK COMPLETED, MANPOWER, DELAYS/CONSTRAINTS, DELIVERIES, INSPECTIONS, SAFETY, TOMORROW PLAN. Say Not documented when missing.",
+            input=context
+        )
+        draft=response.output_text
+    except Exception as exc: draft=f"Auto daily report failed: {exc}"
+    return shell("Auto Daily Report",f"""<div class="hero"><h1>Draft Ready</h1></div><div class="card"><div style="white-space:pre-wrap">{esc(draft)}</div></div>""")
+
+def v30_forecast(pid):
+    c=db(); acts=c.execute("SELECT * FROM activities WHERE project_id=? AND status!='COMPLETE'",(pid,)).fetchall(); c.close()
+    if not acts: return 0.0,.5,"No active activities."
+    scores=[]; notes=[]
+    for a in acts:
+        score,band,reasons=activity_delay_signal(a); scores.append(score)
+        if score>=45: notes.append(f'{a["external_id"]} {a["name"]}: {band}')
+    avg=sum(scores)/len(scores)
+    return round(avg/18.0,1),round(min(.9,.45+len(acts)*.03),2),"; ".join(notes[:5]) or "No major delay signal detected."
+
+@app.get("/predictive-forecast",response_class=HTMLResponse)
+def v30_predictive_forecast():
+    pid=project_id(); h=project_health_snapshot(pid); projected,confidence,explanation=v30_forecast(pid)
+    c=db(); c.execute("INSERT INTO forecast_snapshots(company_id,project_id,snapshot_date,health_score,projected_delay_days,confidence,explanation,created) VALUES(?,?,?,?,?,?,?,?)",
+    (current_company_id(),pid,date.today().isoformat(),h["overall"],projected,confidence,explanation,datetime.utcnow().isoformat())); c.commit(); c.close()
+    band="READY" if projected<1 else "WATCH" if projected<3 else "HIGH" if projected<6 else "CRITICAL"
+    return shell("Predictive Forecast",f"""<div class="hero"><div class="eyebrow">Predictive Forecast</div><h1>{projected:.1f} projected delay day(s)</h1>
+    <span class="badge {band}">{band}</span><div class="muted">Confidence {confidence*100:.0f}%</div></div><div class="card"><p>{esc(explanation)}</p></div>""")
+
+@app.get("/sub-risk",response_class=HTMLResponse)
+def v30_sub_risk():
+    pid=project_id(); c=db(); subs=c.execute("SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",(pid,)).fetchall()
+    updates=c.execute("SELECT * FROM subcontractor_updates WHERE project_id=? ORDER BY update_date DESC,id DESC",(pid,)).fetchall(); c.close()
+    cards=""
+    for s in subs:
+        su=[u for u in updates if u["sub_id"]==s["id"]]; latest=su[0] if su else None; score=20; reasons=[]
+        if not latest: score+=35; reasons.append("no recent field update")
+        else:
+            st=(latest["status"] or "").upper()
+            if st=="CRITICAL": score+=55; reasons.append("latest status critical")
+            elif st=="HIGH": score+=35; reasons.append("latest status high")
+            elif st=="WATCH": score+=18; reasons.append("latest status watch")
+            if (latest["manpower"] or 0)<=0: score+=20; reasons.append("latest manpower zero")
+        score=min(100,score); band="CRITICAL" if score>=75 else "HIGH" if score>=50 else "WATCH" if score>=25 else "READY"; explanation="; ".join(reasons) or "No major risk signal."
+        c2=db(); c2.execute("INSERT INTO sub_risk_snapshots(company_id,project_id,sub_id,risk_score,risk_band,explanation,created) VALUES(?,?,?,?,?,?,?)",(current_company_id(),pid,s["id"],score,band,explanation,datetime.utcnow().isoformat())); c2.commit(); c2.close()
+        cards+=f'<div class="card"><span class="badge {band}">{band} · {score}</span><h3>{esc(s["name"])}</h3><p>{esc(explanation)}</p></div>'
+    return shell("Sub Risk",f'<div class="hero"><h1>Subcontractor Risk</h1></div><div class="grid3">{cards}</div>')
+
+@app.get("/change-package",response_class=HTMLResponse)
+def v30_change_package_page():
+    pid=project_id(); c=db(); rows=c.execute("SELECT * FROM change_events WHERE project_id=? ORDER BY id DESC",(pid,)).fetchall(); c.close()
+    options="".join(f'<option value="{r["id"]}">{esc(r["title"])}</option>' for r in rows)
+    return shell("Change Package",f"""<div class="hero"><div class="eyebrow">Change Order Documentation</div><h1>Build a change package.</h1></div>
+    <div class="card"><form method="post" action="/change-package"><select name="change_event_id">{options}</select><button type="submit">Generate Change Package</button></form></div>""")
+
+@app.post("/change-package",response_class=HTMLResponse)
+def v30_change_package(change_event_id:int=Form(...)):
+    pid=project_id(); c=db()
+    ce=c.execute("""SELECT ce.*,a.external_id,a.name activity FROM change_events ce LEFT JOIN activities a ON a.id=ce.activity_id WHERE ce.id=? AND ce.project_id=?""",(change_event_id,pid)).fetchone(); c.close()
+    if not ce: return HTMLResponse("Change event not found.",status_code=404)
+    package="\n".join([
+        "CHANGE EVENT", str(ce["title"] or ""), "",
+        "TYPE", str(ce["event_type"] or ""), "",
+        "LINKED ACTIVITY", f'{ce["external_id"] or ""} {ce["activity"] or ""}', "",
+        "RESPONSIBLE PARTY", str(ce["responsible_party"] or "Unassigned"), "",
+        "ESTIMATED COST IMPACT", f'${float(ce["estimated_cost"] or 0):,.0f}', "",
+        "SCHEDULE IMPACT", f'{float(ce["schedule_days"] or 0):.1f} day(s)', "",
+        "STATUS", str(ce["status"] or ""), "",
+        "DESCRIPTION", str(ce["description"] or ""), "",
+        "SUPPORTING DOCUMENTS", "Attach photos, RFIs, submittals, meeting notes, and pricing as applicable."
+    ])
+    c=db(); c.execute("INSERT INTO change_packages(company_id,project_id,change_event_id,package_text,created) VALUES(?,?,?,?,?)",(current_company_id(),pid,change_event_id,package,datetime.utcnow().isoformat())); c.commit(); c.close()
+    return shell("Change Package",f'<div class="hero"><h1>{esc(ce["title"])}</h1></div><div class="card"><div style="white-space:pre-wrap">{esc(package)}</div></div>')
+
+@app.get("/owner-dashboard",response_class=HTMLResponse)
+def v30_owner_dashboard():
+    pid=project_id(); h=project_health_snapshot(pid); c=db(); project=c.execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone()
+    changes=c.execute("SELECT * FROM change_events WHERE project_id=?",(pid,)).fetchall(); latest=c.execute("SELECT * FROM weekly_ai_reports WHERE project_id=? ORDER BY id DESC LIMIT 1",(pid,)).fetchone(); c.close()
+    open_cost=sum(float(r["estimated_cost"] or 0) for r in changes if r["status"] not in ["APPROVED","REJECTED"]); approved=sum(float(r["estimated_cost"] or 0) for r in changes if r["status"]=="APPROVED")
+    summary=esc(latest["report_text"][:1800]) if latest else "Generate a Weekly AI Report to populate the owner summary."
+    return shell("Owner Dashboard",f"""<div class="hero"><div class="eyebrow">Owner / Executive View</div><h1>{esc(project["name"] if project else "Project")}</h1><div class="kpi">{h["overall"]}/100</div></div>
+    <div class="grid4"><div class="card"><div class="label">Schedule</div><div class="kpi">{h["schedule"]}</div></div>
+    <div class="card"><div class="label">Readiness</div><div class="kpi">{h["readiness"]}</div></div>
+    <div class="card"><div class="label">Open Change</div><div class="kpi">${open_cost:,.0f}</div></div>
+    <div class="card"><div class="label">Approved Changes</div><div class="kpi">${approved:,.0f}</div></div></div>
+    <div class="card"><h2>Executive Summary</h2><div style="white-space:pre-wrap">{summary}</div></div>""")
+
+@app.get("/portfolio-intelligence",response_class=HTMLResponse)
+def v30_portfolio_intelligence():
+    cid=current_company_id(); c=db(); projects=c.execute("SELECT * FROM projects WHERE company_id=? ORDER BY name",(cid,)).fetchall(); c.close()
+    cards=""; scores=[]
+    for p in projects:
+        h=project_health_snapshot(p["id"]); scores.append(h["overall"]); band="READY" if h["overall"]>=85 else "WATCH" if h["overall"]>=70 else "HIGH" if h["overall"]>=50 else "CRITICAL"
+        cards+=f'<div class="card"><span class="badge {band}">{h["overall"]}/100</span><h3>{esc(p["name"])}</h3><p>Schedule {h["schedule"]} · Readiness {h["readiness"]} · Procurement {h["procurement"]}</p></div>'
+    avg=round(sum(scores)/len(scores)) if scores else 0
+    return shell("Portfolio Intelligence",f'<div class="hero"><h1>Company Portfolio Health: {avg}/100</h1></div><div class="grid3">{cards}</div>')
+
+@app.get("/mobile-field-plus",response_class=HTMLResponse)
+def v30_mobile_field_plus():
+    h=project_health_snapshot(project_id())
+    return shell("Mobile Field+",f"""<div class="hero"><div class="eyebrow">Mobile Superintendent Workflow</div><h1>Field Mode</h1><div class="kpi">{h["overall"]}/100</div></div>
+    <div class="grid2">
+    <div class="card"><a href="/quick-entry">🎤 Speak Note</a></div>
+    <div class="card"><a href="/photo-ai">📷 Analyze Photo</a></div>
+    <div class="card"><a href="/auto-daily-report">📝 Auto Daily Report</a></div>
+    <div class="card"><a href="/rfi-drafting">❓ Draft RFI</a></div>
+    <div class="card"><a href="/lookahead-intelligence">📅 3-Week Lookahead</a></div>
+    <div class="card"><a href="/predictive-forecast">📈 Forecast</a></div>
+    <div class="card"><a href="/sub-risk">👷 Sub Risk</a></div>
+    <div class="card"><a href="/assistant">🤖 Ask AI</a></div></div>""")
