@@ -736,14 +736,8 @@ NAV_GROUPS=[
 ]
 
 def categorized_nav():
-    groups=[]
-    for group_name,items in NAV_GROUPS:
-        links=''.join(f'<a href="{u}">{esc(n)}</a>' for n,u in items)
-        groups.append(f'<details class="nav-group"><summary>{esc(group_name)}</summary><div class="nav-items">{links}</div></details>')
-    return ''.join(groups)
-
-def esc(x):
-    return str(x or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    items=[("Projects","/"),("Build","/build"),("Estimate","/estimate"),("Manage","/manage"),("Ask BuildCommand","/ask-buildcommand")]
+    return "".join(f'<a href="{href}" style="display:block;padding:12px 10px;margin:4px 0;border-radius:9px;">{esc(label)}</a>' for label,href in items)
 
 def shell(title, body):
     current_pid = project_id()
@@ -787,7 +781,124 @@ def select_project(project_id: int = Form(...)):
         c.execute("INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id", (user_id,project_id)); c.commit()
     c.close(); return RedirectResponse("/", status_code=303)
 
+
+# ============================================================
+# v37 UNIFIED BUILDCOMMAND INTERFACE
+# ============================================================
+
+def _v37_count(sql,args):
+    c=db()
+    try:
+        r=c.execute(sql,args).fetchone()
+        value=int(r[0] if r else 0)
+    except Exception:
+        value=0
+    c.close()
+    return value
+
+def _v37_snapshot(pid):
+    if not pid:
+        return dict(scope=0,estimate=0,review=0,issues=0,submittals=0,actions=0,inspections=0)
+    co=current_company_id()
+    return {
+        "scope":_v37_count("SELECT COUNT(*) FROM blueprint_scope_items WHERE company_id=? AND project_id=?",(co,pid)),
+        "estimate":_v37_count("SELECT COUNT(*) FROM estimator_items WHERE company_id=? AND project_id=?",(co,pid)),
+        "review":_v37_count("SELECT COUNT(*) FROM estimator_items WHERE company_id=? AND project_id=? AND COALESCE(verified,0)=0",(co,pid)),
+        "issues":_v37_count("SELECT COUNT(*) FROM issues WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE')",(pid,)),
+        "submittals":_v37_count("SELECT COUNT(*) FROM submittals WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','APPROVED','COMPLETE')",(pid,)),
+        "actions":_v37_count("SELECT COUNT(*) FROM actions WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE')",(pid,)),
+        "inspections":_v37_count("SELECT COUNT(*) FROM inspections WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE','PASSED')",(pid,))
+    }
+
+def _v37_link_card(title,desc,href,label="Open"):
+    return ('<div class="card"><h2>'+esc(title)+'</h2><p class="muted">'+esc(desc)+'</p>'
+            '<a href="'+href+'" style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:800;">'
+            +esc(label)+' →</a></div>')
+
 @app.get("/",response_class=HTMLResponse)
+def unified_projects_home():
+    pid=project_id(); s=_v37_snapshot(pid)
+    attention=s["issues"]+s["submittals"]+s["actions"]+s["inspections"]
+    c=db(); current=c.execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone() if pid else None; c.close()
+    name=esc(current["name"]) if current else "Select or create a project"
+    body=(
+      '<div class="hero"><div class="eyebrow">BuildCommand AI · Construction Operations Intelligence System</div><h1>'+name+'</h1>'
+      '<p class="muted">What is happening? What needs attention? What should happen next?</p></div>'
+      '<div class="grid4">'
+      f'<div class="card"><div class="label">Things That Need You</div><div class="kpi">{attention}</div><a href="/actions">Review →</a></div>'
+      f'<div class="card"><div class="label">Scope Items</div><div class="kpi">{s["scope"]}</div><a href="/build">Build →</a></div>'
+      f'<div class="card"><div class="label">Estimate Review</div><div class="kpi">{s["review"]}</div><a href="/estimate">Estimate →</a></div>'
+      f'<div class="card"><div class="label">Open Issues</div><div class="kpi">{s["issues"]}</div><a href="/manage">Manage →</a></div></div>'
+      '<div class="grid3">'
+      +_v37_link_card("BUILD","Plans, specifications, project scope and construction intelligence.","/build")
+      +_v37_link_card("ESTIMATE","Takeoff, estimator review, pricing and cost intelligence.","/estimate")
+      +_v37_link_card("MANAGE","Schedule, field, RFIs, submittals, inspections and subcontractors.","/manage")
+      +'</div>'
+      +_v37_link_card("Ask BuildCommand","Do not hunt through menus. Ask the project what you need.","/ask-buildcommand","Ask")
+      +'<details class="card"><summary><b>Advanced tools</b></summary><p class="muted">Nothing was removed.</p><p><a href="/legacy-dashboard">Open legacy dashboard →</a></p></details>'
+    )
+    return shell("Projects",body)
+
+@app.get("/build",response_class=HTMLResponse)
+def unified_build():
+    s=_v37_snapshot(project_id())
+    body=(
+      '<div class="hero"><div class="eyebrow">BUILD</div><h1>Understand the project.</h1><p class="muted">One place for plans, specs and scope intelligence.</p></div>'
+      f'<div class="card"><div class="label">Source-backed Scope Items</div><div class="kpi">{s["scope"]}</div></div>'
+      '<div class="grid2">'
+      +_v37_link_card("Analyze Project","Upload/read plans and specifications and build cleaned trade scopes.","/plans-specs-ai","Analyze")
+      +_v37_link_card("Review Project Scope","Review unified source-backed construction intelligence.","/brain","Review")
+      +'</div><details class="card"><summary><b>More Build tools</b></summary><p><a href="/documents">Documents</a> · <a href="/document-ai">Deep Document AI</a></p></details>'
+    )
+    return shell("Build",body)
+
+@app.get("/estimate",response_class=HTMLResponse)
+def unified_estimate():
+    s=_v37_snapshot(project_id())
+    body=(
+      '<div class="hero"><div class="eyebrow">ESTIMATE</div><h1>Scope to price.</h1><p class="muted">The takeoff brains work underneath; review what needs estimator judgment.</p></div>'
+      f'<div class="grid2"><div class="card"><div class="label">Estimator Items</div><div class="kpi">{s["estimate"]}</div></div>'
+      f'<div class="card"><div class="label">Need Review</div><div class="kpi">{s["review"]}</div></div></div>'
+      '<div class="grid2">'
+      +_v37_link_card("Estimator Workspace","Scope, quantity, unit, labor, material, subcontract quote and markup.","/brain/estimator","Open Estimate")
+      +_v37_link_card("Takeoff Review","Review AI quantity proposals and verification items.","/brain/takeoff","Review")
+      +'</div><details class="card"><summary><b>Advanced estimating tools</b></summary><p><a href="/brain/takeoff/components">Takeoff Components</a> · <a href="/cost-intelligence">Cost Intelligence</a></p></details>'
+    )
+    return shell("Estimate",body)
+
+@app.get("/manage",response_class=HTMLResponse)
+def unified_manage():
+    s=_v37_snapshot(project_id())
+    attention=s["issues"]+s["submittals"]+s["actions"]+s["inspections"]
+    body=(
+      '<div class="hero"><div class="eyebrow">MANAGE</div><h1>Run the job.</h1><p class="muted">Schedule, field, RFIs, submittals, inspections and subcontractors.</p></div>'
+      f'<div class="grid4"><div class="card"><div class="label">Need Attention</div><div class="kpi">{attention}</div></div>'
+      f'<div class="card"><div class="label">Issues</div><div class="kpi">{s["issues"]}</div></div>'
+      f'<div class="card"><div class="label">Submittals</div><div class="kpi">{s["submittals"]}</div></div>'
+      f'<div class="card"><div class="label">Inspections</div><div class="kpi">{s["inspections"]}</div></div></div>'
+      '<div class="grid3">'
+      +_v37_link_card("Today","Morning brief and priorities.","/morning-brief")
+      +_v37_link_card("Schedule","Schedule and production planning.","/schedule")
+      +_v37_link_card("Things That Need You","One queue for human decisions.","/actions")
+      +_v37_link_card("RFIs / Issues","Questions, conflicts and issues.","/issues")
+      +_v37_link_card("Submittals","Submittal workflow.","/submittals")
+      +_v37_link_card("Field","Field execution and reporting.","/field")
+      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
+    )
+    return shell("Manage",body)
+
+@app.get("/ask-buildcommand",response_class=HTMLResponse)
+def unified_ask_buildcommand():
+    body=(
+      '<div class="hero"><div class="eyebrow">ASK BUILDCOMMAND</div><h1>Ask the project.</h1><p class="muted">Use natural language instead of hunting through menus.</p></div>'
+      '<div class="grid2">'
+      +_v37_link_card("Project Command","Ask about scope, schedule, risks, trades and project status.","/ai-command","Ask")
+      +_v37_link_card("Search Everything","Find information across the project.","/global-search","Search")
+      +'</div><div class="card"><h2>Try asking</h2><div class="action">What am I missing in electrical?</div><div class="action">What needs my attention today?</div><div class="action">Show me everything affecting doors.</div><div class="action">What could delay this week?</div></div>'
+    )
+    return shell("Ask BuildCommand",body)
+
+@app.get("/legacy-dashboard",response_class=HTMLResponse)
 def home():
     pid = project_id()
     ensure_today_morning_brief(pid)
