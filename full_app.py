@@ -2107,7 +2107,8 @@ def unified_build():
       '<div class="grid2">'
       +_v37_link_card("Analyze Project","Upload once. BuildCommand runs plan intelligence, estimator sync, takeoff splitting and quantity review automatically.","/build/analyze-project","Analyze")
       +_v37_link_card("Review Project Scope","Review unified source-backed construction intelligence.","/brain","Review")
-      +'</div><details class="card"><summary><b>More Build tools</b></summary><p><a href="/preconstruction">Preconstruction & Bid Intelligence</a> · <a href="/documents">Documents</a> · <a href="/document-ai">Deep Document AI</a></p></details>'
+      +_v37_link_card("Blueprint Brain","Open source-backed trade scopes and run the final trade cleanup.","/blueprint-brain","Open")
+      +'</div><details class="card"><summary><b>More Build tools</b></summary><p><a href="/blueprint-brain">Blueprint Brain</a> · <a href="/preconstruction">Preconstruction & Bid Intelligence</a> · <a href="/documents">Documents</a> · <a href="/document-ai">Deep Document AI</a></p></details>'
     )
     return shell("Build",body)
 
@@ -13118,18 +13119,71 @@ def storage_status_page():
     present=sum(1 for r in rows if os.path.isfile(os.path.join(UPLOAD_DIR,r['stored_name']))); missing=len(rows)-present; persistent=not os.path.abspath(UPLOAD_DIR).startswith('/tmp/'); band='READY' if persistent and missing==0 else 'WATCH'
     return shell('Storage Status',f'''<div class="hero"><div class="eyebrow">Persistent Storage</div><h1><span class="badge {band}">{band}</span> {present}/{len(rows)} project file(s) present</h1></div><div class="grid2"><div class="card"><h2>Upload Path</h2><p>{esc(UPLOAD_DIR)}</p><p class="small">{'Persistent path detected.' if persistent else 'Temporary /tmp path detected.'}</p></div><div class="card"><h2>Missing Files</h2><div class="kpi">{missing}</div></div></div>''')
 
+
 @app.get('/global-search',response_class=HTMLResponse)
 def global_search_page(q:str=''):
-    pid=project_id(); results=[]; q=q.strip()
+    pid=project_id()
+    company=current_company_id()
+    results=[]
+    q=(q or '').strip()
+
     if q:
-        like=f'%{q.lower()}%'; c=db(); specs=[('Schedule','activities','name','/schedule'),('RFI / Issue','project_issues','title','/issues'),('Action','action_items','title','/actions'),('Subcontractor','subs','name','/subcontractors'),('Document','attachments','original_name','/documents'),('Change','change_events','title','/changes')]
-        for kind,table,column,url in specs:
-            if table=='attachments': rows=c.execute(f'SELECT id,{column} label FROM {table} WHERE project_id=? AND company_id=? AND lower(COALESCE({column},'')) LIKE ? ORDER BY id DESC LIMIT 20',(pid,current_company_id(),like)).fetchall()
-            else: rows=c.execute(f'SELECT id,{column} label FROM {table} WHERE project_id=? AND lower(COALESCE({column},'')) LIKE ? ORDER BY id DESC LIMIT 20',(pid,like)).fetchall()
-            for r in rows: results.append((kind,r['label'],url))
+        like=f'%{q.lower()}%'
+        specs=[
+            ("Schedule","activities","name","/schedule",False),
+            ("RFI / Issue","project_issues","title","/issues",False),
+            ("Action","action_items","title","/actions",False),
+            ("Subcontractor","subs","name","/subcontractors",False),
+            ("Document","attachments","original_name","/documents",True),
+            ("Change","change_events","title","/changes",False),
+            ("Blueprint Scope","blueprint_scope_items","requirement","/blueprint-brain",True),
+            ("Estimator","estimator_items","description","/brain/estimator",True),
+            ("Submittal","submittals","title","/submittals",False),
+            ("Punch","punch_items","title","/punch",False),
+            ("Procurement","procurement","item","/procurement",False),
+        ]
+
+        c=db()
+        for kind,table,column,url,company_scoped in specs:
+            try:
+                if company_scoped:
+                    sql=f"SELECT id,{column} AS label FROM {table} WHERE project_id=? AND company_id=? AND LOWER(COALESCE({column}, '')) LIKE ? ORDER BY id DESC LIMIT 25"
+                    rows=c.execute(sql,(pid,company,like)).fetchall()
+                else:
+                    sql=f"SELECT id,{column} AS label FROM {table} WHERE project_id=? AND LOWER(COALESCE({column}, '')) LIKE ? ORDER BY id DESC LIMIT 25"
+                    rows=c.execute(sql,(pid,like)).fetchall()
+
+                for r in rows:
+                    label=r["label"] if r["label"] is not None else ""
+                    results.append((kind,label,url))
+            except Exception:
+                try:
+                    c.rollback()
+                except Exception:
+                    pass
+                continue
         c.close()
-    html=''.join(f'<div class="search-result"><b>{esc(k)}</b> · <a href="{u}" style="color:#f0b44d">{esc(l)}</a></div>' for k,l,u in results) or ('<div class="muted">No matching project records.</div>' if q else '')
-    return shell('Global Search',f'''<div class="hero"><div class="eyebrow">Global Search</div><h1>Search this project.</h1></div><div class="card"><form method="get" action="/global-search"><input name="q" value="{esc(q)}" placeholder="Search schedule, RFIs, actions, subs, documents, changes"><button type="submit">Search</button></form></div><div class="card">{html}</div>''')
+
+    html=''.join(
+        f'<div class="search-result"><b>{esc(k)}</b> · <a href="{u}" style="color:#f0b44d">{esc(l)}</a></div>'
+        for k,l,u in results
+    ) or (
+        '<div class="muted">No matching project records.</div>'
+        if q else
+        '<div class="muted">Search plans/scopes, estimator, schedule, RFIs, actions, subcontractors, documents, changes, submittals, punch and procurement.</div>'
+    )
+
+    body=(
+        '<div class="hero"><div class="eyebrow">Search Everything</div>'
+        '<h1>Search this project.</h1>'
+        '<p class="muted">One search across the project instead of hunting through individual tools.</p></div>'
+        '<div class="card"><form method="get" action="/global-search">'
+        f'<input name="q" value="{esc(q)}" placeholder="Search plans, scope, estimator, schedule, RFIs, documents, changes...">'
+        '<button type="submit">Search Everything</button></form></div>'
+        f'<div class="card">{html}</div>'
+    )
+    return shell('Global Search',body)
+
 
 @app.get('/favorites',response_class=HTMLResponse)
 def favorites_page():
