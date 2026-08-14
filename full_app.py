@@ -9746,6 +9746,13 @@ def _ensure_v34_estimator_tables():
                 markup_pct DOUBLE PRECISION DEFAULT 0,
                 notes TEXT DEFAULT '',
                 verified INTEGER DEFAULT 0,
+
+                ai_quantity DOUBLE PRECISION,
+                ai_unit TEXT DEFAULT '',
+                ai_confidence TEXT DEFAULT '',
+                ai_basis TEXT DEFAULT '',
+                ai_source TEXT DEFAULT '',
+                ai_updated TEXT,
                 created TEXT,
                 updated TEXT
             )
@@ -9789,10 +9796,36 @@ def _ensure_v34_estimator_tables():
                 markup_pct REAL DEFAULT 0,
                 notes TEXT DEFAULT '',
                 verified INTEGER DEFAULT 0,
+
+                ai_quantity REAL,
+                ai_unit TEXT DEFAULT '',
+                ai_confidence TEXT DEFAULT '',
+                ai_basis TEXT DEFAULT '',
+                ai_source TEXT DEFAULT '',
+                ai_updated TEXT,
+
                 created TEXT,
                 updated TEXT
             )
         """)
+
+    # v36 automatic takeoff proposal fields. Add safely to existing v34/v35 tables.
+    v36_columns=[
+        ("ai_quantity","DOUBLE PRECISION" if DATABASE_KIND=="postgres" else "REAL"),
+        ("ai_unit","TEXT DEFAULT ''"),
+        ("ai_confidence","TEXT DEFAULT ''"),
+        ("ai_basis","TEXT DEFAULT ''"),
+        ("ai_source","TEXT DEFAULT ''"),
+        ("ai_updated","TEXT")
+    ]
+    for col,col_type in v36_columns:
+        try:
+            c.execute(f"ALTER TABLE estimator_items ADD COLUMN {col} {col_type}")
+            c.commit()
+        except Exception:
+            try: c.rollback()
+            except Exception: pass
+
     # Helpful lookup/index; duplicate historical rows are tolerated, so no UNIQUE migration.
     try:
         c.execute("""
@@ -10051,6 +10084,241 @@ def _takeoff_status(row):
     return "NEEDS_TAKEOFF"
 
 
+
+# ============================================================
+# v36 AUTOMATIC PLAN TAKEOFF BRAIN
+# ============================================================
+
+def _v36_latest_plan_docs(pid):
+    run=_latest_blueprint_run(pid)
+    if not run:
+        return run,[]
+    try:
+        names=json.loads(run["source_files"] or "[]")
+    except Exception:
+        names=[]
+    docs=[]
+    c=db()
+    for name in names:
+        d=c.execute("""
+            SELECT * FROM attachments
+            WHERE company_id=? AND project_id=? AND original_name=?
+            ORDER BY id DESC LIMIT 1
+        """,(current_company_id(),pid,name)).fetchone()
+        if d:
+            docs.append(d)
+    c.close()
+    return run,docs
+
+
+def _v36_scope_targets(pid,run_id):
+    c=db()
+    rows=c.execute("""
+        SELECT e.id estimator_id,e.trade,e.description,e.source_ref,e.quantity,e.unit,e.verified,
+               b.id scope_item_id,b.confidence scope_confidence
+        FROM estimator_items e
+        JOIN blueprint_scope_items b ON b.id=e.blueprint_scope_item_id
+        WHERE e.company_id=? AND e.project_id=? AND b.run_id=?
+        ORDER BY e.trade,e.id
+        LIMIT 180
+    """,(current_company_id(),pid,run_id)).fetchall()
+    c.close()
+    return rows
+
+
+def _v36_takeoff_prompt(targets):
+    lines=[]
+    for r in targets:
+        lines.append(
+            f'ESTIMATOR_ID={r["estimator_id"]} | TRADE={r["trade"]} | '
+            f'DESCRIPTION={r["description"]} | SOURCE={r["source_ref"] or ""} | '
+            f'SUGGESTED_UNIT={_suggest_takeoff_unit(r["trade"],r["description"])}'
+        )
+    return """You are BuildCommand Automatic Plan Takeoff Brain.
+
+Analyze the attached construction plan PDFs visually and textually against the TAKEOFF TARGETS below.
+
+STRICT RULES:
+1. Never guess a quantity.
+2. Return a numeric quantity only when the documents provide enough evidence to count or calculate it with reasonable confidence.
+3. Prefer explicit schedules, legends, tagged fixture/equipment counts, door/window schedules, device plans, room finish schedules, and clearly dimensioned/calculable information.
+4. Do NOT infer scaled LF/SF/CY measurements from a drawing image unless a reliable explicit scale/dimension and geometry are sufficiently clear. If not, return quantity=null and confidence=VERIFY.
+5. A scope statement that says "provide doors" is not itself proof of the number of doors. Use schedules/plans as evidence.
+6. Avoid double-counting the same tagged object shown on multiple sheets/details.
+7. Preserve trade ownership from the supplied target; this task is quantity extraction, not reclassification.
+8. For each non-null quantity, cite the best supporting sheet/schedule/detail in source and briefly explain the basis.
+9. Confidence must be HIGH, MEDIUM, LOW, or VERIFY.
+10. Return JSON only.
+
+Return:
+{
+  "results":[
+    {
+      "estimator_id":123,
+      "quantity":12,
+      "unit":"EA",
+      "confidence":"HIGH",
+      "basis":"12 unique door marks listed in the door schedule.",
+      "source":"A601 Door Schedule"
+    },
+    {
+      "estimator_id":124,
+      "quantity":null,
+      "unit":"SF",
+      "confidence":"VERIFY",
+      "basis":"Area requires scaled takeoff; no reliable explicit area found.",
+      "source":"A201/A801"
+    }
+  ],
+  "review_notes":[]
+}
+
+TAKEOFF TARGETS
+----------------
+"""+"\n".join(lines)
+
+
+def _v36_parse_json(raw):
+    s=(raw or "").strip()
+    if s.startswith("```"):
+        s=re.sub(r"^```(?:json)?\s*","",s,flags=re.I)
+        s=re.sub(r"\s*```$","",s)
+    start=s.find("{"); end=s.rfind("}")
+    if start>=0 and end>start:
+        s=s[start:end+1]
+    return json.loads(s)
+
+
+@app.post("/brain/takeoff/auto",response_class=HTMLResponse)
+def automatic_plan_takeoff():
+    pid=project_id()
+    _seed_estimator_from_latest(pid)
+    run,docs=_v36_latest_plan_docs(pid)
+    if not run:
+        return shell("Automatic Takeoff",'<div class="card"><h2>No Plan Intelligence run found.</h2><p>Run Plan Intake first.</p></div>')
+    if not docs:
+        return shell("Automatic Takeoff",'<div class="card"><h2>Source plan files are unavailable.</h2><p>BuildCommand found the scope run but could not locate its original project attachments.</p></div>')
+    if not os.environ.get("OPENAI_API_KEY"):
+        return shell("Automatic Takeoff",'<div class="card"><h2>OPENAI_API_KEY is not configured.</h2></div>')
+
+    targets=_v36_scope_targets(pid,run["id"])
+    if not targets:
+        return shell("Automatic Takeoff",'<div class="card"><h2>No current estimator targets found.</h2></div>')
+
+    total=sum(int(d["size_bytes"] or 0) for d in docs if Path(d["original_name"] or "").suffix.lower()==".pdf")
+    if total>=50*1024*1024:
+        return shell("Automatic Takeoff",f'<div class="card"><h2>Plan set too large for one automatic takeoff pass.</h2><p>Current PDF total: {total/1024/1024:.1f} MB. Run Plan Intake in smaller volumes before automatic takeoff.</p></div>')
+
+    client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    uploaded=[]; content=[]
+    try:
+        for d in docs:
+            path=os.path.join(UPLOAD_DIR,d["stored_name"])
+            if not os.path.isfile(path):
+                continue
+            if Path(d["original_name"] or "").suffix.lower()==".pdf":
+                with open(path,"rb") as fh:
+                    remote=client.files.create(file=fh,purpose="user_data")
+                uploaded.append(remote.id)
+                content.append({"type":"input_file","file_id":remote.id,"detail":"high"})
+        if not content:
+            return shell("Automatic Takeoff",'<div class="card"><h2>No PDF plan files were available for visual takeoff.</h2></div>')
+
+        content.append({"type":"input_text","text":_v36_takeoff_prompt(targets)})
+        response=client.responses.create(
+            model=os.environ.get("OPENAI_MODEL","gpt-5.6"),
+            input=[{"role":"user","content":content}]
+        )
+        data=_v36_parse_json(response.output_text)
+        results=data.get("results") or []
+        valid_ids={int(r["estimator_id"]) for r in targets}
+        now=datetime.utcnow().isoformat()
+        saved=0; proposed=0; verify=0
+        c=db()
+        for item in results:
+            try:
+                eid=int(item.get("estimator_id"))
+            except Exception:
+                continue
+            if eid not in valid_ids:
+                continue
+            q=item.get("quantity")
+            try:
+                q=float(q) if q is not None else None
+            except Exception:
+                q=None
+            unit=str(item.get("unit") or "").upper().strip()
+            if unit not in {"EA","LF","SF","CY","LS","HR","DAY","TON","GAL"}:
+                unit=""
+            confidence=str(item.get("confidence") or "VERIFY").upper()
+            if confidence not in {"HIGH","MEDIUM","LOW","VERIFY"}:
+                confidence="VERIFY"
+            basis=str(item.get("basis") or "")[:4000]
+            source=str(item.get("source") or "")[:1500]
+            # Only present usable proposals; never overwrite estimator-entered quantity.
+            c.execute("""
+                UPDATE estimator_items
+                SET ai_quantity=?,ai_unit=?,ai_confidence=?,ai_basis=?,ai_source=?,ai_updated=?
+                WHERE id=? AND company_id=? AND project_id=?
+            """,(q,unit,confidence,basis,source,now,eid,current_company_id(),pid))
+            saved+=1
+            if q is not None and confidence in {"HIGH","MEDIUM"}:
+                proposed+=1
+            else:
+                verify+=1
+        c.commit(); c.close()
+
+        notes=data.get("review_notes") or []
+        note_html="".join(f'<div class="action">{esc(n)}</div>' for n in notes)
+        body=f"""
+        <div class="hero">
+          <div class="eyebrow">BuildCommand Brain · Automatic Plan Takeoff · v36</div>
+          <h1>Automatic takeoff pass complete.</h1>
+        </div>
+        <div class="grid3">
+          <div class="card"><div class="label">Targets reviewed</div><div class="kpi">{saved}</div></div>
+          <div class="card"><div class="label">Quantity proposals</div><div class="kpi">{proposed}</div></div>
+          <div class="card"><div class="label">Needs verification</div><div class="kpi">{verify}</div></div>
+        </div>
+        <div class="card">
+          <h2>Important</h2>
+          <p>No estimator quantity was overwritten. AI results are proposals only. Review them on Takeoff Intelligence and accept only the quantities you trust.</p>
+          <p><a href="/brain/takeoff"><b>Review takeoff proposals →</b></a></p>
+        </div>
+        {f'<div class="card"><h2>AI Review Notes</h2>{note_html}</div>' if note_html else ''}
+        """
+        return shell("Automatic Plan Takeoff",body)
+    except Exception as exc:
+        return shell("Automatic Takeoff",f'<div class="hero"><h1>Automatic takeoff did not complete.</h1></div><div class="card"><p>{esc(str(exc))}</p><p><a href="/brain/takeoff">← Back to Takeoff Intelligence</a></p></div>')
+    finally:
+        for fid in uploaded:
+            try: client.files.delete(fid)
+            except Exception: pass
+
+
+@app.post("/brain/takeoff/item/{item_id}/accept-ai")
+def accept_ai_takeoff(item_id:int):
+    pid=project_id(); c=db()
+    row=c.execute("""
+        SELECT * FROM estimator_items
+        WHERE id=? AND company_id=? AND project_id=?
+    """,(item_id,current_company_id(),pid)).fetchone()
+    if not row:
+        c.close(); return HTMLResponse("Estimator item not found.",404)
+    if row["ai_quantity"] is None or (row["ai_confidence"] or "") not in {"HIGH","MEDIUM"}:
+        c.close()
+        return shell("Takeoff Intelligence",'<div class="card"><h2>This AI quantity is not eligible for acceptance.</h2><p>Only HIGH or MEDIUM confidence numeric proposals can be accepted. Verify the item manually.</p><p><a href="/brain/takeoff">← Back</a></p></div>')
+    unit=(row["ai_unit"] or row["unit"] or "EA").upper()
+    c.execute("""
+        UPDATE estimator_items
+        SET quantity=?,unit=?,verified=0,notes=?,updated=?
+        WHERE id=? AND company_id=? AND project_id=?
+    """,(row["ai_quantity"],unit,
+         ((row["notes"] or "")+" | AI takeoff accepted for estimator verification").strip(" |"),
+         datetime.utcnow().isoformat(),item_id,current_company_id(),pid))
+    c.commit(); c.close()
+    return RedirectResponse("/brain/takeoff",status_code=303)
+
 @app.get("/brain/takeoff", response_class=HTMLResponse)
 def estimator_takeoff_intelligence():
     pid=project_id()
@@ -10090,6 +10358,15 @@ def estimator_takeoff_intelligence():
           <h3>{esc(r["description"])}</h3>
           <div class="small">Source: {esc(r["source_ref"] or "Source not identified")}</div>
           <div class="small" style="margin-top:6px">Suggested takeoff unit: <b>{esc(suggested)}</b></div>
+          {(
+            f'<div class="action" style="margin-top:10px"><b>AI PLAN TAKEOFF PROPOSAL:</b> '
+            + (f'{r["ai_quantity"]:g} {esc(r["ai_unit"] or suggested)}' if r["ai_quantity"] is not None else 'VERIFY / no reliable quantity')
+            + f' · Confidence: {esc(r["ai_confidence"] or "VERIFY")}<br>'
+            + f'<span class="small">Basis: {esc(r["ai_basis"] or "")}<br>Source: {esc(r["ai_source"] or "")}</span>'
+            + (f'<form method="post" action="/brain/takeoff/item/{r["id"]}/accept-ai" style="margin-top:8px"><button type="submit">Accept AI Quantity</button></form>'
+               if r["ai_quantity"] is not None and (r["ai_confidence"] or "") in ["HIGH","MEDIUM"] else '')
+            + '</div>'
+          ) if (r["ai_confidence"] or r["ai_basis"] or r["ai_source"]) else ''}
 
           <form method="post" action="/brain/takeoff/item/{r["id"]}" style="margin-top:12px">
             <div class="grid4">
@@ -10123,7 +10400,7 @@ def estimator_takeoff_intelligence():
     project_label=f'{esc(project["number"])} - {esc(project["name"])}' if project else "Current Project"
     body=f"""
     <div class="hero">
-      <div class="eyebrow">BuildCommand Brain · Takeoff Intelligence · v35</div>
+      <div class="eyebrow">BuildCommand Brain · Takeoff Intelligence · v36</div>
       <h1>Scope → measurable takeoff targets.</h1>
       <div class="muted">{project_label}</div>
     </div>
@@ -10142,6 +10419,10 @@ def estimator_takeoff_intelligence():
         It does <b>not invent a quantity</b>. Quantities remain estimator-entered or estimator-verified
         until a future scaled-drawing takeoff engine is connected.
       </p>
+      <form method="post" action="/brain/takeoff/auto" style="margin:14px 0">
+        <button type="submit">Run Automatic Plan Takeoff</button>
+      </form>
+      <p class="small">AI proposals never overwrite estimator quantities. HIGH/MEDIUM proposals must still be accepted and then estimator-verified.</p>
       <p><a href="/brain/estimator"><b>← Back to Estimator Intelligence</b></a></p>
     </div>
 
