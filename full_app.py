@@ -1623,6 +1623,176 @@ def v42_audit_page():
     h="".join(f'<div class="action"><span class="badge">{esc(r["event_type"])}</span> <b>{esc(r["title"])}</b><div class="small">{esc(r["event_time"])} - {esc(r["source_ref"])} - reviewed by {esc(r["reviewed_by"])}</div><p>{esc(r["downstream_impact"])}</p></div>' for r in rows)
     return shell("Project Audit Trail",'<div class="hero"><h1>Project Audit Trail</h1><p class="muted">What changed, source, decision, downstream impact and review history.</p></div><div class="card">'+(h or '<p class="muted">Audit events will accumulate as controlled project decisions are recorded.</p>')+'</div>')
 
+
+# ============================================================
+# v43 CONSTRUCTION LEARNING INTELLIGENCE
+# Human-approved learning only: AI output never teaches itself.
+# ============================================================
+
+def _v43_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS learning_rules(
+        id {pk},company_id BIGINT,project_id BIGINT,rule_type TEXT,subject TEXT,
+        learned_rule TEXT,source_ref TEXT,scope_level TEXT DEFAULT 'PROJECT ONLY',
+        approval_status TEXT DEFAULT 'PROPOSED',approved_by TEXT,confidence TEXT DEFAULT 'HIGH',
+        created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS estimator_learning(
+        id {pk},company_id BIGINT,project_id BIGINT,estimator_item_id BIGINT,trade TEXT,
+        description TEXT,ai_quantity {num},accepted_quantity {num},unit TEXT,
+        decision TEXT,reason TEXT,approval_status TEXT DEFAULT 'PROPOSED',
+        approved_by TEXT,created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS historical_costs(
+        id {pk},company_id BIGINT,project_id BIGINT,trade TEXT,scope TEXT,unit TEXT,
+        quantity {num},unit_cost {num},total_cost {num},building_type TEXT,location TEXT,
+        vendor TEXT,cost_date TEXT,approval_status TEXT DEFAULT 'APPROVED',created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS schedule_learning(
+        id {pk},company_id BIGINT,project_id BIGINT,activity_id BIGINT,trade TEXT,
+        activity_name TEXT,planned_start TEXT,planned_finish TEXT,actual_start TEXT,actual_finish TEXT,
+        planned_days {num},actual_days {num},production_note TEXT,approval_status TEXT DEFAULT 'PROPOSED',created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS subcontractor_performance(
+        id {pk},company_id BIGINT,project_id BIGINT,sub_name TEXT,trade TEXT,
+        schedule_score {num} DEFAULT 0,quality_score {num} DEFAULT 0,safety_score {num} DEFAULT 0,
+        responsiveness_score {num} DEFAULT 0,change_score {num} DEFAULT 0,closeout_score {num} DEFAULT 0,
+        notes TEXT,approval_status TEXT DEFAULT 'PROPOSED',created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS inspection_learning(
+        id {pk},company_id BIGINT,project_id BIGINT,inspection_type TEXT,authority TEXT,trade TEXT,
+        result TEXT,failure_reason TEXT,correction TEXT,lesson TEXT,
+        approval_status TEXT DEFAULT 'PROPOSED',created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS lessons_learned(
+        id {pk},company_id BIGINT,project_id BIGINT,category TEXT,title TEXT,lesson TEXT,
+        recommendation TEXT,source_ref TEXT,scope_level TEXT DEFAULT 'PROJECT ONLY',
+        approval_status TEXT DEFAULT 'PROPOSED',approved_by TEXT,created TEXT)"""
+    ]
+    for s in stmts: c.execute(s)
+    c.commit(); c.close()
+
+def _v43_rules(pid=None):
+    _v43_ensure_tables()
+    if pid:
+        return _v39_rows("SELECT * FROM learning_rules WHERE company_id=? AND project_id=? ORDER BY id DESC",(current_company_id(),pid))
+    return _v39_rows("SELECT * FROM learning_rules WHERE company_id=? ORDER BY id DESC LIMIT 300",(current_company_id(),))
+
+def _v43_trade_proposals(pid):
+    # Current high-confidence reviewed scope becomes a learning candidate only.
+    rows=_v39_rows("SELECT * FROM blueprint_scope_items WHERE project_id=? AND COALESCE(confidence,'')='HIGH' ORDER BY id DESC LIMIT 150",(pid,))
+    return rows
+
+def _v43_estimator_signals(pid):
+    return _v39_rows("SELECT * FROM estimator_items WHERE project_id=? AND (COALESCE(verified,0)=1 OR ai_quantity IS NOT NULL) ORDER BY id DESC LIMIT 150",(pid,))
+
+def _v43_schedule_signals(pid):
+    return _v39_rows("SELECT * FROM activities WHERE project_id=? ORDER BY id DESC LIMIT 150",(pid,))
+
+def _v43_inspection_signals(pid):
+    return _v39_rows("SELECT * FROM inspections_tracker WHERE project_id=? AND COALESCE(result,'PENDING') NOT IN ('PENDING','PASSED') ORDER BY id DESC LIMIT 100",(pid,))
+
+def _v43_rfi_change_patterns(pid):
+    _v42_ensure_tables()
+    rfis=_v39_rows("SELECT * FROM rfi_control WHERE company_id=? AND project_id=? ORDER BY id DESC",(current_company_id(),pid))
+    changes=_v39_rows("SELECT * FROM change_events WHERE project_id=? ORDER BY id DESC",(pid,))
+    return rfis,changes
+
+@app.get("/learning",response_class=HTMLResponse)
+def v43_learning_center():
+    pid=project_id(); _v43_ensure_tables()
+    rules=_v43_rules(pid); trade=_v43_trade_proposals(pid); est=_v43_estimator_signals(pid)
+    inspections=_v43_inspection_signals(pid); rfis,changes=_v43_rfi_change_patterns(pid)
+    approved=sum(1 for r in rules if str(r["approval_status"] or "").upper()=="APPROVED")
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v43 - Construction Learning Intelligence</div><h1>Every approved lesson makes the next project smarter.</h1><p class="muted">{approved} approved learned rules - {len(trade)} trade-learning candidates - {len(est)} estimator signals - {len(inspections)} inspection lessons - {len(rfis)+len(changes)} RFI/change patterns.</p><p><b>Learning firewall:</b> AI proposals never become permanent construction knowledge without human approval.</p></div><div class="grid3">'
+    cards=[
+      ("Trade Assignment Learning","Turn reviewed trade corrections into reusable rules.","/learning/trades"),
+      ("Scope Boundary Brain","Learn where one trade stops and another starts.","/learning/boundaries"),
+      ("Estimator Learning","Learn from accepted, rejected and adjusted takeoff proposals.","/learning/estimator"),
+      ("Historical Cost Brain","Private cost history by trade, scope, unit and project.","/learning/costs"),
+      ("Schedule Learning","Compare planned durations with actual field performance.","/learning/schedule"),
+      ("Sub Performance","Learn which subcontractors actually perform.","/learning/subs"),
+      ("Inspection Learning","Remember failures, corrections and AHJ patterns.","/learning/inspections"),
+      ("RFI / Change Patterns","Find recurring drawing conflicts and cost exposure.","/learning/patterns"),
+      ("Lessons Learned","Turn project experience into approved future guidance.","/learning/lessons"),
+      ("Knowledge Core","Controlled project/company/global construction knowledge.","/learning/core")
+    ]
+    for name,desc,href in cards: body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Construction Learning",body)
+
+@app.get("/learning/trades",response_class=HTMLResponse)
+def v43_trade_learning():
+    rows=_v43_trade_proposals(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">PROPOSAL</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">{esc(r["source_sheet"])} {esc(r["source_detail"])} - Human approval required before learning.</div></div>' for r in rows)
+    return shell("Trade Assignment Learning",'<div class="hero"><h1>Trade Assignment Learning Brain</h1><p class="muted">Reviewed construction corrections become candidates for reusable knowledge, never automatic rules.</p></div><div class="card">'+(h or '<p class="muted">No high-confidence trade candidates yet.</p>')+'</div>')
+
+@app.get("/learning/boundaries",response_class=HTMLResponse)
+def v43_boundaries():
+    rows=_v43_rules()
+    rows=[r for r in rows if str(r["rule_type"] or "").upper() in {"SCOPE BOUNDARY","TRADE ASSIGNMENT"}]
+    h="".join(f'<div class="action"><span class="badge">{esc(r["scope_level"])}</span> <b>{esc(r["subject"])}</b><div>{esc(r["learned_rule"])}</div><div class="small">{esc(r["approval_status"])} - {esc(r["source_ref"])}</div></div>' for r in rows)
+    return shell("Scope Boundary Brain",'<div class="hero"><h1>Scope Boundary Brain</h1><p class="muted">Responsibility rules can be PROJECT ONLY, COMPANY STANDARD, or controlled GLOBAL BUILDCOMMAND RULE.</p></div><div class="card">'+(h or '<p class="muted">No approved boundary rules recorded yet.</p>')+'</div>')
+
+@app.get("/learning/estimator",response_class=HTMLResponse)
+def v43_estimator_learning():
+    rows=_v43_estimator_signals(project_id()); h=""
+    for r in rows:
+        ai=r["ai_quantity"]; accepted=r["quantity"]; delta=(float(accepted or 0)-float(ai or 0)) if ai is not None else None
+        h+=f'<div class="action"><span class="badge {"READY" if r["verified"] else "WATCH"}">{"VERIFIED" if r["verified"] else "REVIEW"}</span> <b>{esc(r["trade"])} - {esc(r["description"])}</b><div class="small">AI {esc(ai)} {esc(r["ai_unit"])} - Current {esc(accepted)} {esc(r["unit"])}'+(f' - Delta {delta:g}' if delta is not None else '')+'</div></div>'
+    return shell("Estimator Learning",'<div class="hero"><h1>Estimator Learning Brain</h1><p class="muted">Quantity decisions remain proposals until reviewed; estimator quantities are never silently overwritten.</p></div><div class="card">'+(h or '<p class="muted">No estimator learning signals yet.</p>')+'</div>')
+
+@app.get("/learning/costs",response_class=HTMLResponse)
+def v43_costs():
+    _v43_ensure_tables()
+    rows=_v39_rows("SELECT * FROM historical_costs WHERE company_id=? ORDER BY cost_date DESC,id DESC LIMIT 200",(current_company_id(),))
+    h="".join(f'<div class="action"><b>{esc(r["trade"])} - {esc(r["scope"])}</b><div class="small">{float(r["quantity"] or 0):g} {esc(r["unit"])} @ ${float(r["unit_cost"] or 0):,.2f} - Total ${float(r["total_cost"] or 0):,.0f} - {esc(r["vendor"])}</div></div>' for r in rows)
+    return shell("Historical Cost Brain",'<div class="hero"><h1>Historical Cost Brain</h1><p class="muted">Private company cost intelligence by trade, scope, unit, project, vendor and date.</p></div><div class="card">'+(h or '<p class="muted">Historical costs will build from reviewed project actuals.</p>')+'</div>')
+
+@app.get("/learning/schedule",response_class=HTMLResponse)
+def v43_schedule_learning():
+    rows=_v43_schedule_signals(project_id())
+    h="".join(f'<div class="action"><b>{esc(r["trade"])} - {esc(r["name"])}</b><div class="small">Planned {esc(r["start"])} to {esc(r["finish"])} - {float(r["pct"] or 0):g}% complete - {esc(r["status"])}</div></div>' for r in rows)
+    return shell("Schedule Learning",'<div class="hero"><h1>Schedule Learning Brain</h1><p class="muted">Build realistic production intelligence by comparing planned work against actual field performance.</p></div><div class="card">'+(h or '<p class="muted">No schedule activities loaded.</p>')+'</div>')
+
+@app.get("/learning/subs",response_class=HTMLResponse)
+def v43_sub_learning():
+    _v43_ensure_tables()
+    rows=_v39_rows("SELECT * FROM subcontractor_performance WHERE company_id=? ORDER BY id DESC LIMIT 200",(current_company_id(),))
+    current=_v39_rows("SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",(project_id(),))
+    h="".join(f'<div class="action"><b>{esc(r["sub_name"])} - {esc(r["trade"])}</b><div class="small">Schedule {float(r["schedule_score"] or 0):g} - Quality {float(r["quality_score"] or 0):g} - Safety {float(r["safety_score"] or 0):g} - Responsiveness {float(r["responsiveness_score"] or 0):g} - Closeout {float(r["closeout_score"] or 0):g}</div></div>' for r in rows)
+    if not h:
+        h="".join(f'<div class="action"><span class="badge WATCH">NEEDS HISTORY</span> <b>{esc(r["name"])} - {esc(r["trade"])}</b></div>' for r in current)
+    return shell("Subcontractor Performance",'<div class="hero"><h1>Subcontractor Performance Brain</h1><p class="muted">Performance history should inform future selection, not price alone.</p></div><div class="card">'+(h or '<p class="muted">No subcontractors loaded.</p>')+'</div>')
+
+@app.get("/learning/inspections",response_class=HTMLResponse)
+def v43_inspection_learning():
+    rows=_v43_inspection_signals(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(r["result"])}</span> <b>{esc(r["inspection_type"])}</b><div class="small">{esc(r["authority"])} - {esc(r["notes"])}</div></div>' for r in rows)
+    return shell("Inspection Learning",'<div class="hero"><h1>Inspection Learning Brain</h1><p class="muted">Remember failed inspections and corrections by jurisdiction, trade and inspection type.</p></div><div class="card">'+(h or '<p class="muted">No failed/rejected inspection signals.</p>')+'</div>')
+
+@app.get("/learning/patterns",response_class=HTMLResponse)
+def v43_patterns():
+    rfis,changes=_v43_rfi_change_patterns(project_id()); h=""
+    for r in rfis:
+        h+=f'<div class="action"><span class="badge">RFI</span> <b>{esc(r["title"])}</b><div class="small">{esc(r["source_ref"])} - ${float(r["cost_impact"] or 0):,.0f} - {float(r["schedule_days"] or 0):g} days</div></div>'
+    for r in changes:
+        h+=f'<div class="action"><span class="badge WATCH">CHANGE</span> <b>{esc(r["title"])}</b><div class="small">{esc(r["event_type"])} - ${float(r["estimated_cost"] or 0):,.0f} - {float(r["schedule_days"] or 0):g} days</div></div>'
+    return shell("RFI / Change Patterns",'<div class="hero"><h1>RFI / Change Pattern Brain</h1><p class="muted">Recurring conflicts become preconstruction warnings after review.</p></div><div class="card">'+(h or '<p class="muted">No RFI/change history yet.</p>')+'</div>')
+
+@app.get("/learning/lessons",response_class=HTMLResponse)
+def v43_lessons():
+    _v43_ensure_tables()
+    rows=_v39_rows("SELECT * FROM lessons_learned WHERE company_id=? AND project_id=? ORDER BY id DESC",(current_company_id(),project_id()))
+    h="".join(f'<div class="action"><span class="badge">{esc(r["approval_status"])}</span> <b>{esc(r["category"])} - {esc(r["title"])}</b><div>{esc(r["lesson"])}</div><div class="small">Recommendation: {esc(r["recommendation"])} - {esc(r["scope_level"])}</div></div>' for r in rows)
+    return shell("Lessons Learned",'<div class="hero"><h1>Project Lessons-Learned Brain</h1><p class="muted">What worked, what failed, what cost money, what delayed the job, and what the next project should do differently.</p></div><div class="card">'+(h or '<p class="muted">Lessons will accumulate through reviewed project closeout.</p>')+'</div>')
+
+@app.get("/learning/core",response_class=HTMLResponse)
+def v43_knowledge_core():
+    rows=_v43_rules(); project=sum(1 for r in rows if r["scope_level"]=="PROJECT ONLY"); company=sum(1 for r in rows if r["scope_level"]=="COMPANY STANDARD"); globaln=sum(1 for r in rows if r["scope_level"]=="GLOBAL BUILDCOMMAND RULE"); approved=sum(1 for r in rows if str(r["approval_status"]).upper()=="APPROVED")
+    h="".join(f'<div class="action"><span class="badge">{esc(r["scope_level"])}</span> <b>{esc(r["rule_type"])} - {esc(r["subject"])}</b><div>{esc(r["learned_rule"])}</div><div class="small">{esc(r["approval_status"])} - source {esc(r["source_ref"])}</div></div>' for r in rows[:150])
+    head=f'<div class="hero"><h1>BuildCommand Construction Knowledge Core</h1><p class="muted">{approved} approved - {project} project-only - {company} company standards - {globaln} controlled global rules.</p><p><b>Knowledge firewall:</b> PROJECT ONLY can never silently become COMPANY STANDARD or GLOBAL. Promotion requires human approval.</p></div>'
+    return shell("Knowledge Core",head+'<div class="card">'+(h or '<p class="muted">The controlled knowledge core is ready to learn from approved construction decisions.</p>')+'</div>')
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -1667,7 +1837,7 @@ def unified_manage():
       +_v37_link_card("RFIs / Issues","Questions, conflicts and issues.","/issues")
       +_v37_link_card("Submittals","Submittal workflow.","/submittals")
       +_v37_link_card("Field","Field execution and reporting.","/field")
-      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/project-control">Project Control</a> · <a href="/intelligence">Intelligence Center</a> · <a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
+      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/learning">Learning Intelligence</a> · <a href="/project-control">Project Control</a> · <a href="/intelligence">Intelligence Center</a> · <a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
     )
     return shell("Manage",body)
 
