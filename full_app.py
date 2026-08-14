@@ -783,7 +783,14 @@ def select_project(project_id: int = Form(...)):
 
 
 # ============================================================
-# v37.1 UNIFIED BUILDCOMMAND INTERFACE FIX
+# v37.2 UNIFIED BUILDCOMMAND INTERFACE FIX
+# ============================================================
+
+def _v37_esc(value):
+    import html
+    return html.escape(str(value or ""), quote=True)
+
+
 # ============================================================
 
 def _v37_count(sql,args=()):
@@ -840,16 +847,16 @@ def _v37_snapshot(pid):
     }
 
 def _v37_link_card(title,desc,href,label="Open"):
-    return ('<div class="card"><h2>'+esc(title)+'</h2><p class="muted">'+esc(desc)+'</p>'
+    return ('<div class="card"><h2>'+_v37_esc(title)+'</h2><p class="muted">'+_v37_esc(desc)+'</p>'
             '<a href="'+href+'" style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:10px 14px;border-radius:9px;font-weight:800;">'
-            +esc(label)+' →</a></div>')
+            +_v37_esc(label)+' →</a></div>')
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
     pid=project_id(); s=_v37_snapshot(pid)
     attention=s["issues"]+s["submittals"]+s["actions"]+s["inspections"]
     c=db(); current=c.execute("SELECT * FROM projects WHERE id=? AND company_id=?",(pid,current_company_id())).fetchone() if pid else None; c.close()
-    name=esc(current["name"]) if current else "Select or create a project"
+    name=_v37_esc(current["name"]) if current else "Select or create a project"
     body=(
       '<div class="hero"><div class="eyebrow">BuildCommand AI · Construction Operations Intelligence System</div><h1>'+name+'</h1>'
       '<p class="muted">What is happening? What needs attention? What should happen next?</p></div>'
