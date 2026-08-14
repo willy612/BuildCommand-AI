@@ -10085,6 +10085,269 @@ def _takeoff_status(row):
 
 
 
+
+# ============================================================
+# v36.1 TAKEOFF COMPONENT SPLITTER
+# ============================================================
+
+def _ensure_takeoff_component_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS takeoff_components(
+                id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT,
+                project_id BIGINT,
+                estimator_item_id BIGINT,
+                component_name TEXT,
+                description TEXT,
+                unit TEXT,
+                quantity DOUBLE PRECISION,
+                confidence TEXT DEFAULT 'VERIFY',
+                basis TEXT DEFAULT '',
+                source_ref TEXT DEFAULT '',
+                status TEXT DEFAULT 'PROPOSED',
+                created TEXT,
+                updated TEXT
+            )
+        """)
+    else:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS takeoff_components(
+                id INTEGER PRIMARY KEY,
+                company_id INTEGER,
+                project_id INTEGER,
+                estimator_item_id INTEGER,
+                component_name TEXT,
+                description TEXT,
+                unit TEXT,
+                quantity REAL,
+                confidence TEXT DEFAULT 'VERIFY',
+                basis TEXT DEFAULT '',
+                source_ref TEXT DEFAULT '',
+                status TEXT DEFAULT 'PROPOSED',
+                created TEXT,
+                updated TEXT
+            )
+        """)
+    try:
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_takeoff_components_parent
+                     ON takeoff_components(company_id,project_id,estimator_item_id)""")
+    except Exception:
+        pass
+    c.commit()
+    c.close()
+
+
+def _component_split_prompt(rows):
+    lines=[]
+    for r in rows:
+        lines.append(
+            f'ESTIMATOR_ID={r["id"]} | TRADE={r["trade"]} | '
+            f'SCOPE={r["description"]} | SOURCE={r["source_ref"] or ""}'
+        )
+    return """You are BuildCommand Takeoff Component Splitter.
+
+Break each construction estimator scope item into separate measurable takeoff components ONLY when the scope contains multiple distinct measurable objects or measurement types.
+
+RULES:
+- Preserve the parent trade. Do not reclassify.
+- Do not invent quantities.
+- One component should normally have one measurement unit.
+- Use EA for countable fixtures/equipment/devices, LF for linear work, SF for area work, CY for volume, LS for coordination/non-measurable scope.
+- Do not split a simple single-measurement scope unnecessarily.
+- Example: "Provide exhaust fan, roof curb, backdraft damper and full-size duct" becomes exhaust fan EA; roof curb EA; backdraft damper EA; exhaust duct LF.
+- Example: "Provide water closets, lavatories, floor drains and domestic water piping" becomes water closets EA; lavatories EA; floor drains EA; domestic water piping LF.
+- Keep the same source reference unless a more specific source is obvious.
+- Return JSON only.
+
+Return:
+{
+  "results":[
+    {
+      "estimator_id":123,
+      "components":[
+        {"name":"Exhaust fan EF-1","description":"Provide EF-1 exhaust fan","unit":"EA","source":"M401"},
+        {"name":"Exhaust duct","description":"Provide full-size exhaust duct","unit":"LF","source":"M401"}
+      ]
+    }
+  ]
+}
+
+ESTIMATOR SCOPE ITEMS
+---------------------
+""" + "\n".join(lines)
+
+
+@app.post("/brain/takeoff/split-components",response_class=HTMLResponse)
+def split_takeoff_components():
+    pid=project_id()
+    _seed_estimator_from_latest(pid)
+    _ensure_takeoff_component_tables()
+    run=_latest_blueprint_run(pid)
+    if not run:
+        return shell("Takeoff Components",'<div class="card"><h2>No current plan analysis found.</h2></div>')
+
+    c=db()
+    rows=c.execute("""
+        SELECT e.*
+        FROM estimator_items e
+        JOIN blueprint_scope_items b ON b.id=e.blueprint_scope_item_id
+        WHERE e.company_id=? AND e.project_id=? AND b.run_id=?
+        ORDER BY e.trade,e.id
+        LIMIT 180
+    """,(current_company_id(),pid,run["id"])).fetchall()
+    c.close()
+
+    if not rows:
+        return shell("Takeoff Components",'<div class="card"><h2>No estimator items found.</h2></div>')
+    if not os.environ.get("OPENAI_API_KEY"):
+        return shell("Takeoff Components",'<div class="card"><h2>OPENAI_API_KEY is not configured.</h2></div>')
+
+    try:
+        client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        resp=client.responses.create(
+            model=os.environ.get("OPENAI_MODEL","gpt-5.6"),
+            input=_component_split_prompt(rows)
+        )
+        data=_v36_parse_json(resp.output_text)
+        valid={int(r["id"]):r for r in rows}
+        now=datetime.utcnow().isoformat()
+        c=db()
+        created=0
+
+        for result in data.get("results") or []:
+            try:
+                eid=int(result.get("estimator_id"))
+            except Exception:
+                continue
+            if eid not in valid:
+                continue
+
+            comps=result.get("components") or []
+            if len(comps)<=1:
+                continue
+
+            c.execute("""DELETE FROM takeoff_components
+                         WHERE company_id=? AND project_id=? AND estimator_item_id=? AND status='PROPOSED'""",
+                      (current_company_id(),pid,eid))
+
+            for comp in comps[:25]:
+                name=str(comp.get("name") or "").strip()
+                desc=str(comp.get("description") or name).strip()
+                unit=str(comp.get("unit") or "").upper()
+                if not name or unit not in {"EA","LF","SF","CY","LS","HR","DAY","TON","GAL"}:
+                    continue
+                source=str(comp.get("source") or valid[eid]["source_ref"] or "")
+                c.execute("""
+                    INSERT INTO takeoff_components(
+                        company_id,project_id,estimator_item_id,component_name,description,
+                        unit,quantity,confidence,basis,source_ref,status,created,updated
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,(current_company_id(),pid,eid,name,desc,unit,None,"VERIFY",
+                     "Component split from cleaned parent scope; quantity not yet verified.",
+                     source,"PROPOSED",now,now))
+                created+=1
+
+        c.commit()
+        c.close()
+
+        body = (
+            '<div class="hero"><div class="eyebrow">BuildCommand · v36.1</div>'
+            '<h1>Takeoff components created.</h1></div>'
+            f'<div class="card"><div class="kpi">{created}</div>'
+            '<div class="muted">measurable child components created without changing the parent scopes.</div>'
+            '<p><a href="/brain/takeoff/components"><b>Review components →</b></a></p></div>'
+        )
+        return shell("Takeoff Components",body)
+
+    except Exception as exc:
+        return shell(
+            "Takeoff Components",
+            f'<div class="card"><h2>Component split did not complete.</h2><p>{esc(str(exc))}</p></div>'
+        )
+
+
+@app.get("/brain/takeoff/components",response_class=HTMLResponse)
+def takeoff_components_page():
+    pid=project_id()
+    _ensure_takeoff_component_tables()
+    c=db()
+    rows=c.execute("""
+        SELECT tc.*,e.trade,e.description parent_description
+        FROM takeoff_components tc
+        JOIN estimator_items e ON e.id=tc.estimator_item_id
+        WHERE tc.company_id=? AND tc.project_id=?
+        ORDER BY e.trade,tc.estimator_item_id,tc.id
+    """,(current_company_id(),pid)).fetchall()
+    c.close()
+
+    cards=[]
+    for r in rows:
+        qty="" if r["quantity"] is None else r["quantity"]
+        confidence_options=''.join(
+            f'<option {"selected" if r["confidence"]==x else ""}>{x}</option>'
+            for x in ["HIGH","MEDIUM","LOW","VERIFY"]
+        )
+        status_options=''.join(
+            f'<option {"selected" if r["status"]==x else ""}>{x}</option>'
+            for x in ["PROPOSED","ACCEPTED","VERIFIED"]
+        )
+
+        cards.append(
+            f'<div class="card">'
+            f'<div class="small">{esc(r["trade"])} · Parent estimator item #{r["estimator_item_id"]}</div>'
+            f'<h3>{esc(r["component_name"])}</h3>'
+            f'<div>{esc(r["description"])}</div>'
+            f'<div class="small">Source: {esc(r["source_ref"] or "")}</div>'
+            f'<form method="post" action="/brain/takeoff/component/{r["id"]}" style="margin-top:10px">'
+            '<div class="grid4">'
+            f'<div><label>Qty</label><input name="quantity" type="number" step="0.01" value="{qty}"></div>'
+            f'<div><label>Unit</label><input name="unit" value="{esc(r["unit"] or "")}"></div>'
+            f'<div><label>Confidence</label><select name="confidence">{confidence_options}</select></div>'
+            f'<div><label>Status</label><select name="status">{status_options}</select></div>'
+            '</div>'
+            f'<label>Basis / note</label><input name="basis" value="{esc(r["basis"] or "")}">'
+            '<button type="submit" style="margin-top:10px">Save Component</button>'
+            '</form></div>'
+        )
+
+    body = (
+        '<div class="hero"><div class="eyebrow">Takeoff Component Splitter · v36.1</div>'
+        '<h1>One scope. Separate measurable pieces.</h1></div>'
+        '<div class="card"><p><a href="/brain/takeoff">← Back to Takeoff Intelligence</a></p></div>'
+        + ("".join(cards) if cards else '<div class="card"><h2>No split components yet.</h2></div>')
+    )
+    return shell("Takeoff Components",body)
+
+
+@app.post("/brain/takeoff/component/{component_id}")
+def update_takeoff_component(component_id:int,quantity:str=Form(""),unit:str=Form("EA"),
+                             confidence:str=Form("VERIFY"),status:str=Form("PROPOSED"),
+                             basis:str=Form("")):
+    pid=project_id()
+    try:
+        q=float(quantity) if str(quantity).strip() else None
+    except Exception:
+        q=None
+
+    unit=unit.upper().strip()
+    if unit not in {"EA","LF","SF","CY","LS","HR","DAY","TON","GAL"}:
+        unit="EA"
+    if confidence not in {"HIGH","MEDIUM","LOW","VERIFY"}:
+        confidence="VERIFY"
+    if status not in {"PROPOSED","ACCEPTED","VERIFIED"}:
+        status="PROPOSED"
+
+    c=db()
+    c.execute("""UPDATE takeoff_components SET quantity=?,unit=?,confidence=?,status=?,basis=?,updated=?
+                 WHERE id=? AND company_id=? AND project_id=?""",
+              (q,unit,confidence,status,basis,datetime.utcnow().isoformat(),
+               component_id,current_company_id(),pid))
+    c.commit()
+    c.close()
+    return RedirectResponse("/brain/takeoff/components",status_code=303)
+
 # ============================================================
 # v36 AUTOMATIC PLAN TAKEOFF BRAIN
 # ============================================================
@@ -10400,7 +10663,7 @@ def estimator_takeoff_intelligence():
     project_label=f'{esc(project["number"])} - {esc(project["name"])}' if project else "Current Project"
     body=f"""
     <div class="hero">
-      <div class="eyebrow">BuildCommand Brain · Takeoff Intelligence · v36</div>
+      <div class="eyebrow">BuildCommand Brain · Takeoff Intelligence · v36.1</div>
       <h1>Scope → measurable takeoff targets.</h1>
       <div class="muted">{project_label}</div>
     </div>
@@ -10419,6 +10682,10 @@ def estimator_takeoff_intelligence():
         It does <b>not invent a quantity</b>. Quantities remain estimator-entered or estimator-verified
         until a future scaled-drawing takeoff engine is connected.
       </p>
+      <form method="post" action="/brain/takeoff/split-components" style="margin:14px 0">
+        <button type="submit">Split Mixed Scopes into Takeoff Components</button>
+      </form>
+      <p><a href="/brain/takeoff/components"><b>Review Takeoff Components →</b></a></p>
       <form method="post" action="/brain/takeoff/auto" style="margin:14px 0">
         <button type="submit">Run Automatic Plan Takeoff</button>
       </form>
