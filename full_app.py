@@ -9571,7 +9571,7 @@ def blueprint_trade_scope(scope_id:int):
         related=(' · <b>Related trade:</b> '+esc(item["related_trade"])) if item["related_trade"] else ''
         options=''.join(f'<option {"selected" if item["status"]==st else ""}>{st}</option>' for st in ["NOT_STARTED","IN_PROGRESS","INSPECTION_REQUIRED","COMPLETE","VERIFIED"])
         cards.append(f'<div class="action"><span class="badge {confidence_badge}">{esc(item["confidence"])}</span> <span class="badge {type_badge}">{esc(typ)}</span><h3>{esc(item["requirement"])}</h3><div class="small"><b>Source:</b> {esc(" · ".join(refs) or "Source not clearly identified")}{related}</div><form method="post" action="/blueprint-brain/item/{item["id"]}/status" style="margin-top:10px"><select name="status">{options}</select><button type="submit">Update</button></form></div>')
-    body=f'<div class="hero"><div class="eyebrow">Division {esc(scope["division"] or "—")} · Blueprint Brain</div><h1>{esc(scope["trade"])} Scope of Work</h1><div class="muted">{esc(scope["summary"] or "")}</div></div><div class="card"><p><a href="/blueprint-brain/run/{scope["run_id"]}">← Full Blueprint Intelligence</a> · <a href="/blueprint-brain/trade/{scope_id}.txt">Export scope text</a></p></div><div class="card"><h2>Scope Boiler</h2><div style="white-space:pre-wrap">{esc(scope["scope_text"] or "")}</div></div><div class="card"><h2>Execution Checklist</h2>{"".join(cards) or "<div class=muted>No scope items.</div>"}</div>'
+    body=f'<div class="hero"><div class="eyebrow">Division {esc(scope["division"] or "—")} · Blueprint Brain</div><h1>{esc(scope["trade"])} Scope of Work</h1><div class="muted">{esc(scope["summary"] or "")}</div></div><div class="card"><p><a href="/blueprint-brain/run/{scope["run_id"]}">← Full Blueprint Intelligence</a> · <a href="/blueprint-brain/trade/{scope_id}/export.txt">Export scope text</a></p></div><div class="card"><h2>Scope Boiler</h2><div style="white-space:pre-wrap">{esc(scope["scope_text"] or "")}</div></div><div class="card"><h2>Execution Checklist</h2>{"".join(cards) or "<div class=muted>No scope items.</div>"}</div>'
     return shell(scope["trade"]+" Scope",body)
 
 
@@ -9584,7 +9584,7 @@ def blueprint_item_status(item_id:int,status:str=Form(...)):
     c.execute("UPDATE blueprint_scope_items SET status=? WHERE id=? AND company_id=? AND project_id=?",(status,item_id,current_company_id(),pid)); c.commit(); scope_id=item["trade_scope_id"]; c.close(); return RedirectResponse(f"/blueprint-brain/trade/{scope_id}",status_code=303)
 
 
-@app.get("/blueprint-brain/trade/{scope_id}.txt")
+@app.get("/blueprint-brain/trade/{scope_id}/export.txt")
 def blueprint_trade_export(scope_id:int):
     pid=project_id(); c=db(); scope=c.execute("SELECT * FROM blueprint_trade_scopes WHERE id=? AND company_id=? AND project_id=?",(scope_id,current_company_id(),pid)).fetchone(); c.close()
     if not scope: return HTMLResponse("Trade scope not found.",404)
