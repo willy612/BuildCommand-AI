@@ -764,12 +764,12 @@ def shell(title, body):
     current = c.execute("SELECT * FROM projects WHERE id=? AND company_id=?", (current_pid, company_id)).fetchone() if current_pid else None
     c.close()
     nav = categorized_nav()
-    project_options = "".join(f'<option value="{p["id"]}" {"selected" if p["id"]==current_pid else ""}>{esc(p["number"])} - {esc(p["name"])}</option>' for p in projects)
-    current_name = esc(current["name"]) if current else "No Project Selected"
-    company_name = esc(user["company_name"]) if user else "BuildCommand Company"
-    display_name = esc(user["display_name"]) if user else ""
+    project_options = "".join(f'<option value="{p["id"]}" {"selected" if p["id"]==current_pid else ""}>{_v37_esc(p["number"])} - {_v37_esc(p["name"])}</option>' for p in projects)
+    current_name = _v37_esc(current["name"]) if current else "No Project Selected"
+    company_name = _v37_esc(user["company_name"]) if user else "BuildCommand Company"
+    display_name = _v37_esc(user["display_name"]) if user else ""
     selector = f'''<div style="margin-bottom:20px;"><div class="small" style="margin-bottom:6px;">CURRENT PROJECT</div><form method="post" action="/projects/select"><select name="project_id" style="margin-bottom:8px;">{project_options}</select><button type="submit" style="width:100%;">Switch Project</button></form><div style="margin-top:10px;"><a href="/projects/new" style="color:#f0b44d;text-decoration:none;font-weight:700;">+ Add Project</a></div></div>'''
-    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{esc(title)} · BuildCommand AI</title><style>{CSS}
+    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{_v37_esc(title)} · BuildCommand AI</title><style>{CSS}
 .nav-group{{border-bottom:1px solid rgba(255,255,255,.08);padding:2px 0}}.nav-group summary{{cursor:pointer;padding:11px 10px;font-weight:800;color:#f4f4f4;list-style:none;border-radius:8px}}.nav-group summary::-webkit-details-marker{{display:none}}.nav-group summary:after{{content:"▾";float:right;opacity:.7}}.nav-group[open] summary:after{{content:"▴"}}.nav-items{{padding:0 0 8px 8px}}.nav-items a{{display:block;padding:8px 10px;font-size:13px}}.search-result{{padding:12px 0;border-bottom:1px solid var(--line)}}
 </style></head><body><div class="app"><aside class="side"><div class="brand">BuildCommand AI</div><div class="company">{company_name}<br>{current_name}</div>{selector}<button type="button" class="mobile-menu-btn" onclick="document.getElementById('bcnav').classList.toggle('mobile-open')">☰ Menu</button><nav class="nav" id="bcnav">{nav}</nav><div class="creator-footer">{display_name}<br>Built by Wilson LaHood<br>© 2026 Wilson LaHood<form method="post" action="/logout" style="margin-top:10px;"><button type="submit" style="width:100%;">Sign Out</button></form></div></aside><main class="main">{body}</main></div></body></html>'''
 
