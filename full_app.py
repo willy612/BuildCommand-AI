@@ -1480,6 +1480,149 @@ def v41_closeout_page():
     h="".join(f'<div class="action"><span class="badge">{esc(r["status"])}</span> <b>{esc(r["category"])}</b> - {esc(r["item"])}<div class="small">{esc(r["responsible_party"])} {esc(r["due_date"])}</div></div>' for r in rows)
     return shell("Closeout Brain",f'<div class="hero"><h1>Closeout Brain</h1><p class="muted">{complete}/{len(rows)} core turnover requirements complete.</p></div><div class="card">'+h+'</div>')
 
+
+# ============================================================
+# v42 PROJECT CONTROL INTELLIGENCE
+# ============================================================
+
+def _v42_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"CREATE TABLE IF NOT EXISTS rfi_control(id {pk},company_id BIGINT,project_id BIGINT,number TEXT,title TEXT,question TEXT,responsible_party TEXT,due_date TEXT,status TEXT DEFAULT 'DRAFT',answer TEXT,cost_impact {num} DEFAULT 0,schedule_days {num} DEFAULT 0,source_ref TEXT,created TEXT,updated TEXT)",
+      f"CREATE TABLE IF NOT EXISTS budget_commitments(id {pk},company_id BIGINT,project_id BIGINT,trade TEXT,vendor TEXT,original_budget {num} DEFAULT 0,commitment {num} DEFAULT 0,approved_changes {num} DEFAULT 0,pending_exposure {num} DEFAULT 0,notes TEXT,created TEXT,updated TEXT)",
+      f"CREATE TABLE IF NOT EXISTS contract_scopes(id {pk},company_id BIGINT,project_id BIGINT,sub_name TEXT,trade TEXT,scope_text TEXT,exclusions TEXT,allowances TEXT,alternates TEXT,status TEXT DEFAULT 'REVIEW',created TEXT,updated TEXT)",
+      f"CREATE TABLE IF NOT EXISTS correspondence_control(id {pk},company_id BIGINT,project_id BIGINT,correspondence_date TEXT,subject TEXT,party TEXT,trade TEXT,related_type TEXT,related_ref TEXT,summary TEXT,status TEXT DEFAULT 'OPEN',created TEXT)",
+      f"CREATE TABLE IF NOT EXISTS owner_decisions(id {pk},company_id BIGINT,project_id BIGINT,title TEXT,decision_needed TEXT,due_date TEXT,cost_impact {num} DEFAULT 0,schedule_days {num} DEFAULT 0,status TEXT DEFAULT 'OPEN',source_ref TEXT,created TEXT,updated TEXT)",
+      f"CREATE TABLE IF NOT EXISTS project_audit_log(id {pk},company_id BIGINT,project_id BIGINT,event_time TEXT,event_type TEXT,title TEXT,source_ref TEXT,decision TEXT,downstream_impact TEXT,reviewed_by TEXT,created TEXT)"
+    ]
+    for s in stmts: c.execute(s)
+    c.commit(); c.close()
+
+def _v42_rfis(pid):
+    _v42_ensure_tables()
+    return _v39_rows("SELECT * FROM rfi_control WHERE company_id=? AND project_id=? ORDER BY id DESC",(current_company_id(),pid))
+
+def _v42_budget(pid):
+    _v42_ensure_tables()
+    return _v39_rows("SELECT * FROM budget_commitments WHERE company_id=? AND project_id=? ORDER BY trade,vendor",(current_company_id(),pid))
+
+def _v42_contract_gaps(pid):
+    _v42_ensure_tables()
+    scopes=_v39_rows("SELECT trade,COUNT(*) n FROM blueprint_scope_items WHERE project_id=? GROUP BY trade ORDER BY trade",(pid,))
+    contracts=_v39_rows("SELECT * FROM contract_scopes WHERE company_id=? AND project_id=?",(current_company_id(),pid))
+    covered={str(r["trade"] or "").lower():r for r in contracts}
+    return [(r["trade"],r["n"],covered.get(str(r["trade"] or "").lower())) for r in scopes]
+
+def _v42_meeting_actions(pid):
+    meetings=_v39_rows("SELECT * FROM meeting_notes WHERE project_id=? ORDER BY meeting_date DESC,id DESC LIMIT 50",(pid,))
+    actions=_v39_rows("SELECT * FROM action_items WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE') ORDER BY due",(pid,))
+    return meetings,actions
+
+def _v42_correspondence(pid):
+    _v42_ensure_tables()
+    return _v39_rows("SELECT * FROM correspondence_control WHERE company_id=? AND project_id=? ORDER BY correspondence_date DESC,id DESC",(current_company_id(),pid))
+
+def _v42_owner(pid):
+    _v42_ensure_tables()
+    return _v39_rows("SELECT * FROM owner_decisions WHERE company_id=? AND project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE') ORDER BY due_date",(current_company_id(),pid))
+
+def _v42_audit(pid):
+    _v42_ensure_tables()
+    return _v39_rows("SELECT * FROM project_audit_log WHERE company_id=? AND project_id=? ORDER BY event_time DESC,id DESC LIMIT 200",(current_company_id(),pid))
+
+@app.get("/project-control",response_class=HTMLResponse)
+def v42_project_control():
+    pid=project_id(); _v42_ensure_tables()
+    rfis=_v42_rfis(pid); subs=_v39_rows("SELECT * FROM submittals WHERE project_id=? AND COALESCE(status,'PENDING') NOT IN ('APPROVED','CLOSED','COMPLETE')",(pid,))
+    budget=_v42_budget(pid); changes=_v39_changes(pid); owners=_v42_owner(pid); gaps=_v42_contract_gaps(pid)
+    meetings,actions=_v42_meeting_actions(pid); corr=_v42_correspondence(pid); audit=_v42_audit(pid)
+    pending=sum(float(r["pending_exposure"] or 0) for r in budget)+sum(float(r["estimated_cost"] or 0) for r in changes)
+    gap_count=sum(1 for _,_,c in gaps if c is None)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v42 - Project Control</div><h1>Control cost, schedule and decisions.</h1><p class="muted">{len(rfis)} RFIs - {len(subs)} open submittals - ${pending:,.0f} pending exposure - {len(owners)} owner decisions - {gap_count} contract scope gaps - {len(actions)} open actions.</p></div><div class="grid3">'
+    cards=[
+      ("RFI Command","Lifecycle, cost/schedule impact and field verification.","/project-control/rfis"),
+      ("Submittal Command","Track required, submitted, review and release status.","/project-control/submittals"),
+      ("Budget & Commitments","Budget, commitments, approved changes and exposure.","/project-control/budget"),
+      ("Change Management","Trace potential changes through cost and schedule.","/project-control/changes"),
+      ("Contract Scope","Compare subcontract coverage against Blueprint Brain.","/project-control/contracts"),
+      ("Meeting Intelligence","Decisions, commitments and open actions.","/project-control/meetings"),
+      ("Correspondence","Organize important communication around project issues.","/project-control/correspondence"),
+      ("Owner Decisions","Decisions required and their consequence.","/project-control/owner-decisions"),
+      ("Audit Trail","Chronological project intelligence record.","/project-control/audit")
+    ]
+    for name,desc,href in cards: body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Project Control",body)
+
+@app.get("/project-control/rfis",response_class=HTMLResponse)
+def v42_rfi_page():
+    rows=_v42_rfis(project_id())
+    h="".join(f'<div class="action"><span class="badge">{esc(r["status"])}</span> <b>{esc(r["number"] or "DRAFT")} - {esc(r["title"])}</b><div class="small">Due {esc(r["due_date"])} - Cost ${float(r["cost_impact"] or 0):,.0f} - {float(r["schedule_days"] or 0):g} days</div></div>' for r in rows)
+    return shell("RFI Command",'<div class="hero"><h1>RFI Command Brain</h1><p class="muted">Detected - draft - submitted - answered - cost/schedule impact - field verification.</p></div><div class="card">'+(h or '<p class="muted">No controlled RFIs yet. Conflict Brain proposals remain available for human review.</p>')+'</div>')
+
+@app.get("/project-control/submittals",response_class=HTMLResponse)
+def v42_submittal_page():
+    rows=_v39_rows("SELECT * FROM submittals WHERE project_id=? ORDER BY due_date,id",(project_id(),))
+    h="".join(f'<div class="action"><span class="badge">{esc(r["status"])}</span> <b>{esc(r["title"])}</b><div class="small">Spec {esc(r["spec_section"])} - {esc(r["responsible_party"])} - Due {esc(r["due_date"])}</div></div>' for r in rows)
+    return shell("Submittal Command",'<div class="hero"><h1>Submittal Command Brain</h1></div><div class="card">'+(h or '<p class="muted">No submittals loaded.</p>')+'</div>')
+
+@app.get("/project-control/budget",response_class=HTMLResponse)
+def v42_budget_page():
+    rows=_v42_budget(project_id()); h=""; tb=tc=ta=tp=0
+    for r in rows:
+        b=float(r["original_budget"] or 0); c=float(r["commitment"] or 0); a=float(r["approved_changes"] or 0); p=float(r["pending_exposure"] or 0)
+        tb+=b; tc+=c; ta+=a; tp+=p; forecast=c+a+p; level="WATCH" if b and forecast>b else "READY"
+        h+=f'<div class="action"><span class="badge {level}">{level}</span> <b>{esc(r["trade"])}</b><div class="small">Budget ${b:,.0f} - Committed ${c:,.0f} - Approved ${a:,.0f} - Pending ${p:,.0f} - Forecast ${forecast:,.0f}</div></div>'
+    head=f'<div class="hero"><h1>Budget & Commitment Brain</h1><p class="muted">Budget ${tb:,.0f} - Commitments ${tc:,.0f} - Approved changes ${ta:,.0f} - Pending exposure ${tp:,.0f}</p></div>'
+    return shell("Budget & Commitments",head+'<div class="card">'+(h or '<p class="muted">No budget commitments loaded yet.</p>')+'</div>')
+
+@app.get("/project-control/changes",response_class=HTMLResponse)
+def v42_changes_page():
+    rows=_v39_changes(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(r["status"])}</span> <b>{esc(r["event_type"])} - {esc(r["title"])}</b><div class="small">${float(r["estimated_cost"] or 0):,.0f} - {float(r["schedule_days"] or 0):g} days - {esc(r["responsible_party"])}</div></div>' for r in rows)
+    return shell("Change Management",'<div class="hero"><h1>Change Management Brain</h1><p class="muted">RFI / ASI / bulletin / owner request / field condition to cost and schedule exposure.</p></div><div class="card">'+(h or '<p class="muted">No open change events.</p>')+'</div>')
+
+@app.get("/project-control/contracts",response_class=HTMLResponse)
+def v42_contract_page():
+    rows=_v42_contract_gaps(project_id()); h=""
+    for trade,n,c in rows:
+        if c is None:
+            h+=f'<div class="action"><span class="badge WATCH">GAP</span> <b>{esc(trade)}</b><div class="small">{n} Blueprint Brain scope items - no contract scope record loaded.</div></div>'
+        else:
+            exclusions=str(c["exclusions"] or "")
+            h+=f'<div class="action"><span class="badge READY">REVIEWED</span> <b>{esc(trade)} - {esc(c["sub_name"])}</b><div class="small">{n} source-backed items - exclusions: {esc(exclusions[:300])}</div></div>'
+    return shell("Contract Scope",'<div class="hero"><h1>Contract Scope Brain</h1><p class="muted">Scope gaps, exclusions, overlaps, allowances and unclear responsibility.</p></div><div class="card">'+(h or '<p class="muted">Analyze Blueprint Brain scope first.</p>')+'</div>')
+
+@app.get("/project-control/meetings",response_class=HTMLResponse)
+def v42_meeting_page():
+    meetings,actions=_v42_meeting_actions(project_id()); h=""
+    for m in meetings:
+        h+=f'<div class="card"><span class="badge">{esc(m["meeting_type"])}</span><h3>{esc(m["title"])}</h3><div class="small">{esc(m["meeting_date"])} - {esc(m["attendees"])}</div><p><b>Decisions:</b> {esc(m["decisions"])}</p><p><b>Commitments:</b> {esc(m["commitments"])}</p></div>'
+    ah="".join(f'<div class="action"><b>{esc(a["title"])}</b><div class="small">{esc(a["owner"])} - Due {esc(a["due"])} - {esc(a["priority"])}</div></div>' for a in actions)
+    return shell("Meeting Intelligence",'<div class="hero"><h1>Meeting Intelligence</h1><p class="muted">Keep decisions and commitments from disappearing.</p></div>'+(h or '<div class="card">No meeting notes loaded.</div>')+'<div class="card"><h2>Open Actions</h2>'+ (ah or '<p class="muted">No open actions.</p>')+'</div>')
+
+@app.get("/project-control/correspondence",response_class=HTMLResponse)
+def v42_correspondence_page():
+    rows=_v42_correspondence(project_id())
+    h="".join(f'<div class="action"><span class="badge">{esc(r["related_type"])}</span> <b>{esc(r["subject"])}</b><div class="small">{esc(r["correspondence_date"])} - {esc(r["party"])} - {esc(r["trade"])} - {esc(r["related_ref"])}</div><p>{esc(r["summary"])}</p></div>' for r in rows)
+    return shell("Correspondence",'<div class="hero"><h1>Correspondence Brain</h1><p class="muted">Communication organized around trade, issue, RFI, submittal, schedule and change.</p></div><div class="card">'+(h or '<p class="muted">No controlled correspondence loaded yet.</p>')+'</div>')
+
+@app.get("/project-control/owner-decisions",response_class=HTMLResponse)
+def v42_owner_page():
+    rows=_v42_owner(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">DECISION</span> <b>{esc(r["title"])}</b><div>{esc(r["decision_needed"])}</div><div class="small">Due {esc(r["due_date"])} - ${float(r["cost_impact"] or 0):,.0f} exposure - {float(r["schedule_days"] or 0):g} days at risk - {esc(r["source_ref"])}</div></div>' for r in rows)
+    return shell("Owner Decisions",'<div class="hero"><h1>Owner Decision Tracker</h1><p class="muted">Decision needed - deadline - downstream cost/schedule consequence.</p></div><div class="card">'+(h or '<p class="muted">No owner decisions currently tracked.</p>')+'</div>')
+
+@app.get("/project-control/audit",response_class=HTMLResponse)
+def v42_audit_page():
+    rows=_v42_audit(project_id())
+    h="".join(f'<div class="action"><span class="badge">{esc(r["event_type"])}</span> <b>{esc(r["title"])}</b><div class="small">{esc(r["event_time"])} - {esc(r["source_ref"])} - reviewed by {esc(r["reviewed_by"])}</div><p>{esc(r["downstream_impact"])}</p></div>' for r in rows)
+    return shell("Project Audit Trail",'<div class="hero"><h1>Project Audit Trail</h1><p class="muted">What changed, source, decision, downstream impact and review history.</p></div><div class="card">'+(h or '<p class="muted">Audit events will accumulate as controlled project decisions are recorded.</p>')+'</div>')
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -1524,7 +1667,7 @@ def unified_manage():
       +_v37_link_card("RFIs / Issues","Questions, conflicts and issues.","/issues")
       +_v37_link_card("Submittals","Submittal workflow.","/submittals")
       +_v37_link_card("Field","Field execution and reporting.","/field")
-      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/intelligence">Intelligence Center</a> · <a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
+      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/project-control">Project Control</a> · <a href="/intelligence">Intelligence Center</a> · <a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
     )
     return shell("Manage",body)
 
