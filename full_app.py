@@ -42,14 +42,14 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="31.1")
+app=FastAPI(title="BuildCommand AI",version="32.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR,exist_ok=True)
 _current_user_id=ContextVar("buildcommand_user_id",default=None)
 _current_company_id=ContextVar("buildcommand_company_id",default=None)
-MAX_UPLOAD_BYTES=10*1024*1024
+MAX_UPLOAD_BYTES=45*1024*1024
 ALLOWED_UPLOAD_EXTENSIONS={".pdf",".png",".jpg",".jpeg",".webp",".doc",".docx",".xls",".xlsx",".csv",".txt"}
 
 DATABASE_URL=os.environ.get("DATABASE_URL","").strip()
@@ -132,6 +132,9 @@ def init():
     CREATE TABLE IF NOT EXISTS meeting_ai_summaries(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,source_text TEXT,summary_text TEXT,created TEXT);
 
     CREATE TABLE IF NOT EXISTS document_ai_chunks(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,attachment_id INTEGER NOT NULL,chunk_index INTEGER,text_content TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS blueprint_runs(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,status TEXT DEFAULT 'COMPLETE',source_files TEXT,project_summary TEXT,detected_disciplines TEXT,cross_discipline_flags TEXT,rfi_candidates TEXT,review_notes TEXT,model_name TEXT,created_by INTEGER,created TEXT);
+    CREATE TABLE IF NOT EXISTS blueprint_trade_scopes(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,run_id INTEGER NOT NULL,trade TEXT NOT NULL,division TEXT,summary TEXT,scope_text TEXT,item_count INTEGER DEFAULT 0,created TEXT);
+    CREATE TABLE IF NOT EXISTS blueprint_scope_items(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,run_id INTEGER NOT NULL,trade_scope_id INTEGER,trade TEXT NOT NULL,requirement TEXT NOT NULL,source_sheet TEXT,source_detail TEXT,source_spec TEXT,source_note TEXT,related_trade TEXT,confidence TEXT DEFAULT 'MEDIUM',item_type TEXT DEFAULT 'SCOPE',status TEXT DEFAULT 'NOT_STARTED',created TEXT);
     CREATE TABLE IF NOT EXISTS schedule_import_sources(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,source_type TEXT,file_name TEXT,imported_count INTEGER DEFAULT 0,created TEXT);
     CREATE TABLE IF NOT EXISTS forecast_snapshots(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,snapshot_date TEXT,health_score REAL,projected_delay_days REAL,confidence REAL,explanation TEXT,created TEXT);
     CREATE TABLE IF NOT EXISTS sub_risk_snapshots(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,sub_id INTEGER NOT NULL,risk_score REAL,risk_band TEXT,explanation TEXT,created TEXT);
@@ -691,7 +694,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;bord
 @media(max-width:900px){.app{grid-template-columns:1fr}.side{position:relative;border-right:0;border-bottom:1px solid var(--line)}.grid4,.grid3,.grid2{grid-template-columns:1fr}.mobile-menu-btn{display:block;width:100%;margin:12px 0}.nav{display:none}.nav.mobile-open{display:block}}
 """
 
-NAV=[("Daily Command","/"),("AI Command","/ai-command"),("Plans & Specs AI","/plans-specs-ai"),("Deep Document AI","/document-ai"),("Schedule Import","/schedule-import"),("Advanced Schedule Import","/advanced-schedule-import"),("Photo Intelligence","/photo-intelligence"),("AI Photo Analysis","/photo-ai"),("3-Week Lookahead","/lookahead-intelligence"),("Project Health","/project-health"),("Predictive Forecast","/predictive-forecast"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Auto Daily Report","/auto-daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Owner Dashboard","/owner-dashboard"),("Portfolio Intelligence","/portfolio-intelligence"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Sub Scorecards","/sub-scorecards"),("Sub Risk","/sub-risk"),("RFI Impact","/rfi-impact"),("Procurement Warning","/procurement-warning"),("Recovery Planner","/ai-recovery"),("Quick Entry","/quick-entry"),("Weekly AI Report","/weekly-report"),("RFI Drafting","/rfi-drafting"),("Sub Communications","/sub-communications"),("AI Meeting Minutes","/meeting-minutes-ai"),("Weather Impacts","/weather-impacts"),("PDF Reports","/pdf-reports"),("Cost Intelligence","/cost-intelligence"),("Change Package","/change-package"),("Mobile Home","/mobile-home"),("Mobile Field+","/mobile-field-plus"),("Beta Checklist","/beta-checklist")]
+NAV=[("Daily Command","/"),("AI Command","/ai-command"),("Blueprint Brain","/plans-specs-ai"),("Deep Document AI","/document-ai"),("Schedule Import","/schedule-import"),("Advanced Schedule Import","/advanced-schedule-import"),("Photo Intelligence","/photo-intelligence"),("AI Photo Analysis","/photo-ai"),("3-Week Lookahead","/lookahead-intelligence"),("Project Health","/project-health"),("Predictive Forecast","/predictive-forecast"),("Morning Brief","/morning-brief"),("Action Center","/actions"),("RFIs / Issues","/issues"),("Punch List","/punch"),("Inspections","/inspections"),("Submittals","/submittals"),("Safety","/safety"),("Change Events","/changes"),("Meetings","/meetings"),("Documents","/documents"),("Notifications","/notifications"),("AI Assistant","/assistant"),("AI Analysis","/ai-analysis"),("Daily Report","/daily-report"),("Auto Daily Report","/auto-daily-report"),("Schedule","/schedule"),("Schedule Health","/schedule-health"),("Procurement","/procurement"),("Readiness","/readiness"),("Make Ready","/make-ready"),("Field","/field"),("Subcontractors","/subcontractors"),("Production","/production"),("Predictive Risk","/risk"),("Recovery","/recovery"),("Company Memory","/memory"),("Playbooks","/playbooks"),("Portfolio","/portfolio"),("Owner Dashboard","/owner-dashboard"),("Portfolio Intelligence","/portfolio-intelligence"),("Exports","/exports"),("Team","/team"),("Company Settings","/company-settings"),("Project Settings","/project-settings"),("System Check","/system-check"),("Beta Feedback","/beta-feedback"),("Setup","/setup"),("Invitations","/invitations"),("Production Settings","/production-settings"),("Sub Scorecards","/sub-scorecards"),("Sub Risk","/sub-risk"),("RFI Impact","/rfi-impact"),("Procurement Warning","/procurement-warning"),("Recovery Planner","/ai-recovery"),("Quick Entry","/quick-entry"),("Weekly AI Report","/weekly-report"),("RFI Drafting","/rfi-drafting"),("Sub Communications","/sub-communications"),("AI Meeting Minutes","/meeting-minutes-ai"),("Weather Impacts","/weather-impacts"),("PDF Reports","/pdf-reports"),("Cost Intelligence","/cost-intelligence"),("Change Package","/change-package"),("Mobile Home","/mobile-home"),("Mobile Field+","/mobile-field-plus"),("Beta Checklist","/beta-checklist")]
 
 
 NAV_GROUPS=[
@@ -711,7 +714,7 @@ NAV_GROUPS=[
         ('Safety','/safety'),('Inspections','/inspections'),('Punch List','/punch')
     ]),
     ('📄 Documents & AI',[
-        ('Documents','/documents'),('Document Tags','/document-tags'),('Plans & Specs AI','/plans-specs-ai'),('Deep Document AI','/document-ai'),
+        ('Documents','/documents'),('Document Tags','/document-tags'),('Blueprint Brain','/plans-specs-ai'),('Deep Document AI','/document-ai'),
         ('RFIs / Issues','/issues'),('RFI Drafting','/rfi-drafting'),('RFI Impact','/rfi-impact'),('Submittals','/submittals'),
         ('Meetings','/meetings'),('AI Meeting Minutes','/meeting-minutes-ai'),('AI Assistant','/assistant'),('AI Analysis','/ai-analysis'),
         ('Weekly AI Report','/weekly-report'),('PDF Reports','/pdf-reports')
@@ -9300,12 +9303,148 @@ def _attachment_text(row):
         return ""
     path=os.path.join(UPLOAD_DIR,row["stored_name"])
     ext=Path(row["original_name"] or "").suffix.lower()
-    if ext in {".txt",".csv"} and os.path.isfile(path):
-        try:
-            return Path(path).read_text(errors="ignore")[:120000]
-        except Exception:
-            return ""
+    if not os.path.isfile(path):
+        return ""
+    try:
+        if ext in {".txt",".csv",".md"}:
+            return Path(path).read_text(errors="ignore")[:250000]
+        if ext==".pdf" and PdfReader is not None:
+            return "\n".join((p.extract_text() or "") for p in PdfReader(path).pages[:250])[:350000]
+        if ext in {".xlsx",".xlsm"} and openpyxl is not None:
+            wb=openpyxl.load_workbook(path,read_only=True,data_only=True)
+            lines=[]
+            for ws in wb.worksheets[:30]:
+                lines.append("SHEET: "+ws.title)
+                for vals in ws.iter_rows(values_only=True):
+                    lines.append(" | ".join("" if v is None else str(v) for v in vals))
+                    if len(lines)>25000:
+                        break
+            return "\n".join(lines)[:350000]
+    except Exception:
+        return ""
     return ""
+
+
+def _blueprint_json(text_value):
+    raw=(text_value or "").strip()
+    if raw.startswith("```"):
+        raw=re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+        raw=re.sub(r"\s*```$", "", raw)
+    try:
+        return json.loads(raw)
+    except Exception:
+        m=re.search(r"\{.*\}",raw,re.S)
+        if m:
+            return json.loads(m.group(0))
+        raise ValueError("Blueprint Brain returned a response that was not valid JSON.")
+
+
+def _blueprint_scope_text(trade_data):
+    lines=[]
+    summary=(trade_data.get("summary") or "").strip()
+    if summary:
+        lines.append(summary)
+        lines.append("")
+    for i,item in enumerate(trade_data.get("items") or [],1):
+        req=(item.get("requirement") or "").strip()
+        if not req:
+            continue
+        src=[]
+        if item.get("source_sheet"): src.append("Sheet "+str(item.get("source_sheet")))
+        if item.get("source_detail"): src.append("Detail "+str(item.get("source_detail")))
+        if item.get("source_spec"): src.append("Spec "+str(item.get("source_spec")))
+        conf=(item.get("confidence") or "MEDIUM").upper()
+        line=f"{i}. {req}"
+        if src: line += " ["+" · ".join(src)+"]"
+        line += f" — Confidence: {conf}"
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _blueprint_prompt(source_names):
+    return f"""
+You are the BuildCommand AI Blueprint Brain, a construction-document scope intelligence engine.
+
+SOURCE FILES:
+{source_names}
+
+MISSION:
+Read the supplied project plans/specifications as one coordinated construction package. Build a trade-by-trade scope of work by finding requirements wherever they appear, including requirements that belong to one trade but are written on another discipline's sheets.
+
+NON-NEGOTIABLE RULES:
+1. Use only information supported by the supplied files. Never invent drawing numbers, details, spec sections, quantities, equipment, code requirements, or responsibilities.
+2. A requirement may be assigned to a trade even when it is found on another discipline's sheet. Mark those as CROSS_DISCIPLINE.
+3. Every scope item must preserve the best available source: sheet number, detail, spec section, note, or filename. If a source cannot be identified, use an empty string and lower the confidence.
+4. Distinguish explicit requirements from coordination inferences. Use item_type values SCOPE, CROSS_DISCIPLINE, COORDINATION, EXCLUSION_REVIEW, or RFI_CANDIDATE.
+5. Flag contradictions, missing information, equipment with unclear power/plumbing/HVAC connections, unclear trade responsibility, and likely scope gaps as RFI candidates. Do not resolve ambiguity by guessing.
+6. Include all detected trades, not only MEP. Typical trades can include demolition, earthwork, concrete, masonry, structural steel, rough carpentry, millwork, waterproofing, roofing, doors/frames/hardware, glazing, framing/drywall, ceilings, flooring, tile, painting, specialties, equipment, furnishings, fire sprinkler, plumbing, HVAC, controls, electrical, fire alarm, low voltage, security, site utilities, paving, landscaping, and others actually supported by the documents.
+7. Phrase each requirement as an actionable subcontractor scope item suitable for GC review. Do not claim the generated scope replaces the signed subcontract, specifications, addenda, RFIs, or professional design review.
+8. Confidence must be HIGH, MEDIUM, or LOW based on source clarity.
+
+Return ONLY valid JSON using exactly this top-level structure:
+{{
+  "project_summary": "short summary grounded in the documents",
+  "detected_disciplines": ["Architectural", "Electrical"],
+  "trade_scopes": [
+    {{
+      "trade": "Electrical",
+      "division": "26",
+      "summary": "short trade scope overview",
+      "items": [
+        {{
+          "requirement": "actionable scope requirement",
+          "source_sheet": "E2.1",
+          "source_detail": "3/E5.2",
+          "source_spec": "26 05 00",
+          "source_note": "General Note 7",
+          "related_trade": "Mechanical",
+          "confidence": "HIGH",
+          "item_type": "CROSS_DISCIPLINE"
+        }}
+      ]
+    }}
+  ],
+  "cross_discipline_flags": ["plain-language flag with source"],
+  "rfi_candidates": ["plain-language ambiguity/gap with source"],
+  "review_notes": ["items the GC should verify before issuing scopes"]
+}}
+""".strip()
+
+
+def _save_blueprint_result(pid, docs, data, model_name):
+    company_id=current_company_id(); user_id=current_user_id(); now=datetime.utcnow().isoformat()
+    c=db()
+    c.execute("INSERT INTO blueprint_runs(company_id,project_id,status,source_files,project_summary,detected_disciplines,cross_discipline_flags,rfi_candidates,review_notes,model_name,created_by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(
+        company_id,pid,"COMPLETE",json.dumps([d["original_name"] for d in docs]),str(data.get("project_summary") or ""),json.dumps(data.get("detected_disciplines") or []),json.dumps(data.get("cross_discipline_flags") or []),json.dumps(data.get("rfi_candidates") or []),json.dumps(data.get("review_notes") or []),model_name,user_id,now
+    ))
+    run_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    for trade_data in data.get("trade_scopes") or []:
+        trade=(trade_data.get("trade") or "Unassigned").strip() or "Unassigned"
+        division=str(trade_data.get("division") or "").strip()
+        summary=str(trade_data.get("summary") or "").strip()
+        items=trade_data.get("items") or []
+        scope_text=_blueprint_scope_text(trade_data)
+        c.execute("INSERT INTO blueprint_trade_scopes(company_id,project_id,run_id,trade,division,summary,scope_text,item_count,created) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,pid,run_id,trade,division,summary,scope_text,len(items),now))
+        trade_scope_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+        for item in items:
+            req=str(item.get("requirement") or "").strip()
+            if not req:
+                continue
+            confidence=str(item.get("confidence") or "MEDIUM").upper()
+            if confidence not in {"HIGH","MEDIUM","LOW"}: confidence="MEDIUM"
+            item_type=str(item.get("item_type") or "SCOPE").upper()
+            c.execute("INSERT INTO blueprint_scope_items(company_id,project_id,run_id,trade_scope_id,trade,requirement,source_sheet,source_detail,source_spec,source_note,related_trade,confidence,item_type,status,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(
+                company_id,pid,run_id,trade_scope_id,trade,req,str(item.get("source_sheet") or ""),str(item.get("source_detail") or ""),str(item.get("source_spec") or ""),str(item.get("source_note") or ""),str(item.get("related_trade") or ""),confidence,item_type,"NOT_STARTED",now
+            ))
+    c.commit(); c.close(); return run_id
+
+
+def _blueprint_latest(pid):
+    c=db(); run=c.execute("SELECT * FROM blueprint_runs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1",(current_company_id(),pid)).fetchone()
+    scopes=[]
+    if run:
+        scopes=c.execute("SELECT * FROM blueprint_trade_scopes WHERE company_id=? AND project_id=? AND run_id=? ORDER BY trade",(current_company_id(),pid,run["id"])).fetchall()
+    c.close(); return run,scopes
 
 
 @app.get("/plans-specs-ai",response_class=HTMLResponse)
@@ -9313,31 +9452,146 @@ def plans_specs_ai():
     pid=project_id(); c=db()
     docs=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",(current_company_id(),pid)).fetchall()
     c.close()
-    opts="".join(f'<option value="{d["id"]}">{esc(d["original_name"])}</option>' for d in docs) or '<option value="">No documents uploaded</option>'
-    body=f'''<div class="hero"><div class="eyebrow">Plans & Specs AI</div><h1>Ask project-document questions.</h1><div class="muted">TXT/CSV can be read directly in v29. PDF/Office files stay available in Documents for future deep extraction.</div></div>
-    <div class="card"><form method="post" action="/plans-specs-ai"><label>Document</label><select name="attachment_id">{opts}</select><label>Question</label><textarea name="question" required></textarea><button>Ask Document AI</button></form></div>'''
-    return shell("Plans & Specs AI",body)
+    eligible=[d for d in docs if Path(d["original_name"] or "").suffix.lower() in {".pdf",".txt",".csv",".xlsx",".xlsm"}]
+    checks="".join(f'<label style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)"><input type="checkbox" name="attachment_ids" value="{d["id"]}" style="width:auto"><span><b>{esc(d["original_name"])}</b><br><span class="small">{(int(d["size_bytes"] or 0)/1024/1024):.1f} MB</span></span></label>' for d in eligible) or '<div class="muted">No PDF/TXT/CSV/Excel project documents are uploaded yet. Use Documents first.</div>'
+    run,scopes=_blueprint_latest(pid)
+    latest='<div class="muted">No Blueprint Brain analysis has been run yet.</div>'
+    if run:
+        scope_cards="".join(f'<div class="action"><a href="/blueprint-brain/trade/{s["id"]}" style="font-weight:800">{esc(s["trade"])}</a> <span class="badge READY">{s["item_count"]} ITEMS</span><div class="small">Division {esc(s["division"] or "—")} · {esc(s["summary"] or "")}</div></div>' for s in scopes)
+        flags=json.loads(run["cross_discipline_flags"] or "[]")
+        rfis=json.loads(run["rfi_candidates"] or "[]")
+        latest=f'<div class="small">LATEST RUN · {esc(run["created"] or "")}</div><h3>{esc(run["project_summary"] or "")}</h3><div style="margin:14px 0"><span class="badge READY">{len(scopes)} TRADES</span> <span class="badge WATCH">{len(flags)} CROSS-DISCIPLINE</span> <span class="badge HIGH">{len(rfis)} RFI CANDIDATES</span></div>{scope_cards}<p><a href="/blueprint-brain/run/{run["id"]}">Open full intelligence report →</a></p>'
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand Blueprint Brain</div><h1>Plans → trade scopes → field execution.</h1><div class="muted">Reads PDF plan pages visually and textually, finds cross-discipline requirements, preserves sources, generates trade scopes, and flags gaps for GC review.</div></div><div class="grid2"><div class="card"><h2>Analyze Plan Set</h2><form method="post" action="/plans-specs-ai/analyze">{checks}<label style="margin-top:16px">Analysis focus (optional)</label><textarea name="focus" placeholder="Example: Full bid/scope review, or focus on MEP coordination"></textarea><button type="submit">Run Blueprint Brain</button></form><p class="small">Selected files must total less than 50 MB. PDF page images use high-detail analysis. AI-generated scopes require superintendent/PM review before contractual use.</p></div><div class="card"><h2>Latest Blueprint Intelligence</h2>{latest}</div></div>'
+    return shell("Blueprint Brain",body)
 
 
 @app.post("/plans-specs-ai",response_class=HTMLResponse)
 def plans_specs_ai_answer(attachment_id:int=Form(...),question:str=Form(...)):
-    pid=project_id(); c=db()
-    d=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",(attachment_id,current_company_id(),pid)).fetchone()
-    c.close()
+    pid=project_id(); c=db(); d=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",(attachment_id,current_company_id(),pid)).fetchone(); c.close()
     if not d: return HTMLResponse("Document not found",404)
     content=_attachment_text(d)
-    if not content:
-        answer=f'BuildCommand can see "{d["original_name"]}", but v29 only directly extracts TXT/CSV text.'
-    elif not os.environ.get("OPENAI_API_KEY"):
-        answer="OPENAI_API_KEY is not configured."
+    if not content: answer=f'BuildCommand can see "{d["original_name"]}", but no readable text was extracted. Use Blueprint Brain for PDF visual analysis.'
+    elif not os.environ.get("OPENAI_API_KEY"): answer="OPENAI_API_KEY is not configured."
     else:
         try:
             client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-            r=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),instructions="Answer only from the supplied document. Say when unsupported.",input=f"DOCUMENT:\n{content}\nQUESTION:\n{question}")
+            r=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),instructions="Answer only from the supplied construction document. Say when unsupported and never invent drawing references.",input=f"DOCUMENT:\n{content[:96000]}\nQUESTION:\n{question}")
             answer=r.output_text
-        except Exception as e:
-            answer=f"Document AI failed: {e}"
-    return shell("Plans & Specs AI",f'<div class="hero"><h1>{esc(d["original_name"])}</h1></div><div class="card"><h2>Answer</h2><div style="white-space:pre-wrap">{esc(answer)}</div></div>')
+        except Exception as e: answer=f"Document AI failed: {e}"
+    return shell("Blueprint Brain",f'<div class="hero"><h1>{esc(d["original_name"])}</h1></div><div class="card"><h2>Answer</h2><div style="white-space:pre-wrap">{esc(answer)}</div></div>')
+
+
+@app.post("/plans-specs-ai/analyze",response_class=HTMLResponse)
+def blueprint_analyze(attachment_ids:list[int] | None=Form(None),focus:str=Form("")):
+    pid=project_id(); company_id=current_company_id()
+    if not os.environ.get("OPENAI_API_KEY"):
+        return shell("Blueprint Brain",'<div class="card"><h2>OPENAI_API_KEY is not configured.</h2><p>Add it in Render Environment settings and redeploy.</p></div>')
+    ids=list(dict.fromkeys(attachment_ids or []))
+    if not ids:
+        return shell("Blueprint Brain",'<div class="hero"><div class="eyebrow">Blueprint Brain</div><h1>Select a plan set first.</h1></div><div class="card"><p>Choose at least one PDF or supported project document, then click <b>Run Blueprint Brain</b>.</p><p><a href="/plans-specs-ai">← Back to Blueprint Brain</a></p></div>')
+    c=db(); docs=[]
+    for aid in ids:
+        d=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",(aid,company_id,pid)).fetchone()
+        if d: docs.append(d)
+    c.close()
+    if not docs: return HTMLResponse("No valid project documents were selected.",404)
+    total=sum(int(d["size_bytes"] or 0) for d in docs)
+    if total>=50*1024*1024:
+        return shell("Blueprint Brain",f'<div class="card"><h2>Plan set is too large for one analysis request.</h2><p>Selected total: {total/1024/1024:.1f} MB. Keep each Blueprint Brain batch under 50 MB, then run the remaining volumes separately.</p></div>')
+    model=os.environ.get("OPENAI_MODEL","gpt-5.6")
+    client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    uploaded=[]; input_content=[]; text_fallback=[]
+    try:
+        for d in docs:
+            path=os.path.join(UPLOAD_DIR,d["stored_name"])
+            if not os.path.isfile(path):
+                continue
+            ext=Path(d["original_name"] or "").suffix.lower()
+            if ext==".pdf":
+                with open(path,"rb") as fh:
+                    remote=client.files.create(file=fh,purpose="user_data")
+                uploaded.append(remote.id)
+                input_content.append({"type":"input_file","file_id":remote.id,"detail":"high"})
+            else:
+                extracted=_attachment_text(d)
+                if extracted:
+                    text_fallback.append(f"\n--- FILE: {d['original_name']} ---\n{extracted[:120000]}")
+        if not input_content and not text_fallback:
+            return HTMLResponse("No readable selected files were available on the server.",400)
+        names="\n".join(f"- {d['original_name']}" for d in docs)
+        prompt=_blueprint_prompt(names)
+        if focus.strip(): prompt += "\n\nGC ANALYSIS FOCUS:\n"+focus.strip()
+        if text_fallback: prompt += "\n\nEXTRACTED NON-PDF DOCUMENT CONTENT:\n"+"\n".join(text_fallback)
+        input_content.append({"type":"input_text","text":prompt})
+        response=client.responses.create(model=model,input=[{"role":"user","content":input_content}])
+        data=_blueprint_json(response.output_text)
+        if not isinstance(data.get("trade_scopes"),list):
+            raise ValueError("Blueprint Brain response did not contain trade_scopes.")
+        run_id=_save_blueprint_result(pid,docs,data,model)
+        return RedirectResponse(f"/blueprint-brain/run/{run_id}",status_code=303)
+    except Exception as exc:
+        return shell("Blueprint Brain",f'<div class="hero"><div class="eyebrow">Blueprint Brain</div><h1>Analysis did not complete.</h1></div><div class="card"><p>{esc(str(exc))}</p><p><a href="/plans-specs-ai">← Back to Blueprint Brain</a></p></div>')
+    finally:
+        for fid in uploaded:
+            try: client.files.delete(fid)
+            except Exception: pass
+
+
+@app.get("/blueprint-brain/run/{run_id}",response_class=HTMLResponse)
+def blueprint_run_detail(run_id:int):
+    pid=project_id(); c=db(); run=c.execute("SELECT * FROM blueprint_runs WHERE id=? AND company_id=? AND project_id=?",(run_id,current_company_id(),pid)).fetchone()
+    if not run: c.close(); return HTMLResponse("Blueprint analysis not found.",404)
+    scopes=c.execute("SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? ORDER BY trade",(run_id,current_company_id(),pid)).fetchall(); c.close()
+    def _arr(field):
+        try: return json.loads(run[field] or "[]")
+        except Exception: return []
+    files=_arr("source_files"); disciplines=_arr("detected_disciplines"); flags=_arr("cross_discipline_flags"); rfis=_arr("rfi_candidates"); notes=_arr("review_notes")
+    scope_cards="".join(f'<div class="card"><div class="small">DIVISION {esc(s["division"] or "—")}</div><h2>{esc(s["trade"])}</h2><p>{esc(s["summary"] or "")}</p><span class="badge READY">{s["item_count"]} SCOPE ITEMS</span><p><a href="/blueprint-brain/trade/{s["id"]}">Open trade scope →</a></p></div>' for s in scopes)
+    def list_html(items,empty): return "".join(f'<div class="action">{esc(x)}</div>' for x in items) or f'<div class="muted">{esc(empty)}</div>'
+    body=f'<div class="hero"><div class="eyebrow">Blueprint Intelligence Run #{run_id}</div><h1>{esc(run["project_summary"] or "Plan set analyzed")}</h1><div class="muted">Sources: {esc(", ".join(files))}</div></div><div class="grid3"><div class="card"><div class="label">Trades</div><div class="kpi">{len(scopes)}</div></div><div class="card"><div class="label">Cross-Discipline Flags</div><div class="kpi">{len(flags)}</div></div><div class="card"><div class="label">RFI Candidates</div><div class="kpi">{len(rfis)}</div></div></div><div class="card"><h2>Detected Disciplines</h2><p>{esc(" · ".join(disciplines) or "Not identified")}</p></div><div class="grid2"><div class="card"><h2>Cross-Discipline Requirements</h2>{list_html(flags,"No cross-discipline flags returned.")}</div><div class="card"><h2>Potential Scope Gaps / RFIs</h2>{list_html(rfis,"No RFI candidates returned.")}</div></div><div class="card"><h2>GC Review Notes</h2>{list_html(notes,"No additional review notes returned.")}</div><h2>Trade Scopes</h2><div class="grid2">{scope_cards}</div><div class="card"><p class="small"><b>BuildCommand review rule:</b> AI-generated scope intelligence is a coordination aid. Verify against the complete contract documents, addenda, RFIs, subcontract agreements, and design-professional direction before issuing contractual scope.</p></div>'
+    return shell("Blueprint Intelligence",body)
+
+
+@app.get("/blueprint-brain/trade/{scope_id}",response_class=HTMLResponse)
+def blueprint_trade_scope(scope_id:int):
+    pid=project_id(); c=db(); scope=c.execute("SELECT * FROM blueprint_trade_scopes WHERE id=? AND company_id=? AND project_id=?",(scope_id,current_company_id(),pid)).fetchone()
+    if not scope: c.close(); return HTMLResponse("Trade scope not found.",404)
+    items=c.execute("SELECT * FROM blueprint_scope_items WHERE trade_scope_id=? AND company_id=? AND project_id=? ORDER BY id",(scope_id,current_company_id(),pid)).fetchall(); c.close()
+    cards=[]
+    for item in items:
+        refs=[]
+        if item["source_sheet"]: refs.append("Sheet "+item["source_sheet"])
+        if item["source_detail"]: refs.append("Detail "+item["source_detail"])
+        if item["source_spec"]: refs.append("Spec "+item["source_spec"])
+        if item["source_note"]: refs.append(item["source_note"])
+        conf=item["confidence"] if item["confidence"] in {"HIGH","MEDIUM","LOW"} else "WATCH"
+        typ=item["item_type"] or "SCOPE"
+        confidence_badge="HIGH" if conf=="HIGH" else "WATCH"
+        type_badge="HIGH" if typ=="RFI_CANDIDATE" else "WATCH" if typ in ["CROSS_DISCIPLINE","COORDINATION"] else "READY"
+        related=(' · <b>Related trade:</b> '+esc(item["related_trade"])) if item["related_trade"] else ''
+        options=''.join(f'<option {"selected" if item["status"]==st else ""}>{st}</option>' for st in ["NOT_STARTED","IN_PROGRESS","INSPECTION_REQUIRED","COMPLETE","VERIFIED"])
+        cards.append(f'<div class="action"><span class="badge {confidence_badge}">{esc(item["confidence"])}</span> <span class="badge {type_badge}">{esc(typ)}</span><h3>{esc(item["requirement"])}</h3><div class="small"><b>Source:</b> {esc(" · ".join(refs) or "Source not clearly identified")}{related}</div><form method="post" action="/blueprint-brain/item/{item["id"]}/status" style="margin-top:10px"><select name="status">{options}</select><button type="submit">Update</button></form></div>')
+    body=f'<div class="hero"><div class="eyebrow">Division {esc(scope["division"] or "—")} · Blueprint Brain</div><h1>{esc(scope["trade"])} Scope of Work</h1><div class="muted">{esc(scope["summary"] or "")}</div></div><div class="card"><p><a href="/blueprint-brain/run/{scope["run_id"]}">← Full Blueprint Intelligence</a> · <a href="/blueprint-brain/trade/{scope_id}.txt">Export scope text</a></p></div><div class="card"><h2>Scope Boiler</h2><div style="white-space:pre-wrap">{esc(scope["scope_text"] or "")}</div></div><div class="card"><h2>Execution Checklist</h2>{"".join(cards) or "<div class=muted>No scope items.</div>"}</div>'
+    return shell(scope["trade"]+" Scope",body)
+
+
+@app.post("/blueprint-brain/item/{item_id}/status")
+def blueprint_item_status(item_id:int,status:str=Form(...)):
+    allowed={"NOT_STARTED","IN_PROGRESS","INSPECTION_REQUIRED","COMPLETE","VERIFIED"}; status=status.upper()
+    if status not in allowed: return HTMLResponse("Invalid status",400)
+    pid=project_id(); c=db(); item=c.execute("SELECT trade_scope_id FROM blueprint_scope_items WHERE id=? AND company_id=? AND project_id=?",(item_id,current_company_id(),pid)).fetchone()
+    if not item: c.close(); return HTMLResponse("Scope item not found",404)
+    c.execute("UPDATE blueprint_scope_items SET status=? WHERE id=? AND company_id=? AND project_id=?",(status,item_id,current_company_id(),pid)); c.commit(); scope_id=item["trade_scope_id"]; c.close(); return RedirectResponse(f"/blueprint-brain/trade/{scope_id}",status_code=303)
+
+
+@app.get("/blueprint-brain/trade/{scope_id}.txt")
+def blueprint_trade_export(scope_id:int):
+    pid=project_id(); c=db(); scope=c.execute("SELECT * FROM blueprint_trade_scopes WHERE id=? AND company_id=? AND project_id=?",(scope_id,current_company_id(),pid)).fetchone(); c.close()
+    if not scope: return HTMLResponse("Trade scope not found.",404)
+    header=f"BuildCommand AI - {scope['trade']} Scope of Work\nDivision {scope['division'] or '—'}\n\n"
+    footer="\n\nGC REVIEW REQUIRED: Verify this AI-generated scope against the complete contract documents, addenda, RFIs, subcontract agreement, and design-professional direction before contractual use.\n"
+    filename=re.sub(r"[^A-Za-z0-9_-]+","_",scope["trade"] or "trade")+"_scope.txt"
+    return Response(content=header+(scope["scope_text"] or "")+footer,media_type="text/plain",headers={"Content-Disposition":f'attachment; filename="{filename}"'})
 
 
 @app.get("/schedule-import",response_class=HTMLResponse)
