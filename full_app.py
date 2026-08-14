@@ -12519,6 +12519,40 @@ def blueprint_analyze(attachment_ids:list[int] | None=Form(None),focus:str=Form(
             except Exception: pass
 
 
+
+@app.get("/blueprint-brain",response_class=HTMLResponse)
+def blueprint_brain_home():
+    pid=project_id()
+    company=current_company_id()
+    c=db()
+    runs=c.execute(
+        "SELECT * FROM blueprint_runs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 25",
+        (company,pid)
+    ).fetchall()
+    c.close()
+
+    cards=""
+    for r in runs:
+        cards+=(
+            f'<div class="card"><div class="small">Run #{r["id"]} · {esc(r["created"] or "")}</div>'
+            f'<h3>{esc(r["project_summary"] or "Blueprint analysis")}</h3>'
+            f'<p><a href="/blueprint-brain/run/{r["id"]}">Open analysis →</a></p></div>'
+        )
+
+    body=(
+        '<div class="hero"><div class="eyebrow">Blueprint Brain</div>'
+        '<h1>Source-backed trade scopes.</h1>'
+        '<p class="muted">Review the latest analysis, run final trade cleanup, or start a new project analysis.</p></div>'
+        '<div class="grid3">'
+        +_v37_link_card("Analyze Project","Run the unified project intelligence pipeline on selected plans/specs.","/build/analyze-project","Analyze")
+        +_v37_link_card("Final Trade Cleanup","Normalize existing Blueprint Brain trade ownership and duplicate scopes.","/blueprint-brain/final-cleanup","Run")
+        +_v37_link_card("Project Scope Review","Open the unified source-backed project scope view.","/brain","Review")
+        +'</div>'
+        '<div class="card"><h2>Recent Blueprint Runs</h2></div>'
+        +(cards or '<div class="card"><p class="muted">No Blueprint Brain analyses yet.</p></div>')
+    )
+    return shell("Blueprint Brain",body)
+
 @app.get("/blueprint-brain/run/{run_id}",response_class=HTMLResponse)
 def blueprint_run_detail(run_id:int):
     pid=project_id(); c=db(); run=c.execute("SELECT * FROM blueprint_runs WHERE id=? AND company_id=? AND project_id=?",(run_id,current_company_id(),pid)).fetchone()
