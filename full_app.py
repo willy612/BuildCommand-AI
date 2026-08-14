@@ -1121,7 +1121,7 @@ def v39_intelligence_center():
         ("Cost & Change",len(changes),"/intelligence/changes","Open cost and schedule exposure."),
         ("Daily Superintendent Command",len(attention)+len(sched),"/intelligence/daily-command","Today's project command brief.")
     ]
-    body='<div class="hero"><div class="eyebrow">BuildCommand v39</div><h1>Construction Intelligence Center</h1><p class="muted">Ten brains. One project operating system. The main menu stays simple.</p></div><div class="grid3">'
+    body='<div class="hero"><div class="eyebrow">BuildCommand v40</div><h1>Construction Intelligence Center</h1><p class="muted">Ten brains. One project operating system. The main menu stays simple.</p></div><div class="grid3">'
     for name,count,href,desc in cards:
         body+=f'<div class="card"><div class="label">{esc(name)}</div><div class="kpi">{count}</div><p class="muted">{esc(desc)}</p><a href="{href}">Open →</a></div>'
     body+='</div>'
@@ -1194,6 +1194,116 @@ def v39_daily_command():
     body+='<div class="grid3">'+_v37_link_card("Decisions","Prioritized items requiring human attention.","/intelligence/attention","Review")+_v37_link_card("Look-Ahead","Upcoming production and make-ready.","/intelligence/lookahead","Open")+_v37_link_card("Ask BuildCommand","Ask the project what matters now.","/ask-buildcommand","Ask")+'</div>'
     return shell("Daily Command",body)
 
+
+# ============================================================
+# v40 PROJECT AUTOPILOT
+# ============================================================
+
+def _v40_score(pid):
+    att=_v39_attention(pid); sched=_v39_schedule_risks(pid); proc=_v39_procurement(pid); changes=_v39_changes(pid)
+    critical=sum(1 for x in att if x[0]=="CRITICAL")+sum(1 for x in sched if x[0]=="CRITICAL")
+    high=sum(1 for x in att if x[0] in {"TODAY","THIS WEEK"})
+    score=min(100,critical*20+high*7+len(proc)*4+len(changes)*5)
+    return {"risk":score,"health":max(0,100-score),"level":"CRITICAL" if score>=70 else "HIGH" if score>=45 else "MEDIUM" if score>=20 else "LOW"}
+
+def _v40_revision_candidates(pid):
+    rows=_v39_rows("SELECT * FROM attachments WHERE project_id=? ORDER BY id DESC LIMIT 100",(pid,))
+    seen={}; pairs=[]
+    for r in rows:
+        name=str(r["original_name"] or "")
+        base=re.sub(r'(?i)(rev(?:ision)?[ _-]*[A-Z0-9]+|addendum[ _-]*[A-Z0-9]+|bulletin[ _-]*[A-Z0-9]+)','',name)
+        base=re.sub(r'[^a-z0-9]+',' ',base.lower()).strip()
+        if base in seen: pairs.append((r,seen[base]))
+        else: seen[base]=r
+    return pairs[:25]
+
+def _v40_gap_summary(pid):
+    scopes=_v39_rows("SELECT trade,COUNT(*) AS n FROM blueprint_scope_items WHERE project_id=? GROUP BY trade ORDER BY trade",(pid,))
+    subs=_v39_rows("SELECT trade,COUNT(*) AS n FROM subcontractors WHERE project_id=? GROUP BY trade",(pid,))
+    covered={str(r["trade"] or "").lower() for r in subs}
+    return [(r["trade"],r["n"],str(r["trade"] or "").lower() in covered) for r in scopes]
+
+def _v40_inspection_ready(pid):
+    inspections=_v39_rows("SELECT * FROM inspections_tracker WHERE project_id=? AND COALESCE(result,'PENDING')!='PASSED' ORDER BY scheduled_date LIMIT 50",(pid,))
+    issues=len(_v39_rows("SELECT id FROM project_issues WHERE project_id=? AND COALESCE(status,'OPEN')!='CLOSED'",(pid,)))
+    subs=len(_v39_rows("SELECT id FROM submittals WHERE project_id=? AND COALESCE(status,'PENDING') NOT IN ('APPROVED','CLOSED','COMPLETE')",(pid,)))
+    return inspections,issues,subs
+
+@app.get("/autopilot",response_class=HTMLResponse)
+def v40_autopilot():
+    pid=project_id(); s=_v40_score(pid)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v40 - Project Autopilot</div><h1>Your project is {s["level"]} risk.</h1><p class="muted">Health {s["health"]}/100 - Risk {s["risk"]}/100. Autopilot connects project decisions to downstream construction impact.</p></div><div class="grid3">'
+    cards=[
+      ("Risk Prediction","Score and prioritize project threats.","/autopilot/risks"),
+      ("Revision Brain","Identify drawing and addendum revision candidates.","/autopilot/revisions"),
+      ("Change Detection","Surface potential cost and time exposure.","/autopilot/change-detection"),
+      ("Subcontractor Gaps","Compare cleaned scopes against subcontractor coverage.","/autopilot/gaps"),
+      ("Inspection Readiness","Preflight upcoming inspections.","/autopilot/inspection-readiness"),
+      ("Quality Control","Source-backed QC verification.","/autopilot/qc"),
+      ("Field Photo Intelligence","Route photos into reviewed field intelligence.","/autopilot/photos"),
+      ("Project Forecast","Forecast health, completion pressure and decisions.","/autopilot/forecast"),
+      ("Executive Command","See project health across the company.","/autopilot/executive")
+    ]
+    for name,desc,href in cards: body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Project Autopilot",body)
+
+@app.get("/autopilot/risks",response_class=HTMLResponse)
+def v40_risks():
+    pid=project_id(); s=_v40_score(pid); items=_v39_attention(pid); sched=_v39_schedule_risks(pid)
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(x[0])}</span> <b>{esc(x[1])}</b> - {esc(x[2])}<div class="small">{esc(x[3])}</div></div>' for x in items[:60])
+    h+="".join(f'<div class="action"><span class="badge WATCH">{esc(x[0])}</span> <b>SCHEDULE</b> - {esc(x[1])}<div class="small">{esc(x[2])} - {esc(x[3])}</div></div>' for x in sched)
+    return shell("Risk Prediction",f'<div class="hero"><h1>Risk Prediction Engine</h1><p class="muted">{s["level"]} - Risk score {s["risk"]}/100</p></div><div class="card">{h or "No major risk signals detected."}</div>')
+
+@app.get("/autopilot/revisions",response_class=HTMLResponse)
+def v40_revisions():
+    pairs=_v40_revision_candidates(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">COMPARE</span> <b>{esc(a["original_name"])}</b><div class="small">Possible revision of {esc(b["original_name"])}</div></div>' for a,b in pairs)
+    return shell("Revision Brain",'<div class="hero"><h1>Drawing Revision / Addendum Brain</h1><p class="muted">Revision candidates are flagged for review. Contract scope is never changed automatically.</p></div><div class="card">'+(h or '<p class="muted">No likely revision pairs detected.</p>')+'</div>')
+
+@app.get("/autopilot/change-detection",response_class=HTMLResponse)
+def v40_change_detection():
+    rows=_v39_conflicts(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">POTENTIAL CHANGE</span> {esc(r["requirement"])}<div class="small">Detected across {r["n"]} trade assignments. Review contract scope.</div></div>' for r in rows)
+    return shell("Change Detection",'<div class="hero"><h1>Automatic Change-Order Detection</h1><p class="muted">Potential exposure only. Human approval required.</p></div><div class="card">'+(h or '<p class="muted">No current change candidates.</p>')+'</div>')
+
+@app.get("/autopilot/gaps",response_class=HTMLResponse)
+def v40_gaps():
+    rows=_v40_gap_summary(project_id())
+    h="".join(f'<div class="action"><span class="badge">{"COVERED" if ok else "GAP"}</span> <b>{esc(trade)}</b><div class="small">{n} cleaned scope items</div></div>' for trade,n,ok in rows)
+    return shell("Subcontractor Gaps",'<div class="hero"><h1>Subcontractor Gap Analyzer</h1></div><div class="card">'+(h or '<p class="muted">Analyze project scope first.</p>')+'</div>')
+
+@app.get("/autopilot/inspection-readiness",response_class=HTMLResponse)
+def v40_inspection_readiness():
+    rows,issues,subs=_v40_inspection_ready(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{"NOT READY" if issues or subs else "READY"}</span> <b>{esc(r["inspection_type"])}</b><div class="small">{esc(r["scheduled_date"])} - {issues} open issues - {subs} open submittals</div></div>' for r in rows)
+    return shell("Inspection Readiness",'<div class="hero"><h1>Inspection Readiness Brain</h1></div><div class="card">'+(h or '<p class="muted">No pending inspections.</p>')+'</div>')
+
+@app.get("/autopilot/qc",response_class=HTMLResponse)
+def v40_qc():
+    rows=_v39_rows("SELECT trade,requirement,source_ref FROM blueprint_scope_items WHERE project_id=? AND COALESCE(confidence,'')='HIGH' ORDER BY trade,id LIMIT 120",(project_id(),))
+    h="".join(f'<div class="action"><input type="checkbox" style="width:auto"> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">{esc(r["source_ref"])}</div></div>' for r in rows)
+    return shell("Quality Control",'<div class="hero"><h1>Quality-Control Brain</h1><p class="muted">Source-backed verification checklist.</p></div><div class="card">'+(h or '<p class="muted">Analyze plans first.</p>')+'</div>')
+
+@app.get("/autopilot/photos",response_class=HTMLResponse)
+def v40_photos():
+    rows=_v39_rows("SELECT * FROM attachments WHERE project_id=? ORDER BY id DESC LIMIT 100",(project_id(),))
+    photos=[r for r in rows if Path(r["original_name"] or "").suffix.lower() in {".jpg",".jpeg",".png",".webp"}]
+    h="".join(f'<div class="action"><span class="badge WATCH">REVIEW PHOTO</span> <b>{esc(r["original_name"])}</b><div class="small">Associate with location, trade, QC, punch or schedule impact.</div></div>' for r in photos)
+    return shell("Field Photo Intelligence",'<div class="hero"><h1>Field Photo Intelligence</h1><p class="muted">Human review required before formal issue creation.</p></div><div class="card">'+(h or '<p class="muted">No project photos uploaded.</p>')+'</div>')
+
+@app.get("/autopilot/forecast",response_class=HTMLResponse)
+def v40_forecast():
+    pid=project_id(); s=_v40_score(pid); acts=_v39_rows("SELECT * FROM activities WHERE project_id=? ORDER BY finish DESC LIMIT 1",(pid,)); finish=acts[0]["finish"] if acts else ""; open_items=len(_v39_attention(pid))
+    return shell("Project Forecast",f'<div class="hero"><h1>Project Forecast Brain</h1><p class="muted">Current planned finish: {esc(finish or "Not scheduled")}</p></div><div class="grid3"><div class="card"><div class="label">Health</div><div class="kpi">{s["health"]}</div></div><div class="card"><div class="label">Risk</div><div class="kpi">{s["risk"]}</div></div><div class="card"><div class="label">Open Decisions</div><div class="kpi">{open_items}</div></div></div>')
+
+@app.get("/autopilot/executive",response_class=HTMLResponse)
+def v40_executive():
+    rows=_v39_rows("SELECT * FROM projects WHERE company_id=? ORDER BY id DESC",(current_company_id(),)); h=""
+    for p in rows:
+        s=_v40_score(p["id"]); h+=f'<div class="action"><span class="badge">{esc(s["level"])}</span> <b>{esc(p["number"])} - {esc(p["name"])}</b><div class="small">Health {s["health"]}/100 - Risk {s["risk"]}/100</div></div>'
+    return shell("Executive Command",'<div class="hero"><h1>Executive Command Center</h1><p class="muted">Which projects need leadership attention and why.</p></div><div class="card">'+(h or '<p class="muted">No projects found.</p>')+'</div>')
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -1232,7 +1342,7 @@ def unified_manage():
       f'<div class="card"><div class="label">Submittals</div><div class="kpi">{s["submittals"]}</div></div>'
       f'<div class="card"><div class="label">Inspections</div><div class="kpi">{s["inspections"]}</div></div></div>'
       '<div class="grid3">'
-      +_v37_link_card("Today","Daily Superintendent Command: priorities, schedule exceptions and decisions.","/intelligence/daily-command")
+      +_v37_link_card("Today","Project Autopilot: risk, priorities, downstream impact and superintendent command.","/autopilot")
       +_v37_link_card("Schedule","Schedule and production planning.","/schedule")
       +_v37_link_card("Things That Need You","One queue for human decisions.","/actions")
       +_v37_link_card("RFIs / Issues","Questions, conflicts and issues.","/issues")
