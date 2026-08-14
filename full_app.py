@@ -890,6 +890,158 @@ def unified_projects_home():
     )
     return shell("Projects",body)
 
+# ============================================================
+# v38 UNIFIED PROJECT INTELLIGENCE PIPELINE
+# ============================================================
+
+def _v38_selected_docs(pid, attachment_ids):
+    ids=list(dict.fromkeys(attachment_ids or []))
+    if not ids: return []
+    c=db(); docs=[]
+    for aid in ids:
+        d=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",(aid,current_company_id(),pid)).fetchone()
+        if d: docs.append(d)
+    c.close(); return docs
+
+def _v38_run_blueprint(pid, docs, focus=""):
+    if not os.environ.get("OPENAI_API_KEY"): raise RuntimeError("OPENAI_API_KEY is not configured.")
+    if not docs: raise RuntimeError("No project documents were selected.")
+    total=sum(int(d["size_bytes"] or 0) for d in docs)
+    if total>=50*1024*1024: raise RuntimeError(f"Selected files total {total/1024/1024:.1f} MB. Keep each Analyze Project batch under 50 MB.")
+    model=os.environ.get("OPENAI_MODEL","gpt-5.6")
+    client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    uploaded=[]; input_content=[]; text_fallback=[]
+    try:
+        for d in docs:
+            path=os.path.join(UPLOAD_DIR,d["stored_name"])
+            if not os.path.isfile(path): continue
+            ext=Path(d["original_name"] or "").suffix.lower()
+            if ext==".pdf":
+                with open(path,"rb") as fh:
+                    remote=client.files.create(file=fh,purpose="user_data")
+                uploaded.append(remote.id); input_content.append({"type":"input_file","file_id":remote.id,"detail":"high"})
+            else:
+                extracted=_attachment_text(d)
+                if extracted: text_fallback.append(f"\n--- FILE: {d['original_name']} ---\n{extracted[:120000]}")
+        if not input_content and not text_fallback: raise RuntimeError("No readable selected files were available on the server.")
+        names="\n".join(f"- {d['original_name']}" for d in docs)
+        prompt=_blueprint_prompt(names)
+        if focus.strip(): prompt += "\n\nGC ANALYSIS FOCUS:\n"+focus.strip()
+        if text_fallback: prompt += "\n\nEXTRACTED NON-PDF DOCUMENT CONTENT:\n"+"\n".join(text_fallback)
+        input_content.append({"type":"input_text","text":prompt})
+        response=client.responses.create(model=model,input=[{"role":"user","content":input_content}])
+        data=_blueprint_json(response.output_text)
+        if not isinstance(data.get("trade_scopes"),list): raise RuntimeError("Plan Intelligence response did not contain trade scopes.")
+        run_id=_save_blueprint_result(pid,docs,data,model)
+        return {"run_id":run_id,"trades":len(data.get("trade_scopes") or [])}
+    finally:
+        for fid in uploaded:
+            try: client.files.delete(fid)
+            except Exception: pass
+
+def _v38_run_component_split(pid):
+    _seed_estimator_from_latest(pid); _ensure_takeoff_component_tables()
+    run=_latest_blueprint_run(pid)
+    if not run: return {"created":0,"skipped":"No plan intelligence run"}
+    c=db()
+    rows=c.execute("SELECT e.* FROM estimator_items e JOIN blueprint_scope_items b ON b.id=e.blueprint_scope_item_id WHERE e.company_id=? AND e.project_id=? AND b.run_id=? ORDER BY e.trade,e.id LIMIT 180",(current_company_id(),pid,run["id"])).fetchall()
+    c.close()
+    if not rows or not os.environ.get("OPENAI_API_KEY"): return {"created":0,"skipped":"No estimator items or AI key"}
+    client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    resp=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),input=_component_split_prompt(rows))
+    data=_v36_parse_json(resp.output_text); valid={int(r["id"]):r for r in rows}; now=datetime.utcnow().isoformat()
+    c=db(); created=0
+    for result in data.get("results") or []:
+        try: eid=int(result.get("estimator_id"))
+        except Exception: continue
+        if eid not in valid: continue
+        comps=result.get("components") or []
+        if len(comps)<=1: continue
+        c.execute("DELETE FROM takeoff_components WHERE company_id=? AND project_id=? AND estimator_item_id=? AND status='PROPOSED'",(current_company_id(),pid,eid))
+        for comp in comps[:25]:
+            name=str(comp.get("name") or "").strip(); desc=str(comp.get("description") or name).strip(); unit=str(comp.get("unit") or "").upper()
+            if not name or unit not in {"EA","LF","SF","CY","LS","HR","DAY","TON","GAL"}: continue
+            source=str(comp.get("source") or valid[eid]["source_ref"] or "")
+            c.execute("INSERT INTO takeoff_components(company_id,project_id,estimator_item_id,component_name,description,unit,quantity,confidence,basis,source_ref,status,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(current_company_id(),pid,eid,name,desc,unit,None,"VERIFY","Component split from cleaned parent scope; quantity not yet verified.",source,"PROPOSED",now,now))
+            created+=1
+    c.commit(); c.close(); return {"created":created}
+
+def _v38_run_auto_takeoff(pid):
+    _seed_estimator_from_latest(pid)
+    run,docs=_v36_latest_plan_docs(pid)
+    if not run or not docs or not os.environ.get("OPENAI_API_KEY"): return {"reviewed":0,"proposed":0,"verify":0,"skipped":"No run, docs, or AI key"}
+    targets=_v36_scope_targets(pid,run["id"])
+    if not targets: return {"reviewed":0,"proposed":0,"verify":0,"skipped":"No estimator targets"}
+    total=sum(int(d["size_bytes"] or 0) for d in docs if Path(d["original_name"] or "").suffix.lower()==".pdf")
+    if total>=50*1024*1024: return {"reviewed":0,"proposed":0,"verify":0,"skipped":"Plan set over 50 MB"}
+    client=OpenAI(api_key=os.environ["OPENAI_API_KEY"]); uploaded=[]; content=[]
+    try:
+        for d in docs:
+            path=os.path.join(UPLOAD_DIR,d["stored_name"])
+            if not os.path.isfile(path): continue
+            if Path(d["original_name"] or "").suffix.lower()==".pdf":
+                with open(path,"rb") as fh: remote=client.files.create(file=fh,purpose="user_data")
+                uploaded.append(remote.id); content.append({"type":"input_file","file_id":remote.id,"detail":"high"})
+        if not content: return {"reviewed":0,"proposed":0,"verify":0,"skipped":"No PDF plan files"}
+        content.append({"type":"input_text","text":_v36_takeoff_prompt(targets)})
+        response=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),input=[{"role":"user","content":content}])
+        data=_v36_parse_json(response.output_text); results=data.get("results") or []; valid_ids={int(r["estimator_id"]) for r in targets}; now=datetime.utcnow().isoformat()
+        c=db(); saved=0; proposed=0; verify=0
+        for item in results:
+            try: eid=int(item.get("estimator_id"))
+            except Exception: continue
+            if eid not in valid_ids: continue
+            q=item.get("quantity")
+            try: q=float(q) if q is not None else None
+            except Exception: q=None
+            unit=str(item.get("unit") or "").upper().strip()
+            if unit not in {"EA","LF","SF","CY","LS","HR","DAY","TON","GAL"}: unit=""
+            confidence=str(item.get("confidence") or "VERIFY").upper()
+            if confidence not in {"HIGH","MEDIUM","LOW","VERIFY"}: confidence="VERIFY"
+            basis=str(item.get("basis") or "")[:4000]; source=str(item.get("source") or "")[:1500]
+            c.execute("UPDATE estimator_items SET ai_quantity=?,ai_unit=?,ai_confidence=?,ai_basis=?,ai_source=?,ai_updated=? WHERE id=? AND company_id=? AND project_id=?",(q,unit,confidence,basis,source,now,eid,current_company_id(),pid))
+            saved+=1
+            if q is not None and confidence in {"HIGH","MEDIUM"}: proposed+=1
+            else: verify+=1
+        c.commit(); c.close(); return {"reviewed":saved,"proposed":proposed,"verify":verify}
+    finally:
+        for fid in uploaded:
+            try: client.files.delete(fid)
+            except Exception: pass
+
+@app.get("/build/analyze-project",response_class=HTMLResponse)
+def unified_analyze_project_page():
+    pid=project_id(); c=db()
+    docs=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",(current_company_id(),pid)).fetchall(); c.close()
+    eligible=[d for d in docs if Path(d["original_name"] or "").suffix.lower() in {".pdf",".txt",".csv",".xlsx",".xlsm"}]
+    checks="".join(f'<label style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)"><input type="checkbox" name="attachment_ids" value="{d["id"]}" style="width:auto"><span><b>{esc(d["original_name"])}</b><br><span class="small">{(int(d["size_bytes"] or 0)/1024/1024):.1f} MB</span></span></label>' for d in eligible) or '<div class="muted">No supported project documents are uploaded yet.</div>'
+    body='<div class="hero"><div class="eyebrow">BuildCommand · Unified Project Intelligence · v38</div><h1>Analyze the project once.</h1><p class="muted">BuildCommand runs Plan Intelligence, trade scope cleanup, estimator sync, takeoff splitting and quantity review.</p></div>'
+    body+='<div class="card"><form method="post" action="/build/analyze-project"><h2>Select project documents</h2>'+checks+'<label style="margin-top:16px">Optional analysis focus</label><textarea name="focus" placeholder="Example: Full bid/scope review"></textarea><button type="submit">Analyze Project</button></form><p class="small">Selected files must total less than 50 MB. AI quantity proposals never overwrite estimator-entered quantities.</p></div>'
+    return shell("Analyze Project",body)
+
+@app.post("/build/analyze-project",response_class=HTMLResponse)
+def unified_analyze_project_run(attachment_ids:list[int] | None=Form(None),focus:str=Form("")):
+    pid=project_id(); docs=_v38_selected_docs(pid,attachment_ids)
+    if not docs: return shell("Analyze Project",'<div class="card"><h2>Select at least one project document.</h2><p><a href="/build/analyze-project">← Back</a></p></div>')
+    stages=[]
+    try:
+        bp=_v38_run_blueprint(pid,docs,focus); stages.append(("Plan Intelligence","COMPLETE",f'{bp["trades"]} trade scopes generated'))
+        est=_seed_estimator_from_latest(pid); stages.append(("Estimator Sync","COMPLETE",f'{est["added"]} new · {est["updated"]} refreshed'))
+        comp=_v38_run_component_split(pid)
+        stages.append(("Takeoff Component Split","REVIEW" if comp.get("skipped") else "COMPLETE",comp.get("skipped") or f'{comp["created"]} measurable components created'))
+        auto=_v38_run_auto_takeoff(pid)
+        stages.append(("Automatic Quantity Review","REVIEW" if auto.get("skipped") else "COMPLETE",auto.get("skipped") or f'{auto["proposed"]} quantity proposals · {auto["verify"]} need verification'))
+        rows="".join(f'<div class="action"><span class="badge {"READY" if status=="COMPLETE" else "WATCH"}">{status}</span> <b>{esc(name)}</b><div class="small">{esc(detail)}</div></div>' for name,status,detail in stages)
+        body='<div class="hero"><div class="eyebrow">Unified Project Intelligence · v38</div><h1>Project intelligence ready.</h1><p class="muted">The brains ran as one pipeline. Review only the items that need human judgment.</p></div><div class="card"><h2>Pipeline Results</h2>'+rows+'</div><div class="grid3">'
+        body+=_v37_link_card("Review BUILD","Review cleaned trade scope and project intelligence.","/build","Open BUILD")+_v37_link_card("Review ESTIMATE","Review takeoff proposals and estimator data.","/estimate","Open ESTIMATE")+_v37_link_card("Things That Need You","Review human-decision items.","/actions","Review")+'</div>'
+        return shell("Project Intelligence Ready",body)
+    except Exception as exc:
+        rows="".join(f'<div class="action"><span class="badge READY">{status}</span> <b>{esc(name)}</b><div class="small">{esc(detail)}</div></div>' for name,status,detail in stages)
+        body='<div class="hero"><h1>Analyze Project stopped.</h1></div><div class="card"><p>'+esc(str(exc))+'</p></div>'
+        if rows: body+='<div class="card"><h2>Completed before stop</h2>'+rows+'</div>'
+        body+='<div class="card"><p><a href="/build/analyze-project">← Back to Analyze Project</a></p></div>'
+        return shell("Analyze Project",body)
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -897,7 +1049,7 @@ def unified_build():
       '<div class="hero"><div class="eyebrow">BUILD</div><h1>Understand the project.</h1><p class="muted">One place for plans, specs and scope intelligence.</p></div>'
       f'<div class="card"><div class="label">Source-backed Scope Items</div><div class="kpi">{s["scope"]}</div></div>'
       '<div class="grid2">'
-      +_v37_link_card("Analyze Project","Upload/read plans and specifications and build cleaned trade scopes.","/plans-specs-ai","Analyze")
+      +_v37_link_card("Analyze Project","Upload once. BuildCommand runs plan intelligence, estimator sync, takeoff splitting and quantity review automatically.","/build/analyze-project","Analyze")
       +_v37_link_card("Review Project Scope","Review unified source-backed construction intelligence.","/brain","Review")
       +'</div><details class="card"><summary><b>More Build tools</b></summary><p><a href="/documents">Documents</a> · <a href="/document-ai">Deep Document AI</a></p></details>'
     )
