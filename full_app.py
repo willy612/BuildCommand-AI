@@ -735,9 +735,25 @@ NAV_GROUPS=[
     ])
 ]
 
+def _v37_esc(value):
+    import html
+    return html.escape(str(value or ""), quote=True)
+
+
+# ============================================================
+
 def categorized_nav():
-    items=[("Projects","/"),("Build","/build"),("Estimate","/estimate"),("Manage","/manage"),("Ask BuildCommand","/ask-buildcommand")]
-    return "".join(f'<a href="{href}" style="display:block;padding:12px 10px;margin:4px 0;border-radius:9px;">{esc(label)}</a>' for label,href in items)
+    items=[
+        ("Projects","/"),
+        ("Build","/build"),
+        ("Estimate","/estimate"),
+        ("Manage","/manage"),
+        ("Ask BuildCommand","/ask-buildcommand"),
+    ]
+    return "".join(
+        f'<a href="{href}" style="display:block;padding:12px 10px;margin:4px 0;border-radius:9px;">{_v37_esc(label)}</a>'
+        for label,href in items
+    )
 
 def shell(title, body):
     current_pid = project_id()
@@ -786,12 +802,6 @@ def select_project(project_id: int = Form(...)):
 # v37.2 UNIFIED BUILDCOMMAND INTERFACE FIX
 # ============================================================
 
-def _v37_esc(value):
-    import html
-    return html.escape(str(value or ""), quote=True)
-
-
-# ============================================================
 
 def _v37_count(sql,args=()):
     """
