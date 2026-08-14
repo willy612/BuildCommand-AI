@@ -9446,144 +9446,234 @@ def _v33_normalize_trade(name):
     return aliases.get(n, (name or "Unassigned").strip() or "Unassigned")
 
 def _v33_trade_for_item(item, proposed_trade):
-    """
-    v34 Core Brain trade classifier.
-    Priority: MEP/system demolition -> general demolition -> protected systems ->
-    actual new-work material/operation. Source sheet never determines ownership.
-    """
+    """v34.1 field-tested Blueprint Brain trade classifier."""
+    req=str(item.get("requirement") or "").strip().lower()
     text=" ".join(str(item.get(k) or "") for k in
                   ["requirement","source_note","source_spec","related_trade"]).lower()
     proposed=_v33_normalize_trade(proposed_trade)
 
-    def has(*terms):
-        return any(x in text for x in terms)
+    def has(*terms): return any(x in text for x in terms)
 
-    demo = has("demo","demolish","demolition","remove existing","remove and dispose",
-               "existing to be removed","disconnect and remove","remove receptacle",
-               "remove outlet","remove switch","remove panel","remove conduit",
-               "remove sprinkler","remove duct","remove diffuser","remove vav",
-               "remove rtu","remove ahu","remove fan coil","remove plumbing",
-               "remove sanitary","remove waste","remove water piping","remove fire alarm",
-               "remove camera","remove card reader","remove access control")
+    # ------------------------------------------------------------
+    # 1) ACTION FIRST: demolition ownership
+    # Demolition must be the work action, not merely context such as
+    # "patching resulting from demolition."
+    explicit_demo=(
+        req.startswith("demo ") or req.startswith("demolish ") or
+        req.startswith("remove existing ") or req.startswith("remove and dispose ") or
+        " existing to be removed" in req or " shall be demolished" in req or
+        " demolition of " in req
+    )
 
-    # MEP/system demolition stays with the owning system.
-    if demo:
+    # Access/coordination removal is NOT demolition scope when it is explicitly remove-and-replace.
+    access_remove_replace=has("remove and replace ceiling tile","remove and replace ceiling tiles",
+                              "remove and replace ceiling grid","remove/reinstall ceiling",
+                              "remove and reinstall ceiling","temporarily remove ceiling")
+
+    if explicit_demo and not access_remove_replace:
+        # If the primary requirement is clearly general architectural demo and merely says
+        # MEP removals remain by their trades, keep the item in Demolition.
+        general_demo_objects=has("restroom partition","toilet partition","accessories","finish flooring",
+                                 "wall finish","ceiling finish","metal stud partition","gypsum partition",
+                                 "drywall partition","door and frame","casework","millwork","storefront",
+                                 "ceramic tile","flooring","ceiling tile","ceiling grid")
+        exception_language=has("remain assigned to their respective trades","system-specific",
+                               "mep removals remain","mep removal remains")
+        if general_demo_objects and exception_language:
+            return "Demolition"
+
+        # Protected MEP/system demo.
         if has("fire alarm","smoke detector","horn strobe","pull station","notification appliance"):
             return "Fire Alarm"
         if has("card reader","card access","access control","electronic strike","electric strike",
                "electrified strike","request to exit","rex device","door contact","security contact",
-               "camera","cctv","security system","intrusion alarm","data","telecom","low voltage",
-               "low-voltage","cabling","intercom"):
+               "camera","cctv","security system","intrusion alarm","data cabling","telecom cabling",
+               "low voltage","low-voltage","intercom"):
             return "Low Voltage"
-        if has("sprinkler","sprinkler head","fire protection","fire suppression","branch line",
-               "sprinkler piping"):
+        if has("sprinkler","fire suppression","fire protection piping"):
             return "Fire Sprinkler"
-        if has("receptacle","outlet","switch","panel","panelboard","transformer","conduit",
-               "wire","wiring","circuit","breaker","light fixture","lighting","disconnect",
-               "electrical","feeder"):
+        if has("receptacle","outlet","switch","panelboard","electrical panel","transformer","conduit",
+               "wire","wiring","branch circuit","breaker","light fixture","lighting fixture","feeder"):
             return "Electrical"
-        if has("plumbing","water closet","lavatory","sink","faucet","domestic water","sanitary",
-               "waste","vent piping","water heater","floor drain","cleanout","plumbing fixture"):
+        if has("water closet","urinal","lavatory","wash fountain","mop sink","floor sink","floor drain",
+               "drinking fountain","plumbing fixture","sanitary piping","waste piping","vent piping",
+               "domestic water","water heater","plumbing piping"):
             return "Plumbing"
-        if has("hvac","mechanical","duct","ductwork","diffuser","grille","vav","rtu","ahu",
-               "fan coil","exhaust fan","air handler","thermostat","chilled water","refrigerant"):
+        if has("ductwork","duct","diffuser","grille","register","vav","rtu","ahu","fan coil",
+               "exhaust fan","air handler","mechanical equipment","hvac equipment","refrigerant piping"):
             return "HVAC / Mechanical"
         return "Demolition"
 
-    # Low voltage/security is protected from Electrical or Doors/Hardware.
+    # ------------------------------------------------------------
+    # 2) GC / coordination responsibilities
+    # ------------------------------------------------------------
+    if has("coordinate installation and utility rough-ins","coordinate installation","coordinate utility rough-ins",
+           "confirm which appliances","confirm which equipment","confirm owner-furnished",
+           "owner furnished versus contractor furnished","owner-furnished versus contractor-furnished",
+           "verify furnished by","confirm furnished by","confirm procurement responsibility"):
+        return "GC / General Contractor"
+
+    # ------------------------------------------------------------
+    # 3) Explicit work-action overrides equipment/location words
+    # ------------------------------------------------------------
+    if has("electrical connections","electrical connection","disconnecting means","provide power",
+           "power connection","branch circuit","electrical circuit","electrical feed","provide disconnect"):
+        return "Electrical"
+
+    # Plumbing fixture/equipment package. Location inside millwork never changes ownership.
+    if has("plumbing fixture schedule","water closets","urinals","lavatories","wash fountains",
+           "mop sink","floor sink","floor drains","drinking fountains","break-room sinks",
+           "break room sinks","disposal connections","instantaneous electric water heater","iwh-1",
+           "chronomite"):
+        return "Plumbing"
+
+    # HVAC equipment package. Roof-mounted/roof curb is location/accessory, not Roofing.
+    if has("exhaust fan","ef-1","greenheck","upblast fan","upblast exhaust fan","full-size exhaust duct",
+           "full size exhaust duct","backdraft damper"):
+        return "HVAC / Mechanical"
+
+    # Roof repair work specifically belongs to Roofing.
+    if has("patch roof","roof patch","repair roof","roof repair","restore roof","roof membrane patch",
+           "patch roofing","repair roof membrane","restore roof membrane","roof flashing",
+           "flash roof penetration","watertight roof restoration"):
+        return "Roofing"
+
+    # ------------------------------------------------------------
+    # 4) Protected specialty systems
+    # ------------------------------------------------------------
     if has("card reader","card access","access control","electronic strike","electric strike",
            "electrified strike","request to exit","rex device","door contact","security contact",
            "camera","cctv","security system","intrusion alarm","data cabling","telecom cabling",
            "low voltage","low-voltage","intercom"):
         return "Low Voltage"
 
-    # Fire sprinkler owns heads/piping even when ceiling coordination is mentioned.
-    if has("sprinkler head","sprinkler heads","sprinkler piping","fire sprinkler",
-           "fire suppression piping","sprinkler branch"):
+    if has("sprinkler head","sprinkler heads","sprinkler piping","fire sprinkler","fire suppression piping",
+           "sprinkler branch","sprinkler drop"):
         return "Fire Sprinkler"
 
-    # Roofing owns patching/repair/flashing/watertight restoration.
-    if has("patch roof","roof patch","repair roof","roof repair","restore roof",
-           "roof membrane patch","patch roofing","roof flashing","flash roof penetration",
-           "watertight roof"):
-        return "Roofing"
+    if has("fire extinguisher cabinet","fire extinguisher cabinets","semi-recessed fire extinguisher",
+           "larson or equal"):
+        return "Specialties"
 
-    # Blocking/backing/support framing belongs to Framing/Drywall.
-    if has("wood blocking","concealed wood blocking","blocking","wood backing","plywood backing",
-           "in-wall backing","in wall backing","metal backing","concealed backing",
-           "support framing","equivalent supports"):
+    # ------------------------------------------------------------
+    # 5) Framing/Drywall primary assemblies and supports
+    # ------------------------------------------------------------
+    if has("concealed wood blocking","wood blocking","plywood backing","wood backing","in-wall backing",
+           "in wall backing","metal backing","concealed backing","support framing","equivalent supports"):
         return "Framing / Drywall"
 
-    # Wall patching belongs to Framing/Drywall.
+    if has("marlite","symmetrix","smart seam","frp","fiberglass reinforced panel",
+           "fiberglass-reinforced panel","wainscot"):
+        return "Framing / Drywall"
+
+    if has("wall type b","gypsum-board ceiling","gypsum board ceiling","resilient channels",
+           "resilient channel","acoustical sealant","taped joints","metal-stud jamb","metal stud jamb",
+           "metal-stud header","metal stud header","rough openings","rough opening","stud framing",
+           "metal studs","metal stud","steel studs","steel stud","gypsum board","gyp board","drywall",
+           "shaftwall","shaft wall"):
+        return "Framing / Drywall"
+
     if has("wall patch","patch wall","patch drywall","drywall patch","gypsum patch","patch gypsum",
-           "repair drywall","repair gypsum","gyp board patch","patch gyp","patch and repair wall"):
+           "repair drywall","repair gypsum","gyp board patch","patch gyp","patch and repair wall",
+           "patch gypsum board","wall or ceiling openings resulting from demolition"):
         return "Framing / Drywall"
-    if has("paint patched","paint patch","repaint","touch-up paint","touch up paint",
-           "paint repair","refinish patched","finish paint"):
-        return "Painting"
 
-    # Storefront/glazing separate from standard doors/hardware.
-    if has("storefront","store front","aluminum entrance","aluminum storefront","curtain wall",
-           "glass entrance","glazing","glazed entrance","sidelite","side lite",
-           "borrowed lite","borrowed light"):
-        return "Storefront / Glazing"
+    # ------------------------------------------------------------
+    # 6) Ceilings
+    # ------------------------------------------------------------
+    if has("suspended acoustical tile ceiling","suspended acoustical tile ceilings",
+           "acoustical tile ceiling","acoustical tile ceilings","acoustic ceiling tile",
+           "acoustical ceiling tile","ceiling tiles and grid","ceiling tile and grid",
+           "ceiling tiles","ceiling grid","act ceiling","suspension system"):
+        return "Ceilings"
 
-    rough_opening=has("rough opening","jamb stud","jamb studs","header framing",
-                      "frame opening with studs","stud opening")
-    if not rough_opening and has("hollow metal door","hollow metal frame","hm door","hm frame",
-           "wood door","door frame","door frames","door leaf","door leaves","door hardware",
-           "hardware set","door closer","panic hardware","exit device","lockset","door threshold",
-           "door sweep","door hinges","door schedule"):
+    # ------------------------------------------------------------
+    # 7) Doors vs Storefront/Glazing -- primary system first
+    # ------------------------------------------------------------
+    interior_door_system=has("interior doors and frames","interior door and frame","hollow-metal framed windows",
+                             "hollow metal framed windows","interior hollow-metal","interior hollow metal",
+                             "door schedule","door hardware sets","rotary white birch doors","hollow-metal doors",
+                             "hollow metal doors")
+    if interior_door_system:
         return "Doors / Frames / Hardware"
 
-    if has("ceramic tile","porcelain tile","wall tile","floor tile","tile base","tile grout",
-           "grout tile","tile mortar","tile adhesive","setting bed","tile setting","tile trim","schluter"):
+    # True storefront/glazing system only; generic 'glazing' is not enough.
+    if has("aluminum storefront","storefront system","store front system","curtain wall","aluminum entrance",
+           "exterior storefront","storefront doors","storefront frames"):
+        return "Storefront / Glazing"
+
+    if has("door frame","door frames","wood door","wood doors","hollow metal frame","hollow-metal frame",
+           "door hardware","hardware set","door closer","panic hardware","exit device","lockset",
+           "door threshold","door sweep","door hinges"):
+        return "Doors / Frames / Hardware"
+
+    # ------------------------------------------------------------
+    # 8) Finishes / tile / flooring / paint
+    # ------------------------------------------------------------
+    if has("faux tile backsplash","tile backsplash","backsplash wt2","aspect ideas a9550",
+           "ceramic tile","porcelain tile","wall tile","floor tile","tile base","tile grout",
+           "tile mortar","tile adhesive","setting bed","tile setting","tile trim","schluter"):
         return "Tile"
 
-    if has("rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl",
-           "vct","carpet tile","sheet vinyl","resilient flooring","floor transition","transition strip"):
+    if has("rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl","vct",
+           "carpet tile","sheet vinyl","resilient flooring","floor transition","transition strip"):
         return "Flooring"
 
-    if has("metal stud","metal studs","cold formed metal framing","track and stud","steel stud",
-           "steel studs","metal track","deflection track","stud framing","jamb stud","jamb studs",
-           "header framing","rough opening","gypsum board","gyp board","drywall","shaftwall",
-           "shaft wall"):
-        return "Framing / Drywall"
-
-    if has("acoustic ceiling tile","acoustical ceiling tile","act ceiling","ceiling grid"):
-        return "Ceilings"
-    if has("paint","painting","wall coating","primer","finish coat"):
+    if has("paint or refinish","paint patched","paint patch","repaint","touch-up paint","touch up paint",
+           "paint repair","refinish patched","finish paint","painting of patched surfaces"):
         return "Painting"
+
     if has("casework","millwork","cabinet","countertop"):
         return "Millwork / Casework"
-    if has("roofing","roof membrane","roof system"):
-        return "Roofing"
-    if has("receptacle","panelboard","electrical conduit","branch circuit"):
+
+    # Conservative fallbacks: do not allow location/source words to steal ownership.
+    if has("electrical","receptacle","panelboard","conduit","circuit"):
         return "Electrical"
-    if has("sanitary piping","domestic water","plumbing fixture"):
+    if has("plumbing","sanitary","domestic water"):
         return "Plumbing"
-    if has("ductwork","diffuser","vav box","mechanical equipment","hvac"):
+    if has("hvac","mechanical","ductwork","diffuser","vav"):
         return "HVAC / Mechanical"
+    if has("paint","painting","primer","finish coat"):
+        return "Painting"
 
     return proposed
 
 def _v33_reclassify_data(data):
+    """Rebuild every parent trade scope from final item ownership."""
     grouped={}
-    metadata={}
     for td in data.get("trade_scopes") or []:
         proposed=_v33_normalize_trade(td.get("trade"))
         for item in td.get("items") or []:
-            target=_v33_trade_for_item(item, proposed)
-            grouped.setdefault(target, []).append(item)
-            metadata.setdefault(target, {"division": str(td.get("division") or ""), "summary": str(td.get("summary") or "")})
+            if not isinstance(item,dict):
+                continue
+            target=_v33_trade_for_item(item, proposed) or "Unassigned"
+            clean=dict(item)
+            clean["assigned_trade"]=target
+            # Preserve source and original proposed trade for auditability.
+            if proposed and proposed != target:
+                clean["original_proposed_trade"]=proposed
+            grouped.setdefault(target,[]).append(clean)
+
+    division_defaults={
+        "GC / General Contractor":"01","Demolition":"02","Concrete":"03","Masonry":"04",
+        "Structural Steel":"05","Rough Carpentry":"06","Waterproofing":"07","Roofing":"07",
+        "Doors / Frames / Hardware":"08","Storefront / Glazing":"08","Framing / Drywall":"09",
+        "Ceilings":"09","Flooring":"09","Tile":"09","Painting":"09","Specialties":"10",
+        "Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23","Controls":"23",
+        "Electrical":"26","Low Voltage":"27","Fire Alarm":"28"
+    }
     rebuilt=[]
-    division_defaults={"Demolition":"02","Concrete":"03","Masonry":"04","Structural Steel":"05","Rough Carpentry":"06","Waterproofing":"07","Roofing":"07","Doors / Frames / Hardware":"08","Glazing":"08","Storefront / Glazing":"08","Framing / Drywall":"09","Ceilings":"09","Flooring":"09","Tile":"09","Painting":"09","Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23","Controls":"23","Electrical":"26","Fire Alarm":"28","Low Voltage":"27"}
-    for trade,items in grouped.items():
-        meta=metadata.get(trade,{})
-        rebuilt.append({"trade":trade,"division":division_defaults.get(trade,meta.get("division", "")),"summary":meta.get("summary") or f"BuildCommand classified scope for {trade}.","items":items})
+    for trade in sorted(grouped):
+        items=grouped[trade]
+        rebuilt.append({
+            "trade":trade,
+            "division":division_defaults.get(trade,""),
+            "summary":f"BuildCommand source-backed scope for {trade}.",
+            "items":items
+        })
     data["trade_scopes"]=rebuilt
     notes=data.setdefault("review_notes",[])
-    notes.append("v34 Core Brain applied action-first construction ownership rules before scopes were saved; GC review is still required.")
+    notes.append("v34.1 rebuilt every parent trade scope from final action-first ownership; source sheet/location cannot override the primary work assembly.")
     return data
 
 
@@ -9721,7 +9811,7 @@ def buildcommand_core_brain():
             if run else '<span class="badge WATCH">NO PLAN ANALYSIS YET</span>')
     body=f"""
     <div class="hero">
-      <div class="eyebrow">BuildCommand Core Brain · v34</div>
+      <div class="eyebrow">BuildCommand Core Brain · v34.1</div>
       <h1>One construction brain. One project memory.</h1>
       <div class="muted">{project_label}</div><div style="margin-top:12px">{latest}</div>
     </div>
