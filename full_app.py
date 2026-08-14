@@ -10974,8 +10974,168 @@ def _v33_reclassify_data(data):
     return data
 
 
+
+# ============================================================
+# v44.1 BLUEPRINT OWNERSHIP GUARD
+# ============================================================
+
+_V441_TRADES=set(V33_TRADES)
+
+def _v441_primary_trade(requirement, proposed):
+    s=str(requirement or "").lower().strip()
+    def has(*terms): return any(x in s for x in terms)
+
+    if has("fire alarm","horn strobe","pull station","notification appliance","smoke detector"):
+        return "Fire Alarm"
+    if has("card access","card reader","access control","electronic strike","electric strike",
+           "electrified strike","request to exit","rex device","door contact","cctv","camera",
+           "security system","intrusion alarm","data cabling","telecom cabling","intercom"):
+        return "Low Voltage"
+    if has("sprinkler head","sprinkler heads","sprinkler piping","fire sprinkler",
+           "fire suppression piping","sprinkler branch","sprinkler drop"):
+        return "Fire Sprinkler"
+
+    demo=(s.startswith("demo ") or s.startswith("demolish ") or s.startswith("remove existing ")
+          or s.startswith("remove and dispose ") or "shall be demolished" in s)
+    if demo:
+        if has("receptacle","panelboard","electrical panel","branch circuit","conduit","wiring","light fixture"):
+            return "Electrical"
+        if has("water closet","urinal","lavatory","floor drain","sanitary piping","domestic water","plumbing fixture"):
+            return "Plumbing"
+        if has("ductwork","diffuser","grille","vav","rtu","ahu","exhaust fan","mechanical equipment"):
+            return "HVAC / Mechanical"
+        if has("fire alarm","smoke detector","horn strobe","pull station"):
+            return "Fire Alarm"
+        if has("card reader","access control","camera","data cabling","telecom cabling"):
+            return "Low Voltage"
+        if has("sprinkler","fire suppression"):
+            return "Fire Sprinkler"
+        return "Demolition"
+
+    # Explicit work action beats equipment/location words.
+    if has("patch roof","roof patch","repair roof","roof repair","restore roof","roof membrane patch",
+           "patch roofing","repair roof membrane","flash roof penetration","roof flashing",
+           "watertight roof","roof penetration patch"):
+        return "Roofing"
+
+    if has("electrical connection","electrical connections","disconnecting means","provide power",
+           "branch circuit","electrical feed","power connection","provide disconnect"):
+        return "Electrical"
+
+    if has("water closet","urinal","lavatory","wash fountain","mop sink","floor sink","floor drain",
+           "drinking fountain","plumbing fixture","break-room sink","break room sink",
+           "disposal connection","instantaneous electric water heater","chronomite","iwh-1"):
+        return "Plumbing"
+
+    if has("exhaust fan","upblast fan","greenheck","backdraft damper","full-size exhaust duct",
+           "full size exhaust duct","rtu","ahu","air handler","vav","diffuser","grille","ductwork"):
+        return "HVAC / Mechanical"
+
+    if has("concealed wood blocking","wood blocking","wood backing","plywood backing","metal backing",
+           "in-wall backing","in wall backing","support framing","rough opening","metal-stud jamb",
+           "metal stud jamb","metal-stud header","metal stud header","stud framing","metal studs",
+           "steel studs","gypsum board","gyp board","drywall","shaftwall","shaft wall",
+           "patch gypsum","patch drywall","wall patch","patch wall","repair drywall",
+           "marlite","symmetrix","frp","wainscot"):
+        return "Framing / Drywall"
+
+    if has("suspended acoustical tile ceiling","acoustical tile ceiling","acoustic ceiling tile",
+           "acoustical ceiling tile","ceiling tile and grid","ceiling tiles and grid",
+           "ceiling grid","act ceiling","suspension system"):
+        return "Ceilings"
+
+    if has("interior doors and frames","interior door and frame","hollow-metal framed window",
+           "hollow metal framed window","door schedule","door hardware set","hollow-metal door",
+           "hollow metal door","door frame","door hardware","lockset","panic hardware","exit device"):
+        return "Doors / Frames / Hardware"
+
+    if has("aluminum storefront","storefront system","store front system","curtain wall",
+           "aluminum entrance","exterior storefront","storefront door","storefront frame"):
+        return "Storefront / Glazing"
+
+    if has("faux tile backsplash","tile backsplash","ceramic tile","porcelain tile","wall tile",
+           "floor tile","tile base","tile grout","tile mortar","tile adhesive","schluter"):
+        return "Tile"
+
+    if has("rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl","vct",
+           "carpet tile","sheet vinyl","resilient flooring","floor transition","transition strip"):
+        return "Flooring"
+
+    if has("paint or refinish","paint patched","repaint","touch-up paint","touch up paint",
+           "paint repair","finish paint","painting of patched surfaces"):
+        return "Painting"
+
+    if has("fire extinguisher cabinet","fire extinguisher cabinets","semi-recessed fire extinguisher"):
+        return "Specialties"
+
+    if has("casework","millwork","countertop"):
+        return "Millwork / Casework"
+
+    return _v33_normalize_trade(proposed)
+
+def _v441_apply_approved_learning(pid, requirement, trade):
+    try:
+        _v43_ensure_tables()
+        c=db()
+        rows=c.execute("""
+            SELECT * FROM learning_rules
+            WHERE company_id=? AND approval_status='APPROVED'
+              AND (project_id=? OR scope_level='COMPANY STANDARD')
+              AND rule_type IN ('TRADE ASSIGNMENT','SCOPE BOUNDARY')
+            ORDER BY CASE WHEN project_id=? THEN 0 ELSE 1 END,id DESC
+        """,(current_company_id(),pid,pid)).fetchall()
+        c.close()
+        low=str(requirement or "").lower()
+        for r in rows:
+            subject=str(r["subject"] or "").strip().lower()
+            if subject and subject in low:
+                learned=str(r["learned_rule"] or "").strip()
+                target=learned.split("->")[-1].strip() if "->" in learned else learned
+                target=_v33_normalize_trade(target)
+                if target in _V441_TRADES:
+                    return target
+    except Exception:
+        pass
+    return trade
+
+def _v441_reclassify_with_learning(pid,data):
+    grouped={}
+    for td in data.get("trade_scopes") or []:
+        proposed=_v33_normalize_trade(td.get("trade"))
+        for item in td.get("items") or []:
+            if not isinstance(item,dict): continue
+            req=str(item.get("requirement") or "").strip()
+            if not req: continue
+            target=_v33_trade_for_item(item,proposed) or proposed
+            target=_v441_primary_trade(req,target)
+            target=_v441_apply_approved_learning(pid,req,target)
+            clean=dict(item)
+            clean["assigned_trade"]=target
+            if proposed != target:
+                clean["original_proposed_trade"]=proposed
+            grouped.setdefault(target,[]).append(clean)
+
+    div={
+        "GC / General Contractor":"01","Demolition":"02","Concrete":"03","Masonry":"04",
+        "Structural Steel":"05","Rough Carpentry":"06","Waterproofing":"07","Roofing":"07",
+        "Doors / Frames / Hardware":"08","Storefront / Glazing":"08","Framing / Drywall":"09",
+        "Ceilings":"09","Flooring":"09","Tile":"09","Painting":"09","Millwork / Casework":"12",
+        "Specialties":"10","Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23",
+        "Controls":"23","Electrical":"26","Low Voltage":"27","Fire Alarm":"28"
+    }
+    data["trade_scopes"]=[
+        {"trade":trade,"division":div.get(trade,""),
+         "summary":f"BuildCommand source-backed scope for {trade}.","items":items}
+        for trade,items in sorted(grouped.items())
+    ]
+    data.setdefault("review_notes",[]).append(
+        "v44.1 Blueprint Ownership Guard applied action/assembly routing and approved learning rules before save."
+    )
+    return data
+
 def _save_blueprint_result(pid, docs, data, model_name):
     data=_v33_reclassify_data(data)
+    data=_v441_reclassify_with_learning(pid,data)
     company_id=current_company_id(); user_id=current_user_id(); now=datetime.utcnow().isoformat()
     c=db()
     c.execute("INSERT INTO blueprint_runs(company_id,project_id,status,source_files,project_summary,detected_disciplines,cross_discipline_flags,rfi_candidates,review_notes,model_name,created_by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(
@@ -12272,7 +12432,7 @@ def blueprint_trade_scope(scope_id:int):
         related=(' · <b>Related trade:</b> '+esc(item["related_trade"])) if item["related_trade"] else ''
         options=''.join(f'<option {"selected" if item["status"]==st else ""}>{st}</option>' for st in ["NOT_STARTED","IN_PROGRESS","INSPECTION_REQUIRED","COMPLETE","VERIFIED"])
         trade_options=''.join(f'<option value="{esc(t)}" {"selected" if item["trade"]==t else ""}>{esc(t)}</option>' for t in V33_TRADES)
-        cards.append(f'<div class="action"><span class="badge {confidence_badge}">{esc(item["confidence"])}</span> <span class="badge {type_badge}">{esc(typ)}</span><h3>{esc(item["requirement"])}</h3><div class="small"><b>Assigned trade:</b> {esc(item["trade"])} · <b>Source:</b> {esc(" · ".join(refs) or "Source not clearly identified")}{related}</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px"><form method="post" action="/blueprint-brain/item/{item["id"]}/status"><select name="status">{options}</select><button type="submit">Update status</button></form><form method="post" action="/blueprint-brain/item/{item["id"]}/trade"><select name="trade">{trade_options}</select><button type="submit">Move trade</button></form></div></div>')
+        cards.append(f'<div class="action"><span class="badge {confidence_badge}">{esc(item["confidence"])}</span> <span class="badge {type_badge}">{esc(typ)}</span><h3>{esc(item["requirement"])}</h3><div class="small"><b>Assigned trade:</b> {esc(item["trade"])} · <b>Source:</b> {esc(" · ".join(refs) or "Source not clearly identified")}{related}</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px"><form method="post" action="/blueprint-brain/item/{item["id"]}/status"><select name="status">{options}</select><button type="submit">Update status</button></form><form method="post" action="/blueprint-brain/item/{item["id"]}/trade"><select name="trade">{trade_options}</select><select name="learn_scope"><option>PROJECT ONLY</option><option>COMPANY STANDARD</option></select><button type="submit">Move & Learn</button></form></div></div>')
     body=f'<div class="hero"><div class="eyebrow">Division {esc(scope["division"] or "—")} · Blueprint Brain</div><h1>{esc(scope["trade"])} Scope of Work</h1><div class="muted">{esc(scope["summary"] or "")}</div></div><div class="card"><p><a href="/blueprint-brain/run/{scope["run_id"]}">← Full Blueprint Intelligence</a> · <a href="/blueprint-brain/trade/{scope_id}/export.txt">Export scope text</a></p></div><div class="card"><h2>Scope Boiler</h2><div style="white-space:pre-wrap">{esc(scope["scope_text"] or "")}</div></div><div class="card"><h2>Execution Checklist</h2>{"".join(cards) or "<div class=muted>No scope items.</div>"}</div>'
     return shell(scope["trade"]+" Scope",body)
 
@@ -12289,27 +12449,53 @@ def blueprint_item_status(item_id:int,status:str=Form(...)):
 
 
 @app.post("/blueprint-brain/item/{item_id}/trade")
-def blueprint_item_trade(item_id:int,trade:str=Form(...)):
+def blueprint_item_trade(item_id:int,trade:str=Form(...),learn_scope:str=Form("PROJECT ONLY")):
     trade=_v33_normalize_trade(trade)
     if trade not in V33_TRADES:
         return HTMLResponse("Invalid trade",400)
+    if learn_scope not in {"PROJECT ONLY","COMPANY STANDARD"}:
+        learn_scope="PROJECT ONLY"
+
     pid=project_id(); company_id=current_company_id(); c=db()
     item=c.execute("SELECT * FROM blueprint_scope_items WHERE id=? AND company_id=? AND project_id=?",(item_id,company_id,pid)).fetchone()
-    if not item: c.close(); return HTMLResponse("Scope item not found",404)
-    old_scope_id=item["trade_scope_id"]; run_id=item["run_id"]
+    if not item:
+        c.close(); return HTMLResponse("Scope item not found",404)
+
+    old_trade=item["trade"]; old_scope_id=item["trade_scope_id"]; run_id=item["run_id"]
     target=c.execute("SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? AND trade=?",(run_id,company_id,pid,trade)).fetchone()
     if not target:
-        div={"Demolition":"02","Flooring":"09","Framing / Drywall":"09","Plumbing":"22","HVAC / Mechanical":"23","Electrical":"26","Fire Sprinkler":"21","Fire Alarm":"28","Low Voltage":"27"}.get(trade,"")
+        div={"GC / General Contractor":"01","Demolition":"02","Roofing":"07",
+             "Doors / Frames / Hardware":"08","Storefront / Glazing":"08",
+             "Flooring":"09","Tile":"09","Painting":"09","Framing / Drywall":"09",
+             "Ceilings":"09","Specialties":"10","Plumbing":"22","HVAC / Mechanical":"23",
+             "Electrical":"26","Fire Sprinkler":"21","Fire Alarm":"28","Low Voltage":"27"}.get(trade,"")
         now=datetime.utcnow().isoformat()
-        c.execute("INSERT INTO blueprint_trade_scopes(company_id,project_id,run_id,trade,division,summary,scope_text,item_count,created) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,pid,run_id,trade,div,f"BuildCommand classified scope for {trade}.","",0,now))
+        c.execute("INSERT INTO blueprint_trade_scopes(company_id,project_id,run_id,trade,division,summary,scope_text,item_count,created) VALUES(?,?,?,?,?,?,?,?,?)",
+                  (company_id,pid,run_id,trade,div,f"BuildCommand classified scope for {trade}.","",0,now))
         target_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
     else:
         target_id=target["id"]
-    c.execute("UPDATE blueprint_scope_items SET trade=?,trade_scope_id=? WHERE id=? AND company_id=? AND project_id=?",(trade,target_id,item_id,company_id,pid))
+
+    c.execute("UPDATE blueprint_scope_items SET trade=?,trade_scope_id=? WHERE id=? AND company_id=? AND project_id=?",
+              (trade,target_id,item_id,company_id,pid))
     for sid in {old_scope_id,target_id}:
         count=c.execute("SELECT COUNT(*) n FROM blueprint_scope_items WHERE trade_scope_id=? AND company_id=? AND project_id=?",(sid,company_id,pid)).fetchone()["n"]
         c.execute("UPDATE blueprint_trade_scopes SET item_count=? WHERE id=? AND company_id=? AND project_id=?",(count,sid,company_id,pid))
     c.commit(); c.close()
+
+    if old_trade != trade:
+        _v43_ensure_tables()
+        c=db(); now=datetime.utcnow().isoformat()
+        subject=str(item["requirement"] or "")[:220]
+        c.execute("""INSERT INTO learning_rules(
+            company_id,project_id,rule_type,subject,learned_rule,source_ref,scope_level,
+            approval_status,approved_by,confidence,created,updated
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (company_id,pid,"TRADE ASSIGNMENT",subject,f"{old_trade} -> {trade}",
+         "Blueprint manual correction",learn_scope,"APPROVED",
+         str(current_user_id()),"HIGH",now,now))
+        c.commit(); c.close()
+
     return RedirectResponse(f"/blueprint-brain/trade/{target_id}",status_code=303)
 
 
