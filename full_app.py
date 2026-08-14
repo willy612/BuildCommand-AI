@@ -783,31 +783,60 @@ def select_project(project_id: int = Form(...)):
 
 
 # ============================================================
-# v37 UNIFIED BUILDCOMMAND INTERFACE
+# v37.1 UNIFIED BUILDCOMMAND INTERFACE FIX
 # ============================================================
 
-def _v37_count(sql,args):
+def _v37_count(sql,args=()):
+    """
+    PostgreSQL/SQLite-safe scalar counter for unified dashboard.
+    Always aliases COUNT(*) as n so dict_row and sqlite Row behave the same.
+    """
     c=db()
     try:
         r=c.execute(sql,args).fetchone()
-        value=int(r[0] if r else 0)
+        value=int((r["n"] if r and "n" in r.keys() else 0) or 0)
+        c.close()
+        return value
     except Exception:
-        value=0
-    c.close()
-    return value
+        try: c.rollback()
+        except Exception: pass
+        try: c.close()
+        except Exception: pass
+        return 0
 
 def _v37_snapshot(pid):
     if not pid:
         return dict(scope=0,estimate=0,review=0,issues=0,submittals=0,actions=0,inspections=0)
     co=current_company_id()
     return {
-        "scope":_v37_count("SELECT COUNT(*) FROM blueprint_scope_items WHERE company_id=? AND project_id=?",(co,pid)),
-        "estimate":_v37_count("SELECT COUNT(*) FROM estimator_items WHERE company_id=? AND project_id=?",(co,pid)),
-        "review":_v37_count("SELECT COUNT(*) FROM estimator_items WHERE company_id=? AND project_id=? AND COALESCE(verified,0)=0",(co,pid)),
-        "issues":_v37_count("SELECT COUNT(*) FROM issues WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE')",(pid,)),
-        "submittals":_v37_count("SELECT COUNT(*) FROM submittals WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','APPROVED','COMPLETE')",(pid,)),
-        "actions":_v37_count("SELECT COUNT(*) FROM actions WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE')",(pid,)),
-        "inspections":_v37_count("SELECT COUNT(*) FROM inspections WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE','PASSED')",(pid,))
+        "scope":_v37_count(
+            "SELECT COUNT(*) AS n FROM blueprint_scope_items WHERE company_id=? AND project_id=?",
+            (co,pid)
+        ),
+        "estimate":_v37_count(
+            "SELECT COUNT(*) AS n FROM estimator_items WHERE company_id=? AND project_id=?",
+            (co,pid)
+        ),
+        "review":_v37_count(
+            "SELECT COUNT(*) AS n FROM estimator_items WHERE company_id=? AND project_id=? AND COALESCE(verified,0)=0",
+            (co,pid)
+        ),
+        "issues":_v37_count(
+            "SELECT COUNT(*) AS n FROM project_issues WHERE project_id=? AND COALESCE(status,'OPEN')!='CLOSED'",
+            (pid,)
+        ),
+        "submittals":_v37_count(
+            "SELECT COUNT(*) AS n FROM submittals WHERE project_id=? AND COALESCE(status,'PENDING') NOT IN ('APPROVED','APPROVED_AS_NOTED','CLOSED','COMPLETE')",
+            (pid,)
+        ),
+        "actions":_v37_count(
+            "SELECT COUNT(*) AS n FROM action_items WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE')",
+            (pid,)
+        ),
+        "inspections":_v37_count(
+            "SELECT COUNT(*) AS n FROM inspections_tracker WHERE project_id=? AND COALESCE(result,'PENDING')!='PASSED'",
+            (pid,)
+        )
     }
 
 def _v37_link_card(title,desc,href,label="Open"):
@@ -819,7 +848,7 @@ def _v37_link_card(title,desc,href,label="Open"):
 def unified_projects_home():
     pid=project_id(); s=_v37_snapshot(pid)
     attention=s["issues"]+s["submittals"]+s["actions"]+s["inspections"]
-    c=db(); current=c.execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone() if pid else None; c.close()
+    c=db(); current=c.execute("SELECT * FROM projects WHERE id=? AND company_id=?",(pid,current_company_id())).fetchone() if pid else None; c.close()
     name=esc(current["name"]) if current else "Select or create a project"
     body=(
       '<div class="hero"><div class="eyebrow">BuildCommand AI · Construction Operations Intelligence System</div><h1>'+name+'</h1>'
