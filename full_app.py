@@ -1793,6 +1793,238 @@ def v43_knowledge_core():
     head=f'<div class="hero"><h1>BuildCommand Construction Knowledge Core</h1><p class="muted">{approved} approved - {project} project-only - {company} company standards - {globaln} controlled global rules.</p><p><b>Knowledge firewall:</b> PROJECT ONLY can never silently become COMPANY STANDARD or GLOBAL. Promotion requires human approval.</p></div>'
     return shell("Knowledge Core",head+'<div class="card">'+(h or '<p class="muted">The controlled knowledge core is ready to learn from approved construction decisions.</p>')+'</div>')
 
+
+# ============================================================
+# v44 PRECONSTRUCTION & BID INTELLIGENCE
+# ============================================================
+
+def _v44_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS pursuit_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,client TEXT,project_type TEXT,
+        location TEXT,bid_due TEXT,estimated_value {num} DEFAULT 0,competition TEXT,
+        strategic_fit {num} DEFAULT 0,risk_score {num} DEFAULT 0,win_score {num} DEFAULT 0,
+        recommendation TEXT DEFAULT 'REVIEW',notes TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS bid_invites(
+        id {pk},company_id BIGINT,project_id BIGINT,trade TEXT,sub_name TEXT,
+        contact TEXT,invite_date TEXT,due_date TEXT,status TEXT DEFAULT 'PLANNED',
+        response TEXT,notes TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS bid_proposals(
+        id {pk},company_id BIGINT,project_id BIGINT,trade TEXT,sub_name TEXT,
+        base_bid {num} DEFAULT 0,alternates {num} DEFAULT 0,allowances {num} DEFAULT 0,
+        exclusions TEXT,qualifications TEXT,scope_coverage {num} DEFAULT 0,
+        risk_score {num} DEFAULT 0,status TEXT DEFAULT 'REVIEW',received_date TEXT,
+        notes TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS bid_packages(
+        id {pk},company_id BIGINT,project_id BIGINT,trade TEXT,title TEXT,
+        scope_text TEXT,source_count INTEGER DEFAULT 0,status TEXT DEFAULT 'DRAFT',
+        issued_date TEXT,due_date TEXT,created TEXT,updated TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit(); c.close()
+
+def _v44_scope_by_trade(pid):
+    return _v39_rows(
+        "SELECT trade,COUNT(*) AS n FROM blueprint_scope_items WHERE project_id=? GROUP BY trade ORDER BY trade",
+        (pid,)
+    )
+
+def _v44_estimate_by_trade(pid):
+    rows=_v39_rows("""
+        SELECT trade,
+               SUM(COALESCE(quantity,0)*COALESCE(material_unit_cost,0)) AS material,
+               SUM(COALESCE(quantity,0)*COALESCE(labor_unit_cost,0)) AS labor,
+               SUM(COALESCE(subcontract_quote,0)) AS subquote,
+               SUM(COALESCE(allowance,0)) AS allowance
+        FROM estimator_items
+        WHERE project_id=?
+        GROUP BY trade ORDER BY trade
+    """,(pid,))
+    return rows
+
+def _v44_historical_cost_by_trade():
+    _v43_ensure_tables()
+    return _v39_rows("""
+        SELECT trade,AVG(COALESCE(unit_cost,0)) AS avg_unit_cost,
+               COUNT(*) AS samples,SUM(COALESCE(total_cost,0)) AS total_history
+        FROM historical_costs
+        WHERE company_id=? AND COALESCE(approval_status,'APPROVED')='APPROVED'
+        GROUP BY trade ORDER BY trade
+    """,(current_company_id(),))
+
+def _v44_bid_coverage(pid):
+    _v44_ensure_tables()
+    scopes=_v44_scope_by_trade(pid)
+    invites=_v39_rows("SELECT * FROM bid_invites WHERE company_id=? AND project_id=?",(current_company_id(),pid))
+    proposals=_v39_rows("SELECT * FROM bid_proposals WHERE company_id=? AND project_id=?",(current_company_id(),pid))
+    out=[]
+    for r in scopes:
+        trade=str(r["trade"] or "")
+        ti=[x for x in invites if str(x["trade"] or "").lower()==trade.lower()]
+        tp=[x for x in proposals if str(x["trade"] or "").lower()==trade.lower()]
+        status="PRICED" if tp else "INVITED" if ti else "NO COVERAGE"
+        out.append((trade,int(r["n"] or 0),len(ti),len(tp),status))
+    return out
+
+def _v44_scope_gaps(pid):
+    rows=_v39_rows("""
+        SELECT * FROM blueprint_scope_items
+        WHERE project_id=? AND (
+            COALESCE(confidence,'MEDIUM') IN ('LOW','MEDIUM')
+            OR COALESCE(related_trade,'')!=''
+        )
+        ORDER BY trade,id LIMIT 150
+    """,(pid,))
+    return rows
+
+def _v44_allowances(pid):
+    rows=_v39_rows("""
+        SELECT * FROM estimator_items
+        WHERE project_id=? AND (
+            COALESCE(allowance,0)>0
+            OR LOWER(COALESCE(description,'')) LIKE '%allowance%'
+            OR LOWER(COALESCE(description,'')) LIKE '%alternate%'
+            OR LOWER(COALESCE(description,'')) LIKE '%owner furnished%'
+        )
+        ORDER BY trade,id
+    """,(pid,))
+    return rows
+
+def _v44_long_leads(pid):
+    rows=_v39_rows("""
+        SELECT * FROM procurement
+        WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('DELIVERED','COMPLETE','CLOSED')
+        ORDER BY required_on_site
+    """,(pid,))
+    return rows
+
+def _v44_precon_risk(pid):
+    coverage=_v44_bid_coverage(pid)
+    gaps=_v44_scope_gaps(pid)
+    est=_v44_estimate_by_trade(pid)
+    longleads=_v44_long_leads(pid)
+    uncovered=sum(1 for x in coverage if x[4]=="NO COVERAGE")
+    unverified=_v37_snapshot(pid)["review"]
+    score=min(100,uncovered*10+len(gaps)*2+unverified*2+len(longleads)*4)
+    level="CRITICAL" if score>=70 else "HIGH" if score>=45 else "MEDIUM" if score>=20 else "LOW"
+    return {"score":score,"level":level,"uncovered":uncovered,"gaps":len(gaps),"unverified":unverified,"longleads":len(longleads)}
+
+def _v44_pursuit(pid):
+    _v44_ensure_tables()
+    rows=_v39_rows("SELECT * FROM pursuit_intelligence WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1",(current_company_id(),pid))
+    return rows[0] if rows else None
+
+@app.get("/preconstruction",response_class=HTMLResponse)
+def v44_preconstruction():
+    pid=project_id(); _v44_ensure_tables()
+    risk=_v44_precon_risk(pid); coverage=_v44_bid_coverage(pid); gaps=_v44_scope_gaps(pid)
+    proposals=_v39_rows("SELECT * FROM bid_proposals WHERE company_id=? AND project_id=?",(current_company_id(),pid))
+    allowances=_v44_allowances(pid); longleads=_v44_long_leads(pid)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v44 - Preconstruction & Bid Intelligence</div><h1>Decide what to bid, what it should cost, and where the risk is.</h1><p class="muted">Preconstruction risk {risk["level"]} ({risk["score"]}/100) - {risk["uncovered"]} trades without bid coverage - {len(proposals)} proposals - {len(gaps)} scope review items - {len(allowances)} allowance/alternate items - {len(longleads)} long-lead signals.</p></div><div class="grid3">'
+    cards=[
+      ("Pursuit / Go-No-Go","Should we chase this project? Score fit, risk, competition and win potential.","/preconstruction/pursuit"),
+      ("Scope Completeness","What is in the job, what is unclear, and what might be missing.","/preconstruction/scope"),
+      ("Estimate Benchmark","Compare current estimate structure with approved historical company costs.","/preconstruction/benchmark"),
+      ("Bid Coverage","Which trades are covered, invited, priced or completely exposed.","/preconstruction/coverage"),
+      ("Bidder Strategy","Build the subcontractor pursuit list by trade and performance history.","/preconstruction/bidders"),
+      ("Bid Packages","Turn cleaned Blueprint Brain scopes into trade bid-package readiness.","/preconstruction/packages"),
+      ("Bid Leveling","Compare subcontractor pricing, coverage, exclusions and qualifications.","/preconstruction/leveling"),
+      ("Allowances & Alternates","Separate uncertain money before it disappears into the estimate.","/preconstruction/allowances"),
+      ("Long-Lead / Schedule Risk","Find procurement items that can hurt the proposed schedule.","/preconstruction/long-lead"),
+      ("Preconstruction Risk","One consolidated view of scope, pricing, coverage and schedule exposure.","/preconstruction/risk")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Preconstruction",body)
+
+@app.get("/preconstruction/pursuit",response_class=HTMLResponse)
+def v44_pursuit_page():
+    pid=project_id(); p=_v44_pursuit(pid); risk=_v44_precon_risk(pid)
+    if p:
+        win=float(p["win_score"] or 0); fit=float(p["strategic_fit"] or 0)
+        rec=p["recommendation"] or "REVIEW"
+        detail=f'<div class="grid3"><div class="card"><div class="label">Win Score</div><div class="kpi">{win:g}</div></div><div class="card"><div class="label">Strategic Fit</div><div class="kpi">{fit:g}</div></div><div class="card"><div class="label">Recommendation</div><div class="kpi">{esc(rec)}</div></div></div><div class="card"><p>{esc(p["notes"])}</p></div>'
+    else:
+        detail=f'<div class="card"><span class="badge WATCH">REVIEW</span><h2>Go / No-Go candidate</h2><p>Current preconstruction risk: <b>{risk["level"]}</b> ({risk["score"]}/100).</p><p class="muted">Add client, competition, strategic fit, project value and win probability before making a pursuit decision.</p></div>'
+    return shell("Pursuit Intelligence",'<div class="hero"><h1>Pursuit / Go-No-Go Brain</h1><p class="muted">Do not burn estimating time on every opportunity. Score whether the project is worth chasing.</p></div>'+detail)
+
+@app.get("/preconstruction/scope",response_class=HTMLResponse)
+def v44_scope_page():
+    rows=_v44_scope_gaps(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(r["confidence"])}</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">{esc(r["source_sheet"])} {esc(r["source_detail"])} {esc(r["source_spec"])}'+(f' - Related trade: {esc(r["related_trade"])}' if r["related_trade"] else '')+'</div></div>' for r in rows)
+    return shell("Scope Completeness",'<div class="hero"><h1>Scope Completeness Brain</h1><p class="muted">Focus estimating attention on ambiguous, cross-trade and lower-confidence requirements.</p></div><div class="card">'+(h or '<p class="muted">No obvious scope-completeness exceptions detected.</p>')+'</div>')
+
+@app.get("/preconstruction/benchmark",response_class=HTMLResponse)
+def v44_benchmark_page():
+    current=_v44_estimate_by_trade(project_id()); hist=_v44_historical_cost_by_trade()
+    hm={str(r["trade"] or "").lower():r for r in hist}; h=""
+    for r in current:
+        trade=str(r["trade"] or ""); current_total=float(r["material"] or 0)+float(r["labor"] or 0)+float(r["subquote"] or 0)+float(r["allowance"] or 0)
+        old=hm.get(trade.lower())
+        hist_text=f'{int(old["samples"] or 0)} historical samples - avg unit cost ${float(old["avg_unit_cost"] or 0):,.2f}' if old else 'No approved historical benchmark'
+        h+=f'<div class="action"><b>{esc(trade)}</b><div class="small">Current estimator total ${current_total:,.0f} - {esc(hist_text)}</div></div>'
+    return shell("Estimate Benchmark",'<div class="hero"><h1>Estimate Benchmark Brain</h1><p class="muted">Historical costs inform review; they never replace current project takeoff or subcontractor pricing.</p></div><div class="card">'+(h or '<p class="muted">No current estimate data.</p>')+'</div>')
+
+@app.get("/preconstruction/coverage",response_class=HTMLResponse)
+def v44_coverage_page():
+    rows=_v44_bid_coverage(project_id())
+    h="".join(f'<div class="action"><span class="badge {"READY" if status=="PRICED" else "WATCH"}">{esc(status)}</span> <b>{esc(trade)}</b><div class="small">{n} scope items - {invites} invite(s) - {proposals} proposal(s)</div></div>' for trade,n,invites,proposals,status in rows)
+    return shell("Bid Coverage",'<div class="hero"><h1>Bid Coverage Brain</h1><p class="muted">Every trade should have deliberate pricing coverage before bid day.</p></div><div class="card">'+(h or '<p class="muted">Analyze project scope first.</p>')+'</div>')
+
+@app.get("/preconstruction/bidders",response_class=HTMLResponse)
+def v44_bidders_page():
+    pid=project_id()
+    subs=_v39_rows("SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",(pid,))
+    perf=_v39_rows("SELECT * FROM subcontractor_performance WHERE company_id=? AND COALESCE(approval_status,'PROPOSED')='APPROVED' ORDER BY trade,sub_name",(current_company_id(),))
+    pm={(str(r["sub_name"] or "").lower(),str(r["trade"] or "").lower()):r for r in perf}
+    h=""
+    for s in subs:
+        p=pm.get((str(s["name"] or "").lower(),str(s["trade"] or "").lower()))
+        score=""
+        if p:
+            vals=[float(p[k] or 0) for k in ["schedule_score","quality_score","safety_score","responsiveness_score","closeout_score"]]
+            score=f' - Performance avg {sum(vals)/len(vals):.1f}'
+        h+=f'<div class="action"><b>{esc(s["name"])} - {esc(s["trade"])}</b><div class="small">Bidder candidate{esc(score)}</div></div>'
+    return shell("Bidder Strategy",'<div class="hero"><h1>Bidder Strategy Brain</h1><p class="muted">Build the bidder list using trade coverage and approved performance history, not price alone.</p></div><div class="card">'+(h or '<p class="muted">No subcontractors loaded for this project.</p>')+'</div>')
+
+@app.get("/preconstruction/packages",response_class=HTMLResponse)
+def v44_packages_page():
+    rows=_v44_scope_by_trade(project_id())
+    h="".join(f'<div class="action"><span class="badge READY">READY TO BUILD</span> <b>{esc(r["trade"])}</b><div class="small">{int(r["n"] or 0)} source-backed scope items can feed a trade bid package.</div></div>' for r in rows)
+    return shell("Bid Packages",'<div class="hero"><h1>Bid Package Brain</h1><p class="muted">Clean Blueprint Brain scope becomes the foundation of each subcontractor bid package.</p></div><div class="card">'+(h or '<p class="muted">Analyze project documents first.</p>')+'</div>')
+
+@app.get("/preconstruction/leveling",response_class=HTMLResponse)
+def v44_leveling_page():
+    _v44_ensure_tables()
+    rows=_v39_rows("SELECT * FROM bid_proposals WHERE company_id=? AND project_id=? ORDER BY trade,base_bid",(current_company_id(),project_id()))
+    h="".join(f'<div class="action"><span class="badge {"READY" if float(r["scope_coverage"] or 0)>=90 else "WATCH"}">{float(r["scope_coverage"] or 0):g}% COVERAGE</span> <b>{esc(r["trade"])} - {esc(r["sub_name"])}</b><div class="small">Base ${float(r["base_bid"] or 0):,.0f} - Alternates ${float(r["alternates"] or 0):,.0f} - Allowances ${float(r["allowances"] or 0):,.0f} - Risk {float(r["risk_score"] or 0):g}</div><p><b>Exclusions:</b> {esc(r["exclusions"])}</p><p><b>Qualifications:</b> {esc(r["qualifications"])}</p></div>' for r in rows)
+    return shell("Bid Leveling",'<div class="hero"><h1>Subcontractor Bid Leveling Brain</h1><p class="muted">Lowest number does not mean lowest risk. Compare scope coverage, exclusions, qualifications and price.</p></div><div class="card">'+(h or '<p class="muted">No subcontractor proposals loaded yet.</p>')+'</div>')
+
+@app.get("/preconstruction/allowances",response_class=HTMLResponse)
+def v44_allowance_page():
+    rows=_v44_allowances(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">REVIEW</span> <b>{esc(r["trade"])}</b> - {esc(r["description"])}<div class="small">Allowance ${float(r["allowance"] or 0):,.0f} - {esc(r["source_ref"])}</div></div>' for r in rows)
+    return shell("Allowances & Alternates",'<div class="hero"><h1>Allowances & Alternates Brain</h1><p class="muted">Keep uncertain money, owner-furnished items and alternates visible before final bid.</p></div><div class="card">'+(h or '<p class="muted">No allowance/alternate signals detected.</p>')+'</div>')
+
+@app.get("/preconstruction/long-lead",response_class=HTMLResponse)
+def v44_longlead_page():
+    rows=_v44_long_leads(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(r["status"])}</span> <b>{esc(r["item"])}</b><div class="small">Required onsite {esc(r["required_on_site"])} - Promised {esc(r["promised_date"])} - {esc(r["vendor"])}</div></div>' for r in rows)
+    return shell("Long Lead",'<div class="hero"><h1>Long-Lead / Schedule Risk Brain</h1><p class="muted">Preconstruction should identify procurement threats before the baseline schedule is committed.</p></div><div class="card">'+(h or '<p class="muted">No long-lead procurement items loaded yet.</p>')+'</div>')
+
+@app.get("/preconstruction/risk",response_class=HTMLResponse)
+def v44_risk_page():
+    r=_v44_precon_risk(project_id())
+    body=f'<div class="hero"><h1>Preconstruction Risk Brain</h1><p class="muted">{r["level"]} risk - Score {r["score"]}/100.</p></div><div class="grid4"><div class="card"><div class="label">Uncovered Trades</div><div class="kpi">{r["uncovered"]}</div></div><div class="card"><div class="label">Scope Review</div><div class="kpi">{r["gaps"]}</div></div><div class="card"><div class="label">Unverified Estimate</div><div class="kpi">{r["unverified"]}</div></div><div class="card"><div class="label">Long-Lead Signals</div><div class="kpi">{r["longleads"]}</div></div></div>'
+    return shell("Preconstruction Risk",body)
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -1802,7 +2034,7 @@ def unified_build():
       '<div class="grid2">'
       +_v37_link_card("Analyze Project","Upload once. BuildCommand runs plan intelligence, estimator sync, takeoff splitting and quantity review automatically.","/build/analyze-project","Analyze")
       +_v37_link_card("Review Project Scope","Review unified source-backed construction intelligence.","/brain","Review")
-      +'</div><details class="card"><summary><b>More Build tools</b></summary><p><a href="/documents">Documents</a> · <a href="/document-ai">Deep Document AI</a></p></details>'
+      +'</div><details class="card"><summary><b>More Build tools</b></summary><p><a href="/preconstruction">Preconstruction & Bid Intelligence</a> · <a href="/documents">Documents</a> · <a href="/document-ai">Deep Document AI</a></p></details>'
     )
     return shell("Build",body)
 
