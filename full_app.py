@@ -1042,6 +1042,158 @@ def unified_analyze_project_run(attachment_ids:list[int] | None=Form(None),focus
         body+='<div class="card"><p><a href="/build/analyze-project">← Back to Analyze Project</a></p></div>'
         return shell("Analyze Project",body)
 
+
+# ============================================================
+# v39 NEXT 10 CONSTRUCTION INTELLIGENCE
+# ============================================================
+
+def _v39_rows(sql,args=()):
+    c=db()
+    try:
+        return c.execute(sql,args).fetchall()
+    finally:
+        c.close()
+
+def _v39_safe_date(v):
+    try:
+        return datetime.fromisoformat(str(v)[:10]).date()
+    except Exception:
+        return None
+
+def _v39_priority(due,priority=""):
+    p=str(priority or "").upper()
+    d=_v39_safe_date(due)
+    today=datetime.utcnow().date()
+    if p in {"CRITICAL","URGENT"} or (d and d<today): return "CRITICAL"
+    if d==today or p=="HIGH": return "TODAY"
+    if d and 0 < (d-today).days <= 7: return "THIS WEEK"
+    return "REVIEW"
+
+def _v39_attention(pid):
+    items=[]
+    for r in _v39_rows("SELECT * FROM action_items WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE')",(pid,)):
+        items.append((_v39_priority(r["due"],r["priority"]),"ACTION",r["title"],r["due"] or "",r["owner"] or ""))
+    for r in _v39_rows("SELECT * FROM project_issues WHERE project_id=? AND COALESCE(status,'OPEN')!='CLOSED'",(pid,)):
+        items.append((_v39_priority(r["due"],r["priority"]),"ISSUE",r["title"],r["due"] or "",r["owner"] or ""))
+    for r in _v39_rows("SELECT * FROM submittals WHERE project_id=? AND COALESCE(status,'PENDING') NOT IN ('APPROVED','CLOSED','COMPLETE')",(pid,)):
+        items.append((_v39_priority(r["due_date"],"HIGH" if r["due_date"] else ""),"SUBMITTAL",r["title"],r["due_date"] or "",r["responsible_party"] or ""))
+    for r in _v39_rows("SELECT * FROM inspections_tracker WHERE project_id=? AND COALESCE(result,'PENDING')!='PASSED'",(pid,)):
+        items.append((_v39_priority(r["scheduled_date"],"HIGH" if r["scheduled_date"] else ""),"INSPECTION",r["inspection_type"],r["scheduled_date"] or "",r["authority"] or ""))
+    for r in _v39_rows("SELECT * FROM estimator_items WHERE project_id=? AND COALESCE(verified,0)=0 AND COALESCE(ai_confidence,'') IN ('LOW','VERIFY')",(pid,)):
+        items.append(("REVIEW","ESTIMATE",r["description"],"",r["trade"] or ""))
+    rank={"CRITICAL":0,"TODAY":1,"THIS WEEK":2,"REVIEW":3,"FYI":4}
+    return sorted(items,key=lambda x:rank.get(x[0],9))
+
+def _v39_memory_rules(pid):
+    return _v39_rows("SELECT trade,requirement,confidence FROM blueprint_scope_items WHERE project_id=? AND COALESCE(confidence,'')='HIGH' ORDER BY id DESC LIMIT 100",(pid,))
+
+def _v39_conflicts(pid):
+    return _v39_rows("SELECT requirement,COUNT(DISTINCT trade) AS n,MIN(trade) AS trade FROM blueprint_scope_items WHERE project_id=? GROUP BY requirement HAVING COUNT(DISTINCT trade)>1 ORDER BY n DESC LIMIT 50",(pid,))
+
+def _v39_schedule_risks(pid):
+    today=datetime.utcnow().date()
+    rows=_v39_rows("SELECT * FROM activities WHERE project_id=? AND COALESCE(status,'NOT_STARTED')!='COMPLETE' ORDER BY start LIMIT 100",(pid,))
+    out=[]
+    for r in rows:
+        s=_v39_safe_date(r["start"]); f=_v39_safe_date(r["finish"]); pct=float(r["pct"] or 0)
+        if f and f<today and pct<100: out.append(("CRITICAL",r["name"],"Past finish date",r["finish"]))
+        elif s and 0 <= (s-today).days <= 14 and pct==0: out.append(("THIS WEEK",r["name"],"Upcoming / make-ready",r["start"]))
+    return out
+
+def _v39_procurement(pid):
+    return _v39_rows("SELECT * FROM procurement WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('DELIVERED','COMPLETE','CLOSED') ORDER BY required_on_site LIMIT 100",(pid,))
+
+def _v39_changes(pid):
+    return _v39_rows("SELECT * FROM change_events WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('CLOSED','COMPLETE') ORDER BY id DESC LIMIT 100",(pid,))
+
+@app.get("/intelligence",response_class=HTMLResponse)
+def v39_intelligence_center():
+    pid=project_id(); attention=_v39_attention(pid); conflicts=_v39_conflicts(pid); sched=_v39_schedule_risks(pid); proc=_v39_procurement(pid); changes=_v39_changes(pid)
+    cards=[
+        ("Things That Need You",len(attention),"/intelligence/attention","Prioritized decisions across the job."),
+        ("Project Memory",len(_v39_memory_rules(pid)),"/intelligence/memory","High-confidence construction knowledge retained from this project."),
+        ("Conflict Brain",len(conflicts),"/intelligence/conflicts","Cross-scope conflicts that deserve review."),
+        ("RFI Intelligence",len(conflicts),"/intelligence/rfis","Draft RFIs from detected conflicts."),
+        ("Schedule Intelligence",len(sched),"/intelligence/schedule","Late and upcoming work requiring make-ready."),
+        ("Look-Ahead Brain",len(sched),"/intelligence/lookahead","2, 3 and 6 week field outlook."),
+        ("Procurement Brain",len(proc),"/intelligence/procurement","Long-lead and required-on-site tracking."),
+        ("Bid Scope Brain",_v37_snapshot(pid)["scope"],"/intelligence/bids","Trade scope package intelligence."),
+        ("Cost & Change",len(changes),"/intelligence/changes","Open cost and schedule exposure."),
+        ("Daily Superintendent Command",len(attention)+len(sched),"/intelligence/daily-command","Today's project command brief.")
+    ]
+    body='<div class="hero"><div class="eyebrow">BuildCommand v39</div><h1>Construction Intelligence Center</h1><p class="muted">Ten brains. One project operating system. The main menu stays simple.</p></div><div class="grid3">'
+    for name,count,href,desc in cards:
+        body+=f'<div class="card"><div class="label">{esc(name)}</div><div class="kpi">{count}</div><p class="muted">{esc(desc)}</p><a href="{href}">Open →</a></div>'
+    body+='</div>'
+    return shell("Intelligence",body)
+
+@app.get("/intelligence/attention",response_class=HTMLResponse)
+def v39_attention_page():
+    items=_v39_attention(project_id())
+    rows="".join(f'<div class="action"><span class="badge">{esc(level)}</span> <b>{esc(kind)}</b> — {esc(title)}<div class="small">{esc(due)} {esc(owner)}</div></div>' for level,kind,title,due,owner in items)
+    return shell("Things That Need You",'<div class="hero"><h1>Things That Need You</h1><p class="muted">Critical → Today → This Week → Review.</p></div><div class="card">'+(rows or '<p class="muted">Nothing needs attention.</p>')+'</div>')
+
+@app.get("/intelligence/memory",response_class=HTMLResponse)
+def v39_memory_page():
+    rows=_v39_memory_rules(project_id())
+    h="".join(f'<div class="action"><b>{esc(r["trade"])}</b><div>{esc(r["requirement"])}</div><span class="small">Confidence: {esc(r["confidence"])}</span></div>' for r in rows)
+    return shell("Project Memory",'<div class="hero"><h1>Project Memory Brain</h1><p class="muted">High-confidence project construction knowledge retained for future reasoning.</p></div><div class="card">'+(h or '<p class="muted">Memory grows as project intelligence is reviewed.</p>')+'</div>')
+
+@app.get("/intelligence/conflicts",response_class=HTMLResponse)
+def v39_conflicts_page():
+    rows=_v39_conflicts(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">REVIEW</span> {esc(r["requirement"])}<div class="small">Appears under {r["n"]} trades.</div></div>' for r in rows)
+    return shell("Conflict Brain",'<div class="hero"><h1>Cross-Document Conflict Brain</h1></div><div class="card">'+(h or '<p class="muted">No duplicate cross-trade requirements detected.</p>')+'</div>')
+
+@app.get("/intelligence/rfis",response_class=HTMLResponse)
+def v39_rfi_page():
+    rows=_v39_conflicts(project_id())
+    h="".join(f'<div class="card"><span class="badge WATCH">DRAFT RFI</span><h3>{esc(r["requirement"])}</h3><p>Please clarify the governing scope/document requirement. BuildCommand detected this requirement across multiple trade assignments.</p><p class="small">Human approval required before issue.</p></div>' for r in rows)
+    return shell("RFI Intelligence",'<div class="hero"><h1>Automatic RFI Intelligence</h1><p class="muted">Proposals only. Nothing is sent automatically.</p></div>'+(h or '<div class="card">No RFI candidates detected.</div>'))
+
+@app.get("/intelligence/schedule",response_class=HTMLResponse)
+def v39_schedule_page():
+    rows=_v39_schedule_risks(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(name)}</b><div class="small">{esc(reason)} · {esc(date)}</div></div>' for level,name,reason,date in rows)
+    return shell("Schedule Intelligence",'<div class="hero"><h1>Schedule Intelligence Brain</h1></div><div class="card">'+(h or '<p class="muted">No immediate schedule exceptions detected.</p>')+'</div>')
+
+@app.get("/intelligence/lookahead",response_class=HTMLResponse)
+def v39_lookahead_page():
+    pid=project_id(); today=datetime.utcnow().date(); rows=_v39_rows("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,))
+    body='<div class="hero"><h1>Look-Ahead Brain</h1><p class="muted">2, 3 and 6 week production outlook.</p></div>'
+    for weeks in (2,3,6):
+        end=today+timedelta(days=weeks*7)
+        subset=[r for r in rows if _v39_safe_date(r["start"]) and today <= _v39_safe_date(r["start"]) <= end]
+        h="".join(f'<div class="action"><b>{esc(r["name"])}</b><div class="small">{esc(r["trade"])} · {esc(r["start"])} → {esc(r["finish"])}</div></div>' for r in subset)
+        body+=f'<div class="card"><h2>{weeks}-Week Look-Ahead</h2>{h or "<p class=muted>No scheduled starts in this window.</p>"}</div>'
+    return shell("Look-Ahead",body)
+
+@app.get("/intelligence/procurement",response_class=HTMLResponse)
+def v39_procurement_page():
+    rows=_v39_procurement(project_id())
+    h="".join(f'<div class="action"><b>{esc(r["item"])}</b><div class="small">Required: {esc(r["required_on_site"])} · Promised: {esc(r["promised_date"])} · {esc(r["status"])}</div></div>' for r in rows)
+    return shell("Procurement Intelligence",'<div class="hero"><h1>Procurement & Long-Lead Brain</h1></div><div class="card">'+(h or '<p class="muted">No open procurement items.</p>')+'</div>')
+
+@app.get("/intelligence/bids",response_class=HTMLResponse)
+def v39_bid_page():
+    rows=_v39_rows("SELECT trade,COUNT(*) AS n FROM blueprint_scope_items WHERE project_id=? GROUP BY trade ORDER BY trade",(project_id(),))
+    h="".join(f'<div class="action"><b>{esc(r["trade"])}</b><div class="small">{r["n"]} source-backed scope items ready for bid-package review.</div></div>' for r in rows)
+    return shell("Bid Scope Intelligence",'<div class="hero"><h1>Subcontractor Scope & Bid Brain</h1><p class="muted">Trade packages originate from the cleaned Blueprint Brain scope.</p></div><div class="card">'+(h or '<p class="muted">Analyze project documents first.</p>')+'</div>')
+
+@app.get("/intelligence/changes",response_class=HTMLResponse)
+def v39_change_page():
+    rows=_v39_changes(project_id()); total=sum(float(r["estimated_cost"] or 0) for r in rows); days=sum(float(r["schedule_days"] or 0) for r in rows)
+    h="".join(f'<div class="action"><b>{esc(r["title"])}</b><div class="small">${float(r["estimated_cost"] or 0):,.0f} · {float(r["schedule_days"] or 0):g} days · {esc(r["status"])}</div></div>' for r in rows)
+    return shell("Cost & Change",f'<div class="hero"><h1>Cost & Change Intelligence</h1><p class="muted">Open exposure: ${total:,.0f} · {days:g} schedule days.</p></div><div class="card">'+(h or '<p class="muted">No open change exposure.</p>')+'</div>')
+
+@app.get("/intelligence/daily-command",response_class=HTMLResponse)
+def v39_daily_command():
+    pid=project_id(); attention=_v39_attention(pid); sched=_v39_schedule_risks(pid); proc=_v39_procurement(pid)
+    critical=sum(1 for x in attention if x[0]=="CRITICAL"); today=sum(1 for x in attention if x[0]=="TODAY")
+    body=f'<div class="hero"><div class="eyebrow">Daily Superintendent Command</div><h1>Run the job from here.</h1><p class="muted">{critical} critical · {today} today · {len(sched)} schedule exceptions · {len(proc)} procurement items.</p></div>'
+    body+='<div class="grid3">'+_v37_link_card("Decisions","Prioritized items requiring human attention.","/intelligence/attention","Review")+_v37_link_card("Look-Ahead","Upcoming production and make-ready.","/intelligence/lookahead","Open")+_v37_link_card("Ask BuildCommand","Ask the project what matters now.","/ask-buildcommand","Ask")+'</div>'
+    return shell("Daily Command",body)
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -1080,13 +1232,13 @@ def unified_manage():
       f'<div class="card"><div class="label">Submittals</div><div class="kpi">{s["submittals"]}</div></div>'
       f'<div class="card"><div class="label">Inspections</div><div class="kpi">{s["inspections"]}</div></div></div>'
       '<div class="grid3">'
-      +_v37_link_card("Today","Morning brief and priorities.","/morning-brief")
+      +_v37_link_card("Today","Daily Superintendent Command: priorities, schedule exceptions and decisions.","/intelligence/daily-command")
       +_v37_link_card("Schedule","Schedule and production planning.","/schedule")
       +_v37_link_card("Things That Need You","One queue for human decisions.","/actions")
       +_v37_link_card("RFIs / Issues","Questions, conflicts and issues.","/issues")
       +_v37_link_card("Submittals","Submittal workflow.","/submittals")
       +_v37_link_card("Field","Field execution and reporting.","/field")
-      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
+      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/intelligence">Intelligence Center</a> · <a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
     )
     return shell("Manage",body)
 
