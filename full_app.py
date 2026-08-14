@@ -739,6 +739,11 @@ def _v37_esc(value):
     import html
     return html.escape(str(value or ""), quote=True)
 
+# Global compatibility helper used by legacy BuildCommand pages.
+def esc(value):
+    return _v37_esc(value)
+
+
 
 # ============================================================
 
