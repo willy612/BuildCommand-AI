@@ -12545,7 +12545,10 @@ def blueprint_brain_home():
         '<p class="muted">Review the latest analysis, run final trade cleanup, or start a new project analysis.</p></div>'
         '<div class="grid3">'
         +_v37_link_card("Analyze Project","Run the unified project intelligence pipeline on selected plans/specs.","/build/analyze-project","Analyze")
-        +_v37_link_card("Final Trade Cleanup","Normalize existing Blueprint Brain trade ownership and duplicate scopes.","/blueprint-brain/final-cleanup","Run")
+        +('<div class="card"><h2>Final Trade Cleanup</h2>'
+             '<p class="muted">Normalize existing Blueprint Brain trade ownership and duplicate scopes.</p>'
+             '<form method="post" action="/blueprint-brain/final-cleanup">'
+             '<button type="submit">Run Final Trade Cleanup</button></form></div>')
         +_v37_link_card("Project Scope Review","Open the unified source-backed project scope view.","/brain","Review")
         +'</div>'
         '<div class="card"><h2>Recent Blueprint Runs</h2></div>'
