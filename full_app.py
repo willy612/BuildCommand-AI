@@ -2031,66 +2031,130 @@ def v44_risk_page():
 # ============================================================
 
 def _v442_normalize_existing_blueprint(pid):
-    """Normalize duplicate trade labels and re-run ownership on existing saved Blueprint Brain items."""
+    """
+    Normalize saved Blueprint Brain items, delete excluded items,
+    merge duplicate parent scopes, and rebuild every displayed scope boiler
+    from the corrected child items.
+    """
+    company=current_company_id()
     c=db()
-    items=c.execute("SELECT * FROM blueprint_scope_items WHERE company_id=? AND project_id=? ORDER BY run_id,id",
-                    (current_company_id(),pid)).fetchall()
+
+    items=c.execute(
+        "SELECT * FROM blueprint_scope_items WHERE company_id=? AND project_id=? ORDER BY run_id,id",
+        (company,pid)
+    ).fetchall()
+
     changed=0
     for item in items:
-        req=str(item["requirement"] or "")
+        req=str(item["requirement"] or "").strip()
+
+        # Remove explicitly excluded generic scope notes.
         if _v442_exclude_scope_item(req):
             c.execute("DELETE FROM blueprint_scope_items WHERE id=?",(item["id"],))
             changed+=1
             continue
-        target=_v441_primary_trade(req,_v33_normalize_trade(item["trade"]))
-        target=_v441_apply_approved_learning(pid,req,target)
-        if target != item["trade"]:
-            run_id=item["run_id"]
-            parent=c.execute("SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? AND trade=? LIMIT 1",
-                             (run_id,current_company_id(),pid,target)).fetchone()
-            if parent:
-                target_id=parent["id"]
-            else:
-                div={"Demolition":"02","Concrete":"03","Roofing":"07","Doors / Frames / Hardware":"08",
-                     "Storefront / Glazing":"08","Framing / Drywall":"09","Ceilings":"09",
-                     "Flooring / Tile":"09","Painting":"09","Toilet / Bath Accessories":"10",
-                     "Specialties":"10","Fire Sprinkler":"21","Plumbing":"22",
-                     "HVAC / Mechanical":"23","Controls":"23","Electrical":"26",
-                     "Low Voltage":"27","Fire Alarm":"28"}.get(target,"")
-                now=datetime.utcnow().isoformat()
-                c.execute("INSERT INTO blueprint_trade_scopes(company_id,project_id,run_id,trade,division,summary,scope_text,item_count,created) VALUES(?,?,?,?,?,?,?,?,?)",
-                          (current_company_id(),pid,run_id,target,div,f"BuildCommand source-backed scope for {target}.","",0,now))
-                target_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
-            c.execute("UPDATE blueprint_scope_items SET trade=?,trade_scope_id=? WHERE id=?",
-                      (target,target_id,item["id"]))
+
+        proposed=_v33_normalize_trade(item["trade"])
+        target=_v441_primary_trade(req, proposed)
+        target=_v441_apply_approved_learning(pid, req, target)
+
+        # Find/create canonical parent scope for this run.
+        parent=c.execute(
+            "SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? AND trade=? LIMIT 1",
+            (item["run_id"],company,pid,target)
+        ).fetchone()
+
+        if parent:
+            target_id=parent["id"]
+        else:
+            div={
+                "GC / General Contractor":"01","Demolition":"02","Concrete":"03","Roofing":"07",
+                "Doors / Frames / Hardware":"08","Storefront / Glazing":"08",
+                "Framing / Drywall":"09","Ceilings":"09","Flooring / Tile":"09",
+                "Painting":"09","Toilet / Bath Accessories":"10","Specialties":"10",
+                "Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23",
+                "Controls":"23","Electrical":"26","Low Voltage":"27","Fire Alarm":"28"
+            }.get(target,"")
+            now=datetime.utcnow().isoformat()
+            c.execute(
+                "INSERT INTO blueprint_trade_scopes(company_id,project_id,run_id,trade,division,summary,scope_text,item_count,created) VALUES(?,?,?,?,?,?,?,?,?)",
+                (company,pid,item["run_id"],target,div,
+                 f"BuildCommand source-backed scope for {target}.","",0,now)
+            )
+            target_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+
+        if target != item["trade"] or target_id != item["trade_scope_id"]:
+            c.execute(
+                "UPDATE blueprint_scope_items SET trade=?,trade_scope_id=? WHERE id=? AND company_id=? AND project_id=?",
+                (target,target_id,item["id"],company,pid)
+            )
             changed+=1
 
-    # Canonicalize parent labels and remove empty/duplicate parents safely.
-    scopes=c.execute("SELECT * FROM blueprint_trade_scopes WHERE company_id=? AND project_id=? ORDER BY run_id,id",
-                     (current_company_id(),pid)).fetchall()
+    # Canonicalize duplicate parent names.
+    scopes=c.execute(
+        "SELECT * FROM blueprint_trade_scopes WHERE company_id=? AND project_id=? ORDER BY run_id,id",
+        (company,pid)
+    ).fetchall()
+
     for sc in scopes:
         canonical=_v33_normalize_trade(sc["trade"])
         if canonical != sc["trade"]:
-            other=c.execute("SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? AND trade=? AND id<>? LIMIT 1",
-                            (sc["run_id"],current_company_id(),pid,canonical,sc["id"])).fetchone()
+            other=c.execute(
+                "SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? AND trade=? AND id<>? LIMIT 1",
+                (sc["run_id"],company,pid,canonical,sc["id"])
+            ).fetchone()
             if other:
-                c.execute("UPDATE blueprint_scope_items SET trade_scope_id=?,trade=? WHERE trade_scope_id=?",
-                          (other["id"],canonical,sc["id"]))
+                c.execute(
+                    "UPDATE blueprint_scope_items SET trade_scope_id=?,trade=? WHERE trade_scope_id=?",
+                    (other["id"],canonical,sc["id"])
+                )
                 c.execute("DELETE FROM blueprint_trade_scopes WHERE id=?",(sc["id"],))
             else:
-                c.execute("UPDATE blueprint_trade_scopes SET trade=? WHERE id=?",(canonical,sc["id"]))
-                c.execute("UPDATE blueprint_scope_items SET trade=? WHERE trade_scope_id=?",(canonical,sc["id"]))
+                c.execute(
+                    "UPDATE blueprint_trade_scopes SET trade=? WHERE id=?",
+                    (canonical,sc["id"])
+                )
+                c.execute(
+                    "UPDATE blueprint_scope_items SET trade=? WHERE trade_scope_id=?",
+                    (canonical,sc["id"])
+                )
 
-    scopes=c.execute("SELECT id FROM blueprint_trade_scopes WHERE company_id=? AND project_id=?",
-                     (current_company_id(),pid)).fetchall()
+    # REBUILD every scope boiler from corrected child items.
+    scopes=c.execute(
+        "SELECT * FROM blueprint_trade_scopes WHERE company_id=? AND project_id=? ORDER BY run_id,id",
+        (company,pid)
+    ).fetchall()
+
     for sc in scopes:
-        n=c.execute("SELECT COUNT(*) n FROM blueprint_scope_items WHERE trade_scope_id=?",(sc["id"],)).fetchone()["n"]
-        if n==0:
+        children=c.execute(
+            "SELECT * FROM blueprint_scope_items WHERE trade_scope_id=? AND company_id=? AND project_id=? ORDER BY id",
+            (sc["id"],company,pid)
+        ).fetchall()
+
+        if not children:
             c.execute("DELETE FROM blueprint_trade_scopes WHERE id=?",(sc["id"],))
-        else:
-            c.execute("UPDATE blueprint_trade_scopes SET item_count=? WHERE id=?",(n,sc["id"]))
+            continue
+
+        lines=[]
+        for i,ch in enumerate(children,1):
+            refs=[]
+            if ch["source_sheet"]: refs.append("Sheet "+str(ch["source_sheet"]))
+            if ch["source_detail"]: refs.append("Detail "+str(ch["source_detail"]))
+            if ch["source_spec"]: refs.append("Spec "+str(ch["source_spec"]))
+            ref_txt=f" [{' · '.join(refs)}]" if refs else ""
+            lines.append(f"{i}. {ch['requirement']}{ref_txt}")
+
+        boiler="\n".join(lines)
+        c.execute(
+            "UPDATE blueprint_trade_scopes SET trade=?,summary=?,scope_text=?,item_count=? WHERE id=?",
+            ( _v33_normalize_trade(sc["trade"]),
+              f"BuildCommand source-backed scope for {_v33_normalize_trade(sc['trade'])}.",
+              boiler,len(children),sc["id"])
+        )
+
     c.commit(); c.close()
     return changed
+
 
 @app.post("/blueprint-brain/final-cleanup")
 def v442_run_final_cleanup():
@@ -11068,6 +11132,24 @@ def _v441_primary_trade(requirement, proposed):
     s=str(requirement or "").lower().strip()
     def has(*terms): return any(x in s for x in terms)
 
+    # Exact live Blueprint Brain corrections from field review.
+    if has("patch concrete and floor surfaces disturbed by electrical or plumbing work"):
+        return "Concrete"
+
+    if has("prime and refinish all wall, ceiling, and other surfaces patched after demolition or mep installation"):
+        return "Painting"
+
+    if has("bobrick toilet tissue holders","stainless-steel grab bars","paper towel/waste receptacles",
+           "soap dispensers","robe hooks","framed mirrors","toilet-seat-cover dispensers",
+           "sanitary-napkin disposals"):
+        return "Toilet / Bath Accessories"
+
+    if has("electric water heater wh-1","bradford white cehd120"):
+        return "Plumbing"
+
+    if has("seven-day programmable thermostats","programmable thermostats") and has("rooftop units","rtu"):
+        return "HVAC / Mechanical"
+
     # 1. PRIMARY ACTION FIRST.
     explicit_demo=(
         s.startswith("demo ") or s.startswith("demolish ") or
@@ -11185,6 +11267,8 @@ def _v441_primary_trade(requirement, proposed):
 
 def _v442_exclude_scope_item(requirement):
     s=str(requirement or "").lower()
+    if "firestop cable, raceway, piping, and similar penetrations" in s:
+        return True
     # User-approved exclusion: generic firestop penetration specification/coordination statement.
     return (
         ("firestop" in s or "firestopping" in s) and
