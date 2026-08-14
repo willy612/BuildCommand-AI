@@ -9410,6 +9410,15 @@ Return ONLY valid JSON using exactly this top-level structure:
   "rfi_candidates": ["plain-language ambiguity/gap with source"],
   "review_notes": ["items the GC should verify before issuing scopes"]
 }}
+
+IMPORTANT TRADE OWNERSHIP:
+Classify by the actual work/material/system, not by which drawing sheet contains the note.
+If one note contains work for multiple trades, split it into separate scope items and keep the same source sheet/detail/spec reference on each.
+Wall/gypsum/drywall patching = Framing / Drywall. Paint/refinish after patch = Painting.
+Doors, door frames, hollow-metal/wood doors and hardware = Doors / Frames / Hardware.
+Door rough openings, jamb studs and header framing = Framing / Drywall.
+Tile materials/installation = Tile. Metal studs/framing = Framing / Drywall even when shown in a tile detail.
+MEP demolition stays with the responsible MEP trade. General non-MEP demolition = Demolition.
 """.strip()
 
 
@@ -9439,35 +9448,70 @@ def _v33_normalize_trade(name):
 def _v33_trade_for_item(item, proposed_trade):
     text=" ".join(str(item.get(k) or "") for k in ["requirement","source_note","source_spec","related_trade"]).lower()
     proposed=_v33_normalize_trade(proposed_trade)
+    def has(*terms): return any(x in text for x in terms)
 
-    # Finish ownership rules: resilient/rubber base belongs with flooring.
-    flooring_terms=["rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl","vct","carpet tile","sheet vinyl","resilient flooring","floor transition","transition strip"]
-    if any(t in text for t in flooring_terms):
+    # Repair/patch ownership. The trade causing the hole does not own the wall repair.
+    if has("wall patch","patch wall","patch drywall","drywall patch","gypsum patch","patch gypsum",
+           "repair drywall","repair gypsum","gyp board patch","patch gyp","patch and repair wall"):
+        return "Framing / Drywall"
+    if has("paint patched","paint patch","repaint","touch-up paint","touch up paint",
+           "paint repair","refinish patched","finish paint"):
+        return "Painting"
+
+    # Door package vs rough-opening construction.
+    rough_opening=has("rough opening","jamb stud","jamb studs","header framing",
+                      "frame opening with studs","stud opening")
+    if not rough_opening and has("hollow metal door","hollow metal frame","hm door","hm frame",
+           "wood door","door frame","door frames","door leaf","door leaves","door hardware",
+           "hardware set","door closer","panic hardware","exit device","lockset","door threshold",
+           "door sweep","door hinges","door schedule","automatic door operator",
+           "powered door operator","electric strike","electrified hardware","mag lock"):
+        return "Doors / Frames / Hardware"
+
+    # Tile system work.
+    if has("ceramic tile","porcelain tile","wall tile","floor tile","tile base","tile grout",
+           "grout tile","tile mortar","tile adhesive","setting bed","tile setting","tile trim","schluter"):
+        return "Tile"
+
+    # Resilient/flooring system work.
+    if has("rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl",
+           "vct","carpet tile","sheet vinyl","resilient flooring","floor transition","transition strip"):
         return "Flooring"
 
-    # MEP demolition stays with the system trade instead of general demolition.
-    demo_words=["demo","demolish","demolition","remove existing","remove and dispose","existing to be removed","disconnect and remove"]
-    is_demo=any(t in text for t in demo_words)
-    if is_demo:
-        electrical=["receptacle","outlet","switch","panel","transformer","conduit","wire","wiring","circuit","breaker","light fixture","lighting","disconnect","electrical","feeder"]
-        plumbing=["plumbing","water closet","lavatory","sink","faucet","domestic water","sanitary","waste","vent piping","water heater","floor drain","plumbing fixture"]
-        mech=["hvac","mechanical","duct","diffuser","grille","vav","rtu","ahu","fan coil","exhaust fan","air handler","thermostat","chilled water","refrigerant"]
-        sprinkler=["sprinkler","fire protection","fire suppression"]
-        fire_alarm=["fire alarm","smoke detector","horn strobe","notification appliance","pull station"]
-        low_voltage=["data","telecom","telephone","cat6","low voltage","access control","security camera","cctv"]
-        if any(t in text for t in electrical): return "Electrical"
-        if any(t in text for t in plumbing): return "Plumbing"
-        if any(t in text for t in mech): return "HVAC / Mechanical"
-        if any(t in text for t in sprinkler): return "Fire Sprinkler"
-        if any(t in text for t in fire_alarm): return "Fire Alarm"
-        if any(t in text for t in low_voltage): return "Low Voltage"
+    # Framing/drywall actual work wins even if it appears on a tile/door/electrical detail.
+    if has("metal stud","metal studs","cold formed metal framing","track and stud","steel stud",
+           "steel studs","metal track","deflection track","stud framing","jamb stud","jamb studs",
+           "header framing","rough opening","gypsum board","gyp board","drywall","shaftwall",
+           "shaft wall","framing backing","wood backing"):
+        return "Framing / Drywall"
+
+    # MEP demolition remains with the system trade.
+    demo=has("demo","demolish","demolition","remove existing","remove and dispose",
+             "existing to be removed","disconnect and remove")
+    if demo:
+        if has("receptacle","outlet","switch","panel","transformer","conduit","wire","wiring",
+               "circuit","breaker","light fixture","lighting","disconnect","electrical","feeder"):
+            return "Electrical"
+        if has("fire alarm","smoke detector","horn strobe","strobe","pull station"):
+            return "Fire Alarm"
+        if has("data","telecom","low voltage","low-voltage","card reader","access control",
+               "security device","camera","cabling"):
+            return "Low Voltage"
+        if has("sprinkler","fire protection","fire suppression"):
+            return "Fire Sprinkler"
+        if has("hvac","mechanical","duct","diffuser","grille","vav","rtu","ahu","fan coil",
+               "exhaust fan","air handler","thermostat","chilled water","refrigerant"):
+            return "HVAC / Mechanical"
+        if has("plumbing","water closet","lavatory","sink","faucet","domestic water","sanitary",
+               "waste","vent piping","water heater","floor drain","plumbing fixture"):
+            return "Plumbing"
         return "Demolition"
 
-    # Strong material/system ownership rules.
-    if any(t in text for t in ["metal stud","cold formed metal framing","track and stud","gypsum board","drywall","shaftwall"]): return "Framing / Drywall"
-    if any(t in text for t in ["acoustic ceiling tile","act ceiling","ceiling grid"]): return "Ceilings"
-    if any(t in text for t in ["ceramic tile","porcelain tile","tile base"]): return "Tile"
-    if any(t in text for t in ["paint","painting","wall coating"]): return "Painting"
+    if has("acoustic ceiling tile","act ceiling","ceiling grid"): return "Ceilings"
+    if has("paint","painting","wall coating","primer","finish coat"): return "Painting"
+    if has("casework","millwork","cabinet","countertop"): return "Millwork / Casework"
+    if has("roofing","roof membrane","roof flashing"): return "Roofing"
+    if has("ceramic tile","porcelain tile","tile base"): return "Tile"
     return proposed
 
 def _v33_reclassify_data(data):
