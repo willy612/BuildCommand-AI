@@ -699,7 +699,7 @@ NAV=[("Daily Command","/"),("AI Command","/ai-command"),("Blueprint Brain","/pla
 
 NAV_GROUPS=[
     ('🏠 Home',[
-        ('Daily Command','/'),('AI Command','/ai-command'),('Morning Brief','/morning-brief'),('Action Center','/actions'),
+        ('BuildCommand Brain','/brain'),('Estimator Intelligence','/brain/estimator'),('Daily Command','/'),('AI Command','/ai-command'),('Morning Brief','/morning-brief'),('Action Center','/actions'),
         ('Global Search','/global-search'),('Favorites','/favorites'),('Recent Activity','/recent-activity'),('Mobile Field+','/mobile-field-plus')
     ]),
     ('📅 Schedule & Production',[
@@ -714,7 +714,7 @@ NAV_GROUPS=[
         ('Safety','/safety'),('Inspections','/inspections'),('Punch List','/punch')
     ]),
     ('📄 Documents & AI',[
-        ('Documents','/documents'),('Document Tags','/document-tags'),('Blueprint Brain','/plans-specs-ai'),('Deep Document AI','/document-ai'),
+        ('Documents','/documents'),('Document Tags','/document-tags'),('Plan Intake','/plans-specs-ai'),('Deep Document AI','/document-ai'),
         ('RFIs / Issues','/issues'),('RFI Drafting','/rfi-drafting'),('RFI Impact','/rfi-impact'),('Submittals','/submittals'),
         ('Meetings','/meetings'),('AI Meeting Minutes','/meeting-minutes-ai'),('AI Assistant','/assistant'),('AI Analysis','/ai-analysis'),
         ('Weekly AI Report','/weekly-report'),('PDF Reports','/pdf-reports')
@@ -9446,11 +9446,75 @@ def _v33_normalize_trade(name):
     return aliases.get(n, (name or "Unassigned").strip() or "Unassigned")
 
 def _v33_trade_for_item(item, proposed_trade):
-    text=" ".join(str(item.get(k) or "") for k in ["requirement","source_note","source_spec","related_trade"]).lower()
+    """
+    v34 Core Brain trade classifier.
+    Priority: MEP/system demolition -> general demolition -> protected systems ->
+    actual new-work material/operation. Source sheet never determines ownership.
+    """
+    text=" ".join(str(item.get(k) or "") for k in
+                  ["requirement","source_note","source_spec","related_trade"]).lower()
     proposed=_v33_normalize_trade(proposed_trade)
-    def has(*terms): return any(x in text for x in terms)
 
-    # Repair/patch ownership. The trade causing the hole does not own the wall repair.
+    def has(*terms):
+        return any(x in text for x in terms)
+
+    demo = has("demo","demolish","demolition","remove existing","remove and dispose",
+               "existing to be removed","disconnect and remove","remove receptacle",
+               "remove outlet","remove switch","remove panel","remove conduit",
+               "remove sprinkler","remove duct","remove diffuser","remove vav",
+               "remove rtu","remove ahu","remove fan coil","remove plumbing",
+               "remove sanitary","remove waste","remove water piping","remove fire alarm",
+               "remove camera","remove card reader","remove access control")
+
+    # MEP/system demolition stays with the owning system.
+    if demo:
+        if has("fire alarm","smoke detector","horn strobe","pull station","notification appliance"):
+            return "Fire Alarm"
+        if has("card reader","card access","access control","electronic strike","electric strike",
+               "electrified strike","request to exit","rex device","door contact","security contact",
+               "camera","cctv","security system","intrusion alarm","data","telecom","low voltage",
+               "low-voltage","cabling","intercom"):
+            return "Low Voltage"
+        if has("sprinkler","sprinkler head","fire protection","fire suppression","branch line",
+               "sprinkler piping"):
+            return "Fire Sprinkler"
+        if has("receptacle","outlet","switch","panel","panelboard","transformer","conduit",
+               "wire","wiring","circuit","breaker","light fixture","lighting","disconnect",
+               "electrical","feeder"):
+            return "Electrical"
+        if has("plumbing","water closet","lavatory","sink","faucet","domestic water","sanitary",
+               "waste","vent piping","water heater","floor drain","cleanout","plumbing fixture"):
+            return "Plumbing"
+        if has("hvac","mechanical","duct","ductwork","diffuser","grille","vav","rtu","ahu",
+               "fan coil","exhaust fan","air handler","thermostat","chilled water","refrigerant"):
+            return "HVAC / Mechanical"
+        return "Demolition"
+
+    # Low voltage/security is protected from Electrical or Doors/Hardware.
+    if has("card reader","card access","access control","electronic strike","electric strike",
+           "electrified strike","request to exit","rex device","door contact","security contact",
+           "camera","cctv","security system","intrusion alarm","data cabling","telecom cabling",
+           "low voltage","low-voltage","intercom"):
+        return "Low Voltage"
+
+    # Fire sprinkler owns heads/piping even when ceiling coordination is mentioned.
+    if has("sprinkler head","sprinkler heads","sprinkler piping","fire sprinkler",
+           "fire suppression piping","sprinkler branch"):
+        return "Fire Sprinkler"
+
+    # Roofing owns patching/repair/flashing/watertight restoration.
+    if has("patch roof","roof patch","repair roof","roof repair","restore roof",
+           "roof membrane patch","patch roofing","roof flashing","flash roof penetration",
+           "watertight roof"):
+        return "Roofing"
+
+    # Blocking/backing/support framing belongs to Framing/Drywall.
+    if has("wood blocking","concealed wood blocking","blocking","wood backing","plywood backing",
+           "in-wall backing","in wall backing","metal backing","concealed backing",
+           "support framing","equivalent supports"):
+        return "Framing / Drywall"
+
+    # Wall patching belongs to Framing/Drywall.
     if has("wall patch","patch wall","patch drywall","drywall patch","gypsum patch","patch gypsum",
            "repair drywall","repair gypsum","gyp board patch","patch gyp","patch and repair wall"):
         return "Framing / Drywall"
@@ -9458,60 +9522,49 @@ def _v33_trade_for_item(item, proposed_trade):
            "paint repair","refinish patched","finish paint"):
         return "Painting"
 
-    # Door package vs rough-opening construction.
+    # Storefront/glazing separate from standard doors/hardware.
+    if has("storefront","store front","aluminum entrance","aluminum storefront","curtain wall",
+           "glass entrance","glazing","glazed entrance","sidelite","side lite",
+           "borrowed lite","borrowed light"):
+        return "Storefront / Glazing"
+
     rough_opening=has("rough opening","jamb stud","jamb studs","header framing",
                       "frame opening with studs","stud opening")
     if not rough_opening and has("hollow metal door","hollow metal frame","hm door","hm frame",
            "wood door","door frame","door frames","door leaf","door leaves","door hardware",
            "hardware set","door closer","panic hardware","exit device","lockset","door threshold",
-           "door sweep","door hinges","door schedule","automatic door operator",
-           "powered door operator","electric strike","electrified hardware","mag lock"):
+           "door sweep","door hinges","door schedule"):
         return "Doors / Frames / Hardware"
 
-    # Tile system work.
     if has("ceramic tile","porcelain tile","wall tile","floor tile","tile base","tile grout",
            "grout tile","tile mortar","tile adhesive","setting bed","tile setting","tile trim","schluter"):
         return "Tile"
 
-    # Resilient/flooring system work.
     if has("rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl",
            "vct","carpet tile","sheet vinyl","resilient flooring","floor transition","transition strip"):
         return "Flooring"
 
-    # Framing/drywall actual work wins even if it appears on a tile/door/electrical detail.
     if has("metal stud","metal studs","cold formed metal framing","track and stud","steel stud",
            "steel studs","metal track","deflection track","stud framing","jamb stud","jamb studs",
            "header framing","rough opening","gypsum board","gyp board","drywall","shaftwall",
-           "shaft wall","framing backing","wood backing"):
+           "shaft wall"):
         return "Framing / Drywall"
 
-    # MEP demolition remains with the system trade.
-    demo=has("demo","demolish","demolition","remove existing","remove and dispose",
-             "existing to be removed","disconnect and remove")
-    if demo:
-        if has("receptacle","outlet","switch","panel","transformer","conduit","wire","wiring",
-               "circuit","breaker","light fixture","lighting","disconnect","electrical","feeder"):
-            return "Electrical"
-        if has("fire alarm","smoke detector","horn strobe","strobe","pull station"):
-            return "Fire Alarm"
-        if has("data","telecom","low voltage","low-voltage","card reader","access control",
-               "security device","camera","cabling"):
-            return "Low Voltage"
-        if has("sprinkler","fire protection","fire suppression"):
-            return "Fire Sprinkler"
-        if has("hvac","mechanical","duct","diffuser","grille","vav","rtu","ahu","fan coil",
-               "exhaust fan","air handler","thermostat","chilled water","refrigerant"):
-            return "HVAC / Mechanical"
-        if has("plumbing","water closet","lavatory","sink","faucet","domestic water","sanitary",
-               "waste","vent piping","water heater","floor drain","plumbing fixture"):
-            return "Plumbing"
-        return "Demolition"
+    if has("acoustic ceiling tile","acoustical ceiling tile","act ceiling","ceiling grid"):
+        return "Ceilings"
+    if has("paint","painting","wall coating","primer","finish coat"):
+        return "Painting"
+    if has("casework","millwork","cabinet","countertop"):
+        return "Millwork / Casework"
+    if has("roofing","roof membrane","roof system"):
+        return "Roofing"
+    if has("receptacle","panelboard","electrical conduit","branch circuit"):
+        return "Electrical"
+    if has("sanitary piping","domestic water","plumbing fixture"):
+        return "Plumbing"
+    if has("ductwork","diffuser","vav box","mechanical equipment","hvac"):
+        return "HVAC / Mechanical"
 
-    if has("acoustic ceiling tile","act ceiling","ceiling grid"): return "Ceilings"
-    if has("paint","painting","wall coating","primer","finish coat"): return "Painting"
-    if has("casework","millwork","cabinet","countertop"): return "Millwork / Casework"
-    if has("roofing","roof membrane","roof flashing"): return "Roofing"
-    if has("ceramic tile","porcelain tile","tile base"): return "Tile"
     return proposed
 
 def _v33_reclassify_data(data):
@@ -9524,13 +9577,13 @@ def _v33_reclassify_data(data):
             grouped.setdefault(target, []).append(item)
             metadata.setdefault(target, {"division": str(td.get("division") or ""), "summary": str(td.get("summary") or "")})
     rebuilt=[]
-    division_defaults={"Demolition":"02","Concrete":"03","Masonry":"04","Structural Steel":"05","Rough Carpentry":"06","Waterproofing":"07","Roofing":"07","Doors / Frames / Hardware":"08","Glazing":"08","Framing / Drywall":"09","Ceilings":"09","Flooring":"09","Tile":"09","Painting":"09","Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23","Controls":"23","Electrical":"26","Fire Alarm":"28","Low Voltage":"27"}
+    division_defaults={"Demolition":"02","Concrete":"03","Masonry":"04","Structural Steel":"05","Rough Carpentry":"06","Waterproofing":"07","Roofing":"07","Doors / Frames / Hardware":"08","Glazing":"08","Storefront / Glazing":"08","Framing / Drywall":"09","Ceilings":"09","Flooring":"09","Tile":"09","Painting":"09","Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23","Controls":"23","Electrical":"26","Fire Alarm":"28","Low Voltage":"27"}
     for trade,items in grouped.items():
         meta=metadata.get(trade,{})
         rebuilt.append({"trade":trade,"division":division_defaults.get(trade,meta.get("division", "")),"summary":meta.get("summary") or f"BuildCommand classified scope for {trade}.","items":items})
     data["trade_scopes"]=rebuilt
     notes=data.setdefault("review_notes",[])
-    notes.append("v33 Trade Classification Brain applied deterministic ownership rules before scopes were saved; GC review is still required.")
+    notes.append("v34 Core Brain applied action-first construction ownership rules before scopes were saved; GC review is still required.")
     return data
 
 
@@ -9571,6 +9624,302 @@ def _blueprint_latest(pid):
     c.close(); return run,scopes
 
 
+
+# ============================================================
+# v34 BUILDCOMMAND CORE BRAIN + ESTIMATOR INTELLIGENCE
+# ============================================================
+
+def _ensure_v34_estimator_tables():
+    c=db()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS estimator_items(
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER,
+            project_id INTEGER,
+            blueprint_scope_item_id INTEGER,
+            trade TEXT,
+            description TEXT,
+            source_ref TEXT,
+            quantity REAL DEFAULT 0,
+            unit TEXT DEFAULT '',
+            material_unit_cost REAL DEFAULT 0,
+            labor_unit_cost REAL DEFAULT 0,
+            subcontract_quote REAL DEFAULT 0,
+            allowance REAL DEFAULT 0,
+            markup_pct REAL DEFAULT 0,
+            notes TEXT DEFAULT '',
+            verified INTEGER DEFAULT 0,
+            created TEXT,
+            updated TEXT
+        )
+    """)
+    c.commit(); c.close()
+
+def _latest_blueprint_run(pid):
+    c=db()
+    row=c.execute("""SELECT * FROM blueprint_runs
+                     WHERE company_id=? AND project_id=?
+                     ORDER BY id DESC LIMIT 1""",
+                  (current_company_id(),pid)).fetchone()
+    c.close(); return row
+
+def _seed_estimator_from_latest(pid):
+    _ensure_v34_estimator_tables()
+    run=_latest_blueprint_run(pid)
+    if not run: return 0
+    c=db()
+    rows=c.execute("""
+        SELECT i.id,i.requirement,i.source_sheet,i.source_detail,i.source_spec,s.trade
+        FROM blueprint_scope_items i
+        JOIN blueprint_trade_scopes s ON s.id=i.trade_scope_id
+        WHERE i.company_id=? AND i.project_id=? AND s.run_id=?
+        ORDER BY s.trade,i.id
+    """,(current_company_id(),pid,run["id"])).fetchall()
+    added=0; now=datetime.utcnow().isoformat()
+    for r in rows:
+        exists=c.execute("""SELECT id FROM estimator_items
+                            WHERE company_id=? AND project_id=? AND blueprint_scope_item_id=?""",
+                         (current_company_id(),pid,r["id"])).fetchone()
+        if exists: continue
+        refs=[str(r[x] or "").strip() for x in ["source_sheet","source_detail","source_spec"]
+              if str(r[x] or "").strip()]
+        c.execute("""
+            INSERT INTO estimator_items(
+                company_id,project_id,blueprint_scope_item_id,trade,description,source_ref,
+                quantity,unit,material_unit_cost,labor_unit_cost,subcontract_quote,allowance,
+                markup_pct,notes,verified,created,updated
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,(current_company_id(),pid,r["id"],r["trade"],r["requirement"],
+             " · ".join(refs),0,"",0,0,0,0,0,"",0,now,now))
+        added+=1
+    c.commit(); c.close(); return added
+
+def _estimate_math(row):
+    qty=float(row["quantity"] or 0); mat=float(row["material_unit_cost"] or 0)
+    labor=float(row["labor_unit_cost"] or 0); sub=float(row["subcontract_quote"] or 0)
+    allowance=float(row["allowance"] or 0); markup=float(row["markup_pct"] or 0)
+    direct=(qty*(mat+labor))+sub+allowance
+    return direct,direct*(1+(markup/100.0))
+
+@app.get("/brain",response_class=HTMLResponse)
+def buildcommand_core_brain():
+    pid=project_id(); run=_latest_blueprint_run(pid); c=db()
+    project=c.execute("SELECT name,number FROM projects WHERE id=?",(pid,)).fetchone()
+    scope_count=item_count=cross_count=rfi_count=0
+    if run:
+        scope_count=c.execute("SELECT COUNT(*) n FROM blueprint_trade_scopes WHERE run_id=?",(run["id"],)).fetchone()["n"]
+        item_count=c.execute("SELECT COUNT(*) n FROM blueprint_scope_items WHERE run_id=?",(run["id"],)).fetchone()["n"]
+        try: cross_count=len(json.loads(run["cross_discipline_flags"] or "[]"))
+        except: cross_count=0
+        try: rfi_count=len(json.loads(run["rfi_candidates"] or "[]"))
+        except: rfi_count=0
+    open_issues=c.execute("SELECT COUNT(*) n FROM project_issues WHERE project_id=? AND status!='CLOSED'",(pid,)).fetchone()["n"]
+    activities=c.execute("SELECT COUNT(*) n FROM activities WHERE project_id=?",(pid,)).fetchone()["n"]
+    c.close()
+    project_label=f'{esc(project["number"])} - {esc(project["name"])}' if project else "Current Project"
+    latest=(f'<span class="badge READY">PLAN INTELLIGENCE READY</span><div class="small" style="margin-top:8px">Latest run #{run["id"]} · {esc(run["created"] or "")}</div>'
+            if run else '<span class="badge WATCH">NO PLAN ANALYSIS YET</span>')
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">BuildCommand Core Brain · v34</div>
+      <h1>One construction brain. One project memory.</h1>
+      <div class="muted">{project_label}</div><div style="margin-top:12px">{latest}</div>
+    </div>
+    <div class="grid4">
+      <div class="card"><div class="label">Trade Scopes</div><div class="kpi">{scope_count}</div></div>
+      <div class="card"><div class="label">Scope Items</div><div class="kpi">{item_count}</div></div>
+      <div class="card"><div class="label">Cross-Discipline</div><div class="kpi">{cross_count}</div></div>
+      <div class="card"><div class="label">RFI Candidates</div><div class="kpi">{rfi_count}</div></div>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h2>Ask the BuildCommand Brain</h2>
+        <form method="post" action="/brain">
+          <textarea name="question" required placeholder="Example: What are the biggest scope and estimating risks on this project?"></textarea>
+          <button type="submit">Ask BuildCommand</button>
+        </form>
+        <p class="small">Core Brain uses operations data plus the latest source-backed plan intelligence.</p>
+      </div>
+      <div class="card">
+        <h2>One Brain Tools</h2>
+        <p><a href="/plans-specs-ai"><b>Plan Intake</b></a> — read plans and create trade scopes.</p>
+        <p><a href="/brain/estimator"><b>Estimator Intelligence</b></a> — estimate from those same scope items.</p>
+        <p><a href="/issues"><b>RFIs / Issues</b></a> — manage scope gaps and coordination issues.</p>
+        <p><a href="/schedule"><b>Schedule</b></a> — connect scope to execution.</p>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>Operations connected</h2><div class="kpi">{activities}</div><div class="muted">schedule activities</div></div>
+      <div class="card"><h2>Open issues connected</h2><div class="kpi">{open_issues}</div><div class="muted">project issues</div></div>
+    </div>"""
+    return shell("BuildCommand Brain",body)
+
+@app.post("/brain",response_class=HTMLResponse)
+def buildcommand_core_brain_answer(question:str=Form(...)):
+    pid=project_id(); run=_latest_blueprint_run(pid); c=db()
+    scope_rows=[]
+    if run:
+        scope_rows=c.execute("""
+            SELECT s.trade,i.requirement,i.source_sheet,i.source_detail,i.source_spec
+            FROM blueprint_scope_items i
+            JOIN blueprint_trade_scopes s ON s.id=i.trade_scope_id
+            WHERE i.company_id=? AND i.project_id=? AND s.run_id=?
+            ORDER BY s.trade,i.id LIMIT 500
+        """,(current_company_id(),pid,run["id"])).fetchall()
+    c.close()
+    plan_context="\n".join(
+        f'- {r["trade"]}: {r["requirement"]} | source: {r["source_sheet"] or ""} {r["source_detail"] or ""} {r["source_spec"] or ""}'
+        for r in scope_rows
+    ) or "No plan/scope intelligence available yet."
+    api_key=os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        answer="OPENAI_API_KEY is not configured."
+    else:
+        try:
+            operations=build_project_context(pid)
+            client=OpenAI(api_key=api_key)
+            resp=client.responses.create(
+                model=os.environ.get("OPENAI_MODEL","gpt-5.6"),
+                instructions="""You are the BuildCommand Core Brain, a construction operations and estimating intelligence system.
+Use only supplied project facts as job-specific facts.
+Think across estimating, trade scope, drawings, schedule, field execution, RFIs, procurement, inspections and closeout.
+Never invent quantities, dimensions, costs, field conditions, commitments or drawing requirements.
+If quantity/cost is not supported, say ESTIMATOR VERIFICATION REQUIRED.
+Classify by actual work, not by drawing discipline.
+Non-MEP demolition belongs to Demolition; MEP/system demo stays with the system trade.
+Blocking/backing belongs to Framing/Drywall. Roof patching belongs to Roofing.
+Sprinkler heads/piping belong to Fire Sprinkler.
+Card access/electronic strikes/cameras/security belong to Low Voltage.
+Storefront/glazing is separate from standard Doors/Frames/Hardware.""",
+                input=f"""PROJECT OPERATIONS DATA
+{operations}
+
+LATEST PLAN / TRADE SCOPE INTELLIGENCE
+{plan_context}
+
+USER QUESTION
+{question}"""
+            )
+            answer=resp.output_text
+        except Exception as exc:
+            answer=f"BuildCommand Brain could not complete the analysis: {exc}"
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand Core Brain</div><h1>Project Answer</h1></div>
+    <div class="grid2"><div class="card"><div class="small">QUESTION</div><h3>{esc(question)}</h3><p><a href="/brain">← Back to Brain</a></p></div>
+    <div class="card"><div class="small">BUILDCOMMAND BRAIN</div><div style="white-space:pre-wrap;line-height:1.6">{esc(answer)}</div></div></div>"""
+    return shell("BuildCommand Brain",body)
+
+@app.get("/brain/estimator",response_class=HTMLResponse)
+def estimator_intelligence():
+    pid=project_id(); added=_seed_estimator_from_latest(pid); c=db()
+    project=c.execute("SELECT name,number FROM projects WHERE id=?",(pid,)).fetchone()
+    rows=c.execute("""SELECT * FROM estimator_items
+                      WHERE company_id=? AND project_id=? ORDER BY trade,id""",
+                   (current_company_id(),pid)).fetchall()
+    c.close()
+    trade_totals={}; grand=0.0; cards=[]
+    for r in rows:
+        direct,total=_estimate_math(r); grand+=total
+        trade_totals[r["trade"]]=trade_totals.get(r["trade"],0)+total
+        verify_label="✓ VERIFIED" if int(r["verified"] or 0) else "VERIFY"
+        cards.append(f"""
+        <div class="card">
+          <div class="small">{esc(r["trade"])} · {verify_label}</div>
+          <h3>{esc(r["description"])}</h3>
+          <div class="small">Source: {esc(r["source_ref"] or "Source not identified")}</div>
+          <form method="post" action="/brain/estimator/item/{r["id"]}">
+            <div class="grid4" style="margin-top:12px">
+              <div><label>Qty</label><input name="quantity" type="number" step="0.01" value="{r["quantity"] or 0}"></div>
+              <div><label>Unit</label><input name="unit" value="{esc(r["unit"] or "")}" placeholder="EA, LF, SF"></div>
+              <div><label>Material / unit</label><input name="material_unit_cost" type="number" step="0.01" value="{r["material_unit_cost"] or 0}"></div>
+              <div><label>Labor / unit</label><input name="labor_unit_cost" type="number" step="0.01" value="{r["labor_unit_cost"] or 0}"></div>
+            </div>
+            <div class="grid4" style="margin-top:10px">
+              <div><label>Sub quote</label><input name="subcontract_quote" type="number" step="0.01" value="{r["subcontract_quote"] or 0}"></div>
+              <div><label>Allowance</label><input name="allowance" type="number" step="0.01" value="{r["allowance"] or 0}"></div>
+              <div><label>Markup %</label><input name="markup_pct" type="number" step="0.01" value="{r["markup_pct"] or 0}"></div>
+              <div><label>Verified</label><select name="verified"><option value="0" {"selected" if not r["verified"] else ""}>No</option><option value="1" {"selected" if r["verified"] else ""}>Yes</option></select></div>
+            </div>
+            <label style="margin-top:10px">Estimator notes</label><input name="notes" value="{esc(r["notes"] or "")}">
+            <div style="margin-top:10px"><b>Extended total: ${total:,.2f}</b></div>
+            <button type="submit" style="margin-top:10px">Save Estimate Item</button>
+          </form>
+        </div>""")
+    totals="".join(f"<tr><td>{esc(k)}</td><td>${v:,.2f}</td></tr>" for k,v in sorted(trade_totals.items()))
+    project_label=f'{esc(project["number"])} - {esc(project["name"])}' if project else "Current Project"
+    body=f"""
+    <div class="hero"><div class="eyebrow">BuildCommand Brain · Estimator Intelligence</div>
+      <h1>Plans → scope → estimate.</h1><div class="muted">{project_label}</div></div>
+    <div class="grid2">
+      <div class="card"><div class="label">Current Estimate</div><div class="kpi">${grand:,.2f}</div>
+        <div class="small">{len(rows)} source-backed scope items · {added} newly synced</div></div>
+      <div class="card"><h2>Estimator Brain Review</h2>
+        <form method="post" action="/brain/estimator/review">
+          <textarea name="focus" placeholder="Find bid gaps, allowances, long-lead items and takeoff verification needs."></textarea>
+          <button type="submit">Analyze Estimate Risk</button>
+        </form></div>
+    </div>
+    <div class="card"><h2>Trade Totals</h2><table><tr><th>Trade</th><th>Current Total</th></tr>{totals}</table></div>
+    <div class="card"><h2>Estimator rule</h2><p>BuildCommand organizes and identifies takeoff targets, but quantities and costs remain <b>unverified until an estimator confirms them</b>. Source references stay attached.</p></div>
+    {"".join(cards) if cards else '<div class="card"><h2>No estimator items yet</h2><p>Run Plan Intake first, then return here.</p></div>'}"""
+    return shell("Estimator Intelligence",body)
+
+@app.post("/brain/estimator/item/{item_id}")
+def estimator_item_update(item_id:int,quantity:float=Form(0),unit:str=Form(""),
+    material_unit_cost:float=Form(0),labor_unit_cost:float=Form(0),
+    subcontract_quote:float=Form(0),allowance:float=Form(0),
+    markup_pct:float=Form(0),notes:str=Form(""),verified:int=Form(0)):
+    pid=project_id(); c=db()
+    c.execute("""UPDATE estimator_items SET quantity=?,unit=?,material_unit_cost=?,labor_unit_cost=?,
+        subcontract_quote=?,allowance=?,markup_pct=?,notes=?,verified=?,updated=?
+        WHERE id=? AND company_id=? AND project_id=?""",
+        (quantity,unit,material_unit_cost,labor_unit_cost,subcontract_quote,allowance,
+         markup_pct,notes,verified,datetime.utcnow().isoformat(),item_id,current_company_id(),pid))
+    c.commit(); c.close()
+    return RedirectResponse("/brain/estimator",status_code=303)
+
+@app.post("/brain/estimator/review",response_class=HTMLResponse)
+def estimator_brain_review(focus:str=Form("")):
+    pid=project_id(); _seed_estimator_from_latest(pid); c=db()
+    rows=c.execute("""SELECT * FROM estimator_items
+                      WHERE company_id=? AND project_id=? ORDER BY trade,id""",
+                   (current_company_id(),pid)).fetchall()
+    c.close()
+    lines=[]
+    for r in rows:
+        direct,total=_estimate_math(r)
+        lines.append(f'{r["trade"]} | {r["description"]} | source={r["source_ref"]} | '
+                     f'qty={r["quantity"]} {r["unit"]} | mat={r["material_unit_cost"]} | '
+                     f'labor={r["labor_unit_cost"]} | sub={r["subcontract_quote"]} | '
+                     f'allowance={r["allowance"]} | markup={r["markup_pct"]}% | total={total:.2f} | '
+                     f'verified={bool(r["verified"])} | notes={r["notes"]}')
+    api_key=os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        answer="OPENAI_API_KEY is not configured."
+    else:
+        try:
+            client=OpenAI(api_key=api_key)
+            resp=client.responses.create(
+                model=os.environ.get("OPENAI_MODEL","gpt-5.6"),
+                instructions="""You are BuildCommand Estimator Intelligence.
+Review source-backed scope items and estimator-entered values.
+Do not invent quantities or prices. Treat zero/unverified entries as missing, not as confirmed zero scope.
+Identify bid gaps, missing takeoffs, missing quotes, allowances, cross-trade coordination,
+scope exclusions needing confirmation, long-lead/procurement concerns, and high-risk items.
+Prioritize what an estimator must verify before bid submission.""",
+                input=f"""ESTIMATE WORKSHEET
+{chr(10).join(lines)}
+
+ESTIMATOR FOCUS
+{focus or "Full bid-risk review"}"""
+            )
+            answer=resp.output_text
+        except Exception as exc:
+            answer=f"Estimator Intelligence could not complete review: {exc}"
+    body=f"""<div class="hero"><div class="eyebrow">Estimator Intelligence</div><h1>Bid Risk Review</h1></div>
+    <div class="card"><div style="white-space:pre-wrap;line-height:1.6">{esc(answer)}</div>
+    <p><a href="/brain/estimator">← Back to Estimate</a></p></div>"""
+    return shell("Estimator Brain Review",body)
+
 @app.get("/plans-specs-ai",response_class=HTMLResponse)
 def plans_specs_ai():
     pid=project_id(); c=db()
@@ -9585,7 +9934,7 @@ def plans_specs_ai():
         flags=json.loads(run["cross_discipline_flags"] or "[]")
         rfis=json.loads(run["rfi_candidates"] or "[]")
         latest=f'<div class="small">LATEST RUN · {esc(run["created"] or "")}</div><h3>{esc(run["project_summary"] or "")}</h3><div style="margin:14px 0"><span class="badge READY">{len(scopes)} TRADES</span> <span class="badge WATCH">{len(flags)} CROSS-DISCIPLINE</span> <span class="badge HIGH">{len(rfis)} RFI CANDIDATES</span></div>{scope_cards}<p><a href="/blueprint-brain/run/{run["id"]}">Open full intelligence report →</a></p>'
-    body=f'<div class="hero"><div class="eyebrow">BuildCommand Blueprint Brain</div><h1>Plans → trade scopes → field execution.</h1><div class="muted">Reads PDF plan pages visually and textually, finds cross-discipline requirements, preserves sources, generates trade scopes, and flags gaps for GC review.</div></div><div class="grid2"><div class="card"><h2>Analyze Plan Set</h2><form method="post" action="/plans-specs-ai/analyze">{checks}<label style="margin-top:16px">Analysis focus (optional)</label><textarea name="focus" placeholder="Example: Full bid/scope review, or focus on MEP coordination"></textarea><button type="submit">Run Blueprint Brain</button></form><p class="small">Selected files must total less than 50 MB. PDF page images use high-detail analysis. AI-generated scopes require superintendent/PM review before contractual use.</p></div><div class="card"><h2>Latest Blueprint Intelligence</h2>{latest}</div></div>'
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand Plan Intelligence</div><h1>Plans → trade scopes → field execution.</h1><div class="muted">Reads PDF plan pages visually and textually, finds cross-discipline requirements, preserves sources, generates trade scopes, and flags gaps for GC review.</div></div><div class="grid2"><div class="card"><h2>Analyze Plan Set</h2><form method="post" action="/plans-specs-ai/analyze">{checks}<label style="margin-top:16px">Analysis focus (optional)</label><textarea name="focus" placeholder="Example: Full bid/scope review, or focus on MEP coordination"></textarea><button type="submit">Run Blueprint Brain</button></form><p class="small">Selected files must total less than 50 MB. PDF page images use high-detail analysis. AI-generated scopes require superintendent/PM review before contractual use.</p></div><div class="card"><h2>Latest Blueprint Intelligence</h2>{latest}</div></div>'
     return shell("Blueprint Brain",body)
 
 
