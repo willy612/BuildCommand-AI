@@ -1304,6 +1304,182 @@ def v40_executive():
         s=_v40_score(p["id"]); h+=f'<div class="action"><span class="badge">{esc(s["level"])}</span> <b>{esc(p["number"])} - {esc(p["name"])}</b><div class="small">Health {s["health"]}/100 - Risk {s["risk"]}/100</div></div>'
     return shell("Executive Command",'<div class="hero"><h1>Executive Command Center</h1><p class="muted">Which projects need leadership attention and why.</p></div><div class="card">'+(h or '<p class="muted">No projects found.</p>')+'</div>')
 
+
+# ============================================================
+# v41 FIELD EXECUTION INTELLIGENCE
+# ============================================================
+
+def _v41_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        c.execute("CREATE TABLE IF NOT EXISTS closeout_items(id BIGSERIAL PRIMARY KEY,company_id BIGINT,project_id BIGINT,category TEXT,item TEXT,responsible_party TEXT,due_date TEXT,status TEXT DEFAULT 'OPEN',notes TEXT DEFAULT '',created TEXT,updated TEXT)")
+    else:
+        c.execute("CREATE TABLE IF NOT EXISTS closeout_items(id INTEGER PRIMARY KEY,company_id INTEGER,project_id INTEGER,category TEXT,item TEXT,responsible_party TEXT,due_date TEXT,status TEXT DEFAULT 'OPEN',notes TEXT DEFAULT '',created TEXT,updated TEXT)")
+    c.commit(); c.close()
+
+def _v41_make_ready(pid):
+    rows=_v39_rows("SELECT a.*,r.drawings,r.material,r.manpower,r.predecessor,r.access_ready,r.inspection,r.equipment,r.notes readiness_notes FROM activities a LEFT JOIN activity_readiness r ON r.activity_id=a.id AND r.project_id=a.project_id WHERE a.project_id=? AND COALESCE(a.status,'NOT_STARTED')!='COMPLETE' ORDER BY a.start LIMIT 80",(pid,))
+    out=[]
+    for r in rows:
+        checks=[r["drawings"],r["material"],r["manpower"],r["predecessor"],r["access_ready"],r["inspection"],r["equipment"]]
+        missing=7-sum(1 for x in checks if int(x or 0)==1)
+        status="READY" if missing==0 else "AT RISK" if missing<=2 else "NOT READY"
+        out.append((r,status,missing))
+    return out
+
+def _v41_sub_center(pid):
+    return (
+        _v39_rows("SELECT * FROM subs WHERE project_id=? ORDER BY trade,name",(pid,)),
+        _v39_rows("SELECT * FROM activities WHERE project_id=? AND COALESCE(status,'NOT_STARTED')!='COMPLETE' ORDER BY start",(pid,)),
+        _v39_rows("SELECT * FROM subcontractor_updates WHERE project_id=? ORDER BY id DESC LIMIT 100",(pid,))
+    )
+
+def _v41_delivery_risks(pid):
+    today=datetime.utcnow().date()
+    rows=_v39_rows("SELECT * FROM procurement WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('DELIVERED','COMPLETE','CLOSED') ORDER BY required_on_site",(pid,))
+    out=[]
+    for r in rows:
+        need=_v39_safe_date(r["required_on_site"]); promised=_v39_safe_date(r["promised_date"])
+        exposure=(promised-need).days if need and promised else None
+        level="CRITICAL" if exposure is not None and exposure>=7 else "HIGH" if exposure is not None and exposure>0 else "TODAY" if need and need<=today else "WATCH"
+        out.append((r,level,exposure))
+    return out
+
+def _v41_inspection_countdown(pid):
+    today=datetime.utcnow().date()
+    rows=_v39_rows("SELECT * FROM inspections_tracker WHERE project_id=? AND COALESCE(result,'PENDING')!='PASSED' ORDER BY scheduled_date",(pid,))
+    out=[]
+    for r in rows:
+        d=_v39_safe_date(r["scheduled_date"]); days=(d-today).days if d else None
+        label="UNSCHEDULED" if days is None else "OVERDUE" if days<0 else "TODAY" if days==0 else "TOMORROW" if days==1 else f"{days} DAYS" if days<=7 else "UPCOMING"
+        out.append((r,label,days))
+    return out
+
+def _v41_delay_candidates(pid):
+    rows=_v39_rows("SELECT * FROM project_issues WHERE project_id=? AND COALESCE(status,'OPEN')!='CLOSED' ORDER BY id DESC",(pid,))
+    out=[]
+    for r in rows:
+        txt=(str(r["title"] or "")+" "+str(r["description"] or "")+" "+str(r["issue_type"] or "")).lower()
+        if any(x in txt for x in ["delay","late","waiting","hold","blocked","impact","shutdown","unavailable"]):
+            out.append({"title":r["title"],"description":r["description"] or "","due":r["due"] or "","owner":r["owner"] or ""})
+    for level,name,reason,datev in _v39_schedule_risks(pid):
+        if level=="CRITICAL":
+            out.append({"title":name,"description":reason,"due":datev,"owner":""})
+    return out
+
+def _v41_closeout_seed(pid):
+    _v41_ensure_tables()
+    c=db()
+    r=c.execute("SELECT COUNT(*) AS n FROM closeout_items WHERE company_id=? AND project_id=?",(current_company_id(),pid)).fetchone()
+    if int(r["n"] or 0)==0:
+        now=datetime.utcnow().isoformat()
+        defaults=[
+            ("As-Builts","Record drawings / as-builts"),
+            ("O&M","Operations and maintenance manuals"),
+            ("Warranties","Warranty documentation"),
+            ("Training","Owner training completion"),
+            ("Attic Stock","Required attic stock / spare materials"),
+            ("Inspections","Final inspections and certificates"),
+            ("Testing","Final testing and commissioning"),
+            ("Lien Releases","Final lien releases"),
+            ("Turnover","Keys, access, owner turnover documents")
+        ]
+        for category,item in defaults:
+            c.execute("INSERT INTO closeout_items(company_id,project_id,category,item,responsible_party,due_date,status,notes,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?)",(current_company_id(),pid,category,item,"","","OPEN","",now,now))
+        c.commit()
+    c.close()
+
+@app.get("/field-command",response_class=HTMLResponse)
+def v41_field_command():
+    pid=project_id()
+    ready=_v41_make_ready(pid); deliveries=_v41_delivery_risks(pid); inspections=_v41_inspection_countdown(pid)
+    subs,acts,updates=_v41_sub_center(pid); delays=_v41_delay_candidates(pid); attention=_v39_attention(pid)
+    not_ready=sum(1 for _,s,_ in ready if s=="NOT READY")
+    today_ins=sum(1 for _,label,_ in inspections if label in {"TODAY","TOMORROW"})
+    delivery_risk=sum(1 for _,level,_ in deliveries if level in {"CRITICAL","HIGH","TODAY"})
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v41 - Superintendent Field Command</div><h1>Run today&#39;s job.</h1><p class="muted">{len(subs)} subcontractors - {today_ins} inspections due now/next - {delivery_risk} delivery risks - {not_ready} activities not ready - {len(delays)} delay signals - {len(attention)} decisions need review.</p></div>'
+    body+='<div class="grid3">'
+    body+=_v37_link_card("Make-Ready","See what can actually start and why.","/field-command/make-ready","Open")
+    body+=_v37_link_card("Subcontractors","Crews, commitments and upcoming work.","/field-command/subs","Open")
+    body+=_v37_link_card("Sub Alerts","Prepare schedule/field alerts for human approval.","/field-command/sub-alerts","Open")
+    body+=_v37_link_card("Deliveries","Required-on-site vs promised-date exposure.","/field-command/deliveries","Open")
+    body+=_v37_link_card("Inspections","Countdown and readiness before the inspector arrives.","/field-command/inspections","Open")
+    body+=_v37_link_card("Daily Report","Build today's superintendent report from project data.","/field-command/daily-report","Open")
+    body+=_v37_link_card("Delay Documentation","Capture possible delay events before the record is lost.","/field-command/delays","Open")
+    body+=_v37_link_card("Punch & Completion","Open punch organized by location/trade.","/field-command/punch","Open")
+    body+=_v37_link_card("Closeout","Track turnover requirements to completion.","/field-command/closeout","Open")
+    body+='</div>'
+    return shell("Field Command",body)
+
+@app.get("/field-command/make-ready",response_class=HTMLResponse)
+def v41_make_ready_page():
+    rows=_v41_make_ready(project_id())
+    h="".join(f'<div class="action"><span class="badge">{esc(status)}</span> <b>{esc(r["name"])}</b><div class="small">{esc(r["trade"])} - {esc(r["start"])} - {missing} readiness checks incomplete</div></div>' for r,status,missing in rows)
+    return shell("Make-Ready Brain",'<div class="hero"><h1>Make-Ready Brain</h1><p class="muted">Drawings - material - manpower - predecessor - access - inspection - equipment.</p></div><div class="card">'+(h or '<p class="muted">No active activities.</p>')+'</div>')
+
+@app.get("/field-command/subs",response_class=HTMLResponse)
+def v41_subs_page():
+    subs,acts,updates=_v41_sub_center(project_id()); h=""
+    for s in subs:
+        related=[a for a in acts if str(a["trade"] or "").lower()==str(s["trade"] or "").lower()]
+        nxt=related[0] if related else None
+        next_text=("Next: "+esc(nxt["name"])+" - "+esc(nxt["start"])) if nxt else "No upcoming activity matched."
+        h+=f'<div class="card"><h3>{esc(s["name"])}</h3><div class="small">{esc(s["trade"])}</div><p>{next_text}</p></div>'
+    return shell("Subcontractor Command",'<div class="hero"><h1>Subcontractor Command Center</h1></div><div class="grid3">'+(h or '<div class="card">No subcontractors loaded.</div>')+'</div>')
+
+@app.get("/field-command/sub-alerts",response_class=HTMLResponse)
+def v41_sub_alerts():
+    subs,acts,updates=_v41_sub_center(project_id()); risks=_v39_schedule_risks(project_id()); h=""
+    for s in subs:
+        matching=[r for r in risks if any(str(a["trade"] or "").lower()==str(s["trade"] or "").lower() and a["name"]==r[1] for a in acts)]
+        if matching:
+            msg=f'BuildCommand draft: Please review upcoming {s["trade"]} schedule requirements and confirm manpower/material readiness. Human approval required before sending.'
+            h+=f'<div class="card"><span class="badge WATCH">DRAFT ALERT</span><h3>{esc(s["name"])}</h3><p>{esc(msg)}</p></div>'
+    return shell("Sub Alerts",'<div class="hero"><h1>Automatic Sub Alerts</h1><p class="muted">Prepared only. BuildCommand does not send external messages without approval.</p></div>'+(h or '<div class="card">No current alert candidates.</div>'))
+
+@app.get("/field-command/deliveries",response_class=HTMLResponse)
+def v41_deliveries_page():
+    rows=_v41_delivery_risks(project_id()); h=""
+    for r,level,exposure in rows:
+        ex=(f' - {exposure} day exposure' if exposure is not None and exposure>0 else '')
+        h+=f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(r["item"])}</b><div class="small">Need {esc(r["required_on_site"])} - Promised {esc(r["promised_date"])}{ex}</div></div>'
+    return shell("Delivery Intelligence",'<div class="hero"><h1>Delivery Intelligence</h1></div><div class="card">'+(h or '<p class="muted">No open deliveries.</p>')+'</div>')
+
+@app.get("/field-command/inspections",response_class=HTMLResponse)
+def v41_inspections_page():
+    rows=_v41_inspection_countdown(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(label)}</span> <b>{esc(r["inspection_type"])}</b><div class="small">{esc(r["scheduled_date"])} - {esc(r["authority"])}</div></div>' for r,label,days in rows)
+    return shell("Inspection Countdown",'<div class="hero"><h1>Inspection Countdown</h1><p class="muted">7 days - 3 days - tomorrow - today.</p></div><div class="card">'+(h or '<p class="muted">No pending inspections.</p>')+'</div>')
+
+@app.get("/field-command/daily-report",response_class=HTMLResponse)
+def v41_daily_report_page():
+    pid=project_id()
+    acts=_v39_rows("SELECT * FROM activities WHERE project_id=? AND COALESCE(status,'NOT_STARTED')!='COMPLETE' ORDER BY start LIMIT 20",(pid,))
+    deliveries=_v41_delivery_risks(pid); inspections=_v41_inspection_countdown(pid); delays=_v41_delay_candidates(pid)
+    work=", ".join(str(a["name"]) for a in acts[:8])
+    body=f'<div class="hero"><h1>Daily Report Brain</h1><p class="muted">Draft from live project information; superintendent reviews before saving.</p></div><div class="card"><h2>Draft</h2><p><b>Work / upcoming:</b> {esc(work or "No active activities")}</p><p><b>Deliveries:</b> {len(deliveries)} open</p><p><b>Inspections:</b> {len(inspections)} pending</p><p><b>Potential delays:</b> {len(delays)}</p><p><a href="/daily-report">Open Daily Report editor -&gt;</a></p></div>'
+    return shell("Daily Report Brain",body)
+
+@app.get("/field-command/delays",response_class=HTMLResponse)
+def v41_delays_page():
+    rows=_v41_delay_candidates(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">DOCUMENT</span> <b>{esc(r["title"])}</b><div class="small">{esc(r["description"])}</div></div>' for r in rows)
+    return shell("Delay Documentation",'<div class="hero"><h1>Delay Documentation Brain</h1><p class="muted">Capture dates, affected activity, responsible party, photos, RFIs and schedule impact.</p></div><div class="card">'+(h or '<p class="muted">No obvious delay candidates detected.</p>')+'</div>')
+
+@app.get("/field-command/punch",response_class=HTMLResponse)
+def v41_punch_page():
+    rows=_v39_rows("SELECT * FROM punch_items WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('VERIFIED','CLOSED','COMPLETE') ORDER BY location,trade,due",(project_id(),))
+    h="".join(f'<div class="action"><b>{esc(r["location"] or "No location")} - {esc(r["title"])}</b><div class="small">{esc(r["trade"])} - {esc(r["owner"])} - Due {esc(r["due"])}</div></div>' for r in rows)
+    return shell("Punch & Completion",'<div class="hero"><h1>Punch & Completion Brain</h1></div><div class="card">'+(h or '<p class="muted">No open punch items.</p>')+'<p><a href="/punch">Open full Punch List -&gt;</a></p></div>')
+
+@app.get("/field-command/closeout",response_class=HTMLResponse)
+def v41_closeout_page():
+    pid=project_id(); _v41_closeout_seed(pid)
+    rows=_v39_rows("SELECT * FROM closeout_items WHERE company_id=? AND project_id=? ORDER BY category,id",(current_company_id(),pid))
+    complete=sum(1 for r in rows if str(r["status"] or "").upper() in {"COMPLETE","CLOSED","RECEIVED"})
+    h="".join(f'<div class="action"><span class="badge">{esc(r["status"])}</span> <b>{esc(r["category"])}</b> - {esc(r["item"])}<div class="small">{esc(r["responsible_party"])} {esc(r["due_date"])}</div></div>' for r in rows)
+    return shell("Closeout Brain",f'<div class="hero"><h1>Closeout Brain</h1><p class="muted">{complete}/{len(rows)} core turnover requirements complete.</p></div><div class="card">'+h+'</div>')
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -1342,7 +1518,7 @@ def unified_manage():
       f'<div class="card"><div class="label">Submittals</div><div class="kpi">{s["submittals"]}</div></div>'
       f'<div class="card"><div class="label">Inspections</div><div class="kpi">{s["inspections"]}</div></div></div>'
       '<div class="grid3">'
-      +_v37_link_card("Today","Project Autopilot: risk, priorities, downstream impact and superintendent command.","/autopilot")
+      +_v37_link_card("Today","Superintendent Field Command: readiness, crews, deliveries, inspections and decisions.","/field-command")
       +_v37_link_card("Schedule","Schedule and production planning.","/schedule")
       +_v37_link_card("Things That Need You","One queue for human decisions.","/actions")
       +_v37_link_card("RFIs / Issues","Questions, conflicts and issues.","/issues")
