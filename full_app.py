@@ -2025,6 +2025,79 @@ def v44_risk_page():
     body=f'<div class="hero"><h1>Preconstruction Risk Brain</h1><p class="muted">{r["level"]} risk - Score {r["score"]}/100.</p></div><div class="grid4"><div class="card"><div class="label">Uncovered Trades</div><div class="kpi">{r["uncovered"]}</div></div><div class="card"><div class="label">Scope Review</div><div class="kpi">{r["gaps"]}</div></div><div class="card"><div class="label">Unverified Estimate</div><div class="kpi">{r["unverified"]}</div></div><div class="card"><div class="label">Long-Lead Signals</div><div class="kpi">{r["longleads"]}</div></div></div>'
     return shell("Preconstruction Risk",body)
 
+
+# ============================================================
+# v44.2 EXISTING BLUEPRINT DATA NORMALIZATION
+# ============================================================
+
+def _v442_normalize_existing_blueprint(pid):
+    """Normalize duplicate trade labels and re-run ownership on existing saved Blueprint Brain items."""
+    c=db()
+    items=c.execute("SELECT * FROM blueprint_scope_items WHERE company_id=? AND project_id=? ORDER BY run_id,id",
+                    (current_company_id(),pid)).fetchall()
+    changed=0
+    for item in items:
+        req=str(item["requirement"] or "")
+        if _v442_exclude_scope_item(req):
+            c.execute("DELETE FROM blueprint_scope_items WHERE id=?",(item["id"],))
+            changed+=1
+            continue
+        target=_v441_primary_trade(req,_v33_normalize_trade(item["trade"]))
+        target=_v441_apply_approved_learning(pid,req,target)
+        if target != item["trade"]:
+            run_id=item["run_id"]
+            parent=c.execute("SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? AND trade=? LIMIT 1",
+                             (run_id,current_company_id(),pid,target)).fetchone()
+            if parent:
+                target_id=parent["id"]
+            else:
+                div={"Demolition":"02","Concrete":"03","Roofing":"07","Doors / Frames / Hardware":"08",
+                     "Storefront / Glazing":"08","Framing / Drywall":"09","Ceilings":"09",
+                     "Flooring / Tile":"09","Painting":"09","Toilet / Bath Accessories":"10",
+                     "Specialties":"10","Fire Sprinkler":"21","Plumbing":"22",
+                     "HVAC / Mechanical":"23","Controls":"23","Electrical":"26",
+                     "Low Voltage":"27","Fire Alarm":"28"}.get(target,"")
+                now=datetime.utcnow().isoformat()
+                c.execute("INSERT INTO blueprint_trade_scopes(company_id,project_id,run_id,trade,division,summary,scope_text,item_count,created) VALUES(?,?,?,?,?,?,?,?,?)",
+                          (current_company_id(),pid,run_id,target,div,f"BuildCommand source-backed scope for {target}.","",0,now))
+                target_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+            c.execute("UPDATE blueprint_scope_items SET trade=?,trade_scope_id=? WHERE id=?",
+                      (target,target_id,item["id"]))
+            changed+=1
+
+    # Canonicalize parent labels and remove empty/duplicate parents safely.
+    scopes=c.execute("SELECT * FROM blueprint_trade_scopes WHERE company_id=? AND project_id=? ORDER BY run_id,id",
+                     (current_company_id(),pid)).fetchall()
+    for sc in scopes:
+        canonical=_v33_normalize_trade(sc["trade"])
+        if canonical != sc["trade"]:
+            other=c.execute("SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? AND trade=? AND id<>? LIMIT 1",
+                            (sc["run_id"],current_company_id(),pid,canonical,sc["id"])).fetchone()
+            if other:
+                c.execute("UPDATE blueprint_scope_items SET trade_scope_id=?,trade=? WHERE trade_scope_id=?",
+                          (other["id"],canonical,sc["id"]))
+                c.execute("DELETE FROM blueprint_trade_scopes WHERE id=?",(sc["id"],))
+            else:
+                c.execute("UPDATE blueprint_trade_scopes SET trade=? WHERE id=?",(canonical,sc["id"]))
+                c.execute("UPDATE blueprint_scope_items SET trade=? WHERE trade_scope_id=?",(canonical,sc["id"]))
+
+    scopes=c.execute("SELECT id FROM blueprint_trade_scopes WHERE company_id=? AND project_id=?",
+                     (current_company_id(),pid)).fetchall()
+    for sc in scopes:
+        n=c.execute("SELECT COUNT(*) n FROM blueprint_scope_items WHERE trade_scope_id=?",(sc["id"],)).fetchone()["n"]
+        if n==0:
+            c.execute("DELETE FROM blueprint_trade_scopes WHERE id=?",(sc["id"],))
+        else:
+            c.execute("UPDATE blueprint_trade_scopes SET item_count=? WHERE id=?",(n,sc["id"]))
+    c.commit(); c.close()
+    return changed
+
+@app.post("/blueprint-brain/final-cleanup")
+def v442_run_final_cleanup():
+    pid=project_id()
+    _v442_normalize_existing_blueprint(pid)
+    return RedirectResponse("/blueprint-brain",status_code=303)
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -10723,9 +10796,9 @@ MEP demolition stays with the responsible MEP trade. General non-MEP demolition 
 
 V33_TRADES = [
     "Demolition","Earthwork","Concrete","Masonry","Structural Steel","Rough Carpentry",
-    "Millwork","Waterproofing","Roofing","Doors / Frames / Hardware","Glazing",
-    "Framing / Drywall","Ceilings","Flooring","Tile","Painting","Specialties",
-    "Equipment","Furnishings","Fire Sprinkler","Plumbing","HVAC / Mechanical",
+    "Millwork","Waterproofing","Roofing","Doors / Frames / Hardware","Storefront / Glazing",
+    "Framing / Drywall","Ceilings","Flooring / Tile","Painting","Toilet / Bath Accessories",
+    "Specialties","Equipment","Furnishings","Fire Sprinkler","Plumbing","HVAC / Mechanical",
     "Controls","Electrical","Fire Alarm","Low Voltage","Security","Site Utilities",
     "Paving","Landscaping","Unassigned"
 ]
@@ -10733,12 +10806,21 @@ V33_TRADES = [
 def _v33_normalize_trade(name):
     n=(name or "").strip().lower()
     aliases={
-        "mechanical":"HVAC / Mechanical","hvac":"HVAC / Mechanical","hvac/mechanical":"HVAC / Mechanical",
+        "mechanical":"HVAC / Mechanical","hvac":"HVAC / Mechanical",
+        "hvac/mechanical":"HVAC / Mechanical","mechanical / hvac":"HVAC / Mechanical",
         "drywall":"Framing / Drywall","framing":"Framing / Drywall","framing/drywall":"Framing / Drywall",
         "doors/frames/hardware":"Doors / Frames / Hardware","door hardware":"Doors / Frames / Hardware",
+        "storefront":"Storefront / Glazing","glazing":"Storefront / Glazing",
+        "glazing/storefront":"Storefront / Glazing","glazing / storefront":"Storefront / Glazing",
+        "storefront/glazing":"Storefront / Glazing","storefront / glazing":"Storefront / Glazing",
+        "tile":"Flooring / Tile","flooring":"Flooring / Tile","flooring/tile":"Flooring / Tile",
+        "tile/flooring":"Flooring / Tile","flooring / tile":"Flooring / Tile","tile / flooring":"Flooring / Tile",
+        "bath accessories":"Toilet / Bath Accessories","bathroom accessories":"Toilet / Bath Accessories",
+        "toilet accessories":"Toilet / Bath Accessories","toilet room accessories":"Toilet / Bath Accessories",
+        "toilet / bath accessories":"Toilet / Bath Accessories",
         "fire sprinkler":"Fire Sprinkler","sprinkler":"Fire Sprinkler","fire alarm":"Fire Alarm",
         "low voltage":"Low Voltage","low-voltage":"Low Voltage","electrical":"Electrical",
-        "plumbing":"Plumbing","flooring":"Flooring","demolition":"Demolition","demo":"Demolition"
+        "plumbing":"Plumbing","demolition":"Demolition","demo":"Demolition"
     }
     return aliases.get(n, (name or "Unassigned").strip() or "Unassigned")
 
@@ -10985,6 +11067,60 @@ def _v441_primary_trade(requirement, proposed):
     s=str(requirement or "").lower().strip()
     def has(*terms): return any(x in s for x in terms)
 
+    # 1. PRIMARY ACTION FIRST.
+    explicit_demo=(
+        s.startswith("demo ") or s.startswith("demolish ") or
+        s.startswith("remove existing ") or s.startswith("remove the existing ") or
+        s.startswith("remove the architectural ") or s.startswith("remove architectural ") or
+        s.startswith("remove and dispose ") or s.startswith("perform non-system") or
+        "specifically marked for removal" in s or "identified for demolition" in s
+    )
+    if explicit_demo:
+        return "Demolition"
+
+    # Generic firestopping coordination/spec language is excluded later, not routed as a trade scope.
+    # Finish actions beat substrate/material words.
+    if has("paint ","paint gypsum","paint hollow","prime and refinish","prime and paint",
+           "paint or refinish","repaint","touch-up paint","touch up paint",
+           "refinish all wall","finish paint","painting of patched surfaces"):
+        return "Painting"
+
+    # Supporting construction work owns itself even when caused by MEP.
+    if has("slab cutting","sawcut slab","saw cut slab","concrete cutting",
+           "trenching and restoration","patch concrete","concrete patch",
+           "restore concrete","slab restoration"):
+        return "Concrete"
+
+    # Ceiling coordination/layout belongs to ceilings; device names are interfaces only.
+    if has("coordinate ceiling grid layout","ceiling grid layout and openings",
+           "coordinate ceiling openings","suspended acoustical tile ceiling",
+           "acoustical tile ceiling","acoustic ceiling tile","acoustical ceiling tile",
+           "ceiling tile and grid","ceiling tiles and grid","ceiling grid","act ceiling",
+           "suspension system"):
+        return "Ceilings"
+
+    # Duct smoke devices tied to air-conditioning units are HVAC in this BuildCommand ownership model.
+    if has("duct smoke detector","duct smoke detectors"):
+        return "HVAC / Mechanical"
+
+    # Electronic accessible/automatic door operators and touch pads are Low Voltage.
+    if has("electronic accessible door operator","automatic door operator",
+           "accessible door operator","door operator with","touch pads","activation touch pad"):
+        return "Low Voltage"
+
+    # Toilet/bath accessories are not plumbing.
+    if has("grab bar","grab bars","toilet partition","toilet partitions","urinal screen","urinal screens",
+           "toilet tissue holder","paper towel/waste","paper towel dispenser","soap dispenser",
+           "robe hook","framed mirror","toilet-seat-cover","toilet seat cover",
+           "sanitary-napkin","sanitary napkin","bath accessory","bathroom accessory",
+           "toilet room accessory"):
+        return "Toilet / Bath Accessories"
+
+    # Storefront hardware remains storefront when explicitly part of storefront/entrance assembly.
+    if has("storefront door hardware","storefront entrance hardware","aluminum entrance hardware"):
+        return "Storefront / Glazing"
+
+    # Protected specialty systems.
     if has("fire alarm","horn strobe","pull station","notification appliance","smoke detector"):
         return "Fire Alarm"
     if has("card access","card reader","access control","electronic strike","electric strike",
@@ -10995,24 +11131,6 @@ def _v441_primary_trade(requirement, proposed):
            "fire suppression piping","sprinkler branch","sprinkler drop"):
         return "Fire Sprinkler"
 
-    demo=(s.startswith("demo ") or s.startswith("demolish ") or s.startswith("remove existing ")
-          or s.startswith("remove and dispose ") or "shall be demolished" in s)
-    if demo:
-        if has("receptacle","panelboard","electrical panel","branch circuit","conduit","wiring","light fixture"):
-            return "Electrical"
-        if has("water closet","urinal","lavatory","floor drain","sanitary piping","domestic water","plumbing fixture"):
-            return "Plumbing"
-        if has("ductwork","diffuser","grille","vav","rtu","ahu","exhaust fan","mechanical equipment"):
-            return "HVAC / Mechanical"
-        if has("fire alarm","smoke detector","horn strobe","pull station"):
-            return "Fire Alarm"
-        if has("card reader","access control","camera","data cabling","telecom cabling"):
-            return "Low Voltage"
-        if has("sprinkler","fire suppression"):
-            return "Fire Sprinkler"
-        return "Demolition"
-
-    # Explicit work action beats equipment/location words.
     if has("patch roof","roof patch","repair roof","roof repair","restore roof","roof membrane patch",
            "patch roofing","repair roof membrane","flash roof penetration","roof flashing",
            "watertight roof","roof penetration patch"):
@@ -11024,11 +11142,13 @@ def _v441_primary_trade(requirement, proposed):
 
     if has("water closet","urinal","lavatory","wash fountain","mop sink","floor sink","floor drain",
            "drinking fountain","plumbing fixture","break-room sink","break room sink",
-           "disposal connection","instantaneous electric water heater","chronomite","iwh-1"):
+           "disposal connection","instantaneous electric water heater","electric domestic water heater",
+           "water heater wh-","chronomite","iwh-1","expansion tank","recirculation pump"):
         return "Plumbing"
 
     if has("exhaust fan","upblast fan","greenheck","backdraft damper","full-size exhaust duct",
-           "full size exhaust duct","rtu","ahu","air handler","vav","diffuser","grille","ductwork"):
+           "full size exhaust duct","rtu","ahu","air handler","vav","diffuser","grille","ductwork",
+           "thermostat","thermostats","rooftop unit","air-conditioning unit","air conditioning unit"):
         return "HVAC / Mechanical"
 
     if has("concealed wood blocking","wood blocking","wood backing","plywood backing","metal backing",
@@ -11038,11 +11158,6 @@ def _v441_primary_trade(requirement, proposed):
            "patch gypsum","patch drywall","wall patch","patch wall","repair drywall",
            "marlite","symmetrix","frp","wainscot"):
         return "Framing / Drywall"
-
-    if has("suspended acoustical tile ceiling","acoustical tile ceiling","acoustic ceiling tile",
-           "acoustical ceiling tile","ceiling tile and grid","ceiling tiles and grid",
-           "ceiling grid","act ceiling","suspension system"):
-        return "Ceilings"
 
     if has("interior doors and frames","interior door and frame","hollow-metal framed window",
            "hollow metal framed window","door schedule","door hardware set","hollow-metal door",
@@ -11054,24 +11169,27 @@ def _v441_primary_trade(requirement, proposed):
         return "Storefront / Glazing"
 
     if has("faux tile backsplash","tile backsplash","ceramic tile","porcelain tile","wall tile",
-           "floor tile","tile base","tile grout","tile mortar","tile adhesive","schluter"):
-        return "Tile"
-
-    if has("rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl","vct",
+           "floor tile","tile base","tile grout","tile mortar","tile adhesive","schluter",
+           "rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl","vct",
            "carpet tile","sheet vinyl","resilient flooring","floor transition","transition strip"):
-        return "Flooring"
-
-    if has("paint or refinish","paint patched","repaint","touch-up paint","touch up paint",
-           "paint repair","finish paint","painting of patched surfaces"):
-        return "Painting"
+        return "Flooring / Tile"
 
     if has("fire extinguisher cabinet","fire extinguisher cabinets","semi-recessed fire extinguisher"):
         return "Specialties"
 
     if has("casework","millwork","countertop"):
-        return "Millwork / Casework"
+        return "Millwork"
 
     return _v33_normalize_trade(proposed)
+
+def _v442_exclude_scope_item(requirement):
+    s=str(requirement or "").lower()
+    # User-approved exclusion: generic firestop penetration specification/coordination statement.
+    return (
+        ("firestop" in s or "firestopping" in s) and
+        ("penetration" in s or "penetrations" in s) and
+        ("listed assembl" in s or "restore" in s or "original rating" in s)
+    )
 
 def _v441_apply_approved_learning(pid, requirement, trade):
     try:
@@ -11106,6 +11224,8 @@ def _v441_reclassify_with_learning(pid,data):
             if not isinstance(item,dict): continue
             req=str(item.get("requirement") or "").strip()
             if not req: continue
+            if _v442_exclude_scope_item(req):
+                continue
             target=_v33_trade_for_item(item,proposed) or proposed
             target=_v441_primary_trade(req,target)
             target=_v441_apply_approved_learning(pid,req,target)
@@ -11119,8 +11239,8 @@ def _v441_reclassify_with_learning(pid,data):
         "GC / General Contractor":"01","Demolition":"02","Concrete":"03","Masonry":"04",
         "Structural Steel":"05","Rough Carpentry":"06","Waterproofing":"07","Roofing":"07",
         "Doors / Frames / Hardware":"08","Storefront / Glazing":"08","Framing / Drywall":"09",
-        "Ceilings":"09","Flooring":"09","Tile":"09","Painting":"09","Millwork / Casework":"12",
-        "Specialties":"10","Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23",
+        "Ceilings":"09","Flooring / Tile":"09","Painting":"09","Millwork":"12",
+        "Toilet / Bath Accessories":"10","Specialties":"10","Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23",
         "Controls":"23","Electrical":"26","Low Voltage":"27","Fire Alarm":"28"
     }
     data["trade_scopes"]=[
