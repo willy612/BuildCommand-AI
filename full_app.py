@@ -699,7 +699,7 @@ NAV=[("Daily Command","/"),("AI Command","/ai-command"),("Blueprint Brain","/pla
 
 NAV_GROUPS=[
     ('🏠 Home',[
-        ('BuildCommand Brain','/brain'),('Estimator Intelligence','/brain/estimator'),('Daily Command','/'),('AI Command','/ai-command'),('Morning Brief','/morning-brief'),('Action Center','/actions'),
+        ('BuildCommand Brain','/brain'),('Estimator Intelligence','/brain/estimator'),('Takeoff Intelligence','/brain/takeoff'),('Daily Command','/'),('AI Command','/ai-command'),('Morning Brief','/morning-brief'),('Action Center','/actions'),
         ('Global Search','/global-search'),('Favorites','/favorites'),('Recent Activity','/recent-activity'),('Mobile Field+','/mobile-field-plus')
     ]),
     ('📅 Schedule & Production',[
@@ -9989,6 +9989,191 @@ USER QUESTION
     <div class="card"><div class="small">BUILDCOMMAND BRAIN</div><div style="white-space:pre-wrap;line-height:1.6">{esc(answer)}</div></div></div>"""
     return shell("BuildCommand Brain",body)
 
+
+# ============================================================
+# v35 ESTIMATOR TAKEOFF INTELLIGENCE
+# ============================================================
+
+def _suggest_takeoff_unit(trade, description):
+    t=(str(description or "")+" "+str(trade or "")).lower()
+
+    # Counts / equipment
+    if any(x in t for x in [
+        "door","frame","window","sprinkler head","receptacle","outlet","switch",
+        "fixture","water closet","urinal","lavatory","sink","floor drain","cleanout",
+        "diffuser","grille","vav","fan","rtu","ahu","panel","transformer","disconnect",
+        "card reader","camera","fire extinguisher cabinet","cabinet","appliance"
+    ]):
+        return "EA"
+
+    # Linear measurements
+    if any(x in t for x in [
+        "rubber base","resilient base","cove base","base molding","curb","handrail",
+        "guardrail","pipe","piping","conduit","duct","ductwork","gutter","flashing",
+        "joint sealant","wall base"
+    ]):
+        return "LF"
+
+    # Area measurements
+    if any(x in t for x in [
+        "flooring","carpet","lvt","vct","tile","wall tile","floor tile","ceiling",
+        "ceiling tile","drywall","gypsum board","wallboard","paint","painting",
+        "frp","marlite","wainscot","roof membrane","roofing","waterproofing",
+        "storefront glazing","glazing","insulation"
+    ]):
+        return "SF"
+
+    # Volume
+    if any(x in t for x in ["concrete","slab","footing","grade beam","grout fill"]):
+        return "CY"
+
+    # Earthwork
+    if any(x in t for x in ["excavation","backfill","import soil","export soil"]):
+        return "CY"
+
+    # Lump-sum / coordination / general conditions
+    if any(x in t for x in [
+        "coordinate","confirm","verify","allowance","general conditions","mobilization",
+        "testing","commissioning","permit","closeout","temporary protection"
+    ]):
+        return "LS"
+
+    return "EA"
+
+
+def _takeoff_status(row):
+    qty=float(row["quantity"] or 0)
+    verified=bool(int(row["verified"] or 0))
+    if verified:
+        return "VERIFIED"
+    if qty > 0:
+        return "QUANTITY_ENTERED"
+    return "NEEDS_TAKEOFF"
+
+
+@app.get("/brain/takeoff", response_class=HTMLResponse)
+def estimator_takeoff_intelligence():
+    pid=project_id()
+    sync=_seed_estimator_from_latest(pid)
+    c=db()
+    project=c.execute("SELECT name,number FROM projects WHERE id=?",(pid,)).fetchone()
+    run=_latest_blueprint_run(pid)
+
+    if run:
+        rows=c.execute("""
+            SELECT e.*
+            FROM estimator_items e
+            JOIN blueprint_scope_items b ON b.id=e.blueprint_scope_item_id
+            WHERE e.company_id=? AND e.project_id=? AND b.run_id=?
+            ORDER BY e.trade,e.id
+        """,(current_company_id(),pid,run["id"])).fetchall()
+    else:
+        rows=[]
+    c.close()
+
+    counts={"NEEDS_TAKEOFF":0,"QUANTITY_ENTERED":0,"VERIFIED":0}
+    cards=[]
+    for r in rows:
+        status=_takeoff_status(r)
+        counts[status]+=1
+        suggested=_suggest_takeoff_unit(r["trade"],r["description"])
+        current_unit=(r["unit"] or "").strip()
+        unit=current_unit or suggested
+        badge = "READY" if status=="VERIFIED" else ("WATCH" if status=="QUANTITY_ENTERED" else "HIGH")
+
+        cards.append(f"""
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:center">
+            <div><b>{esc(r["trade"])}</b></div>
+            <span class="badge {badge}">{status.replace("_"," ")}</span>
+          </div>
+          <h3>{esc(r["description"])}</h3>
+          <div class="small">Source: {esc(r["source_ref"] or "Source not identified")}</div>
+          <div class="small" style="margin-top:6px">Suggested takeoff unit: <b>{esc(suggested)}</b></div>
+
+          <form method="post" action="/brain/takeoff/item/{r["id"]}" style="margin-top:12px">
+            <div class="grid4">
+              <div>
+                <label>Quantity</label>
+                <input name="quantity" type="number" step="0.01" value="{r["quantity"] or 0}">
+              </div>
+              <div>
+                <label>Unit</label>
+                <select name="unit">
+                  {''.join(f'<option value="{u}" {"selected" if unit==u else ""}>{u}</option>' for u in ["EA","LF","SF","CY","LS","HR","DAY","TON","GAL"])}
+                </select>
+              </div>
+              <div>
+                <label>Estimator verified</label>
+                <select name="verified">
+                  <option value="0" {"selected" if not r["verified"] else ""}>No</option>
+                  <option value="1" {"selected" if r["verified"] else ""}>Yes</option>
+                </select>
+              </div>
+              <div>
+                <label>Takeoff note</label>
+                <input name="notes" value="{esc(r["notes"] or "")}" placeholder="Counted on A201, verify addendum, etc.">
+              </div>
+            </div>
+            <button type="submit" style="margin-top:10px">Save Takeoff</button>
+          </form>
+        </div>
+        """)
+
+    project_label=f'{esc(project["number"])} - {esc(project["name"])}' if project else "Current Project"
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">BuildCommand Brain · Takeoff Intelligence · v35</div>
+      <h1>Scope → measurable takeoff targets.</h1>
+      <div class="muted">{project_label}</div>
+    </div>
+
+    <div class="grid4">
+      <div class="card"><div class="label">Scope Items</div><div class="kpi">{len(rows)}</div></div>
+      <div class="card"><div class="label">Needs Takeoff</div><div class="kpi">{counts["NEEDS_TAKEOFF"]}</div></div>
+      <div class="card"><div class="label">Qty Entered</div><div class="kpi">{counts["QUANTITY_ENTERED"]}</div></div>
+      <div class="card"><div class="label">Verified</div><div class="kpi">{counts["VERIFIED"]}</div></div>
+    </div>
+
+    <div class="card">
+      <h2>How BuildCommand handles takeoffs</h2>
+      <p>
+        BuildCommand identifies what should be counted or measured and suggests the likely unit.
+        It does <b>not invent a quantity</b>. Quantities remain estimator-entered or estimator-verified
+        until a future scaled-drawing takeoff engine is connected.
+      </p>
+      <p><a href="/brain/estimator"><b>← Back to Estimator Intelligence</b></a></p>
+    </div>
+
+    {"".join(cards) if cards else '<div class="card"><h2>No takeoff items yet</h2><p>Run Plan Intake first.</p></div>'}
+    """
+    return shell("Takeoff Intelligence",body)
+
+
+@app.post("/brain/takeoff/item/{item_id}")
+def estimator_takeoff_update(
+    item_id:int,
+    quantity:float=Form(0),
+    unit:str=Form("EA"),
+    verified:int=Form(0),
+    notes:str=Form("")
+):
+    allowed={"EA","LF","SF","CY","LS","HR","DAY","TON","GAL"}
+    unit=(unit or "EA").upper()
+    if unit not in allowed:
+        unit="EA"
+
+    pid=project_id()
+    c=db()
+    c.execute("""
+        UPDATE estimator_items
+        SET quantity=?,unit=?,verified=?,notes=?,updated=?
+        WHERE id=? AND company_id=? AND project_id=?
+    """,(quantity,unit,verified,notes,datetime.utcnow().isoformat(),
+         item_id,current_company_id(),pid))
+    c.commit(); c.close()
+    return RedirectResponse("/brain/takeoff",status_code=303)
+
 @app.get("/brain/estimator",response_class=HTMLResponse)
 def estimator_intelligence():
     pid=project_id(); sync=_seed_estimator_from_latest(pid); c=db()
@@ -10047,6 +10232,7 @@ def estimator_intelligence():
           <button type="submit">Analyze Estimate Risk</button>
         </form></div>
     </div>
+    <div class="card"><h2>Takeoff Intelligence</h2><p>Turn cleaned scope items into quantity targets and verification status.</p><p><a href="/brain/takeoff"><b>Open Takeoff Intelligence →</b></a></p></div>
     <div class="card"><h2>Trade Totals</h2><table><tr><th>Trade</th><th>Current Total</th></tr>{totals}</table></div>
     <div class="card"><h2>Estimator rule</h2><p>BuildCommand organizes and identifies takeoff targets, but quantities and costs remain <b>unverified until an estimator confirms them</b>. Source references stay attached.</p></div>
     {"".join(cards) if cards else '<div class="card"><h2>No estimator items yet</h2><p>Run Plan Intake first, then return here.</p></div>'}"""
