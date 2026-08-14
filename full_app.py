@@ -9720,29 +9720,87 @@ def _blueprint_latest(pid):
 # ============================================================
 
 def _ensure_v34_estimator_tables():
+    """
+    v34.2 estimator schema repair.
+    PostgreSQL needs a sequence/default for estimator_items.id. Earlier v34 used
+    c.execute(CREATE TABLE...) instead of executescript(), so PgCompat did not
+    translate INTEGER PRIMARY KEY to BIGSERIAL. Repair existing installs in place.
+    """
     c=db()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS estimator_items(
-            id INTEGER PRIMARY KEY,
-            company_id INTEGER,
-            project_id INTEGER,
-            blueprint_scope_item_id INTEGER,
-            trade TEXT,
-            description TEXT,
-            source_ref TEXT,
-            quantity REAL DEFAULT 0,
-            unit TEXT DEFAULT '',
-            material_unit_cost REAL DEFAULT 0,
-            labor_unit_cost REAL DEFAULT 0,
-            subcontract_quote REAL DEFAULT 0,
-            allowance REAL DEFAULT 0,
-            markup_pct REAL DEFAULT 0,
-            notes TEXT DEFAULT '',
-            verified INTEGER DEFAULT 0,
-            created TEXT,
-            updated TEXT
-        )
-    """)
+    if DATABASE_KIND=="postgres":
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS estimator_items(
+                id BIGSERIAL PRIMARY KEY,
+                company_id BIGINT,
+                project_id BIGINT,
+                blueprint_scope_item_id BIGINT,
+                trade TEXT,
+                description TEXT,
+                source_ref TEXT,
+                quantity DOUBLE PRECISION DEFAULT 0,
+                unit TEXT DEFAULT '',
+                material_unit_cost DOUBLE PRECISION DEFAULT 0,
+                labor_unit_cost DOUBLE PRECISION DEFAULT 0,
+                subcontract_quote DOUBLE PRECISION DEFAULT 0,
+                allowance DOUBLE PRECISION DEFAULT 0,
+                markup_pct DOUBLE PRECISION DEFAULT 0,
+                notes TEXT DEFAULT '',
+                verified INTEGER DEFAULT 0,
+                created TEXT,
+                updated TEXT
+            )
+        """)
+        # Repair a v34 table that already exists with "id INTEGER PRIMARY KEY"
+        # and therefore has no sequence/default.
+        try:
+            c.execute("CREATE SEQUENCE IF NOT EXISTS estimator_items_id_seq")
+            c.execute("ALTER SEQUENCE estimator_items_id_seq OWNED BY estimator_items.id")
+            c.execute("""
+                ALTER TABLE estimator_items
+                ALTER COLUMN id SET DEFAULT nextval('estimator_items_id_seq')
+            """)
+            c.execute("""
+                SELECT setval(
+                    'estimator_items_id_seq',
+                    GREATEST(COALESCE((SELECT MAX(id) FROM estimator_items),0)+1,1),
+                    false
+                )
+            """)
+        except Exception:
+            c.rollback()
+            c=db()
+            # If another deploy/request repaired it concurrently, normal use can continue.
+    else:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS estimator_items(
+                id INTEGER PRIMARY KEY,
+                company_id INTEGER,
+                project_id INTEGER,
+                blueprint_scope_item_id INTEGER,
+                trade TEXT,
+                description TEXT,
+                source_ref TEXT,
+                quantity REAL DEFAULT 0,
+                unit TEXT DEFAULT '',
+                material_unit_cost REAL DEFAULT 0,
+                labor_unit_cost REAL DEFAULT 0,
+                subcontract_quote REAL DEFAULT 0,
+                allowance REAL DEFAULT 0,
+                markup_pct REAL DEFAULT 0,
+                notes TEXT DEFAULT '',
+                verified INTEGER DEFAULT 0,
+                created TEXT,
+                updated TEXT
+            )
+        """)
+    # Helpful lookup/index; duplicate historical rows are tolerated, so no UNIQUE migration.
+    try:
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_estimator_project_scope
+            ON estimator_items(company_id,project_id,blueprint_scope_item_id)
+        """)
+    except Exception:
+        pass
     c.commit(); c.close()
 
 def _latest_blueprint_run(pid):
@@ -9754,9 +9812,16 @@ def _latest_blueprint_run(pid):
     c.close(); return row
 
 def _seed_estimator_from_latest(pid):
+    """
+    Sync estimator rows from the latest cleaned Blueprint/Plan Intelligence run.
+    Existing user-entered pricing/quantities are preserved, while trade, description,
+    and source references are refreshed from v34.1+ corrected scope ownership.
+    """
     _ensure_v34_estimator_tables()
     run=_latest_blueprint_run(pid)
-    if not run: return 0
+    if not run:
+        return {"added":0,"updated":0,"run_id":None}
+
     c=db()
     rows=c.execute("""
         SELECT i.id,i.requirement,i.source_sheet,i.source_detail,i.source_spec,s.trade
@@ -9765,24 +9830,50 @@ def _seed_estimator_from_latest(pid):
         WHERE i.company_id=? AND i.project_id=? AND s.run_id=?
         ORDER BY s.trade,i.id
     """,(current_company_id(),pid,run["id"])).fetchall()
-    added=0; now=datetime.utcnow().isoformat()
+
+    added=0; updated=0; now=datetime.utcnow().isoformat()
+    latest_scope_ids=set()
+
     for r in rows:
-        exists=c.execute("""SELECT id FROM estimator_items
-                            WHERE company_id=? AND project_id=? AND blueprint_scope_item_id=?""",
-                         (current_company_id(),pid,r["id"])).fetchone()
-        if exists: continue
+        scope_item_id=int(r["id"])
+        latest_scope_ids.add(scope_item_id)
         refs=[str(r[x] or "").strip() for x in ["source_sheet","source_detail","source_spec"]
               if str(r[x] or "").strip()]
+        source_ref=" · ".join(refs)
+
+        existing=c.execute("""
+            SELECT id,trade,description,source_ref
+            FROM estimator_items
+            WHERE company_id=? AND project_id=? AND blueprint_scope_item_id=?
+            ORDER BY id LIMIT 1
+        """,(current_company_id(),pid,scope_item_id)).fetchone()
+
+        if existing:
+            # Keep estimator-entered numbers/notes but refresh scope truth.
+            if ((existing["trade"] or "") != (r["trade"] or "") or
+                (existing["description"] or "") != (r["requirement"] or "") or
+                (existing["source_ref"] or "") != source_ref):
+                c.execute("""
+                    UPDATE estimator_items
+                    SET trade=?,description=?,source_ref=?,updated=?
+                    WHERE id=? AND company_id=? AND project_id=?
+                """,(r["trade"],r["requirement"],source_ref,now,
+                     existing["id"],current_company_id(),pid))
+                updated+=1
+            continue
+
         c.execute("""
             INSERT INTO estimator_items(
                 company_id,project_id,blueprint_scope_item_id,trade,description,source_ref,
                 quantity,unit,material_unit_cost,labor_unit_cost,subcontract_quote,allowance,
                 markup_pct,notes,verified,created,updated
             ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,(current_company_id(),pid,r["id"],r["trade"],r["requirement"],
-             " · ".join(refs),0,"",0,0,0,0,0,"",0,now,now))
+        """,(current_company_id(),pid,scope_item_id,r["trade"],r["requirement"],
+             source_ref,0,"",0,0,0,0,0,"",0,now,now))
         added+=1
-    c.commit(); c.close(); return added
+
+    c.commit(); c.close()
+    return {"added":added,"updated":updated,"run_id":run["id"]}
 
 def _estimate_math(row):
     qty=float(row["quantity"] or 0); mat=float(row["material_unit_cost"] or 0)
@@ -9900,11 +9991,19 @@ USER QUESTION
 
 @app.get("/brain/estimator",response_class=HTMLResponse)
 def estimator_intelligence():
-    pid=project_id(); added=_seed_estimator_from_latest(pid); c=db()
+    pid=project_id(); sync=_seed_estimator_from_latest(pid); c=db()
     project=c.execute("SELECT name,number FROM projects WHERE id=?",(pid,)).fetchone()
-    rows=c.execute("""SELECT * FROM estimator_items
-                      WHERE company_id=? AND project_id=? ORDER BY trade,id""",
-                   (current_company_id(),pid)).fetchall()
+    run=_latest_blueprint_run(pid)
+    if run:
+        rows=c.execute("""
+            SELECT e.*
+            FROM estimator_items e
+            JOIN blueprint_scope_items b ON b.id=e.blueprint_scope_item_id
+            WHERE e.company_id=? AND e.project_id=? AND b.run_id=?
+            ORDER BY e.trade,e.id
+        """,(current_company_id(),pid,run["id"])).fetchall()
+    else:
+        rows=[]
     c.close()
     trade_totals={}; grand=0.0; cards=[]
     for r in rows:
@@ -9937,11 +10036,11 @@ def estimator_intelligence():
     totals="".join(f"<tr><td>{esc(k)}</td><td>${v:,.2f}</td></tr>" for k,v in sorted(trade_totals.items()))
     project_label=f'{esc(project["number"])} - {esc(project["name"])}' if project else "Current Project"
     body=f"""
-    <div class="hero"><div class="eyebrow">BuildCommand Brain · Estimator Intelligence</div>
+    <div class="hero"><div class="eyebrow">BuildCommand Brain · Estimator Intelligence · v34.2</div>
       <h1>Plans → scope → estimate.</h1><div class="muted">{project_label}</div></div>
     <div class="grid2">
       <div class="card"><div class="label">Current Estimate</div><div class="kpi">${grand:,.2f}</div>
-        <div class="small">{len(rows)} source-backed scope items · {added} newly synced</div></div>
+        <div class="small">{len(rows)} source-backed scope items · {sync["added"]} new · {sync["updated"]} refreshed</div></div>
       <div class="card"><h2>Estimator Brain Review</h2>
         <form method="post" action="/brain/estimator/review">
           <textarea name="focus" placeholder="Find bid gaps, allowances, long-lead items and takeoff verification needs."></textarea>
@@ -9970,9 +10069,17 @@ def estimator_item_update(item_id:int,quantity:float=Form(0),unit:str=Form(""),
 @app.post("/brain/estimator/review",response_class=HTMLResponse)
 def estimator_brain_review(focus:str=Form("")):
     pid=project_id(); _seed_estimator_from_latest(pid); c=db()
-    rows=c.execute("""SELECT * FROM estimator_items
-                      WHERE company_id=? AND project_id=? ORDER BY trade,id""",
-                   (current_company_id(),pid)).fetchall()
+    run=_latest_blueprint_run(pid)
+    if run:
+        rows=c.execute("""
+            SELECT e.*
+            FROM estimator_items e
+            JOIN blueprint_scope_items b ON b.id=e.blueprint_scope_item_id
+            WHERE e.company_id=? AND e.project_id=? AND b.run_id=?
+            ORDER BY e.trade,e.id
+        """,(current_company_id(),pid,run["id"])).fetchall()
+    else:
+        rows=[]
     c.close()
     lines=[]
     for r in rows:
