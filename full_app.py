@@ -9380,6 +9380,8 @@ NON-NEGOTIABLE RULES:
 6. Include all detected trades, not only MEP. Typical trades can include demolition, earthwork, concrete, masonry, structural steel, rough carpentry, millwork, waterproofing, roofing, doors/frames/hardware, glazing, framing/drywall, ceilings, flooring, tile, painting, specialties, equipment, furnishings, fire sprinkler, plumbing, HVAC, controls, electrical, fire alarm, low voltage, security, site utilities, paving, landscaping, and others actually supported by the documents.
 7. Phrase each requirement as an actionable subcontractor scope item suitable for GC review. Do not claim the generated scope replaces the signed subcontract, specifications, addenda, RFIs, or professional design review.
 8. Confidence must be HIGH, MEDIUM, or LOW based on source clarity.
+9. Trade ownership rules: resilient/rubber/vinyl base and resilient flooring belong to Flooring, not Framing/Drywall.
+10. Demolition is system-owned: electrical demolition belongs to Electrical, plumbing demolition to Plumbing, HVAC/mechanical demolition to HVAC/Mechanical, fire sprinkler demolition to Fire Sprinkler, fire alarm demolition to Fire Alarm, and low-voltage/security demolition to the applicable systems trade. Only non-system/general demolition belongs to Demolition.
 
 Return ONLY valid JSON using exactly this top-level structure:
 {{
@@ -9411,7 +9413,85 @@ Return ONLY valid JSON using exactly this top-level structure:
 """.strip()
 
 
+
+
+V33_TRADES = [
+    "Demolition","Earthwork","Concrete","Masonry","Structural Steel","Rough Carpentry",
+    "Millwork","Waterproofing","Roofing","Doors / Frames / Hardware","Glazing",
+    "Framing / Drywall","Ceilings","Flooring","Tile","Painting","Specialties",
+    "Equipment","Furnishings","Fire Sprinkler","Plumbing","HVAC / Mechanical",
+    "Controls","Electrical","Fire Alarm","Low Voltage","Security","Site Utilities",
+    "Paving","Landscaping","Unassigned"
+]
+
+def _v33_normalize_trade(name):
+    n=(name or "").strip().lower()
+    aliases={
+        "mechanical":"HVAC / Mechanical","hvac":"HVAC / Mechanical","hvac/mechanical":"HVAC / Mechanical",
+        "drywall":"Framing / Drywall","framing":"Framing / Drywall","framing/drywall":"Framing / Drywall",
+        "doors/frames/hardware":"Doors / Frames / Hardware","door hardware":"Doors / Frames / Hardware",
+        "fire sprinkler":"Fire Sprinkler","sprinkler":"Fire Sprinkler","fire alarm":"Fire Alarm",
+        "low voltage":"Low Voltage","low-voltage":"Low Voltage","electrical":"Electrical",
+        "plumbing":"Plumbing","flooring":"Flooring","demolition":"Demolition","demo":"Demolition"
+    }
+    return aliases.get(n, (name or "Unassigned").strip() or "Unassigned")
+
+def _v33_trade_for_item(item, proposed_trade):
+    text=" ".join(str(item.get(k) or "") for k in ["requirement","source_note","source_spec","related_trade"]).lower()
+    proposed=_v33_normalize_trade(proposed_trade)
+
+    # Finish ownership rules: resilient/rubber base belongs with flooring.
+    flooring_terms=["rubber base","resilient base","vinyl base","cove base","lvt","luxury vinyl","vct","carpet tile","sheet vinyl","resilient flooring","floor transition","transition strip"]
+    if any(t in text for t in flooring_terms):
+        return "Flooring"
+
+    # MEP demolition stays with the system trade instead of general demolition.
+    demo_words=["demo","demolish","demolition","remove existing","remove and dispose","existing to be removed","disconnect and remove"]
+    is_demo=any(t in text for t in demo_words)
+    if is_demo:
+        electrical=["receptacle","outlet","switch","panel","transformer","conduit","wire","wiring","circuit","breaker","light fixture","lighting","disconnect","electrical","feeder"]
+        plumbing=["plumbing","water closet","lavatory","sink","faucet","domestic water","sanitary","waste","vent piping","water heater","floor drain","plumbing fixture"]
+        mech=["hvac","mechanical","duct","diffuser","grille","vav","rtu","ahu","fan coil","exhaust fan","air handler","thermostat","chilled water","refrigerant"]
+        sprinkler=["sprinkler","fire protection","fire suppression"]
+        fire_alarm=["fire alarm","smoke detector","horn strobe","notification appliance","pull station"]
+        low_voltage=["data","telecom","telephone","cat6","low voltage","access control","security camera","cctv"]
+        if any(t in text for t in electrical): return "Electrical"
+        if any(t in text for t in plumbing): return "Plumbing"
+        if any(t in text for t in mech): return "HVAC / Mechanical"
+        if any(t in text for t in sprinkler): return "Fire Sprinkler"
+        if any(t in text for t in fire_alarm): return "Fire Alarm"
+        if any(t in text for t in low_voltage): return "Low Voltage"
+        return "Demolition"
+
+    # Strong material/system ownership rules.
+    if any(t in text for t in ["metal stud","cold formed metal framing","track and stud","gypsum board","drywall","shaftwall"]): return "Framing / Drywall"
+    if any(t in text for t in ["acoustic ceiling tile","act ceiling","ceiling grid"]): return "Ceilings"
+    if any(t in text for t in ["ceramic tile","porcelain tile","tile base"]): return "Tile"
+    if any(t in text for t in ["paint","painting","wall coating"]): return "Painting"
+    return proposed
+
+def _v33_reclassify_data(data):
+    grouped={}
+    metadata={}
+    for td in data.get("trade_scopes") or []:
+        proposed=_v33_normalize_trade(td.get("trade"))
+        for item in td.get("items") or []:
+            target=_v33_trade_for_item(item, proposed)
+            grouped.setdefault(target, []).append(item)
+            metadata.setdefault(target, {"division": str(td.get("division") or ""), "summary": str(td.get("summary") or "")})
+    rebuilt=[]
+    division_defaults={"Demolition":"02","Concrete":"03","Masonry":"04","Structural Steel":"05","Rough Carpentry":"06","Waterproofing":"07","Roofing":"07","Doors / Frames / Hardware":"08","Glazing":"08","Framing / Drywall":"09","Ceilings":"09","Flooring":"09","Tile":"09","Painting":"09","Fire Sprinkler":"21","Plumbing":"22","HVAC / Mechanical":"23","Controls":"23","Electrical":"26","Fire Alarm":"28","Low Voltage":"27"}
+    for trade,items in grouped.items():
+        meta=metadata.get(trade,{})
+        rebuilt.append({"trade":trade,"division":division_defaults.get(trade,meta.get("division", "")),"summary":meta.get("summary") or f"BuildCommand classified scope for {trade}.","items":items})
+    data["trade_scopes"]=rebuilt
+    notes=data.setdefault("review_notes",[])
+    notes.append("v33 Trade Classification Brain applied deterministic ownership rules before scopes were saved; GC review is still required.")
+    return data
+
+
 def _save_blueprint_result(pid, docs, data, model_name):
+    data=_v33_reclassify_data(data)
     company_id=current_company_id(); user_id=current_user_id(); now=datetime.utcnow().isoformat()
     c=db()
     c.execute("INSERT INTO blueprint_runs(company_id,project_id,status,source_files,project_summary,detected_disciplines,cross_discipline_flags,rfi_candidates,review_notes,model_name,created_by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(
@@ -9570,7 +9650,8 @@ def blueprint_trade_scope(scope_id:int):
         type_badge="HIGH" if typ=="RFI_CANDIDATE" else "WATCH" if typ in ["CROSS_DISCIPLINE","COORDINATION"] else "READY"
         related=(' · <b>Related trade:</b> '+esc(item["related_trade"])) if item["related_trade"] else ''
         options=''.join(f'<option {"selected" if item["status"]==st else ""}>{st}</option>' for st in ["NOT_STARTED","IN_PROGRESS","INSPECTION_REQUIRED","COMPLETE","VERIFIED"])
-        cards.append(f'<div class="action"><span class="badge {confidence_badge}">{esc(item["confidence"])}</span> <span class="badge {type_badge}">{esc(typ)}</span><h3>{esc(item["requirement"])}</h3><div class="small"><b>Source:</b> {esc(" · ".join(refs) or "Source not clearly identified")}{related}</div><form method="post" action="/blueprint-brain/item/{item["id"]}/status" style="margin-top:10px"><select name="status">{options}</select><button type="submit">Update</button></form></div>')
+        trade_options=''.join(f'<option value="{esc(t)}" {"selected" if item["trade"]==t else ""}>{esc(t)}</option>' for t in V33_TRADES)
+        cards.append(f'<div class="action"><span class="badge {confidence_badge}">{esc(item["confidence"])}</span> <span class="badge {type_badge}">{esc(typ)}</span><h3>{esc(item["requirement"])}</h3><div class="small"><b>Assigned trade:</b> {esc(item["trade"])} · <b>Source:</b> {esc(" · ".join(refs) or "Source not clearly identified")}{related}</div><div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px"><form method="post" action="/blueprint-brain/item/{item["id"]}/status"><select name="status">{options}</select><button type="submit">Update status</button></form><form method="post" action="/blueprint-brain/item/{item["id"]}/trade"><select name="trade">{trade_options}</select><button type="submit">Move trade</button></form></div></div>')
     body=f'<div class="hero"><div class="eyebrow">Division {esc(scope["division"] or "—")} · Blueprint Brain</div><h1>{esc(scope["trade"])} Scope of Work</h1><div class="muted">{esc(scope["summary"] or "")}</div></div><div class="card"><p><a href="/blueprint-brain/run/{scope["run_id"]}">← Full Blueprint Intelligence</a> · <a href="/blueprint-brain/trade/{scope_id}/export.txt">Export scope text</a></p></div><div class="card"><h2>Scope Boiler</h2><div style="white-space:pre-wrap">{esc(scope["scope_text"] or "")}</div></div><div class="card"><h2>Execution Checklist</h2>{"".join(cards) or "<div class=muted>No scope items.</div>"}</div>'
     return shell(scope["trade"]+" Scope",body)
 
@@ -9582,6 +9663,33 @@ def blueprint_item_status(item_id:int,status:str=Form(...)):
     pid=project_id(); c=db(); item=c.execute("SELECT trade_scope_id FROM blueprint_scope_items WHERE id=? AND company_id=? AND project_id=?",(item_id,current_company_id(),pid)).fetchone()
     if not item: c.close(); return HTMLResponse("Scope item not found",404)
     c.execute("UPDATE blueprint_scope_items SET status=? WHERE id=? AND company_id=? AND project_id=?",(status,item_id,current_company_id(),pid)); c.commit(); scope_id=item["trade_scope_id"]; c.close(); return RedirectResponse(f"/blueprint-brain/trade/{scope_id}",status_code=303)
+
+
+
+
+@app.post("/blueprint-brain/item/{item_id}/trade")
+def blueprint_item_trade(item_id:int,trade:str=Form(...)):
+    trade=_v33_normalize_trade(trade)
+    if trade not in V33_TRADES:
+        return HTMLResponse("Invalid trade",400)
+    pid=project_id(); company_id=current_company_id(); c=db()
+    item=c.execute("SELECT * FROM blueprint_scope_items WHERE id=? AND company_id=? AND project_id=?",(item_id,company_id,pid)).fetchone()
+    if not item: c.close(); return HTMLResponse("Scope item not found",404)
+    old_scope_id=item["trade_scope_id"]; run_id=item["run_id"]
+    target=c.execute("SELECT * FROM blueprint_trade_scopes WHERE run_id=? AND company_id=? AND project_id=? AND trade=?",(run_id,company_id,pid,trade)).fetchone()
+    if not target:
+        div={"Demolition":"02","Flooring":"09","Framing / Drywall":"09","Plumbing":"22","HVAC / Mechanical":"23","Electrical":"26","Fire Sprinkler":"21","Fire Alarm":"28","Low Voltage":"27"}.get(trade,"")
+        now=datetime.utcnow().isoformat()
+        c.execute("INSERT INTO blueprint_trade_scopes(company_id,project_id,run_id,trade,division,summary,scope_text,item_count,created) VALUES(?,?,?,?,?,?,?,?,?)",(company_id,pid,run_id,trade,div,f"BuildCommand classified scope for {trade}.","",0,now))
+        target_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    else:
+        target_id=target["id"]
+    c.execute("UPDATE blueprint_scope_items SET trade=?,trade_scope_id=? WHERE id=? AND company_id=? AND project_id=?",(trade,target_id,item_id,company_id,pid))
+    for sid in {old_scope_id,target_id}:
+        count=c.execute("SELECT COUNT(*) n FROM blueprint_scope_items WHERE trade_scope_id=? AND company_id=? AND project_id=?",(sid,company_id,pid)).fetchone()["n"]
+        c.execute("UPDATE blueprint_trade_scopes SET item_count=? WHERE id=? AND company_id=? AND project_id=?",(count,sid,company_id,pid))
+    c.commit(); c.close()
+    return RedirectResponse(f"/blueprint-brain/trade/{target_id}",status_code=303)
 
 
 @app.get("/blueprint-brain/trade/{scope_id}/export.txt")
