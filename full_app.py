@@ -2398,6 +2398,289 @@ def v45_downstream():
     )
     return shell("Downstream Impact",'<div class="hero"><h1>Downstream Sequence Impact</h1><p class="muted">Shows high-risk activities that can force later work out of sequence.</p></div><div class="card">'+(h or '<p class="muted">No high downstream sequence exposure detected.</p>')+'</div>')
 
+
+# ============================================================
+# v45.2 INTELLIGENCE ENGINE — NEXT 10
+# ============================================================
+
+def _v452_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS constructability_findings(
+        id {pk},company_id BIGINT,project_id BIGINT,finding_type TEXT,title TEXT,
+        description TEXT,trade TEXT,related_trade TEXT,source_ref TEXT,
+        severity TEXT DEFAULT 'REVIEW',status TEXT DEFAULT 'OPEN',
+        recommended_action TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS scope_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,intelligence_type TEXT,
+        trade TEXT,related_trade TEXT,requirement TEXT,source_ref TEXT,
+        severity TEXT DEFAULT 'REVIEW',status TEXT DEFAULT 'OPEN',created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS procurement_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,procurement_id BIGINT,
+        item TEXT,risk_level TEXT,days_exposure INTEGER DEFAULT 0,
+        reason TEXT,recommended_action TEXT,created TEXT,updated TEXT)"""
+    ]
+    for s in stmts: c.execute(s)
+    c.commit(); c.close()
+
+def _v452_scope_rows(pid):
+    return _v39_rows("""
+        SELECT * FROM blueprint_scope_items
+        WHERE company_id=? AND project_id=?
+        ORDER BY run_id,trade,id
+    """,(current_company_id(),pid))
+
+def _v452_constructability(pid):
+    rows=_v452_scope_rows(pid)
+    findings=[]
+    patterns=[
+      ("ACCESS","Equipment/service access",
+       ("access","clearance","service space","maintenance access","working clearance"),
+       "Verify physical access, service clearance, and installation path before release."),
+      ("PENETRATION","Penetration / support coordination",
+       ("penetration","core drill","sleeve","opening","curb","blocking","backing","support"),
+       "Coordinate opening/support responsibility and verify structural/finish impact."),
+      ("CEILING","Above-ceiling congestion",
+       ("ceiling","diffuser","sprinkler","light fixture","duct","above ceiling"),
+       "Coordinate ceiling layout and above-ceiling systems before grid/closure."),
+      ("ADA","Accessibility / clearance",
+       ("ada","accessible","grab bar","clear floor","maneuvering clearance"),
+       "Verify dimensions and mounting requirements against accessibility details."),
+      ("ROOF","Roof penetration coordination",
+       ("roof penetration","roof curb","roof flashing","roof patch"),
+       "Coordinate equipment, curb, flashing and roofing responsibility before installation."),
+    ]
+    seen=set()
+    for r in rows:
+        text=(str(r["requirement"] or "")+" "+str(r["source_note"] or "")).lower()
+        for typ,title,terms,action in patterns:
+            if any(term in text for term in terms):
+                key=(typ,r["requirement"])
+                if key in seen: continue
+                seen.add(key)
+                severity="HIGH" if typ in {"ACCESS","PENETRATION","ROOF"} else "REVIEW"
+                findings.append({
+                    "type":typ,"title":title,"description":r["requirement"],
+                    "trade":r["trade"],"related":r["related_trade"] or "",
+                    "source":" · ".join(x for x in [r["source_sheet"],r["source_detail"],r["source_spec"]] if x),
+                    "severity":severity,"action":action
+                })
+    return findings[:150]
+
+def _v452_conflicts(pid):
+    rows=_v452_scope_rows(pid)
+    by_req={}
+    for r in rows:
+        key=re.sub(r'\s+',' ',str(r["requirement"] or "").lower()).strip()
+        if not key: continue
+        by_req.setdefault(key,[]).append(r)
+    out=[]
+    for req,items in by_req.items():
+        trades=sorted(set(str(x["trade"] or "") for x in items))
+        if len(trades)>1:
+            out.append((items[0]["requirement"],trades,items[0]["source_sheet"] or ""))
+    return out[:100]
+
+def _v452_scope_gaps(pid):
+    rows=_v452_scope_rows(pid)
+    out=[]
+    for r in rows:
+        trade=str(r["trade"] or "").strip()
+        conf=str(r["confidence"] or "MEDIUM").upper()
+        if trade in {"","Unassigned"} or conf=="LOW":
+            out.append(r)
+    return out[:150]
+
+def _v452_scope_overlaps(pid):
+    return _v452_conflicts(pid)
+
+def _v452_change_exposure(pid):
+    conflicts=_v452_conflicts(pid)
+    rfis=_v42_rfis(pid)
+    changes=_v39_changes(pid)
+    return conflicts,rfis,changes
+
+def _v452_procurement_analysis(pid):
+    rows=_v39_rows("SELECT * FROM procurement WHERE project_id=? AND COALESCE(status,'OPEN') NOT IN ('DELIVERED','COMPLETE','CLOSED') ORDER BY required_on_site",(pid,))
+    today=datetime.utcnow().date()
+    out=[]
+    for r in rows:
+        need=_v39_safe_date(r["required_on_site"])
+        promised=_v39_safe_date(r["promised_date"])
+        exposure=(promised-need).days if need and promised else 0
+        if exposure>=7: level="CRITICAL"
+        elif exposure>0: level="HIGH"
+        elif need and need<=today: level="TODAY"
+        else: level="WATCH"
+        reason=(f"Promised date is {exposure} day(s) after required-on-site date." if exposure>0
+                else "Required-on-site timing requires monitoring.")
+        action=("Escalate vendor/submittal/fabrication plan and evaluate schedule recovery."
+                if exposure>0 else "Confirm fabrication, shipping and delivery status.")
+        out.append((r,level,exposure,reason,action))
+    return out
+
+def _v452_inspection_derived(pid):
+    scopes=_v452_scope_rows(pid)
+    inspections=_v39_rows("SELECT * FROM inspections_tracker WHERE project_id=?",(pid,))
+    existing=" ".join(str(i["inspection_type"] or "").lower() for i in inspections)
+    candidates=[]
+    mapping=[
+      ("Concrete",("concrete","footing","slab","rebar"),"Concrete / reinforcing inspection"),
+      ("Framing / Drywall",("framing","stud","drywall","gypsum"),"Framing / in-wall inspection"),
+      ("Electrical",("electrical","conduit","branch circuit"),"Electrical rough inspection"),
+      ("Plumbing",("plumbing","sanitary","domestic water"),"Plumbing rough / pressure test"),
+      ("HVAC / Mechanical",("duct","hvac","mechanical"),"Mechanical rough inspection"),
+      ("Fire Sprinkler",("sprinkler","fire suppression"),"Fire sprinkler inspection / test"),
+      ("Roofing",("roof","roofing"),"Roofing / waterproofing inspection"),
+    ]
+    corpus=" ".join(str(r["requirement"] or "").lower() for r in scopes)
+    for trade,terms,name in mapping:
+        if any(term in corpus for term in terms) and name.lower() not in existing:
+            candidates.append((trade,name,"Derived from analyzed project scope; verify with AHJ/project requirements."))
+    return candidates
+
+def _v452_learning_context(pid):
+    _v43_ensure_tables()
+    rules=_v39_rows("""
+        SELECT * FROM learning_rules
+        WHERE company_id=? AND approval_status='APPROVED'
+          AND (project_id=? OR scope_level='COMPANY STANDARD')
+        ORDER BY CASE WHEN project_id=? THEN 0 ELSE 1 END,id DESC
+        LIMIT 200
+    """,(current_company_id(),pid,pid))
+    return rules
+
+def _v452_command(pid):
+    sequence=_v45_sequence_analysis(pid)
+    attention=_v39_attention(pid)
+    proc=_v452_procurement_analysis(pid)
+    conflicts=_v452_conflicts(pid)
+    gaps=_v452_scope_gaps(pid)
+    inspection_candidates=_v452_inspection_derived(pid)
+
+    critical_sequence=[x for x in sequence if x["risk"]=="CRITICAL"]
+    high_sequence=[x for x in sequence if x["risk"]=="HIGH"]
+    critical_proc=[x for x in proc if x[1]=="CRITICAL"]
+    top=[]
+    for x in critical_sequence[:3]:
+        top.append(("CRITICAL","Sequence",x["activity"]["name"],x["blocking_reason"]))
+    for x in critical_proc[:3]:
+        top.append(("CRITICAL","Procurement",x[0]["item"],x[3]))
+    for x in attention[:4]:
+        top.append((x[0],x[1],x[2],x[3]))
+    for req,trades,source in conflicts[:3]:
+        top.append(("REVIEW","Conflict",req,f"Assigned across {', '.join(trades)}"))
+    return {
+        "top":top[:10],
+        "sequence_critical":len(critical_sequence),
+        "sequence_high":len(high_sequence),
+        "proc_critical":len(critical_proc),
+        "conflicts":len(conflicts),
+        "gaps":len(gaps),
+        "inspection_candidates":len(inspection_candidates)
+    }
+
+@app.get("/intelligence-engine",response_class=HTMLResponse)
+def v452_intelligence_engine():
+    pid=project_id()
+    construct=_v452_constructability(pid)
+    conflicts=_v452_conflicts(pid)
+    gaps=_v452_scope_gaps(pid)
+    proc=_v452_procurement_analysis(pid)
+    inspections=_v452_inspection_derived(pid)
+    learning=_v452_learning_context(pid)
+    command=_v452_command(pid)
+
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v45.2 - Intelligence Engine</div><h1>Think across the whole project.</h1><p class="muted">{len(construct)} constructability signals - {len(conflicts)} conflicts/overlaps - {len(gaps)} scope gaps - {len(proc)} procurement items - {len(inspections)} derived inspection candidates - {len(learning)} approved learning rules.</p></div><div class="grid3">'
+    cards=[
+      ("Constructability Intelligence","Find access, clearance, penetration, ceiling and coordination risks.","/intelligence-engine/constructability"),
+      ("Conflict Intelligence","Find contradictory/duplicate ownership across project scope.","/intelligence-engine/conflicts"),
+      ("Automatic RFI Brain","Draft RFI candidates from confirmed conflicts. Human approval required.","/intelligence-engine/rfis"),
+      ("Scope Gap Intelligence","Find low-confidence or unassigned scope before award.","/intelligence-engine/gaps"),
+      ("Scope Overlap Intelligence","Detect duplicate ownership and coordination overlap.","/intelligence-engine/overlaps"),
+      ("Change-Order Intelligence","Connect conflicts, RFIs and open changes to exposure.","/intelligence-engine/change-exposure"),
+      ("Procurement Intelligence","Connect promised dates to required-on-site risk.","/intelligence-engine/procurement"),
+      ("Inspection Intelligence 2.0","Derive likely inspection/testing gates from project scope.","/intelligence-engine/inspections"),
+      ("Approved Learning Context","See what company/project knowledge is influencing the brain.","/intelligence-engine/learning"),
+      ("Superintendent Command Intelligence","One prioritized view of what can hurt the job now.","/intelligence-engine/command")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Intelligence Engine",body)
+
+@app.get("/intelligence-engine/constructability",response_class=HTMLResponse)
+def v452_constructability_page():
+    rows=_v452_constructability(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(r["severity"])}</span> <b>{esc(r["title"])}</b><div>{esc(r["description"])}</div><div class="small">{esc(r["trade"])} {("· "+esc(r["related"])) if r["related"] else ""} · {esc(r["source"])}</div><p><b>Check:</b> {esc(r["action"])}</p></div>' for r in rows)
+    return shell("Constructability Intelligence",'<div class="hero"><h1>Constructability Intelligence</h1><p class="muted">Signals for things that may not coordinate, fit, or remain accessible. These are review prompts, not automatic design decisions.</p></div><div class="card">'+(h or '<p class="muted">No constructability signals detected from current scope.</p>')+'</div>')
+
+@app.get("/intelligence-engine/conflicts",response_class=HTMLResponse)
+def v452_conflict_page():
+    rows=_v452_conflicts(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">CONFLICT</span> <b>{esc(req)}</b><div class="small">Trades: {esc(", ".join(trades))} · {esc(source)}</div></div>' for req,trades,source in rows)
+    return shell("Conflict Intelligence",'<div class="hero"><h1>Conflict Intelligence</h1><p class="muted">Finds identical requirements assigned to multiple trades for review.</p></div><div class="card">'+(h or '<p class="muted">No duplicate cross-trade requirements detected.</p>')+'</div>')
+
+@app.get("/intelligence-engine/rfis",response_class=HTMLResponse)
+def v452_rfi_brain():
+    rows=_v452_conflicts(project_id())
+    h=""
+    for i,(req,trades,source) in enumerate(rows,1):
+        h+=f'<div class="card"><span class="badge WATCH">DRAFT RFI</span><h3>RFI Candidate {i}: {esc(req)}</h3><p><b>Question:</b> Please clarify the governing trade responsibility and document requirement for this item.</p><p><b>Detected trades:</b> {esc(", ".join(trades))}</p><p><b>Source:</b> {esc(source)}</p><p class="small">Proposal only. Human approval required before issue.</p></div>'
+    return shell("Automatic RFI Brain",'<div class="hero"><h1>Automatic RFI Brain</h1><p class="muted">Turns conflicts into reviewable RFI drafts without sending anything automatically.</p></div>'+(h or '<div class="card">No RFI candidates detected.</div>'))
+
+@app.get("/intelligence-engine/gaps",response_class=HTMLResponse)
+def v452_gap_page():
+    rows=_v452_scope_gaps(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">GAP / REVIEW</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Confidence {esc(r["confidence"])} · {esc(r["source_sheet"])}</div></div>' for r in rows)
+    return shell("Scope Gap Intelligence",'<div class="hero"><h1>Scope Gap Intelligence</h1><p class="muted">Find scope with weak or missing ownership before it becomes a field problem.</p></div><div class="card">'+(h or '<p class="muted">No obvious low-confidence/unassigned scope detected.</p>')+'</div>')
+
+@app.get("/intelligence-engine/overlaps",response_class=HTMLResponse)
+def v452_overlap_page():
+    rows=_v452_scope_overlaps(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">OVERLAP</span> <b>{esc(req)}</b><div class="small">{esc(" / ".join(trades))}</div></div>' for req,trades,source in rows)
+    return shell("Scope Overlap Intelligence",'<div class="hero"><h1>Scope Overlap Intelligence</h1><p class="muted">Separates true coordination interfaces from accidental duplicate ownership.</p></div><div class="card">'+(h or '<p class="muted">No current duplicate ownership detected.</p>')+'</div>')
+
+@app.get("/intelligence-engine/change-exposure",response_class=HTMLResponse)
+def v452_change_page():
+    conflicts,rfis,changes=_v452_change_exposure(project_id())
+    total=sum(float(r["estimated_cost"] or 0) for r in changes)
+    days=sum(float(r["schedule_days"] or 0) for r in changes)
+    body=f'<div class="hero"><h1>Change-Order Intelligence</h1><p class="muted">{len(conflicts)} scope conflicts · {len(rfis)} controlled RFIs · {len(changes)} open changes · ${total:,.0f} known exposure · {days:g} schedule days.</p></div>'
+    body+='<div class="card"><p>Use conflicts and RFIs as early warning signals. Human review determines whether any item is truly extra-contract work.</p></div>'
+    return shell("Change-Order Intelligence",body)
+
+@app.get("/intelligence-engine/procurement",response_class=HTMLResponse)
+def v452_procurement_page():
+    rows=_v452_procurement_analysis(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(r["item"])}</b><div class="small">Need {esc(r["required_on_site"])} · Promised {esc(r["promised_date"])} · Exposure {exposure} day(s)</div><p>{esc(reason)}</p><p><b>Action:</b> {esc(action)}</p></div>' for r,level,exposure,reason,action in rows)
+    return shell("Procurement Intelligence",'<div class="hero"><h1>Procurement Intelligence</h1><p class="muted">Connects required-on-site timing to delivery exposure.</p></div><div class="card">'+(h or '<p class="muted">No open procurement items.</p>')+'</div>')
+
+@app.get("/intelligence-engine/inspections",response_class=HTMLResponse)
+def v452_inspection_page():
+    candidates=_v452_inspection_derived(project_id())
+    existing=_v39_rows("SELECT * FROM inspections_tracker WHERE project_id=? ORDER BY scheduled_date,id",(project_id(),))
+    h="".join(f'<div class="action"><span class="badge WATCH">DERIVED</span> <b>{esc(name)}</b><div class="small">{esc(trade)}</div><p>{esc(note)}</p></div>' for trade,name,note in candidates)
+    eh="".join(f'<div class="action"><span class="badge">{esc(r["result"])}</span> <b>{esc(r["inspection_type"])}</b><div class="small">{esc(r["scheduled_date"])} · {esc(r["authority"])}</div></div>' for r in existing)
+    return shell("Inspection Intelligence 2.0",'<div class="hero"><h1>Inspection Intelligence 2.0</h1><p class="muted">Derives likely inspection/testing gates from actual scope. AHJ/project requirements still govern.</p></div><div class="card"><h2>Derived Candidates</h2>'+(h or '<p class="muted">No new inspection candidates.</p>')+'</div><div class="card"><h2>Tracked Inspections</h2>'+(eh or '<p class="muted">No tracked inspections.</p>')+'</div>')
+
+@app.get("/intelligence-engine/learning",response_class=HTMLResponse)
+def v452_learning_page():
+    rows=_v452_learning_context(project_id())
+    h="".join(f'<div class="action"><span class="badge">{esc(r["scope_level"])}</span> <b>{esc(r["rule_type"])} - {esc(r["subject"])}</b><div>{esc(r["learned_rule"])}</div><div class="small">Approved by {esc(r["approved_by"])}</div></div>' for r in rows)
+    return shell("Approved Learning Context",'<div class="hero"><h1>Approved Learning Context</h1><p class="muted">Only approved project/company rules influence automated ownership logic.</p></div><div class="card">'+(h or '<p class="muted">No approved learning rules yet.</p>')+'</div>')
+
+@app.get("/intelligence-engine/command",response_class=HTMLResponse)
+def v452_command_page():
+    d=_v452_command(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(kind)}</b> - {esc(title)}<div class="small">{esc(detail)}</div></div>' for level,kind,title,detail in d["top"])
+    body=f'<div class="hero"><div class="eyebrow">Superintendent Command Intelligence</div><h1>What can hurt the job now?</h1><p class="muted">{d["sequence_critical"]} critical sequence · {d["sequence_high"]} high sequence · {d["proc_critical"]} critical procurement · {d["conflicts"]} conflicts · {d["gaps"]} scope gaps · {d["inspection_candidates"]} derived inspection candidates.</p></div><div class="card"><h2>Top Priorities</h2>{h or "<p class=muted>No major current intelligence exceptions.</p>"}</div>'
+    return shell("Superintendent Command Intelligence",body)
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
