@@ -1,36 +1,6 @@
-from fastapi import FastAPI, Form, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, FileResponse
-import sqlite3
-
-try:
-    import openpyxl
-except Exception:
-    openpyxl = None
-
-try:
-    from pypdf import PdfReader
-except Exception:
-    PdfReader = None
-
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-except Exception:
-    psycopg = None
-    dict_row = None
-import os
-import io
-import csv
-import json
-import base64
-import re
-import secrets
-import hashlib
-import hmac
-import mimetypes
-import zipfile
-from contextvars import ContextVar
-from datetime import date, datetime, timedelta
+A
+        self.last_insert_id=None
+    def _sql(self,sql):
 from pathlib import Path
 try:
     from openai import OpenAI
@@ -38,28 +8,9 @@ except Exception:
     OpenAI = None
 
 try:
-    from reportlab.pdfgen import canvas
-except Exception:
-    canvas = None
-
-app=FastAPI(title="BuildCommand AI",version="32.0")
-DB="construction_ai_web.db"
-DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
-UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
-os.makedirs(UPLOAD_DIR,exist_ok=True)
-_current_user_id=ContextVar("buildcommand_user_id",default=None)
-_current_company_id=ContextVar("buildcommand_company_id",default=None)
-MAX_UPLOAD_BYTES=45*1024*1024
-ALLOWED_UPLOAD_EXTENSIONS={".pdf",".png",".jpg",".jpeg",".webp",".doc",".docx",".xls",".xlsx",".csv",".txt"}
-
-DATABASE_URL=os.environ.get("DATABASE_URL","").strip()
-DATABASE_KIND="postgres" if DATABASE_URL.startswith(("postgres://","postgresql://")) else "sqlite"
-
-class PgCompatConnection:
-    def __init__(self,conn):
-        self.conn=conn
-        self.last_insert_id=None
-    def _sql(self,sql):
+import mimetypes
+import zipfile
+    from reportlab.pdfgen import canvasA
         if sql.strip().lower().startswith("select last_insert_rowid()"):
             return None
         sql=sql.replace("?","%s")
@@ -1399,7 +1350,7 @@ def v41_field_command():
     delivery_risk=sum(1 for _,level,_ in deliveries if level in {"CRITICAL","HIGH","TODAY"})
     body=f'<div class="hero"><div class="eyebrow">BuildCommand v41 - Superintendent Field Command</div><h1>Run today&#39;s job.</h1><p class="muted">{len(subs)} subcontractors - {today_ins} inspections due now/next - {delivery_risk} delivery risks - {not_ready} activities not ready - {len(delays)} delay signals - {len(attention)} decisions need review.</p></div>'
     body+='<div class="grid3">'
-    body+=_v37_link_card("Make-Ready","See what can actually start and why.","/field-command/make-ready","Open")
+    body+=_v37_link_card("Make-Ready","See what can actually start and why, with sequence intelligence.","/sequence-intelligence","Open")
     body+=_v37_link_card("Subcontractors","Crews, commitments and upcoming work.","/field-command/subs","Open")
     body+=_v37_link_card("Sub Alerts","Prepare schedule/field alerts for human approval.","/field-command/sub-alerts","Open")
     body+=_v37_link_card("Deliveries","Required-on-site vs promised-date exposure.","/field-command/deliveries","Open")
@@ -2162,6 +2113,242 @@ def v442_run_final_cleanup():
     _v442_normalize_existing_blueprint(pid)
     return RedirectResponse("/blueprint-brain",status_code=303)
 
+
+# ============================================================
+# v45 SEQUENCE INTELLIGENCE ENGINE
+# ============================================================
+
+def _v45_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"
+    else:
+        pk="INTEGER PRIMARY KEY"
+    c.execute(f"""CREATE TABLE IF NOT EXISTS sequence_intelligence(
+        id {pk},
+        company_id BIGINT,
+        project_id BIGINT,
+        activity_id BIGINT,
+        activity_name TEXT,
+        activity_trade TEXT,
+        sequence_stage INTEGER DEFAULT 0,
+        readiness_status TEXT DEFAULT 'REVIEW',
+        risk_level TEXT DEFAULT 'LOW',
+        predecessor_summary TEXT DEFAULT '',
+        blocking_reason TEXT DEFAULT '',
+        downstream_impact TEXT DEFAULT '',
+        recommended_action TEXT DEFAULT '',
+        source_type TEXT DEFAULT 'SYSTEM',
+        created TEXT,
+        updated TEXT
+    )""")
+    c.commit(); c.close()
+
+def _v45_stage_for_activity(name,trade):
+    s=(str(name or "")+" "+str(trade or "")).lower()
+    rules=[
+        (10,("mobilization","survey","layout","erosion","swppp","clearing","site prep")),
+        (20,("earthwork","excavat","grading","underground","site utilities","storm drain","sanitary sewer","water line")),
+        (30,("footing","foundation","stem wall","grade beam","slab","concrete")),
+        (40,("structural steel","masonry","cmu","tilt","framing","stud","sheathing")),
+        (50,("roof","waterproof")),
+        (60,("mep rough","rough-in","rough in","electrical rough","plumbing rough","hvac rough","duct rough","overhead mep","fire sprinkler rough","low voltage rough")),
+        (70,("rough inspection","above ceiling inspection","in-wall inspection","in wall inspection","pressure test","rough test")),
+        (80,("insulation","drywall","gypsum","gyp board","close wall")),
+        (90,("ceiling grid","act ceiling","acoustical ceiling")),
+        (100,("paint","flooring","tile","millwork","casework","doors","hardware","finish")),
+        (110,("fixture","trim out","trim-out","device","startup","start-up","commission","test and balance","tab")),
+        (120,("punch","final inspection","closeout","turnover")),
+    ]
+    for stage,terms in rules:
+        if any(term in s for term in terms):
+            return stage
+    return 65 if any(x in s for x in ("electrical","plumbing","hvac","mechanical","sprinkler","low voltage")) else 50
+
+def _v45_gate_requirements(stage):
+    gates=[]
+    if stage>=30:
+        gates.append("survey/layout and below-grade prerequisites complete")
+    if stage>=40:
+        gates.append("foundation/slab prerequisites complete where applicable")
+    if stage>=60:
+        gates.append("framing/supporting construction ready")
+    if stage>=80:
+        gates.append("MEP rough-in complete")
+        gates.append("required rough inspections/testing passed")
+    if stage>=90:
+        gates.append("above-ceiling work coordinated and inspected")
+    if stage>=100:
+        gates.append("substrates and predecessor finishes ready")
+    if stage>=110:
+        gates.append("equipment/material available and approved")
+    if stage>=120:
+        gates.append("punch/testing/final documentation progressing")
+    return gates
+
+def _v45_sequence_analysis(pid):
+    _v45_ensure_tables()
+    today=datetime.utcnow().date()
+    acts=_v39_rows("SELECT * FROM activities WHERE project_id=? ORDER BY start,id",(pid,))
+    readiness={}
+    for r in _v39_rows("SELECT * FROM activity_readiness WHERE project_id=?",(pid,)):
+        readiness[int(r["activity_id"])]=r
+    inspections=_v39_rows("SELECT * FROM inspections_tracker WHERE project_id=?",(pid,))
+    procurement=_v39_rows("SELECT * FROM procurement WHERE project_id=?",(pid,))
+    submittals=_v39_rows("SELECT * FROM submittals WHERE project_id=?",(pid,))
+    issues=_v39_rows("SELECT * FROM project_issues WHERE project_id=? AND COALESCE(status,'OPEN')!='CLOSED'",(pid,))
+
+    analyzed=[]
+    prior=[]
+    for a in acts:
+        stage=_v45_stage_for_activity(a["name"],a["trade"])
+        start=_v39_safe_date(a["start"]); finish=_v39_safe_date(a["finish"])
+        pct=float(a["pct"] or 0)
+        status=str(a["status"] or "NOT_STARTED").upper()
+        reasons=[]
+        risk="LOW"
+
+        earlier=[p for p in prior if p["stage"] < stage and p["status"]!="COMPLETE"]
+        immediate=sorted(earlier,key=lambda x:x["stage"],reverse=True)[:3]
+        if immediate and (status=="IN_PROGRESS" or pct>0):
+            reasons.append("Work appears started while earlier-stage activities remain incomplete.")
+            risk="HIGH"
+
+        rd=readiness.get(int(a["id"]))
+        if rd:
+            missing=[]
+            labels=[("drawings","drawings"),("material","materials"),("manpower","manpower"),
+                    ("predecessor","predecessors"),("access_ready","access"),
+                    ("inspection","inspection gate"),("equipment","equipment")]
+            for col,label in labels:
+                if int(rd[col] or 0)!=1:
+                    missing.append(label)
+            if missing and start and start<=today+timedelta(days=7):
+                reasons.append("Make-ready incomplete: "+", ".join(missing)+".")
+                risk="CRITICAL" if start and start<=today else "HIGH"
+
+        pending_insp=[i for i in inspections if i["activity_id"]==a["id"] and str(i["result"] or "PENDING").upper() not in {"PASSED","COMPLETE"}]
+        if pending_insp and stage>=80:
+            reasons.append(f"{len(pending_insp)} inspection gate(s) remain open before concealment/finish work.")
+            risk="CRITICAL" if status=="IN_PROGRESS" or pct>0 else "HIGH"
+
+        late_material=[]
+        for p in procurement:
+            if p["activity_id"]==a["id"]:
+                need=_v39_safe_date(p["required_on_site"]); promised=_v39_safe_date(p["promised_date"])
+                if need and promised and promised>need:
+                    late_material.append(p)
+        if late_material:
+            reasons.append(f"{len(late_material)} procurement item(s) are promised after required-on-site date.")
+            risk="CRITICAL" if risk=="HIGH" else "HIGH"
+
+        open_subs=[s for s in submittals if s["activity_id"]==a["id"] and str(s["status"] or "PENDING").upper() not in {"APPROVED","COMPLETE","CLOSED"}]
+        if open_subs and start and start<=today+timedelta(days=14):
+            reasons.append(f"{len(open_subs)} submittal approval(s) remain open before planned start.")
+            if risk=="LOW": risk="HIGH"
+
+        open_issues=[i for i in issues if i["activity_id"]==a["id"]]
+        if open_issues:
+            reasons.append(f"{len(open_issues)} open issue(s) are tied to this activity.")
+            if risk=="LOW": risk="MEDIUM"
+
+        if finish and finish<today and pct<100:
+            reasons.append("Activity is past its planned finish date.")
+            risk="CRITICAL"
+
+        readiness_status="READY" if not reasons else "NOT READY" if risk=="CRITICAL" else "AT RISK"
+        gates=_v45_gate_requirements(stage)
+        predecessor_summary="; ".join(gates)
+        blocking_reason=" ".join(reasons)
+        downstream=(
+            "Downstream work may be delayed or forced out of sequence."
+            if reasons else
+            "No current sequence exception detected from available project data."
+        )
+        recommendation=(
+            "Resolve blocking prerequisites before releasing downstream work."
+            if reasons else
+            "Maintain planned sequence and continue make-ready verification."
+        )
+        analyzed.append({
+            "activity":a,"stage":stage,"status":status,"risk":risk,
+            "readiness":readiness_status,"predecessor_summary":predecessor_summary,
+            "blocking_reason":blocking_reason,"downstream":downstream,"recommendation":recommendation
+        })
+        prior.append({"stage":stage,"status":status,"name":a["name"]})
+
+    # Persist latest intelligence snapshot.
+    c=db()
+    c.execute("DELETE FROM sequence_intelligence WHERE company_id=? AND project_id=?",(current_company_id(),pid))
+    now=datetime.utcnow().isoformat()
+    for x in analyzed:
+        a=x["activity"]
+        c.execute("""INSERT INTO sequence_intelligence(
+            company_id,project_id,activity_id,activity_name,activity_trade,sequence_stage,
+            readiness_status,risk_level,predecessor_summary,blocking_reason,downstream_impact,
+            recommended_action,source_type,created,updated
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
+            current_company_id(),pid,a["id"],a["name"],a["trade"],x["stage"],
+            x["readiness"],x["risk"],x["predecessor_summary"],x["blocking_reason"],
+            x["downstream"],x["recommendation"],"SYSTEM",now,now
+        ))
+    c.commit(); c.close()
+    return analyzed
+
+@app.get("/sequence-intelligence",response_class=HTMLResponse)
+def v45_sequence_home():
+    pid=project_id()
+    rows=_v45_sequence_analysis(pid)
+    critical=sum(1 for x in rows if x["risk"]=="CRITICAL")
+    high=sum(1 for x in rows if x["risk"]=="HIGH")
+    medium=sum(1 for x in rows if x["risk"]=="MEDIUM")
+    ready=sum(1 for x in rows if x["readiness"]=="READY")
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v45 - Sequence Intelligence</div><h1>Build in the right order.</h1><p class="muted">{critical} critical - {high} high - {medium} medium sequence risks - {ready}/{len(rows)} activities currently ready from available data.</p></div>'
+    body+='<div class="grid3">'
+    body+=_v37_link_card("Sequence Exceptions","Activities that are late, blocked or out of order.","/sequence-intelligence/exceptions","Review")
+    body+=_v37_link_card("Inspection Gates","See inspection/testing gates before concealment and finishes.","/sequence-intelligence/inspection-gates","Review")
+    body+=_v37_link_card("Downstream Impact","See which activities can push following work.","/sequence-intelligence/downstream","Review")
+    body+='</div><div class="card"><h2>Sequence Map</h2>'
+    for x in rows:
+        a=x["activity"]
+        body+=f'<div class="action"><span class="badge {"READY" if x["readiness"]=="READY" else "WATCH"}">{esc(x["readiness"])}</span> <b>{esc(a["name"])}</b><div class="small">Stage {x["stage"]} - {esc(a["trade"])} - {esc(a["start"])} to {esc(a["finish"])} - Risk {esc(x["risk"])}</div><p>{esc(x["blocking_reason"] or "No current sequence exception.")}</p></div>'
+    body+='</div>'
+    return shell("Sequence Intelligence",body)
+
+@app.get("/sequence-intelligence/exceptions",response_class=HTMLResponse)
+def v45_sequence_exceptions():
+    rows=_v45_sequence_analysis(project_id())
+    rows=[x for x in rows if x["readiness"]!="READY"]
+    h="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(x["risk"])}</span> <b>{esc(x["activity"]["name"])}</b>'
+        f'<div class="small">{esc(x["activity"]["trade"])} - Stage {x["stage"]}</div>'
+        f'<p>{esc(x["blocking_reason"])}</p><p><b>Recommended:</b> {esc(x["recommendation"])}</p></div>'
+        for x in rows
+    )
+    return shell("Sequence Exceptions",'<div class="hero"><h1>Sequence Exceptions</h1><p class="muted">Only activities with a detected sequencing or readiness problem appear here.</p></div><div class="card">'+(h or '<p class="muted">No current sequence exceptions detected.</p>')+'</div>')
+
+@app.get("/sequence-intelligence/inspection-gates",response_class=HTMLResponse)
+def v45_inspection_gates():
+    pid=project_id()
+    rows=_v39_rows("SELECT * FROM inspections_tracker WHERE project_id=? ORDER BY scheduled_date,id",(pid,))
+    h="".join(
+        f'<div class="action"><span class="badge {"READY" if str(r["result"] or "").upper()=="PASSED" else "WATCH"}">{esc(r["result"])}</span> '
+        f'<b>{esc(r["inspection_type"])}</b><div class="small">{esc(r["scheduled_date"])} - {esc(r["authority"])}</div></div>'
+        for r in rows
+    )
+    return shell("Inspection Gates",'<div class="hero"><h1>Inspection & Testing Gates</h1><p class="muted">Sequence Intelligence treats required inspections as gates before concealment and downstream finish work.</p></div><div class="card">'+(h or '<p class="muted">No inspection gates loaded.</p>')+'</div>')
+
+@app.get("/sequence-intelligence/downstream",response_class=HTMLResponse)
+def v45_downstream():
+    rows=_v45_sequence_analysis(project_id())
+    risky=[x for x in rows if x["risk"] in {"CRITICAL","HIGH"}]
+    h="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(x["risk"])}</span> <b>{esc(x["activity"]["name"])}</b>'
+        f'<p>{esc(x["downstream"])}</p><div class="small">Prerequisite model: {esc(x["predecessor_summary"])}</div></div>'
+        for x in risky
+    )
+    return shell("Downstream Impact",'<div class="hero"><h1>Downstream Sequence Impact</h1><p class="muted">Shows high-risk activities that can force later work out of sequence.</p></div><div class="card">'+(h or '<p class="muted">No high downstream sequence exposure detected.</p>')+'</div>')
+
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
     s=_v37_snapshot(project_id())
@@ -2207,7 +2394,7 @@ def unified_manage():
       +_v37_link_card("RFIs / Issues","Questions, conflicts and issues.","/issues")
       +_v37_link_card("Submittals","Submittal workflow.","/submittals")
       +_v37_link_card("Field","Field execution and reporting.","/field")
-      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/learning">Learning Intelligence</a> · <a href="/project-control">Project Control</a> · <a href="/intelligence">Intelligence Center</a> · <a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
+      +'</div><details class="card"><summary><b>More management tools</b></summary><p><a href="/sequence-intelligence">Sequence Intelligence</a> · <a href="/learning">Learning Intelligence</a> · <a href="/project-control">Project Control</a> · <a href="/intelligence">Intelligence Center</a> · <a href="/inspections">Inspections</a> · <a href="/safety">Safety</a> · <a href="/subcontractors">Subcontractors</a> · <a href="/procurement">Procurement</a> · <a href="/punch">Punch</a></p></details>'
     )
     return shell("Manage",body)
 
