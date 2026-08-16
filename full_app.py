@@ -1125,6 +1125,8 @@ def v39_intelligence_center():
     for name,count,href,desc in cards:
         body+=f'<div class="card"><div class="label">{esc(name)}</div><div class="kpi">{count}</div><p class="muted">{esc(desc)}</p><a href="{href}">Open →</a></div>'
     body+='</div>'
+    body += '<div class="grid3">'+_v37_link_card("Constructability Intelligence","Find access, clearance, penetration, ceiling and coordination risks.","/intelligence-engine/constructability","Open")+_v37_link_card("Superintendent Command Intelligence","Prioritized view of sequence, procurement, conflicts, gaps and inspections.","/intelligence-engine/command","Open")+_v37_link_card("Full Intelligence Engine","Conflict, RFI, scope, change, procurement, inspection and learning intelligence.","/intelligence-engine","Open")+'</div>'
+
     return shell("Intelligence",body)
 
 @app.get("/intelligence/attention",response_class=HTMLResponse)
