@@ -2408,7 +2408,7 @@ def unified_build():
       +_v37_link_card("Analyze Project","Upload once. BuildCommand runs plan intelligence, estimator sync, takeoff splitting and quantity review automatically.","/build/analyze-project","Analyze")
       +_v37_link_card("Review Project Scope","Review unified source-backed construction intelligence.","/brain","Review")
       +_v37_link_card("Blueprint Brain","Open source-backed trade scopes and run the final trade cleanup.","/blueprint-brain","Open")
-      +'</div><details class="card"><summary><b>More Build tools</b></summary><p><a href="/blueprint-brain">Blueprint Brain</a> · <a href="/preconstruction">Preconstruction & Bid Intelligence</a> · <a href="/documents">Documents</a> · <a href="/document-ai">Deep Document AI</a></p></details>'
+      +'</div><details class="card"><summary><b>More Build tools</b></summary><p><a href="/sequence-intelligence">Sequence Intelligence</a> · <a href="/blueprint-brain">Blueprint Brain</a> · <a href="/preconstruction">Preconstruction & Bid Intelligence</a> · <a href="/documents">Documents</a> · <a href="/document-ai">Deep Document AI</a></p></details>'
     )
     return shell("Build",body)
 
