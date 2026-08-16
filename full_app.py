@@ -1,6 +1,36 @@
-A
-        self.last_insert_id=None
-    def _sql(self,sql):
+from fastapi import FastAPI, Form, Request, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, FileResponse
+import sqlite3
+
+try:
+    import openpyxl
+except Exception:
+    openpyxl = None
+
+try:
+    from pypdf import PdfReader
+except Exception:
+    PdfReader = None
+
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:
+    psycopg = None
+    dict_row = None
+import os
+import io
+import csv
+import json
+import base64
+import re
+import secrets
+import hashlib
+import hmac
+import mimetypes
+import zipfile
+from contextvars import ContextVar
+from datetime import date, datetime, timedelta
 from pathlib import Path
 try:
     from openai import OpenAI
@@ -8,9 +38,28 @@ except Exception:
     OpenAI = None
 
 try:
-import mimetypes
-import zipfile
-    from reportlab.pdfgen import canvasA
+    from reportlab.pdfgen import canvas
+except Exception:
+    canvas = None
+
+app=FastAPI(title="BuildCommand AI",version="32.0")
+DB="construction_ai_web.db"
+DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
+UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
+os.makedirs(UPLOAD_DIR,exist_ok=True)
+_current_user_id=ContextVar("buildcommand_user_id",default=None)
+_current_company_id=ContextVar("buildcommand_company_id",default=None)
+MAX_UPLOAD_BYTES=45*1024*1024
+ALLOWED_UPLOAD_EXTENSIONS={".pdf",".png",".jpg",".jpeg",".webp",".doc",".docx",".xls",".xlsx",".csv",".txt"}
+
+DATABASE_URL=os.environ.get("DATABASE_URL","").strip()
+DATABASE_KIND="postgres" if DATABASE_URL.startswith(("postgres://","postgresql://")) else "sqlite"
+
+class PgCompatConnection:
+    def __init__(self,conn):
+        self.conn=conn
+        self.last_insert_id=None
+    def _sql(self,sql):
         if sql.strip().lower().startswith("select last_insert_rowid()"):
             return None
         sql=sql.replace("?","%s")
