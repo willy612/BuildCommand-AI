@@ -986,38 +986,121 @@ def _v37_link_card(title,desc,href,label="Open"):
 def unified_projects_home():
     pid=project_id()
     s=_v37_snapshot(pid)
+
     try:
         score=_v50_score(pid)
     except Exception:
         score={"health":100,"risk":0,"quality":100}
+
     try:
-        top=_v50_top_priorities(pid,5)
+        top=_v50_top_priorities(pid,8)
     except Exception:
         top=[]
 
+    try:
+        decisions=_v47_decision_deadlines(pid)[:8]
+    except Exception:
+        decisions=[]
+
+    try:
+        materials=[x for x in _v47_material_readiness(pid) if x[2] in {"CRITICAL","HIGH","TODAY"}][:8]
+    except Exception:
+        materials=[]
+
+    try:
+        holds=[x for x in _v49_hold_points(pid) if str(x[0]["result"] or "").upper()!="PASSED"][:8]
+    except Exception:
+        holds=[]
+
+    try:
+        agenda=_v47_coordination_agenda(pid)[:8]
+    except Exception:
+        agenda=[]
+
+    try:
+        sequence=[x for x in _v45_sequence_analysis(pid) if x["risk"] in {"CRITICAL","HIGH"}][:8]
+    except Exception:
+        sequence=[]
+
     attention=s["issues"]+s["submittals"]+s["actions"]+s["inspections"]
-    top_html="".join(
+
+    priority_html="".join(
         f'<div class="action bc-priority"><span class="badge WATCH">{_v37_esc(f["severity"])}</span> '
         f'<b>{_v37_esc(f["type"])}</b> - {_v37_esc(f["title"])}'
-        f'<div class="small">{_v37_esc(f["reason"])}</div></div>'
+        f'<div class="small">{_v37_esc(f["reason"])}</div>'
+        f'<p><b>Next:</b> {_v37_esc(f["action"])}</p></div>'
         for f in top
     ) or '<p class="muted">No major project priorities detected.</p>'
 
+    seq_html="".join(
+        f'<div class="action"><span class="badge WATCH">{_v37_esc(x["risk"])}</span> '
+        f'<b>{_v37_esc(x["activity"]["name"])}</b>'
+        f'<div class="small">{_v37_esc(x["activity"]["trade"])} · {_v37_esc(x["blocking_reason"] or "Sequence risk")}</div></div>'
+        for x in sequence
+    ) or '<p class="muted">No high sequence blockers.</p>'
+
+    insp_html="".join(
+        f'<div class="action"><span class="badge WATCH">{_v37_esc(i["result"])}</span> '
+        f'<b>{_v37_esc(i["inspection_type"])}</b>'
+        f'<div class="small">{_v37_esc(i["scheduled_date"])} · {_v37_esc(i["authority"])}'
+        f' · Activity {_v37_esc(a["name"] if a else "Unlinked")}</div></div>'
+        for i,a in holds
+    ) or '<p class="muted">No open inspection hold points.</p>'
+
+    mat_html="".join(
+        f'<div class="action"><span class="badge WATCH">{_v37_esc(level)}</span> '
+        f'<b>{_v37_esc(r["item"])}</b>'
+        f'<div class="small">Need {_v37_esc(r["required_on_site"])} · Promised {_v37_esc(r["promised_date"])}'
+        f' · {exposure} day(s) exposure</div></div>'
+        for r,act,level,exposure,reason,action in materials
+    ) or '<p class="muted">No critical/high material risks.</p>'
+
+    dec_html="".join(
+        f'<div class="action"><span class="badge WATCH">{_v37_esc(severity)}</span> '
+        f'<b>{_v37_esc(typ)} - {_v37_esc(title)}</b>'
+        f'<div class="small">Due {_v37_esc(due)} · ${cost:,.0f} exposure · {days:g} schedule day(s)</div></div>'
+        for typ,title,due,severity,cost,days,source in decisions
+    ) or '<p class="muted">No urgent decision deadlines.</p>'
+
+    agenda_html="".join(
+        f'<div class="action"><span class="badge">{_v37_esc(kind)}</span> '
+        f'<b>{_v37_esc(title)}</b><div class="small">{_v37_esc(detail)}</div></div>'
+        for kind,title,detail in agenda
+    ) or '<p class="muted">No current coordination agenda items.</p>'
+
     body=(
-      '<div class="hero"><div class="eyebrow">PROJECT COMMAND</div><h1>Run the project from one place.</h1>'
-      '<p class="muted">BuildCommand surfaces what matters now. Deeper tools stay organized in the dropdown navigation above.</p></div>'
+      '<div class="hero"><div class="eyebrow">PROJECT COMMAND</div>'
+      '<h1>Today’s construction command center.</h1>'
+      '<p class="muted">What needs attention, what is blocked, what is late, and what BuildCommand recommends doing next.</p></div>'
+
       '<div class="bc-home-grid">'
       f'<div class="card"><div class="label">Project Health</div><div class="kpi">{score["health"]}</div><div class="small">Risk {score["risk"]}/100</div></div>'
       f'<div class="card"><div class="label">Needs Attention</div><div class="kpi">{attention}</div><div class="small">Issues · submittals · actions · inspections</div></div>'
-      f'<div class="card"><div class="label">Scope Intelligence</div><div class="kpi">{s["scope"]}</div><div class="small">Source-backed scope items</div></div>'
+      f'<div class="card"><div class="label">Open Blockers</div><div class="kpi">{len(sequence)}</div><div class="small">Critical/high sequence risks</div></div>'
       f'<div class="card"><div class="label">Brain Quality</div><div class="kpi">{score["quality"]}</div><div class="small">Current intelligence quality</div></div>'
       '</div>'
+
       '<div class="grid3" style="margin-top:16px">'
-      +_v37_link_card("Analyze Project","Upload plans/specs and run the intelligence pipeline.","/build/analyze-project","Analyze")
-      +_v37_link_card("Today","Field Command for readiness, deliveries, inspections and decisions.","/field-command","Open")
       +_v37_link_card("Ask BuildCommand","Ask questions across the current project.","/ask-buildcommand","Ask")
+      +_v37_link_card("Field Command","Readiness, crews, deliveries, inspections and decisions.","/field-command","Open")
+      +_v37_link_card("Master Reasoning","See the connected project judgment behind the priorities.","/master-reasoning","Open")
       +'</div>'
-      '<div class="card"><h2>Top Project Priorities</h2>'+top_html+'</div>'
+
+      '<div class="grid2" style="margin-top:16px">'
+      '<div class="card"><h2>Top Priorities</h2>'+priority_html+'</div>'
+      '<div class="card"><h2>What Is Blocking Work</h2>'+seq_html+'</div>'
+      '</div>'
+
+      '<div class="grid3">'
+      '<div class="card"><h2>Inspection Hold Points</h2>'+insp_html+'</div>'
+      '<div class="card"><h2>Material Risk</h2>'+mat_html+'</div>'
+      '<div class="card"><h2>Decisions Needed</h2>'+dec_html+'</div>'
+      '</div>'
+
+      '<div class="card"><h2>Coordination Agenda</h2>'
+      '<p class="muted">Use this as the starting point for today’s subcontractor/coordination discussion.</p>'
+      +agenda_html+
+      '</div>'
     )
     return shell("Project Command",body)
 
