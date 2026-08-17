@@ -1129,6 +1129,8 @@ def v39_intelligence_center():
     body += '<div class="grid3">' + _v37_link_card("Project Knowledge Graph","Drawing revisions, dependencies, equipment chains, prediction and verification.","/knowledge-graph","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Prediction & Decision Intelligence","Dependency impacts, decision deadlines, manpower, materials, closeout and risk propagation.","/prediction-intelligence","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Brain Quality & Self-Learning","Verification, confidence calibration, source quality, contradiction detection and improvement queue.","/brain-quality","Open") + '</div>'
+    body += '<div class="grid3">' + _v37_link_card("Field Context & Assembly Intelligence","Rooms, assemblies, systems, prerequisites, hold points, commissioning and field work packages.","/field-context","Open") + '</div>'
+
 
 
 
@@ -3524,6 +3526,314 @@ def v48_queue_page():
     queue.sort(key=lambda x:x[0],reverse=True)
     h="".join(f'<div class="action"><span class="badge WATCH">PRIORITY {p}</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">2nd opinion {esc(verify)} · Source {esc(source)} · Confidence {esc(conf)} ({score:.0f})</div></div>' for p,r,verify,agreement,source,conf,score in queue[:100])
     return shell("Brain Improvement Queue",'<div class="hero"><h1>Brain Improvement Queue</h1><p class="muted">Fix the highest-value intelligence problems first.</p></div><div class="card">'+(h or '<p class="muted">No current quality-improvement queue.</p>')+'</div>')
+
+
+# ============================================================
+# v49 FIELD CONTEXT & ASSEMBLY INTELLIGENCE
+# ============================================================
+
+def _v49_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS room_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,room_key TEXT,room_name TEXT,
+        room_number TEXT,source_ref TEXT,trade_count INTEGER DEFAULT 0,
+        issue_count INTEGER DEFAULT 0,status TEXT DEFAULT 'REVIEW',created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS assembly_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,assembly_type TEXT,assembly_key TEXT,
+        description TEXT,primary_trade TEXT,related_trades TEXT,source_ref TEXT,
+        prerequisite_summary TEXT,inspection_summary TEXT,status TEXT DEFAULT 'REVIEW',
+        created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS field_work_packages(
+        id {pk},company_id BIGINT,project_id BIGINT,package_type TEXT,title TEXT,
+        location TEXT,trade TEXT,scope_summary TEXT,prerequisites TEXT,
+        inspection_gates TEXT,materials TEXT,status TEXT DEFAULT 'DRAFT',
+        created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS commissioning_chain(
+        id {pk},company_id BIGINT,project_id BIGINT,equipment_key TEXT,equipment_name TEXT,
+        install_trade TEXT,power_trade TEXT,controls_trade TEXT,startup_trade TEXT,
+        testing_requirement TEXT,closeout_requirement TEXT,status TEXT DEFAULT 'REVIEW',
+        source_ref TEXT,created TEXT,updated TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit(); c.close()
+
+def _v49_scope_rows(pid):
+    return _v452_scope_rows(pid)
+
+def _v49_room_key(text):
+    s=str(text or "")
+    # Common room-number patterns such as 101, 122A, Room 203.
+    m=re.search(r'(?i)\broom\s+([A-Z]?\d{2,4}[A-Z]?)\b',s)
+    if m:
+        return m.group(1)
+    m=re.search(r'\b([1-9]\d{2}[A-Z]?)\b',s)
+    return m.group(1) if m else ""
+
+def _v49_rooms(pid):
+    rows=_v49_scope_rows(pid)
+    rooms={}
+    for r in rows:
+        corpus=" ".join(str(r[k] or "") for k in ["requirement","source_note","source_detail"])
+        rk=_v49_room_key(corpus)
+        if not rk:
+            continue
+        ent=rooms.setdefault(rk,{"room":rk,"items":[],"trades":set()})
+        ent["items"].append(r)
+        ent["trades"].add(str(r["trade"] or ""))
+    return list(rooms.values())[:200]
+
+def _v49_assemblies(pid):
+    rows=_v49_scope_rows(pid)
+    out=[]
+    patterns=[
+      ("WALL",("wall type","partition","stud wall","gypsum board wall","shaft wall")),
+      ("CEILING",("ceiling","act ceiling","acoustical ceiling","hard lid")),
+      ("FLOOR",("flooring","tile","lvt","vct","carpet","resilient flooring")),
+      ("ROOF",("roof","roofing","roof curb","roof penetration")),
+      ("DOOR",("door","frame","hardware","storefront entrance")),
+      ("PLUMBING FIXTURE",("water closet","urinal","lavatory","mop sink","floor drain")),
+      ("EQUIPMENT",("water heater","rooftop unit","exhaust fan","air handler","panelboard","transformer"))
+    ]
+    seen=set()
+    for r in rows:
+        low=str(r["requirement"] or "").lower()
+        for typ,terms in patterns:
+            if any(term in low for term in terms):
+                key=(typ,re.sub(r'\s+',' ',low[:140]))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rel=set()
+                if r["related_trade"]:
+                    rel.add(str(r["related_trade"]))
+                for dep_r,rels in _v46_dependencies(pid):
+                    if dep_r["id"]==r["id"]:
+                        rel.update(rels)
+                prereq=[]
+                if typ=="WALL":
+                    prereq=["layout complete","framing/backing complete","MEP rough complete","required rough inspection passed"]
+                elif typ=="CEILING":
+                    prereq=["above-ceiling MEP complete","coordination complete","inspection/testing complete"]
+                elif typ=="FLOOR":
+                    prereq=["substrate ready","moisture/flatness requirements verified","overhead damaging work complete"]
+                elif typ=="ROOF":
+                    prereq=["penetrations/curbs coordinated","equipment/support locations confirmed"]
+                elif typ=="DOOR":
+                    prereq=["rough opening verified","frame/blocking ready","hardware/electrical interfaces coordinated"]
+                elif typ=="PLUMBING FIXTURE":
+                    prereq=["rough plumbing complete","wall/floor finishes ready","fixture available"]
+                else:
+                    prereq=["approved submittal","support ready","material onsite","power/controls/piping interfaces coordinated"]
+                source=" · ".join(x for x in [r["source_sheet"],r["source_detail"],r["source_spec"]] if x)
+                out.append((typ,r,sorted(rel),prereq,source))
+    return out[:250]
+
+def _v49_system_trace(pid):
+    rows=_v49_scope_rows(pid)
+    systems={
+        "Electrical":[],"Plumbing":[],"HVAC / Mechanical":[],"Fire Sprinkler":[],
+        "Low Voltage":[],"Fire Alarm":[],"Roofing":[],"Doors / Frames / Hardware":[]
+    }
+    for r in rows:
+        tr=str(r["trade"] or "")
+        if tr in systems:
+            systems[tr].append(r)
+    return systems
+
+def _v49_penetrations(pid):
+    rows=_v49_scope_rows(pid)
+    out=[]
+    for r in rows:
+        low=str(r["requirement"] or "").lower()
+        if any(x in low for x in ["penetration","sleeve","core drill","opening","roof curb","rough opening"]):
+            out.append(r)
+    return out[:150]
+
+def _v49_install_prereqs(pid):
+    seq=_v45_sequence_analysis(pid)
+    out=[]
+    for x in seq:
+        a=x["activity"]
+        gates=_v45_gate_requirements(x["stage"])
+        out.append((a,x["readiness"],x["risk"],gates,x["blocking_reason"]))
+    return out[:150]
+
+def _v49_hold_points(pid):
+    inspections=_v39_rows("SELECT * FROM inspections_tracker WHERE project_id=? ORDER BY scheduled_date,id",(pid,))
+    seq=_v45_sequence_analysis(pid)
+    out=[]
+    for i in inspections:
+        act=None
+        if i["activity_id"] is not None:
+            act=next((x["activity"] for x in seq if x["activity"]["id"]==i["activity_id"]),None)
+        out.append((i,act))
+    return out[:150]
+
+def _v49_commissioning(pid):
+    eq=_v46_equipment(pid)
+    out=[]
+    for e in eq:
+        testing=[]
+        closeout=[]
+        name=e["name"].lower()
+        if any(x in name for x in ["rtu","air handler","exhaust fan","vav"]):
+            testing=["startup","controls verification","test and balance as applicable"]
+            closeout=["O&M","warranty","startup record"]
+        elif "water heater" in name:
+            testing=["startup","temperature/operation verification","leak check"]
+            closeout=["O&M","warranty"]
+        elif any(x in name for x in ["panelboard","transformer"]):
+            testing=["energization verification","labeling/identification"]
+            closeout=["O&M if required","test records if required"]
+        else:
+            testing=["startup / functional verification as applicable"]
+            closeout=["O&M / warranty as applicable"]
+        out.append((e,testing,closeout))
+    return out[:100]
+
+def _v49_work_packages(pid):
+    rooms=_v49_rooms(pid)
+    assemblies=_v49_assemblies(pid)
+    packages=[]
+    for room in rooms:
+        by_trade={}
+        for r in room["items"]:
+            by_trade.setdefault(r["trade"],[]).append(r)
+        for tr,items in by_trade.items():
+            scope="; ".join(str(x["requirement"]) for x in items[:8])
+            packages.append({
+                "title":f"Room {room['room']} - {tr}",
+                "location":f"Room {room['room']}",
+                "trade":tr,"scope":scope,
+                "prereq":"Verify predecessor work, access, approved documents and material readiness.",
+                "inspection":"Verify required inspection/hold points before concealment or finish work.",
+                "materials":"Confirm project-specific material availability."
+            })
+    if not packages:
+        # Fallback assembly-based packages when room numbers are not explicit.
+        for typ,r,rels,prereq,source in assemblies[:80]:
+            packages.append({
+                "title":f"{typ} - {r['trade']}",
+                "location":source or "Project",
+                "trade":r["trade"],"scope":r["requirement"],
+                "prereq":"; ".join(prereq),
+                "inspection":"Verify applicable inspections/testing before downstream work.",
+                "materials":"Confirm approved material/submittal and onsite readiness."
+            })
+    return packages[:200]
+
+@app.get("/field-context",response_class=HTMLResponse)
+def v49_field_context_home():
+    pid=project_id(); _v49_ensure_tables()
+    rooms=_v49_rooms(pid); assemblies=_v49_assemblies(pid); pens=_v49_penetrations(pid)
+    prereqs=_v49_install_prereqs(pid); holds=_v49_hold_points(pid); comm=_v49_commissioning(pid)
+    packages=_v49_work_packages(pid); systems=_v49_system_trace(pid)
+    system_count=sum(1 for _,rows in systems.items() if rows)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v49 - Field Context & Assembly Intelligence</div><h1>Understand the project where the work actually happens.</h1><p class="muted">{len(rooms)} room context(s) · {len(assemblies)} assembly signals · {system_count} traced systems · {len(pens)} penetration/opening items · {len(holds)} inspection hold points · {len(comm)} commissioning chains · {len(packages)} field work packages.</p></div><div class="grid3">'
+    cards=[
+      ("Room Intelligence","Organize project scope by room/location context.","/field-context/rooms"),
+      ("Assembly Intelligence","Understand wall, ceiling, floor, roof, door and equipment assemblies.","/field-context/assemblies"),
+      ("System Trace Intelligence","Trace scope by Electrical, Plumbing, HVAC, Fire Protection and other systems.","/field-context/systems"),
+      ("Penetration & Opening Brain","Find sleeves, penetrations, rough openings and roof/opening coordination.","/field-context/penetrations"),
+      ("Installation Prerequisites","Show what must be ready before activities can start.","/field-context/prerequisites"),
+      ("Inspection Hold Points","Connect inspections/testing to the work they gate.","/field-context/hold-points"),
+      ("Equipment-to-Location Intelligence","Map equipment scope to room/source context and trade interfaces.","/field-context/equipment-locations"),
+      ("Commissioning Chain","Follow install → power → controls → startup → testing → closeout.","/field-context/commissioning"),
+      ("Field Work Packages","Turn project intelligence into location/trade execution packages.","/field-context/work-packages"),
+      ("Field Context Command","One field-focused view of rooms, assemblies, gates and work packages.","/field-context/command")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Field Context Intelligence",body)
+
+@app.get("/field-context/rooms",response_class=HTMLResponse)
+def v49_rooms_page():
+    rows=_v49_rooms(project_id())
+    h=""
+    for room in rows:
+        h+=f'<div class="card"><h3>Room {esc(room["room"])}</h3><p class="small">{len(room["items"])} scope item(s) · {len(room["trades"])} trade(s)</p>'
+        for r in room["items"][:20]:
+            h+=f'<div class="action"><b>{esc(r["trade"])}</b> - {esc(r["requirement"])}</div>'
+        h+='</div>'
+    return shell("Room Intelligence",'<div class="hero"><h1>Room Intelligence</h1><p class="muted">Location context is inferred only where explicit room identifiers exist in the analyzed text.</p></div>'+(h or '<div class="card">No explicit room identifiers detected in current scope.</div>'))
+
+@app.get("/field-context/assemblies",response_class=HTMLResponse)
+def v49_assemblies_page():
+    rows=_v49_assemblies(project_id())
+    h="".join(f'<div class="action"><span class="badge">{esc(typ)}</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Related: {esc(", ".join(rels) or "None")} · Source {esc(source)}</div><p><b>Prerequisites:</b> {esc("; ".join(pre))}</p></div>' for typ,r,rels,pre,source in rows)
+    return shell("Assembly Intelligence",'<div class="hero"><h1>Assembly Intelligence</h1><p class="muted">Breaks project scope into buildable assemblies with related trades and prerequisite logic.</p></div><div class="card">'+(h or '<p class="muted">No assembly signals detected.</p>')+'</div>')
+
+@app.get("/field-context/systems",response_class=HTMLResponse)
+def v49_systems_page():
+    systems=_v49_system_trace(project_id())
+    body='<div class="hero"><h1>System Trace Intelligence</h1><p class="muted">Trace the project by system instead of reading isolated scope items.</p></div>'
+    for name,rows in systems.items():
+        if not rows: continue
+        body+=f'<div class="card"><h2>{esc(name)}</h2>'
+        body+="".join(f'<div class="action">{esc(r["requirement"])}<div class="small">{esc(r["source_sheet"])} {esc(r["source_detail"])}</div></div>' for r in rows[:40])
+        body+='</div>'
+    return shell("System Trace Intelligence",body)
+
+@app.get("/field-context/penetrations",response_class=HTMLResponse)
+def v49_penetrations_page():
+    rows=_v49_penetrations(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">COORDINATE</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">{esc(r["source_sheet"])} {esc(r["source_detail"])}</div></div>' for r in rows)
+    return shell("Penetration & Opening Brain",'<div class="hero"><h1>Penetration & Opening Brain</h1><p class="muted">Finds opening/penetration scope requiring coordination across structure, MEP, roofing, framing or finishes.</p></div><div class="card">'+(h or '<p class="muted">No penetration/opening scope detected.</p>')+'</div>')
+
+@app.get("/field-context/prerequisites",response_class=HTMLResponse)
+def v49_prereq_page():
+    rows=_v49_install_prereqs(project_id())
+    h="".join(f'<div class="action"><span class="badge {"READY" if ready=="READY" else "WATCH"}">{esc(ready)}</span> <b>{esc(a["name"])}</b><div class="small">{esc(a["trade"])} · Risk {esc(risk)}</div><p><b>Expected gates:</b> {esc("; ".join(gates))}</p><p>{esc(blocking)}</p></div>' for a,ready,risk,gates,blocking in rows)
+    return shell("Installation Prerequisites",'<div class="hero"><h1>Installation Prerequisite Intelligence</h1><p class="muted">Makes sequence/readiness logic understandable at the installation level.</p></div><div class="card">'+(h or '<p class="muted">No scheduled activities available.</p>')+'</div>')
+
+@app.get("/field-context/hold-points",response_class=HTMLResponse)
+def v49_hold_page():
+    rows=_v49_hold_points(project_id())
+    h="".join(f'<div class="action"><span class="badge {"READY" if str(i["result"] or "").upper()=="PASSED" else "WATCH"}">{esc(i["result"])}</span> <b>{esc(i["inspection_type"])}</b><div class="small">Activity: {esc(a["name"] if a else "Unlinked")} · {esc(i["scheduled_date"])} · {esc(i["authority"])}</div></div>' for i,a in rows)
+    return shell("Inspection Hold Points",'<div class="hero"><h1>Inspection Hold Points</h1><p class="muted">Do not let downstream work bury required inspection/testing gates.</p></div><div class="card">'+(h or '<p class="muted">No inspection hold points loaded.</p>')+'</div>')
+
+@app.get("/field-context/equipment-locations",response_class=HTMLResponse)
+def v49_equipment_locations():
+    rows=_v46_equipment(project_id())
+    h=""
+    for e in rows:
+        room=_v49_room_key(e["name"])
+        h+=f'<div class="action"><b>{esc(e["name"])}</b><div class="small">Location context: {esc("Room "+room if room else e["source"] or "Not explicit")} · Install {esc(e["primary"])} · Power {esc(e["power"] or "N/A")} · Controls {esc(e["controls"] or "N/A")}</div></div>'
+    return shell("Equipment Location Intelligence",'<div class="hero"><h1>Equipment-to-Location Intelligence</h1><p class="muted">Connects equipment responsibilities to explicit room/source context where available.</p></div><div class="card">'+(h or '<p class="muted">No equipment intelligence detected.</p>')+'</div>')
+
+@app.get("/field-context/commissioning",response_class=HTMLResponse)
+def v49_commissioning_page():
+    rows=_v49_commissioning(project_id())
+    h="".join(f'<div class="card"><h3>{esc(e["name"])}</h3><p><b>Install:</b> {esc(e["primary"])} · <b>Power:</b> {esc(e["power"] or "N/A")} · <b>Controls:</b> {esc(e["controls"] or "N/A")} · <b>Startup:</b> {esc(e["startup"])}</p><p><b>Testing:</b> {esc("; ".join(testing))}</p><p><b>Closeout:</b> {esc("; ".join(closeout))}</p></div>' for e,testing,closeout in rows)
+    return shell("Commissioning Chain",'<div class="hero"><h1>Commissioning Chain Intelligence</h1><p class="muted">Follows equipment from installation through operational verification and turnover.</p></div>'+(h or '<div class="card">No commissioning chains detected.</div>'))
+
+@app.get("/field-context/work-packages",response_class=HTMLResponse)
+def v49_packages_page():
+    rows=_v49_work_packages(project_id())
+    h="".join(f'<div class="card"><span class="badge">DRAFT PACKAGE</span><h3>{esc(p["title"])}</h3><p><b>Location:</b> {esc(p["location"])}</p><p><b>Scope:</b> {esc(p["scope"])}</p><p><b>Prerequisites:</b> {esc(p["prereq"])}</p><p><b>Inspection:</b> {esc(p["inspection"])}</p><p><b>Materials:</b> {esc(p["materials"])}</p></div>' for p in rows)
+    return shell("Field Work Packages",'<div class="hero"><h1>Field Work Package Intelligence</h1><p class="muted">Draft execution packages only; superintendent review is required before release to the field.</p></div>'+(h or '<div class="card">No work-package candidates detected.</div>'))
+
+@app.get("/field-context/command",response_class=HTMLResponse)
+def v49_command_page():
+    pid=project_id()
+    rooms=_v49_rooms(pid); assemblies=_v49_assemblies(pid); pens=_v49_penetrations(pid)
+    prereqs=[x for x in _v49_install_prereqs(pid) if x[1]!="READY"]
+    holds=[x for x in _v49_hold_points(pid) if str(x[0]["result"] or "").upper()!="PASSED"]
+    packages=_v49_work_packages(pid)
+    body=f'<div class="hero"><div class="eyebrow">Field Context Command</div><h1>What needs coordination before work moves?</h1><p class="muted">{len(rooms)} room contexts · {len(assemblies)} assemblies · {len(pens)} penetration/opening items · {len(prereqs)} not-ready activities · {len(holds)} open hold points · {len(packages)} draft work packages.</p></div>'
+    body+='<div class="grid3">'
+    body+=_v37_link_card("Not-Ready Work","Installation prerequisites and blocking reasons.","/field-context/prerequisites","Review")
+    body+=_v37_link_card("Hold Points","Inspections/testing that gate downstream work.","/field-context/hold-points","Review")
+    body+=_v37_link_card("Work Packages","Location/trade execution packages from current intelligence.","/field-context/work-packages","Review")
+    body+='</div>'
+    return shell("Field Context Command",body)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
