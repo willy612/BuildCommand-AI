@@ -1128,6 +1128,8 @@ def v39_intelligence_center():
     body += '<div class="grid3">'+_v37_link_card("Constructability Intelligence","Find access, clearance, penetration, ceiling and coordination risks.","/intelligence-engine/constructability","Open")+_v37_link_card("Superintendent Command Intelligence","Prioritized view of sequence, procurement, conflicts, gaps and inspections.","/intelligence-engine/command","Open")+_v37_link_card("Full Intelligence Engine","Conflict, RFI, scope, change, procurement, inspection and learning intelligence.","/intelligence-engine","Open")+'</div>'
     body += '<div class="grid3">' + _v37_link_card("Project Knowledge Graph","Drawing revisions, dependencies, equipment chains, prediction and verification.","/knowledge-graph","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Prediction & Decision Intelligence","Dependency impacts, decision deadlines, manpower, materials, closeout and risk propagation.","/prediction-intelligence","Open") + '</div>'
+    body += '<div class="grid3">' + _v37_link_card("Brain Quality & Self-Learning","Verification, confidence calibration, source quality, contradiction detection and improvement queue.","/brain-quality","Open") + '</div>'
+
 
 
 
@@ -3287,6 +3289,241 @@ def v47_predictive_brief():
     body+='<div class="card"><h2>Material Risk</h2>'+("".join(f'<div class="action"><b>{esc(r["item"])}</b><div class="small">{esc(level)} · {exposure} day(s) exposure</div></div>' for r,act,level,exposure,reason,action in materials) or '<p class="muted">No high material risks.</p>')+'</div>'
     body+='<div class="card"><h2>Closeout Risk</h2>'+("".join(f'<div class="action"><b>{esc(r["item"])}</b><div class="small">{esc(level)} · Due {esc(r["due_date"])}</div></div>' for r,level in closeout) or '<p class="muted">No high closeout risks.</p>')+'</div>'
     return shell("Predictive Project Brief",body)
+
+
+# ============================================================
+# v48 BRAIN QUALITY & SELF-LEARNING ENGINE
+# ============================================================
+
+def _v48_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS quality_audit(
+        id {pk},company_id BIGINT,project_id BIGINT,subject_type TEXT,subject_key TEXT,
+        primary_result TEXT,secondary_result TEXT,agreement TEXT DEFAULT 'REVIEW',
+        source_quality TEXT DEFAULT 'MEDIUM',confidence_score {num} DEFAULT 0,
+        contradiction_flag INTEGER DEFAULT 0,reason TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS confidence_calibration(
+        id {pk},company_id BIGINT,project_id BIGINT,subject_type TEXT,subject_key TEXT,
+        stated_confidence TEXT,calibrated_confidence TEXT,score {num} DEFAULT 0,
+        reason TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS contradiction_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,subject TEXT,source_a TEXT,source_b TEXT,
+        contradiction_type TEXT,severity TEXT DEFAULT 'REVIEW',status TEXT DEFAULT 'OPEN',
+        reason TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS learning_feedback(
+        id {pk},company_id BIGINT,project_id BIGINT,subject_type TEXT,subject_key TEXT,
+        original_result TEXT,approved_result TEXT,feedback_type TEXT,reason TEXT,
+        approved_by TEXT,scope_level TEXT DEFAULT 'PROJECT ONLY',created TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit(); c.close()
+
+def _v48_source_quality(r):
+    score=0
+    if r["source_sheet"]: score+=35
+    if r["source_detail"]: score+=25
+    if r["source_spec"]: score+=25
+    if r["source_note"]: score+=15
+    if score>=75: return ("HIGH",score)
+    if score>=40: return ("MEDIUM",score)
+    return ("LOW",score)
+
+def _v48_calibrated_confidence(r):
+    stated=str(r["confidence"] or "MEDIUM").upper()
+    source_level,source_score=_v48_source_quality(r)
+    verify=_v441_primary_trade(r["requirement"],r["trade"])
+    agrees=(verify==r["trade"])
+    score=source_score
+    score += 15 if agrees else -25
+    score += 10 if stated=="HIGH" else 0
+    score -= 10 if stated=="LOW" else 0
+    score=max(0,min(100,score))
+    calibrated="HIGH" if score>=75 else "MEDIUM" if score>=45 else "LOW"
+    reason=f"Source quality {source_level}; second opinion {'agrees' if agrees else 'disagrees'} with saved trade."
+    return calibrated,score,reason,verify
+
+def _v48_self_audit(pid):
+    rows=_v452_scope_rows(pid)
+    out=[]
+    for r in rows:
+        calibrated,score,reason,verify=_v48_calibrated_confidence(r)
+        agreement="AGREE" if verify==r["trade"] else "DISAGREE"
+        source_level,_=_v48_source_quality(r)
+        contradiction=1 if agreement=="DISAGREE" else 0
+        out.append((r,verify,agreement,source_level,calibrated,score,contradiction,reason))
+    return out[:300]
+
+def _v48_contradictions(pid):
+    rows=_v452_scope_rows(pid)
+    by_key={}
+    out=[]
+    for r in rows:
+        req=re.sub(r'\s+',' ',str(r["requirement"] or "").lower()).strip()
+        if not req: continue
+        by_key.setdefault(req,[]).append(r)
+    for req,items in by_key.items():
+        trades=sorted(set(str(x["trade"] or "") for x in items))
+        if len(trades)>1:
+            out.append(("TRADE OWNERSHIP",items[0]["requirement"]," / ".join(trades),items[0]["source_sheet"] or "",items[-1]["source_sheet"] or ""))
+    # One-sided spec/drawing signals are treated as possible document contradictions.
+    for r,kind in _v46_spec_drawing_checks(pid):
+        out.append(("SOURCE MISMATCH",r["requirement"],kind,r["source_sheet"] or "",r["source_spec"] or ""))
+    return out[:200]
+
+def _v48_learning_rules(pid):
+    _v43_ensure_tables()
+    return _v39_rows("""
+        SELECT * FROM learning_rules
+        WHERE company_id=? AND approval_status='APPROVED'
+          AND (project_id=? OR scope_level='COMPANY STANDARD')
+        ORDER BY CASE WHEN project_id=? THEN 0 ELSE 1 END,id DESC
+        LIMIT 300
+    """,(current_company_id(),pid,pid))
+
+def _v48_quality_score(pid):
+    audit=_v48_self_audit(pid)
+    if not audit:
+        return {"score":100,"disagree":0,"low":0,"missing_source":0}
+    disagree=sum(1 for x in audit if x[2]=="DISAGREE")
+    low=sum(1 for x in audit if x[4]=="LOW")
+    missing_source=sum(1 for x in audit if x[3]=="LOW")
+    score=max(0,100 - disagree*6 - low*3 - missing_source*2)
+    return {"score":score,"disagree":disagree,"low":low,"missing_source":missing_source}
+
+def _v48_learning_opportunities(pid):
+    audit=_v48_self_audit(pid)
+    approved=_v48_learning_rules(pid)
+    subjects={str(r["subject"] or "").lower() for r in approved}
+    out=[]
+    for r,verify,agreement,source_level,calibrated,score,contradiction,reason in audit:
+        if agreement=="DISAGREE" and str(r["requirement"] or "").lower() not in subjects:
+            out.append((r,verify,calibrated,reason))
+    return out[:150]
+
+def _v48_answer_guard(pid,question):
+    """
+    Lightweight quality gate for Ask BuildCommand:
+    surfaces uncertainty and related knowledge rather than fabricating certainty.
+    """
+    q=(question or "").lower()
+    rows=_v452_scope_rows(pid)
+    matches=[]
+    for r in rows:
+        text=(str(r["requirement"] or "")+" "+str(r["trade"] or "")+" "+str(r["source_note"] or "")).lower()
+        if any(tok in text for tok in [w for w in re.findall(r'[a-z0-9]+',q) if len(w)>3]):
+            matches.append(r)
+    matches=matches[:12]
+    if not matches:
+        return {"confidence":"LOW","note":"No strong project-source match found.","matches":[]}
+    low=sum(1 for r in matches if _v48_calibrated_confidence(r)[0]=="LOW")
+    conf="LOW" if low>=max(1,len(matches)//2) else "MEDIUM" if low else "HIGH"
+    note="Answer should cite project sources and expose uncertainty where sources conflict."
+    return {"confidence":conf,"note":note,"matches":matches}
+
+@app.get("/brain-quality",response_class=HTMLResponse)
+def v48_brain_quality_home():
+    pid=project_id(); _v48_ensure_tables()
+    q=_v48_quality_score(pid)
+    contradictions=_v48_contradictions(pid)
+    rules=_v48_learning_rules(pid)
+    opportunities=_v48_learning_opportunities(pid)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v48 - Brain Quality & Self-Learning</div><h1>Make the brain more accurate before making it bigger.</h1><p class="muted">Quality score {q["score"]}/100 · {q["disagree"]} second-opinion disagreement(s) · {q["low"]} low-confidence item(s) · {len(contradictions)} contradiction/source mismatch signal(s) · {len(rules)} approved learning rule(s).</p></div><div class="grid3">'
+    cards=[
+      ("Multi-Pass Verification","Primary ownership vs independent second opinion.","/brain-quality/verification"),
+      ("Confidence Calibration","Re-score confidence using source quality and agreement.","/brain-quality/confidence"),
+      ("Source Quality Audit","Find weakly sourced project intelligence.","/brain-quality/sources"),
+      ("Contradiction Detection","Find ownership or source inconsistencies.","/brain-quality/contradictions"),
+      ("Approved Learning Reuse","Show the project/company rules the brain can trust.","/brain-quality/learning"),
+      ("Learning Opportunities","Find disagreements that should become reviewed corrections.","/brain-quality/opportunities"),
+      ("Scope Self-Audit","Run trade/source/confidence QA before downstream use.","/brain-quality/self-audit"),
+      ("Answer Guardrails","Show how Ask BuildCommand should expose uncertainty.","/brain-quality/answer-guard"),
+      ("Quality Dashboard","One score for current intelligence quality.","/brain-quality/dashboard"),
+      ("Brain Improvement Queue","Prioritize the highest-value corrections first.","/brain-quality/queue")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Brain Quality",body)
+
+@app.get("/brain-quality/verification",response_class=HTMLResponse)
+def v48_verification_page():
+    rows=_v48_self_audit(project_id())
+    h="".join(f'<div class="action"><span class="badge {"READY" if agreement=="AGREE" else "WATCH"}">{esc(agreement)}</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Second opinion: {esc(verify)} · Calibrated {esc(calibrated)} ({score:.0f})</div></div>' for r,verify,agreement,source_level,calibrated,score,contradiction,reason in rows if agreement=="DISAGREE")
+    return shell("Multi-Pass Verification",'<div class="hero"><h1>Multi-Pass Verification</h1><p class="muted">The second pass challenges the saved result instead of rubber-stamping it.</p></div><div class="card">'+(h or '<p class="muted">No current ownership disagreements.</p>')+'</div>')
+
+@app.get("/brain-quality/confidence",response_class=HTMLResponse)
+def v48_confidence_page():
+    rows=_v48_self_audit(project_id())
+    h="".join(f'<div class="action"><span class="badge">{esc(calibrated)}</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Stated {esc(r["confidence"])} → Calibrated {esc(calibrated)} ({score:.0f}/100) · {esc(reason)}</div></div>' for r,verify,agreement,source_level,calibrated,score,contradiction,reason in rows)
+    return shell("Confidence Calibration",'<div class="hero"><h1>Confidence Calibration</h1><p class="muted">Confidence now considers source strength and whether an independent ownership pass agrees.</p></div><div class="card">'+(h or '<p class="muted">No scope intelligence available.</p>')+'</div>')
+
+@app.get("/brain-quality/sources",response_class=HTMLResponse)
+def v48_sources_page():
+    rows=_v48_self_audit(project_id())
+    weak=[x for x in rows if x[3]=="LOW"]
+    h="".join(f'<div class="action"><span class="badge WATCH">LOW SOURCE</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Sheet {esc(r["source_sheet"])} · Detail {esc(r["source_detail"])} · Spec {esc(r["source_spec"])}</div></div>' for r,verify,agreement,source_level,calibrated,score,contradiction,reason in weak)
+    return shell("Source Quality Audit",'<div class="hero"><h1>Source Quality Audit</h1><p class="muted">Weak sourcing should lower trust even when the wording looks convincing.</p></div><div class="card">'+(h or '<p class="muted">No low-source-quality scope items detected.</p>')+'</div>')
+
+@app.get("/brain-quality/contradictions",response_class=HTMLResponse)
+def v48_contradictions_page():
+    rows=_v48_contradictions(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(kind)}</span> <b>{esc(subject)}</b><div class="small">{esc(detail)} · Source A {esc(a)} · Source B {esc(b)}</div></div>' for kind,subject,detail,a,b in rows)
+    return shell("Contradiction Detection",'<div class="hero"><h1>Contradiction Detection</h1><p class="muted">Conflicting ownership or one-sided documentation should become review work, not false certainty.</p></div><div class="card">'+(h or '<p class="muted">No contradiction signals detected.</p>')+'</div>')
+
+@app.get("/brain-quality/learning",response_class=HTMLResponse)
+def v48_learning_page():
+    rows=_v48_learning_rules(project_id())
+    h="".join(f'<div class="action"><span class="badge READY">{esc(r["scope_level"])}</span> <b>{esc(r["rule_type"])} - {esc(r["subject"])}</b><div>{esc(r["learned_rule"])}</div><div class="small">Approved by {esc(r["approved_by"])}</div></div>' for r in rows)
+    return shell("Approved Learning Reuse",'<div class="hero"><h1>Approved Learning Reuse</h1><p class="muted">Only reviewed project/company rules are trusted by the brain.</p></div><div class="card">'+(h or '<p class="muted">No approved learning rules available.</p>')+'</div>')
+
+@app.get("/brain-quality/opportunities",response_class=HTMLResponse)
+def v48_opportunities_page():
+    rows=_v48_learning_opportunities(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">LEARN</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Second opinion says {esc(verify)} · {esc(calibrated)} · {esc(reason)}</div></div>' for r,verify,calibrated,reason in rows)
+    return shell("Learning Opportunities",'<div class="hero"><h1>Learning Opportunities</h1><p class="muted">These are disagreements worth human review before they become approved knowledge.</p></div><div class="card">'+(h or '<p class="muted">No new learning opportunities detected.</p>')+'</div>')
+
+@app.get("/brain-quality/self-audit",response_class=HTMLResponse)
+def v48_selfaudit_page():
+    rows=_v48_self_audit(project_id())
+    bad=[x for x in rows if x[2]=="DISAGREE" or x[4]=="LOW" or x[3]=="LOW"]
+    h="".join(f'<div class="action"><span class="badge WATCH">REVIEW</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Agreement {esc(agreement)} · Source {esc(source_level)} · Confidence {esc(calibrated)} ({score:.0f})</div></div>' for r,verify,agreement,source_level,calibrated,score,contradiction,reason in bad)
+    return shell("Scope Self-Audit",'<div class="hero"><h1>Scope Self-Audit</h1><p class="muted">Runs QA before intelligence feeds estimating, bidding, schedule or field execution.</p></div><div class="card">'+(h or '<p class="muted">No major quality exceptions detected.</p>')+'</div>')
+
+@app.get("/brain-quality/answer-guard",response_class=HTMLResponse)
+def v48_answer_guard_page(q:str=''):
+    result=_v48_answer_guard(project_id(),q)
+    matches=result["matches"]
+    h="".join(f'<div class="action"><b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Sheet {esc(r["source_sheet"])} · Spec {esc(r["source_spec"])} · Confidence {esc(_v48_calibrated_confidence(r)[0])}</div></div>' for r in matches)
+    body='<div class="hero"><h1>Answer Guardrails</h1><p class="muted">Ask BuildCommand should say when project evidence is weak or conflicting.</p></div><div class="card"><form method="get"><input name="q" value="'+esc(q)+'" placeholder="Test a project question"><button type="submit">Check evidence</button></form></div>'
+    if q:
+        body+=f'<div class="card"><span class="badge">{esc(result["confidence"])}</span><p>{esc(result["note"])}</p>{h or "<p class=muted>No strong project-source matches.</p>"}</div>'
+    return shell("Answer Guardrails",body)
+
+@app.get("/brain-quality/dashboard",response_class=HTMLResponse)
+def v48_dashboard_page():
+    q=_v48_quality_score(project_id())
+    return shell("Quality Dashboard",f'<div class="hero"><h1>Brain Quality Dashboard</h1><p class="muted">Current intelligence quality score: {q["score"]}/100.</p></div><div class="grid3"><div class="card"><div class="label">Second-Opinion Disagreements</div><div class="kpi">{q["disagree"]}</div></div><div class="card"><div class="label">Low Confidence</div><div class="kpi">{q["low"]}</div></div><div class="card"><div class="label">Weak Sources</div><div class="kpi">{q["missing_source"]}</div></div></div>')
+
+@app.get("/brain-quality/queue",response_class=HTMLResponse)
+def v48_queue_page():
+    rows=_v48_self_audit(project_id())
+    queue=[]
+    for r,verify,agreement,source_level,calibrated,score,contradiction,reason in rows:
+        priority=0
+        if agreement=="DISAGREE": priority+=50
+        if calibrated=="LOW": priority+=30
+        if source_level=="LOW": priority+=20
+        if priority:
+            queue.append((priority,r,verify,agreement,source_level,calibrated,score))
+    queue.sort(key=lambda x:x[0],reverse=True)
+    h="".join(f'<div class="action"><span class="badge WATCH">PRIORITY {p}</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">2nd opinion {esc(verify)} · Source {esc(source)} · Confidence {esc(conf)} ({score:.0f})</div></div>' for p,r,verify,agreement,source,conf,score in queue[:100])
+    return shell("Brain Improvement Queue",'<div class="hero"><h1>Brain Improvement Queue</h1><p class="muted">Fix the highest-value intelligence problems first.</p></div><div class="card">'+(h or '<p class="muted">No current quality-improvement queue.</p>')+'</div>')
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
