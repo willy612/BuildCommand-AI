@@ -896,7 +896,7 @@ def shell(title, body):
     </div>'''
 
     _groups=[
-      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("System Status","/system-status"),("Scale Status","/scale-status"),("Storage Status","/storage-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
+      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("System Status","/system-status"),("Scale Status","/scale-status"),("Storage Status","/storage-status"),("Worker Status","/worker-status"),("Background Jobs","/jobs"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
       ("BUILD",[("Build Home","/build"),("Blueprint Brain","/blueprint-brain"),("Daily Superintendent","/daily-superintendent"),("Look-Ahead","/lookahead-intelligence"),("Trade Readiness","/trade-readiness"),("Trade Coordination","/trade-coordination")]),
       ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction","/preconstruction"),("Scope Gap Intelligence","/scope-gap-intelligence")]),
       ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Change Order Intelligence","/change-order-intelligence"),("Performance Monitor","/performance")]),
@@ -1162,7 +1162,7 @@ def unified_analyze_project_page():
     eligible=[d for d in docs if Path(d["original_name"] or "").suffix.lower() in {".pdf",".txt",".csv",".xlsx",".xlsm"}]
     checks="".join(f'<label style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)"><input type="checkbox" name="attachment_ids" value="{d["id"]}" style="width:auto"><span><b>{esc(d["original_name"])}</b><br><span class="small">{(int(d["size_bytes"] or 0)/1024/1024):.1f} MB</span></span></label>' for d in eligible) or '<div class="muted">No supported project documents are uploaded yet.</div>'
     body='<div class="hero"><div class="eyebrow">BuildCommand · Unified Project Intelligence · v38</div><h1>Analyze the project once.</h1><p class="muted">BuildCommand runs Plan Intelligence, trade scope cleanup, estimator sync, takeoff splitting and quantity review.</p></div>'
-    body+='<div class="card"><form method="post" action="/build/analyze-project"><h2>Select project documents</h2>'+checks+'<label style="margin-top:16px">Optional analysis focus</label><textarea name="focus" placeholder="Example: Full bid/scope review"></textarea><button type="submit">Analyze Project</button></form><p class="small">Selected files must total less than 50 MB. AI quantity proposals never overwrite estimator-entered quantities.</p></div>'
+    body+='<div class="card"><form method="post" action="/build/analyze-project/queue"><h2>Select project documents</h2>'+checks+'<label style="margin-top:16px">Optional analysis focus</label><textarea name="focus" placeholder="Example: Full bid/scope review"></textarea><button type="submit">Queue Project Analysis</button></form><p class="small">Analysis runs in a background worker so you can keep using BuildCommand. Selected files must total less than 50 MB. AI quantity proposals never overwrite estimator-entered quantities.</p></div>'
     return shell("Analyze Project",body)
 
 @app.post("/build/analyze-project",response_class=HTMLResponse)
@@ -7973,6 +7973,268 @@ def bc10_scale_status():
       '<div class="card"><h2>Scale Rules</h2><p>Use multiple web workers, keep DB_POOL_MAX conservative per worker, move large files to object storage, and move heavy AI/document analysis to worker jobs before large customer rollout.</p></div>'
     )
     return shell("Scale Status",body)
+
+
+# ============================================================
+# BuildCommand 1.0 - SCALE FOUNDATION PHASE 4
+# Durable background jobs for heavy AI/document work.
+# ============================================================
+
+BC_JOB_MAX_ATTEMPTS=max(1,int(os.environ.get("JOB_MAX_ATTEMPTS","3")))
+
+def _bc_jobs_ensure():
+    c=db()
+    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
+    c.execute(f"""CREATE TABLE IF NOT EXISTS background_jobs(
+      id {pk},
+      company_id BIGINT NOT NULL,
+      project_id BIGINT,
+      created_by BIGINT,
+      job_type TEXT NOT NULL,
+      status TEXT DEFAULT 'QUEUED',
+      priority INTEGER DEFAULT 100,
+      payload_json TEXT,
+      result_json TEXT,
+      progress INTEGER DEFAULT 0,
+      progress_message TEXT,
+      attempts INTEGER DEFAULT 0,
+      max_attempts INTEGER DEFAULT 3,
+      available_at TEXT,
+      started_at TEXT,
+      finished_at TEXT,
+      worker_id TEXT,
+      error_text TEXT,
+      created TEXT,
+      updated TEXT
+    )""")
+    try:
+        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_claim ON background_jobs(status,available_at,priority,id)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_company_project ON background_jobs(company_id,project_id,id)")
+    except Exception:
+        try: c.rollback()
+        except Exception: pass
+    c.commit()
+    c.close()
+
+try:
+    _bc_jobs_ensure()
+except Exception:
+    pass
+
+def bc_enqueue_job(job_type,payload,project_id_value=None,priority=100,max_attempts=None):
+    _bc_jobs_ensure()
+    cid=current_company_id()
+    uid=current_user_id()
+    pid=project_id_value if project_id_value is not None else project_id_safe()
+    now=datetime.utcnow().isoformat()
+    c=db()
+    c.execute("""INSERT INTO background_jobs(
+      company_id,project_id,created_by,job_type,status,priority,payload_json,
+      progress,progress_message,attempts,max_attempts,available_at,created,updated
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+    (cid,pid,uid,job_type,"QUEUED",priority,json.dumps(payload or {}),
+     0,"Queued",0,max_attempts or BC_JOB_MAX_ATTEMPTS,now,now,now))
+    jid=getattr(c,"last_insert_id",None)
+    if not jid:
+        try:
+            r=c.execute("SELECT last_insert_rowid()").fetchone()
+            jid=r["id"] if isinstance(r,dict) else r[0]
+        except Exception:
+            jid=None
+    c.commit()
+    c.close()
+    return jid
+
+def bc_job_update(job_id,progress=None,message=None,status=None,result=None,error=None,worker_id=None):
+    fields=[]
+    args=[]
+    if progress is not None:
+        fields.append("progress=?")
+        args.append(int(max(0,min(100,progress))))
+    if message is not None:
+        fields.append("progress_message=?")
+        args.append(str(message)[:500])
+    if status is not None:
+        fields.append("status=?")
+        args.append(status)
+    if result is not None:
+        fields.append("result_json=?")
+        args.append(json.dumps(result))
+    if error is not None:
+        fields.append("error_text=?")
+        args.append(str(error)[:8000])
+    if worker_id is not None:
+        fields.append("worker_id=?")
+        args.append(worker_id)
+    if status=="RUNNING":
+        fields.append("started_at=?")
+        args.append(datetime.utcnow().isoformat())
+    if status in {"COMPLETED","FAILED"}:
+        fields.append("finished_at=?")
+        args.append(datetime.utcnow().isoformat())
+    fields.append("updated=?")
+    args.append(datetime.utcnow().isoformat())
+    args.append(job_id)
+    c=db()
+    c.execute("UPDATE background_jobs SET "+",".join(fields)+" WHERE id=?",tuple(args))
+    c.commit()
+    c.close()
+
+def bc_job_get(job_id):
+    rows=_v39_rows("SELECT * FROM background_jobs WHERE id=? AND company_id=?",(job_id,current_company_id()))
+    return rows[0] if rows else None
+
+def bc_job_list(pid=None,limit=100):
+    if pid:
+        return _v39_rows(
+            "SELECT * FROM background_jobs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT ?",
+            (current_company_id(),pid,limit)
+        )
+    return _v39_rows(
+        "SELECT * FROM background_jobs WHERE company_id=? ORDER BY id DESC LIMIT ?",
+        (current_company_id(),limit)
+    )
+
+def _bc_execute_job(job,progress_cb=None):
+    payload=json.loads(job["payload_json"] or "{}")
+    jtype=str(job["job_type"] or "").upper()
+    pid=int(job["project_id"] or 0)
+    progress_cb=progress_cb or (lambda p,m: None)
+
+    company_token=_current_company_id.set(int(job["company_id"]))
+    user_token=_current_user_id.set(int(job["created_by"] or 0))
+    try:
+        if jtype=="PROJECT_ANALYSIS":
+            ids=[int(x) for x in payload.get("attachment_ids",[]) if str(x).isdigit()]
+            focus=str(payload.get("focus") or "")
+            progress_cb(5,"Loading selected project documents")
+            docs=_v38_selected_docs(pid,ids)
+            if not docs:
+                raise RuntimeError("No valid project documents were selected.")
+            progress_cb(15,"Running Blueprint Brain and plan intelligence")
+            bp=_v38_run_blueprint(pid,docs,focus)
+            progress_cb(62,"Synchronizing estimator intelligence")
+            est=_seed_estimator_from_latest(pid)
+            progress_cb(76,"Splitting measurable takeoff components")
+            comp=_v38_run_component_split(pid)
+            progress_cb(88,"Reviewing automatic quantity proposals")
+            auto=_v38_run_auto_takeoff(pid)
+            progress_cb(100,"Project analysis complete")
+            return {
+                "blueprint":bp,
+                "estimator":est,
+                "components":comp,
+                "automatic_takeoff":auto
+            }
+
+        if jtype=="REVISION_ANALYSIS":
+            progress_cb(20,"Loading revision intelligence")
+            result=_v55_summary(pid)
+            progress_cb(100,"Revision intelligence complete")
+            return result
+
+        if jtype=="PROJECT_MEMORY_REFRESH":
+            progress_cb(20,"Refreshing approved project memory")
+            _v54_seed_from_existing(pid)
+            progress_cb(65,"Rebuilding cross-project patterns")
+            _v54_rebuild_patterns()
+            progress_cb(100,"Project memory refresh complete")
+            return {"status":"complete"}
+
+        raise RuntimeError(f"Unsupported background job type: {jtype}")
+    finally:
+        _current_company_id.reset(company_token)
+        _current_user_id.reset(user_token)
+
+@app.post("/build/analyze-project/queue")
+def bc_queue_project_analysis(attachment_ids:list[int] | None=Form(None),focus:str=Form("")):
+    pid=project_id()
+    ids=attachment_ids or []
+    if not ids:
+        return RedirectResponse("/build/analyze-project?error=select_documents",status_code=303)
+    jid=bc_enqueue_job("PROJECT_ANALYSIS",{"attachment_ids":ids,"focus":focus},pid,priority=50)
+    return RedirectResponse(f"/jobs/{jid}",status_code=303)
+
+@app.get("/jobs",response_class=HTMLResponse)
+def bc_jobs_page():
+    rows=bc_job_list(project_id(),100)
+    h="".join(
+        f'<div class="action"><span class="badge">{esc(r["status"])}</span> '
+        f'<a href="/jobs/{r["id"]}"><b>Job #{r["id"]} - {esc(r["job_type"])}</b></a>'
+        f'<div class="small">{int(r["progress"] or 0)}% - {esc(r["progress_message"] or "")} · attempts {int(r["attempts"] or 0)}/{int(r["max_attempts"] or 0)}</div></div>'
+        for r in rows
+    ) or '<p class="muted">No background jobs for this project yet.</p>'
+    return shell(
+        "Background Jobs",
+        '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation</div>'
+        '<h1>Background Jobs</h1><p class="muted">Heavy analysis runs outside normal web requests.</p></div>'
+        '<div class="card">'+h+'</div>'
+    )
+
+@app.get("/jobs/{job_id}",response_class=HTMLResponse)
+def bc_job_page(job_id:int):
+    r=bc_job_get(job_id)
+    if not r:
+        return HTMLResponse("Job not found.",status_code=404)
+
+    result_html=""
+    if r["result_json"]:
+        try:
+            result_html='<pre style="white-space:pre-wrap">'+esc(json.dumps(json.loads(r["result_json"]),indent=2)[:15000])+'</pre>'
+        except Exception:
+            result_html='<pre>'+esc(str(r["result_json"])[:15000])+'</pre>'
+
+    body=(
+        f'<div class="hero"><div class="eyebrow">BACKGROUND JOB #{r["id"]}</div>'
+        f'<h1>{esc(r["job_type"])}</h1><p class="muted">{esc(r["status"])} · {int(r["progress"] or 0)}%</p></div>'
+        '<div class="grid3">'
+        f'<div class="card"><div class="label">Status</div><div class="kpi" style="font-size:22px">{esc(r["status"])}</div></div>'
+        f'<div class="card"><div class="label">Progress</div><div class="kpi">{int(r["progress"] or 0)}%</div></div>'
+        f'<div class="card"><div class="label">Attempts</div><div class="kpi">{int(r["attempts"] or 0)}</div></div>'
+        '</div>'
+        f'<div class="card"><h2>Current Step</h2><p>{esc(r["progress_message"] or "")}</p></div>'
+    )
+    if r["error_text"]:
+        body += f'<div class="card"><h2>Error</h2><pre>{esc(r["error_text"])}</pre></div>'
+    if result_html:
+        body += f'<div class="card"><h2>Result</h2>{result_html}</div>'
+    if str(r["status"]) in {"QUEUED","RUNNING","RETRY"}:
+        body += '<script>setTimeout(function(){location.reload()},4000)</script>'
+    return shell(f"Job #{job_id}",body)
+
+@app.get("/jobs/{job_id}/status")
+def bc_job_status_api(job_id:int):
+    r=bc_job_get(job_id)
+    if not r:
+        return JSONResponse({"error":"not found"},status_code=404)
+    return JSONResponse({
+        "id":r["id"],
+        "type":r["job_type"],
+        "status":r["status"],
+        "progress":int(r["progress"] or 0),
+        "message":r["progress_message"] or "",
+        "attempts":int(r["attempts"] or 0),
+        "error":r["error_text"] or ""
+    })
+
+@app.get("/worker-status",response_class=HTMLResponse)
+def bc_worker_status():
+    rows=bc_job_list(None,200)
+    counts={}
+    for r in rows:
+        counts[r["status"]]=counts.get(r["status"],0)+1
+    cards="".join(
+        f'<div class="card"><div class="label">{esc(k)}</div><div class="kpi">{v}</div></div>'
+        for k,v in sorted(counts.items())
+    )
+    if not cards:
+        cards='<div class="card">No jobs yet.</div>'
+    return shell(
+        "Worker Status",
+        '<div class="hero"><div class="eyebrow">Scale Foundation Phase 4</div>'
+        '<h1>Background Worker Status</h1><p class="muted">Queue health for AI, blueprint and heavy project processing.</p></div>'
+        '<div class="grid3">'+cards+'</div><div class="card"><a href="/jobs">Open Project Jobs</a></div>'
+    )
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
