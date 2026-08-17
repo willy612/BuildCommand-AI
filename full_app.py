@@ -900,7 +900,7 @@ def shell(title, body):
     </div>'''
 
     _groups=[
-      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("Production Gates","/production-gates"),("Tenant Security","/tenant-security-status"),("Migration Status","/migration-status"),("System Status","/system-status"),("Scale Status","/scale-status"),("Storage Status","/storage-status"),("Worker Status","/worker-status"),("Background Jobs","/jobs"),("Cache Status","/cache-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
+      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("Phase 7 Tests","/phase7-status"),("Security Tests","/security-test-status"),("Production Gates","/production-gates"),("Tenant Security","/tenant-security-status"),("Migration Status","/migration-status"),("System Status","/system-status"),("Scale Status","/scale-status"),("Storage Status","/storage-status"),("Worker Status","/worker-status"),("Background Jobs","/jobs"),("Cache Status","/cache-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
       ("BUILD",[("Build Home","/build"),("Blueprint Brain","/blueprint-brain"),("Daily Superintendent","/daily-superintendent"),("Look-Ahead","/lookahead-intelligence"),("Trade Readiness","/trade-readiness"),("Trade Coordination","/trade-coordination")]),
       ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction","/preconstruction"),("Scope Gap Intelligence","/scope-gap-intelligence")]),
       ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Change Order Intelligence","/change-order-intelligence"),("Performance Monitor","/performance")]),
@@ -8636,6 +8636,99 @@ def bc_production_gates():
       f'<h1>{"Scale foundation healthy" if ready else "Production gates still open"}</h1>'
       '<p class="muted">These gates must pass before calling BuildCommand ready for high-volume production.</p></div>'
       '<div class="card">'+h+'</div>'
+    )
+
+
+# ============================================================
+# BuildCommand 1.0 - SCALE FOUNDATION PHASE 7
+# Load-test observability + security verification gates.
+# ============================================================
+
+BC_PHASE7="1.0-scale-7"
+
+def _bc_security_headers_audit():
+    return [
+      ("X-Content-Type-Options","nosniff"),
+      ("X-Frame-Options","SAMEORIGIN"),
+      ("Referrer-Policy","strict-origin-when-cross-origin"),
+      ("Permissions-Policy","camera=(), microphone=(), geolocation=()"),
+    ]
+
+def _bc_phase7_metrics():
+    with _BC_REQ_LOCK:
+        count=int(_BC_REQ_STATS["count"])
+        errors=int(_BC_REQ_STATS["errors"])
+        avg=(_BC_REQ_STATS["total_ms"]/count) if count else 0.0
+        mx=float(_BC_REQ_STATS["max_ms"])
+        slow=len(_BC_SLOW)
+    jobs={}
+    try:
+        rows=_v39_rows("SELECT status,COUNT(*) AS n FROM background_jobs GROUP BY status")
+        for r in rows: jobs[str(r["status"])]=int(r["n"])
+    except Exception: pass
+    return {
+      "release":BC_PHASE7,
+      "requests":count,
+      "errors":errors,
+      "error_rate_pct":round((errors/count*100.0) if count else 0.0,3),
+      "average_ms":round(avg,1),
+      "max_ms":round(mx,1),
+      "slow_request_count":slow,
+      "jobs":jobs,
+      "cache":dict(_BC_CACHE_STATS),
+      "schema_version":bc_schema_version()
+    }
+
+@app.get("/scale-test-metrics")
+def bc_scale_test_metrics():
+    return JSONResponse(_bc_phase7_metrics())
+
+@app.get("/phase7-status",response_class=HTMLResponse)
+def bc_phase7_status():
+    m=_bc_phase7_metrics()
+    tenant=_bc_tenant_audit()
+    tenant_fail=sum(1 for x in tenant if x[1]=="FAIL")
+    cache=_bc_cache_health()
+    storage=_bc_storage_health()
+    cards=[
+      ("Requests",m["requests"]),
+      ("Errors",m["errors"]),
+      ("Error Rate",f'{m["error_rate_pct"]}%'),
+      ("Average",f'{m["average_ms"]} ms'),
+      ("Max",f'{m["max_ms"]} ms'),
+      ("Tenant Failures",tenant_fail),
+    ]
+    h="".join(f'<div class="card"><div class="label">{esc(k)}</div><div class="kpi">{esc(v)}</div></div>' for k,v in cards)
+    gates=[
+      ("Tenant isolation",tenant_fail==0),
+      ("Shared cache",cache[1]=="PASS"),
+      ("Shared storage",storage[1]=="PASS"),
+      ("Migration tracking",m["schema_version"] not in {"unknown","bootstrap"}),
+      ("Observed error rate under 1%",m["error_rate_pct"]<1.0),
+    ]
+    gh="".join(f'<div class="action"><span class="badge">{"PASS" if ok else "OPEN"}</span> <b>{esc(name)}</b></div>' for name,ok in gates)
+    return shell("Phase 7 Status",
+      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation Phase 7</div>'
+      '<h1>Load & Security Test Center</h1><p class="muted">Measure the platform instead of guessing about scale.</p></div>'
+      '<div class="grid3">'+h+'</div><div class="card"><h2>Production Gates</h2>'+gh+'</div>'
+      '<div class="card"><h2>Test progression</h2><p>10 → 50 → 100 → 250 → 500 → 1,000 concurrent users. '
+      'Do not advance a stage until the prior stage meets the agreed response-time, error-rate, tenant-isolation, database, cache, storage and worker-queue gates.</p></div>'
+    )
+
+@app.get("/security-test-status",response_class=HTMLResponse)
+def bc_security_test_status():
+    tenant=_bc_tenant_audit()
+    rows="".join(
+      f'<div class="action"><span class="badge">{esc(s)}</span> <b>{esc(n)}</b><div class="small">{esc(v)}</div></div>'
+      for n,s,v in tenant
+    )
+    headers="".join(f'<div class="action"><b>{esc(k)}</b><div class="small">{esc(v)}</div></div>' for k,v in _bc_security_headers_audit())
+    return shell("Security Test Status",
+      '<div class="hero"><div class="eyebrow">Phase 7 Security Verification</div><h1>Security Test Center</h1>'
+      '<p class="muted">Tenant boundaries, request protection and browser security controls.</p></div>'
+      '<div class="card"><h2>Tenant Integrity</h2>'+rows+'</div>'
+      '<div class="card"><h2>Required Response Headers</h2>'+headers+'</div>'
+      '<div class="card"><h2>Automated probes</h2><p>Run <b>python security_regression_tests.py</b> against a staging deployment before production promotion.</p></div>'
     )
 
 @app.get("/build",response_class=HTMLResponse)
