@@ -7056,7 +7056,7 @@ def v473_pdf_workspace(attachment_id:int,page:int=1):
       <button onclick="v473Zoom(-.15)">Zoom −</button>
       <button onclick="v473Fit()">Fit</button>
       <a href="/documents/__AID__/download">Download Original</a>
-      <a href="/blueprint-markup/pro?attachment_id=__AID__">Markup Pro</a>
+      <a href="/blueprint-markup/pro?attachment_id=__AID__">Markup Pro</a><a href="/blueprint-markup/interactive?attachment_id=__AID__">Interactive Markup</a>
       <span class="v473-pageinfo" id="v473-pageinfo">Loading PDF…</span>
     </div>
 
@@ -7230,6 +7230,448 @@ def v473_new_page_markup(
      x,y,w,h,text_value,"default","","","OPEN","USER",now,now))
     c.commit();c.close()
     return JSONResponse({"ok":True})
+
+
+# ============================================================
+# v474 INTERACTIVE BLUEPRINT MARKUP TOOLS
+# True drag drawing, move/resize, freehand paths, arrows,
+# calibrated distance/area measurements, and project item links.
+# ============================================================
+
+def _v474_ensure_tables():
+    _v472_ensure_tables()
+    c=db()
+    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
+    c.execute(f"""CREATE TABLE IF NOT EXISTS blueprint_markup_geometry(
+      id {pk},company_id BIGINT,project_id BIGINT,markup_id BIGINT,
+      geometry_json TEXT,measurement_value REAL,measurement_unit TEXT,
+      created TEXT,updated TEXT)""")
+    c.commit();c.close()
+
+def _v474_geometry(markup_id):
+    try:
+        rows=_v39_rows(
+            "SELECT * FROM blueprint_markup_geometry WHERE company_id=? AND project_id=? AND markup_id=? ORDER BY id DESC LIMIT 1",
+            (current_company_id(),project_id(),markup_id)
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+def _v474_calibration(attachment_id,page_number):
+    try:
+        rows=_v39_rows(
+          """SELECT * FROM blueprint_measurement_calibrations
+             WHERE company_id=? AND project_id=? AND attachment_id=? AND page_number=?
+             ORDER BY id DESC LIMIT 1""",
+          (current_company_id(),project_id(),attachment_id,page_number)
+        )
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+@app.get("/blueprint-markup/interactive",response_class=HTMLResponse)
+def v474_interactive(attachment_id:int,page:int=1):
+    pid=project_id();_v474_ensure_tables()
+    docs=_v471_docs(pid)
+    doc=next((d for d in docs if int(d["id"])==int(attachment_id)),None)
+    if not doc:
+        return shell("Interactive Blueprint Markup",'<div class="card"><p class="muted">Document not found.</p></div>')
+
+    name=str(doc["original_name"] or "")
+    mime=str(doc["mime_type"] or "").lower()
+    if not (name.lower().endswith(".pdf") or "pdf" in mime):
+        return shell("Interactive Blueprint Markup",f'<div class="card"><p>{esc(name)} is not a PDF.</p></div>')
+
+    layers=_v471_layers(pid,attachment_id)
+    if not layers:
+        c=db();now=datetime.utcnow().isoformat()
+        c.execute("""INSERT INTO blueprint_markup_layers(
+          company_id,project_id,attachment_id,name,trade,color_label,status,created_by,created,updated
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (current_company_id(),pid,attachment_id,"General Markup","General","default","ACTIVE","USER",now,now))
+        c.commit();c.close()
+        layers=_v471_layers(pid,attachment_id)
+
+    layer_options="".join(f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["trade"] or "General")}</option>' for r in layers)
+
+    html="""
+    <style>
+    .v474-shell{display:grid;grid-template-columns:220px minmax(0,1fr) 290px;gap:10px}
+    .v474-panel{background:#fff;border:1px solid #dfe6eb;border-radius:14px;padding:12px}
+    .v474-stage{height:78vh;overflow:auto;background:#cfd7dd;border-radius:14px;position:relative}
+    .v474-page{position:relative;margin:24px auto;background:white;box-shadow:0 5px 22px rgba(0,0,0,.2);transform-origin:top left}
+    #v474-pdf{display:block}
+    #v474-overlay{position:absolute;inset:0;z-index:4;touch-action:none}
+    .v474-toolbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+    .v474-toolbar button,.v474-toolbar a{border:1px solid #dbe2e7;background:#fff;border-radius:8px;padding:8px 11px;text-decoration:none;cursor:pointer}
+    .v474-tools button{display:block;width:100%;text-align:left;margin:4px 0;padding:8px;border:1px solid #dbe2e7;background:#fff;border-radius:8px}
+    .v474-tools button.active{background:#111820;color:#fff}
+    .v474-shape{position:absolute;border:2px solid #e33;box-sizing:border-box;background:rgba(255,255,255,.15);cursor:move}
+    .v474-highlight{background:rgba(255,235,59,.38);border-color:#ffb300}
+    .v474-text{background:rgba(255,255,255,.85);padding:4px;font-size:11px;min-width:50px;min-height:20px}
+    .v474-pin{width:25px;height:25px;border-radius:50%;background:#e33;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900}
+    .v474-selected{outline:3px solid rgba(17,24,32,.32)}
+    .v474-handle{position:absolute;width:10px;height:10px;right:-6px;bottom:-6px;background:#111820;border:2px solid #fff;border-radius:2px;cursor:nwse-resize}
+    .v474-arrow{position:absolute;height:2px;background:#e33;transform-origin:left center;cursor:move}
+    .v474-arrow:after{content:"";position:absolute;right:-1px;top:-5px;border-left:10px solid #e33;border-top:6px solid transparent;border-bottom:6px solid transparent}
+    .v474-path{position:absolute;inset:0;pointer-events:none}
+    .v474-measure-label{position:absolute;background:#111820;color:#fff;padding:3px 6px;border-radius:6px;font-size:10px;pointer-events:none}
+    .v474-info{font-size:12px;line-height:1.5}
+    @media(max-width:1050px){.v474-shell{grid-template-columns:1fr}.v474-stage{height:65vh}}
+    </style>
+
+    <div class="hero">
+      <div class="eyebrow">BuildCommand v474 · INTERACTIVE DRAWING TOOLS</div>
+      <h1>__DOC__</h1>
+      <p class="muted">Click-and-drag markups, movable/resizable objects, real arrows/freehand paths, and calibrated measurements.</p>
+    </div>
+
+    <div class="v474-toolbar">
+      <button onclick="v474Prev()">← Previous</button>
+      <button onclick="v474Next()">Next →</button>
+      <button onclick="v474Zoom(.15)">Zoom +</button>
+      <button onclick="v474Zoom(-.15)">Zoom −</button>
+      <button onclick="v474Fit()">Fit</button>
+      <a href="/blueprint-markup/pdf?attachment_id=__AID__">Live PDF Markup</a>
+      <span id="v474-pageinfo" class="v474-info">Loading…</span>
+    </div>
+
+    <div class="v474-shell">
+      <div class="v474-panel v474-tools">
+        <h3>Tools</h3>
+        <button onclick="v474SetTool(this,'select')">Pointer / Move</button>
+        <button onclick="v474SetTool(this,'cloud')">Cloud / Box</button>
+        <button onclick="v474SetTool(this,'highlight')">Highlight</button>
+        <button onclick="v474SetTool(this,'arrow')">Arrow</button>
+        <button onclick="v474SetTool(this,'freehand')">Freehand</button>
+        <button onclick="v474SetTool(this,'text')">Text Note</button>
+        <button onclick="v474SetTool(this,'issue')">Issue Pin</button>
+        <button onclick="v474SetTool(this,'rfi')">RFI Pin</button>
+        <button onclick="v474SetTool(this,'measure')">Distance Measure</button>
+        <button onclick="v474SetTool(this,'area')">Area Measure</button>
+        <hr>
+        <label>Active Layer</label>
+        <select id="v474-layer" style="width:100%">__LAYERS__</select>
+        <button onclick="v474Calibrate()">Calibrate Scale</button>
+      </div>
+
+      <div class="v474-stage" id="v474-stage">
+        <div class="v474-page" id="v474-page">
+          <canvas id="v474-pdf"></canvas>
+          <svg id="v474-svg" class="v474-path"></svg>
+          <div id="v474-overlay"></div>
+        </div>
+      </div>
+
+      <div class="v474-panel">
+        <h3>Selected Markup</h3>
+        <div id="v474-inspector"><p class="muted">Select a markup.</p></div>
+        <hr>
+        <h3>Create Project Item</h3>
+        <button onclick="v474CreateLinked('ISSUE')">Create Issue From Markup</button>
+        <button onclick="v474CreateLinked('RFI')">Create RFI From Markup</button>
+        <button onclick="v474CreateLinked('PUNCH')">Create Punch Item</button>
+        <hr>
+        <h3>Measurement</h3>
+        <div id="v474-calibration" class="v474-info">No scale loaded yet.</div>
+      </div>
+    </div>
+
+    <script type="module">
+    import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
+    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+
+    const aid=__AID__;
+    let pdfDoc=null,pageNum=__PAGE__,baseScale=1.35,viewScale=1,tool="select";
+    let data=[],selected=null,drawing=false,startX=0,startY=0,temp=null,pathPoints=[],calibration=null;
+
+    function pointFromEvent(e){
+      const rect=document.getElementById("v474-overlay").getBoundingClientRect();
+      return {x:(e.clientX-rect.left)/viewScale,y:(e.clientY-rect.top)/viewScale};
+    }
+
+    async function loadPage(){
+      const page=await pdfDoc.getPage(pageNum);
+      const vp=page.getViewport({scale:baseScale});
+      const c=document.getElementById("v474-pdf"),ctx=c.getContext("2d");
+      c.width=vp.width;c.height=vp.height;
+      const pg=document.getElementById("v474-page");
+      pg.style.width=vp.width+"px";pg.style.height=vp.height+"px";
+      const svg=document.getElementById("v474-svg");
+      svg.setAttribute("width",vp.width);svg.setAttribute("height",vp.height);
+      await page.render({canvasContext:ctx,viewport:vp}).promise;
+      document.getElementById("v474-pageinfo").textContent="Page "+pageNum+" of "+pdfDoc.numPages;
+      await loadData();await loadCalibration();v474Fit();
+    }
+
+    async function loadData(){
+      const r=await fetch("/blueprint-markup/interactive/data?attachment_id="+aid+"&page_number="+pageNum);
+      data=await r.json();renderAll();
+    }
+
+    async function loadCalibration(){
+      const r=await fetch("/blueprint-markup/interactive/calibration?attachment_id="+aid+"&page_number="+pageNum);
+      calibration=await r.json();
+      const el=document.getElementById("v474-calibration");
+      el.textContent=calibration && calibration.real_distance ? 
+        "Scale: "+calibration.real_distance+" "+calibration.unit+" = "+calibration.pixel_distance+" drawing px" :
+        "No calibrated scale for this page.";
+    }
+
+    function renderAll(){
+      const ov=document.getElementById("v474-overlay"),svg=document.getElementById("v474-svg");
+      ov.innerHTML="";svg.innerHTML="";
+      data.forEach(m=>{
+        const g=m.geometry||{};
+        if(m.type==="freehand"){
+          const pl=document.createElementNS("http://www.w3.org/2000/svg","polyline");
+          const pts=(g.points||[]).map(p=>p[0]+","+p[1]).join(" ");
+          pl.setAttribute("points",pts);pl.setAttribute("fill","none");pl.setAttribute("stroke","#e33");pl.setAttribute("stroke-width","2");
+          svg.appendChild(pl);return;
+        }
+        if(m.type==="arrow"||m.type==="measure"){
+          const dx=(g.x2??m.x)-m.x,dy=(g.y2??m.y)-m.y;
+          const len=Math.sqrt(dx*dx+dy*dy),ang=Math.atan2(dy,dx)*180/Math.PI;
+          const el=document.createElement("div");
+          el.className="v474-arrow"+(selected===m.id?" v474-selected":"");
+          el.style.left=m.x+"px";el.style.top=m.y+"px";el.style.width=len+"px";el.style.transform="rotate("+ang+"deg)";
+          el.onclick=(e)=>{e.stopPropagation();selectOne(m.id)};ov.appendChild(el);
+          if(m.measurement){
+            const lab=document.createElement("div");lab.className="v474-measure-label";lab.textContent=m.measurement;
+            lab.style.left=((m.x+(g.x2??m.x))/2)+"px";lab.style.top=((m.y+(g.y2??m.y))/2)+"px";ov.appendChild(lab);
+          }
+          return;
+        }
+        const el=document.createElement("div");
+        let cls="v474-shape";
+        if(m.type==="highlight")cls+=" v474-highlight";
+        if(m.type==="text")cls+=" v474-text";
+        if(m.type==="issue"||m.type==="rfi")cls+=" v474-pin";
+        if(selected===m.id)cls+=" v474-selected";
+        el.className=cls;el.style.left=m.x+"px";el.style.top=m.y+"px";
+        if(m.w)el.style.width=m.w+"px";if(m.h)el.style.height=m.h+"px";
+        el.textContent=m.type==="issue"?"I":m.type==="rfi"?"R":(m.text||"");
+        el.onclick=(e)=>{e.stopPropagation();selectOne(m.id)};
+        if(selected===m.id && !["issue","rfi"].includes(m.type)){
+          const h=document.createElement("span");h.className="v474-handle";h.onpointerdown=(e)=>startResize(e,m);el.appendChild(h);
+        }
+        if(tool==="select")el.onpointerdown=(e)=>startMove(e,m);
+        ov.appendChild(el);
+      });
+    }
+
+    function selectOne(id){
+      selected=id;renderAll();
+      const m=data.find(x=>x.id===id),g=m.geometry||{};
+      document.getElementById("v474-inspector").innerHTML=
+        '<b>'+m.type.toUpperCase()+'</b><br><textarea id="v474-text" style="width:100%;margin:8px 0">'+(m.text||'')+'</textarea>'+
+        '<div class="v474-info">X '+Math.round(m.x)+' · Y '+Math.round(m.y)+(m.measurement?'<br>Measurement: '+m.measurement:'')+'</div>'+
+        '<button onclick="window.v474SaveText()">Save Note</button> <button onclick="window.v474Delete()">Delete</button>';
+    }
+
+    window.v474SetTool=(btn,t)=>{tool=t;document.querySelectorAll(".v474-tools button").forEach(b=>b.classList.remove("active"));btn.classList.add("active")};
+    window.v474Prev=async()=>{if(pageNum>1){pageNum--;selected=null;await loadPage()}};
+    window.v474Next=async()=>{if(pageNum<pdfDoc.numPages){pageNum++;selected=null;await loadPage()}};
+    window.v474Zoom=(d)=>{viewScale=Math.max(.4,Math.min(3,viewScale+d));document.getElementById("v474-page").style.transform="scale("+viewScale+")"};
+    window.v474Fit=()=>{const st=document.getElementById("v474-stage"),pg=document.getElementById("v474-page");viewScale=Math.min(1,(st.clientWidth-40)/pg.offsetWidth);pg.style.transform="scale("+viewScale+")"};
+
+    async function saveNew(payload){
+      const fd=new URLSearchParams();
+      Object.entries(payload).forEach(([k,v])=>fd.set(k,typeof v==="object"?JSON.stringify(v):v));
+      await fetch("/blueprint-markup/interactive/new",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
+      await loadData();
+    }
+
+    const overlay=document.getElementById("v474-overlay");
+    overlay.onpointerdown=(e)=>{
+      if(tool==="select")return;
+      const p=pointFromEvent(e);drawing=true;startX=p.x;startY=p.y;pathPoints=[[p.x,p.y]];
+      if(["text","issue","rfi"].includes(tool)){
+        drawing=false;
+        let text=tool==="text"?(prompt("Text note:","")||""):"";
+        saveNew({attachment_id:aid,layer_id:document.getElementById("v474-layer").value,page_number:pageNum,markup_type:tool,x:p.x,y:p.y,w:tool==="text"?120:25,h:tool==="text"?40:25,text_value:text,geometry_json:"{}"});
+      }
+    };
+    overlay.onpointermove=(e)=>{
+      if(!drawing)return;
+      const p=pointFromEvent(e);
+      if(tool==="freehand")pathPoints.push([p.x,p.y]);
+    };
+    overlay.onpointerup=async(e)=>{
+      if(!drawing)return;drawing=false;const p=pointFromEvent(e);
+      const layer=document.getElementById("v474-layer").value;
+      if(tool==="cloud"||tool==="highlight"||tool==="area"){
+        const x=Math.min(startX,p.x),y=Math.min(startY,p.y),w=Math.abs(p.x-startX),h=Math.abs(p.y-startY);
+        let measurement="";
+        if(tool==="area"&&calibration&&calibration.pixel_distance){
+          const ratio=calibration.real_distance/calibration.pixel_distance;
+          const area=w*h*ratio*ratio;measurement=area.toFixed(2)+" sq "+calibration.unit;
+        }
+        await saveNew({attachment_id:aid,layer_id:layer,page_number:pageNum,markup_type:tool,x,y,w,h,text_value:measurement,geometry_json:JSON.stringify({x2:p.x,y2:p.y})});
+      }else if(tool==="arrow"||tool==="measure"){
+        let measurement="";
+        if(tool==="measure"&&calibration&&calibration.pixel_distance){
+          const px=Math.hypot(p.x-startX,p.y-startY),ratio=calibration.real_distance/calibration.pixel_distance;
+          measurement=(px*ratio).toFixed(2)+" "+calibration.unit;
+        }
+        await saveNew({attachment_id:aid,layer_id:layer,page_number:pageNum,markup_type:tool,x:startX,y:startY,w:0,h:0,text_value:measurement,geometry_json:JSON.stringify({x2:p.x,y2:p.y})});
+      }else if(tool==="freehand"){
+        await saveNew({attachment_id:aid,layer_id:layer,page_number:pageNum,markup_type:tool,x:startX,y:startY,w:0,h:0,text_value:"",geometry_json:JSON.stringify({points:pathPoints})});
+      }
+    };
+
+    let moveState=null;
+    function startMove(e,m){
+      if(tool!=="select")return;e.stopPropagation();selectOne(m.id);
+      const p=pointFromEvent(e);moveState={m,startX:p.x,startY:p.y,origX:m.x,origY:m.y};
+      window.onpointermove=(ev)=>{if(!moveState)return;const q=pointFromEvent(ev);m.x=moveState.origX+q.x-moveState.startX;m.y=moveState.origY+q.y-moveState.startY;renderAll()};
+      window.onpointerup=async()=>{if(!moveState)return;await updateGeom(m);moveState=null;window.onpointermove=null;window.onpointerup=null};
+    }
+    function startResize(e,m){
+      e.stopPropagation();const p=pointFromEvent(e);const ow=m.w||0,oh=m.h||0;
+      window.onpointermove=(ev)=>{const q=pointFromEvent(ev);m.w=Math.max(10,ow+q.x-p.x);m.h=Math.max(10,oh+q.y-p.y);renderAll()};
+      window.onpointerup=async()=>{await updateGeom(m);window.onpointermove=null;window.onpointerup=null};
+    }
+    async function updateGeom(m){
+      const fd=new URLSearchParams();fd.set("x",m.x);fd.set("y",m.y);fd.set("w",m.w||0);fd.set("h",m.h||0);
+      await fetch("/blueprint-markup/interactive/"+m.id+"/geometry",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
+    }
+
+    window.v474SaveText=async()=>{
+      if(!selected)return;const fd=new URLSearchParams();fd.set("text_value",document.getElementById("v474-text").value);
+      await fetch("/blueprint-markup/markups/"+selected+"/update",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});await loadData();selectOne(selected);
+    };
+    window.v474Delete=async()=>{if(!selected||!confirm("Delete this markup?"))return;await fetch("/blueprint-markup/markups/"+selected+"/delete",{method:"POST"});selected=null;await loadData();document.getElementById("v474-inspector").innerHTML="<p class='muted'>Select a markup.</p>"};
+
+    window.v474Calibrate=async()=>{
+      const px=prompt("Drawing pixel/reference distance:","100");if(!px)return;
+      const real=prompt("Real distance:","10");if(!real)return;
+      const unit=prompt("Unit (ft, in, m):","ft")||"ft";
+      const fd=new URLSearchParams();fd.set("attachment_id",aid);fd.set("page_number",pageNum);fd.set("pixel_distance",px);fd.set("real_distance",real);fd.set("unit",unit);
+      await fetch("/blueprint-markup/interactive/calibrate",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});await loadCalibration();
+    };
+
+    window.v474CreateLinked=async(kind)=>{
+      if(!selected){alert("Select a markup first.");return}
+      const title=prompt(kind+" title:","")||"";if(!title)return;
+      const fd=new URLSearchParams();fd.set("kind",kind);fd.set("title",title);
+      const r=await fetch("/blueprint-markup/interactive/"+selected+"/create-linked",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
+      const j=await r.json();alert(j.message||"Created.");
+    };
+
+    pdfDoc=await pdfjsLib.getDocument("/documents/"+aid+"/inline").promise;
+    pageNum=Math.max(1,Math.min(pageNum,pdfDoc.numPages));await loadPage();
+    </script>
+    """
+
+    html=html.replace("__AID__",str(attachment_id)).replace("__PAGE__",str(max(1,page)))
+    html=html.replace("__DOC__",esc(name)).replace("__LAYERS__",layer_options)
+    return shell("Interactive Blueprint Markup",html)
+
+@app.get("/blueprint-markup/interactive/data")
+def v474_data(attachment_id:int,page_number:int=1):
+    rows=_v473_page_markups(project_id(),attachment_id,page_number)
+    out=[]
+    for r in rows:
+        g=_v474_geometry(r["id"])
+        geom={}
+        measurement=""
+        if g:
+            try: geom=json.loads(g["geometry_json"] or "{}")
+            except Exception: geom={}
+            if g["measurement_value"] is not None:
+                measurement=f'{float(g["measurement_value"]):.2f} {g["measurement_unit"] or ""}'.strip()
+        if not measurement and r["markup_type"] in {"measure","area"}:
+            measurement=str(r["text_value"] or "")
+        out.append({
+          "id":r["id"],"type":r["markup_type"],"x":r["x"],"y":r["y"],"w":r["w"],"h":r["h"],
+          "text":r["text_value"] or "","layer_id":r["layer_id"],"geometry":geom,"measurement":measurement
+        })
+    return JSONResponse(out)
+
+@app.get("/blueprint-markup/interactive/calibration")
+def v474_get_calibration(attachment_id:int,page_number:int=1):
+    r=_v474_calibration(attachment_id,page_number)
+    if not r:return JSONResponse({})
+    return JSONResponse({"pixel_distance":r["pixel_distance"],"real_distance":r["real_distance"],"unit":r["unit"]})
+
+@app.post("/blueprint-markup/interactive/calibrate")
+def v474_calibrate(
+    attachment_id:int=Form(...),page_number:int=Form(1),pixel_distance:float=Form(...),
+    real_distance:float=Form(...),unit:str=Form("ft")
+):
+    _v472_ensure_tables();c=db();now=datetime.utcnow().isoformat()
+    c.execute("""INSERT INTO blueprint_measurement_calibrations(
+      company_id,project_id,attachment_id,page_number,pixel_distance,real_distance,unit,created,updated
+    ) VALUES(?,?,?,?,?,?,?,?,?)""",
+    (current_company_id(),project_id(),attachment_id,page_number,pixel_distance,real_distance,unit,now,now))
+    c.commit();c.close();return JSONResponse({"ok":True})
+
+@app.post("/blueprint-markup/interactive/new")
+def v474_new(
+    attachment_id:int=Form(...),layer_id:int=Form(...),page_number:int=Form(1),
+    markup_type:str=Form(...),x:float=Form(0),y:float=Form(0),w:float=Form(0),h:float=Form(0),
+    text_value:str=Form(""),geometry_json:str=Form("{}")
+):
+    _v474_ensure_tables();c=db();now=datetime.utcnow().isoformat()
+    c.execute("""INSERT INTO blueprint_markups(
+      company_id,project_id,attachment_id,layer_id,page_number,markup_type,x,y,w,h,text_value,
+      stroke_label,linked_type,linked_id,status,created_by,created,updated
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+    (current_company_id(),project_id(),attachment_id,layer_id,page_number,markup_type,x,y,w,h,text_value,"default","","","OPEN","USER",now,now))
+    try:
+        row=c.execute("SELECT last_insert_rowid()").fetchone();mid=row[0] if row else None
+    except Exception:
+        # PostgreSQL compatibility fallback.
+        try:
+            row=c.execute("SELECT MAX(id) FROM blueprint_markups WHERE company_id=? AND project_id=?",
+                          (current_company_id(),project_id())).fetchone()
+            mid=row[0] if row else None
+        except Exception: mid=None
+    if mid:
+        mv=None;mu=""
+        if markup_type in {"measure","area"} and text_value:
+            try: mv=float(str(text_value).split()[0]);mu=" ".join(str(text_value).split()[1:])
+            except Exception: pass
+        c.execute("""INSERT INTO blueprint_markup_geometry(
+          company_id,project_id,markup_id,geometry_json,measurement_value,measurement_unit,created,updated
+        ) VALUES(?,?,?,?,?,?,?,?)""",
+        (current_company_id(),project_id(),mid,geometry_json,mv,mu,now,now))
+    c.commit();c.close();return JSONResponse({"ok":True,"id":mid})
+
+@app.post("/blueprint-markup/interactive/{markup_id}/geometry")
+def v474_update_geometry(markup_id:int,x:float=Form(...),y:float=Form(...),w:float=Form(0),h:float=Form(0)):
+    c=db();c.execute("""UPDATE blueprint_markups SET x=?,y=?,w=?,h=?,updated=?
+                       WHERE id=? AND company_id=? AND project_id=?""",
+                    (x,y,w,h,datetime.utcnow().isoformat(),markup_id,current_company_id(),project_id()))
+    c.commit();c.close();return JSONResponse({"ok":True})
+
+@app.post("/blueprint-markup/interactive/{markup_id}/create-linked")
+def v474_create_linked(markup_id:int,kind:str=Form(...),title:str=Form(...)):
+    kind=kind.upper().strip()
+    c=db();now=datetime.utcnow().isoformat()
+    created_id=None
+    try:
+        if kind=="ISSUE":
+            c.execute("""INSERT INTO project_issues(project_id,title,status,created)
+                         VALUES(?,?,?,?)""",(project_id(),title,"OPEN",now))
+        elif kind=="RFI":
+            c.execute("""INSERT INTO rfis(company_id,project_id,number,title,question,status,created,updated)
+                         VALUES(?,?,?,?,?,?,?,?)""",
+                      (current_company_id(),project_id(),"AUTO",title,f"Created from blueprint markup #{markup_id}.","DRAFT",now,now))
+        elif kind=="PUNCH":
+            c.execute("""INSERT INTO punch_items(company_id,project_id,title,status,created,updated)
+                         VALUES(?,?,?,?,?,?)""",
+                      (current_company_id(),project_id(),title,"OPEN",now,now))
+        c.execute("""UPDATE blueprint_markups SET linked_type=?,linked_id=?,updated=?
+                     WHERE id=? AND company_id=? AND project_id=?""",
+                  (kind,title,now,markup_id,current_company_id(),project_id()))
+        c.commit()
+        msg=f"{kind} created/linked from markup."
+    except Exception as exc:
+        c.rollback();msg=f"Could not create {kind}: {exc}"
+    c.close();return JSONResponse({"message":msg,"id":created_id})
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
