@@ -818,7 +818,7 @@ def shell(title, body):
     </div>'''
 
     _groups=[
-      ("PROJECT",[("Project Command","/"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
+      ("PROJECT",[("Project Command","/"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
       ("BUILD",[("Build Home","/build"),("Blueprint Brain","/blueprint-brain"),("Daily Superintendent","/daily-superintendent"),("Look-Ahead","/lookahead-intelligence"),("Trade Readiness","/trade-readiness"),("Trade Coordination","/trade-coordination")]),
       ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction","/preconstruction"),("Scope Gap Intelligence","/scope-gap-intelligence")]),
       ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Change Order Intelligence","/change-order-intelligence"),("Performance Monitor","/performance")]),
@@ -6290,6 +6290,186 @@ def v369_sqc_page():
         f'<div class="small">{esc(i["scheduled_date"])} · {esc(i["authority"])}</div></div>' for i,a in holds[:30]
     ) or '<p class="muted">No open inspection hold points.</p>'
     return shell("Safety Quality Company Command",'<div class="hero"><div class="eyebrow">v369</div><h1>Safety / Quality / Company Command</h1></div><div class="grid2"><div class="card"><h2>Quality Checkpoints</h2>'+qh+'</div><div class="card"><h2>Open Hold Points</h2>'+hh+'</div></div>')
+
+
+# ============================================================
+# v371-v470 COMPANY, SUBCONTRACTOR, FORECAST & AGENT INTELLIGENCE
+# 100 capabilities in shared company/agent workspaces.
+# ============================================================
+
+_V470_CAPABILITIES=[(371, 'Portfolio Health Dashboard', 'COMPANY_INTELLIGENCE'), (372, 'Project Benchmarking Brain', 'COMPANY_INTELLIGENCE'), (373, 'Cross-Project Cost Benchmarking', 'COMPANY_INTELLIGENCE'), (374, 'Cross-Project Schedule Benchmarking', 'COMPANY_INTELLIGENCE'), (375, 'Cross-Project RFI Benchmarking', 'COMPANY_INTELLIGENCE'), (376, 'Cross-Project Submittal Benchmarking', 'COMPANY_INTELLIGENCE'), (377, 'Cross-Project Safety Benchmarking', 'COMPANY_INTELLIGENCE'), (378, 'Cross-Project Quality Benchmarking', 'COMPANY_INTELLIGENCE'), (379, 'Company Lessons Intelligence', 'COMPANY_INTELLIGENCE'), (380, 'Company Standards Governance', 'COMPANY_INTELLIGENCE'), (381, 'Recurring Scope Gap Pattern', 'COMPANY_INTELLIGENCE'), (382, 'Recurring Change Cause Pattern', 'COMPANY_INTELLIGENCE'), (383, 'Recurring Delay Cause Pattern', 'COMPANY_INTELLIGENCE'), (384, 'Recurring Procurement Risk Pattern', 'COMPANY_INTELLIGENCE'), (385, 'Recurring Inspection Failure Pattern', 'COMPANY_INTELLIGENCE'), (386, 'Project Complexity Scoring', 'COMPANY_INTELLIGENCE'), (387, 'Project Risk Ranking', 'COMPANY_INTELLIGENCE'), (388, 'Executive Portfolio Alerts', 'COMPANY_INTELLIGENCE'), (389, 'Company KPI Intelligence', 'COMPANY_INTELLIGENCE'), (390, 'Company Command Center', 'COMPANY_INTELLIGENCE'), (391, 'Subcontractor Performance Score', 'SUBCONTRACTOR_INTELLIGENCE'), (392, 'Trade Partner Reliability Score', 'SUBCONTRACTOR_INTELLIGENCE'), (393, 'Schedule Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (394, 'Quality Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (395, 'Safety Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (396, 'RFI Burden by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (397, 'Submittal Burden by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (398, 'Change Order Frequency by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (399, 'Procurement Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (400, 'Manpower Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (401, 'Production Rate Benchmark by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (402, 'Closeout Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (403, 'Bid Accuracy by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (404, 'Scope Coverage Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (405, 'Relationship History Brain', 'SUBCONTRACTOR_INTELLIGENCE'), (406, 'Trade Partner Risk Forecast', 'SUBCONTRACTOR_INTELLIGENCE'), (407, 'Preferred Partner Recommendation', 'SUBCONTRACTOR_INTELLIGENCE'), (408, 'Subcontractor Watch List', 'SUBCONTRACTOR_INTELLIGENCE'), (409, 'Trade Partner Comparison', 'SUBCONTRACTOR_INTELLIGENCE'), (410, 'Subcontractor Command Center', 'SUBCONTRACTOR_INTELLIGENCE'), (411, 'Project Completion Forecast', 'FORECASTING'), (412, 'Milestone Completion Forecast', 'FORECASTING'), (413, 'Cost Forecast 2.0', 'FORECASTING'), (414, 'Change Exposure Forecast', 'FORECASTING'), (415, 'Procurement Delay Forecast', 'FORECASTING'), (416, 'RFI Aging Forecast', 'FORECASTING'), (417, 'Submittal Aging Forecast', 'FORECASTING'), (418, 'Inspection Failure Forecast', 'FORECASTING'), (419, 'Field Productivity Forecast', 'FORECASTING'), (420, 'Manpower Demand Forecast', 'FORECASTING'), (421, 'Trade Mobilization Forecast 2.0', 'FORECASTING'), (422, 'Area Turnover Forecast', 'FORECASTING'), (423, 'Closeout Completion Forecast', 'FORECASTING'), (424, 'Cash Exposure Forecast', 'FORECASTING'), (425, 'Contingency Burn Forecast', 'FORECASTING'), (426, 'Executive Risk Forecast', 'FORECASTING'), (427, 'Forecast Confidence Calibration', 'FORECASTING'), (428, 'Forecast Backtesting', 'FORECASTING'), (429, 'Scenario Forecasting', 'FORECASTING'), (430, 'Forecast Command Center', 'FORECASTING'), (431, 'Blueprint Agent', 'AGENT_NETWORK'), (432, 'Estimator Agent', 'AGENT_NETWORK'), (433, 'Superintendent Agent', 'AGENT_NETWORK'), (434, 'Project Manager Agent', 'AGENT_NETWORK'), (435, 'Scheduler Agent', 'AGENT_NETWORK'), (436, 'Procurement Agent', 'AGENT_NETWORK'), (437, 'Quality Agent', 'AGENT_NETWORK'), (438, 'Safety Agent', 'AGENT_NETWORK'), (439, 'Cost Agent', 'AGENT_NETWORK'), (440, 'Change Agent', 'AGENT_NETWORK'), (441, 'RFI Agent', 'AGENT_NETWORK'), (442, 'Submittal Agent', 'AGENT_NETWORK'), (443, 'Closeout Agent', 'AGENT_NETWORK'), (444, 'Portfolio Agent', 'AGENT_NETWORK'), (445, 'Subcontractor Agent', 'AGENT_NETWORK'), (446, 'Agent Message Bus', 'AGENT_NETWORK'), (447, 'Agent Shared Context', 'AGENT_NETWORK'), (448, 'Agent Conflict Resolver', 'AGENT_NETWORK'), (449, 'Agent Confidence Voting', 'AGENT_NETWORK'), (450, 'Agent Network Command', 'AGENT_NETWORK'), (451, 'Daily Project Brief Workflow', 'AUTONOMOUS_WORKFLOWS'), (452, 'Weekly Look-Ahead Workflow', 'AUTONOMOUS_WORKFLOWS'), (453, 'RFI Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (454, 'Submittal Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (455, 'Procurement Escalation Workflow', 'AUTONOMOUS_WORKFLOWS'), (456, 'Inspection Readiness Workflow', 'AUTONOMOUS_WORKFLOWS'), (457, 'Trade Readiness Workflow', 'AUTONOMOUS_WORKFLOWS'), (458, 'Change Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (459, 'Cost Forecast Workflow', 'AUTONOMOUS_WORKFLOWS'), (460, 'Schedule Recovery Workflow', 'AUTONOMOUS_WORKFLOWS'), (461, 'Closeout Readiness Workflow', 'AUTONOMOUS_WORKFLOWS'), (462, 'Executive Portfolio Brief Workflow', 'AUTONOMOUS_WORKFLOWS'), (463, 'Subcontractor Performance Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (464, 'Lessons Learned Workflow', 'AUTONOMOUS_WORKFLOWS'), (465, 'Revision Impact Workflow', 'AUTONOMOUS_WORKFLOWS'), (466, 'Meeting Preparation Workflow', 'AUTONOMOUS_WORKFLOWS'), (467, 'Decision Escalation Workflow', 'AUTONOMOUS_WORKFLOWS'), (468, 'Project Health Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (469, 'Autonomous Workflow Audit', 'AUTONOMOUS_WORKFLOWS'), (470, 'Construction Operations Command 5.0', 'AUTONOMOUS_WORKFLOWS')]
+
+def _v470_projects():
+    try:
+        c=db()
+        rows=c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY id DESC",(current_company_id(),)).fetchall()
+        c.close()
+        return rows
+    except Exception:
+        return []
+
+def _v470_project_snapshot(pid):
+    try:
+        snap=_v56_cached("snapshot",pid,lambda:_v37_snapshot(pid))
+    except Exception:
+        snap={}
+    try:
+        score=_v50_score(pid)
+    except Exception:
+        score={"health":100,"risk":0,"quality":100}
+    return {"snap":snap,"score":score}
+
+def _v470_portfolio():
+    out=[]
+    for p in _v470_projects():
+        s=_v470_project_snapshot(p["id"])
+        out.append({"project":p,"health":s["score"].get("health",100),"risk":s["score"].get("risk",0),"quality":s["score"].get("quality",100)})
+    out.sort(key=lambda x:(-x["risk"],x["health"]))
+    return out
+
+def _v470_subs():
+    try:
+        c=db()
+        rows=c.execute("SELECT * FROM subcontractors WHERE company_id=? ORDER BY name",(current_company_id(),)).fetchall()
+        c.close()
+        return rows
+    except Exception:
+        return []
+
+def _v470_sub_score(sub):
+    # Transparent placeholder score from available saved fields; no invented performance data.
+    score=70
+    blob=" ".join(str(sub[k] or "") for k in sub.keys() if k in sub.keys()).lower()
+    if "preferred" in blob: score+=10
+    if "inactive" in blob: score-=20
+    return max(0,min(100,score))
+
+def _v470_forecast(pid):
+    try:
+        seq=_v56_sequence(pid)
+    except Exception:
+        seq=[]
+    high=sum(1 for x in seq if x.get("risk") in {"CRITICAL","HIGH"})
+    try:
+        changes=_v39_changes(pid)
+        known=sum(float(r["estimated_cost"] or 0) for r in changes)
+    except Exception:
+        known=0
+    try:
+        look=_v59_lookahead(pid,6)
+        notready=sum(1 for x in look if x[1]!="READY")
+    except Exception:
+        notready=0
+    confidence="HIGH" if seq else "LOW"
+    return {"high_sequence":high,"known_change":known,"not_ready":notready,"confidence":confidence}
+
+def _v470_agents(pid):
+    return [
+      {"name":"Blueprint Agent","status":"ACTIVE","focus":"Drawings, specs, scope and coordination"},
+      {"name":"Estimator Agent","status":"ACTIVE","focus":"Scope coverage, quantity and cost reasoning"},
+      {"name":"Superintendent Agent","status":"ACTIVE","focus":"Field readiness, priorities and handoffs"},
+      {"name":"Project Manager Agent","status":"ACTIVE","focus":"RFIs, submittals, decisions and changes"},
+      {"name":"Scheduler Agent","status":"ACTIVE","focus":"Sequence, look-ahead and schedule exposure"},
+      {"name":"Procurement Agent","status":"ACTIVE","focus":"Long-lead and material readiness"},
+      {"name":"Quality Agent","status":"ACTIVE","focus":"QC checkpoints and inspections"},
+      {"name":"Safety Agent","status":"LEARNING","focus":"Activity safety readiness"},
+      {"name":"Cost Agent","status":"ACTIVE","focus":"Known exposure and commercial risk"},
+      {"name":"Closeout Agent","status":"ACTIVE","focus":"Turnover readiness and closeout risk"}
+    ]
+
+def _v470_workflows(pid):
+    return [
+      ("Daily Project Brief","Superintendent + PM + schedule + procurement context","READY"),
+      ("Weekly Look-Ahead","Upcoming activities + trade readiness + materials + inspections","READY"),
+      ("RFI Review","Conflict candidates + open decisions + schedule/cost exposure","READY"),
+      ("Procurement Escalation","Late material + install dates + affected activities","READY"),
+      ("Inspection Readiness","Hold points + activity readiness + QC checkpoints","READY"),
+      ("Change Review","Revision intelligence + known cost + downstream controls","READY"),
+      ("Closeout Readiness","Open closeout + inspections + commissioning","READY"),
+      ("Executive Portfolio Brief","Portfolio health + risk ranking + project exceptions","READY")
+    ]
+
+def _v470_status(pid,cap):
+    _,_,group=cap
+    if group=="COMPANY_INTELLIGENCE":
+        return "ACTIVE" if _v470_projects() else "WAITING FOR PROJECT DATA"
+    if group=="SUBCONTRACTOR_INTELLIGENCE":
+        return "ACTIVE" if _v470_subs() else "WAITING FOR SUBCONTRACTOR DATA"
+    if group=="FORECASTING":
+        return "ACTIVE" if _v470_forecast(pid)["confidence"]=="HIGH" else "LEARNING"
+    if group=="AGENT_NETWORK":
+        return "ACTIVE"
+    if group=="AUTONOMOUS_WORKFLOWS":
+        return "READY"
+    return "LEARNING"
+
+@app.get("/platform-470",response_class=HTMLResponse)
+def v470_platform():
+    pid=project_id()
+    active=sum(1 for x in _V470_CAPABILITIES if _v470_status(pid,x) in {"ACTIVE","READY"})
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v470</div><h1>Company & Agent Intelligence Platform</h1><p class="muted">{active} / 100 new capabilities active/ready.</p></div><div class="grid3">'
+    cards=[
+      ("Company Command","Portfolio health, benchmarks and recurring project patterns.","/company-command"),
+      ("Subcontractor Command","Trade partner performance and risk intelligence.","/subcontractor-command"),
+      ("Forecast Command","Completion, cost, schedule and readiness forecasting.","/forecast-command"),
+      ("Agent Network","Specialized construction agents sharing project context.","/agent-network"),
+      ("Workflow Command","Reusable construction operating workflows.","/workflow-command"),
+      ("Capability Map","See v371-v470 capabilities.","/platform-470/capabilities"),
+      ("Execution & Control v369","Previous operating platform.","/platform-369"),
+      ("Project Autopilot","Current-project command.","/autopilot"),
+      ("Knowledge Brain","Construction knowledge foundation.","/knowledge-brain-2"),
+    ]
+    for n,d,h in cards: body+=_v37_link_card(n,d,h,"Open")
+    body+='</div>'
+    return shell("Company & Agent Intelligence",body)
+
+@app.get("/platform-470/capabilities",response_class=HTMLResponse)
+def v470_caps():
+    pid=project_id()
+    h="".join(
+      f'<div class="action"><span class="badge">{esc(_v470_status(pid,x))}</span> <b>v{x[0]} - {esc(x[1])}</b><div class="small">{esc(x[2].replace("_"," "))}</div></div>'
+      for x in _V470_CAPABILITIES
+    )
+    return shell("v371-v470 Capability Map",'<div class="hero"><h1>Next 100 Capability Map</h1><p class="muted">Company, subcontractor, forecasting, agent and workflow intelligence.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/company-command",response_class=HTMLResponse)
+def v470_company():
+    rows=_v470_portfolio()
+    h="".join(
+      f'<div class="action"><span class="badge WATCH">RISK {x["risk"]}</span> <b>{esc(x["project"]["number"])} - {esc(x["project"]["name"])}</b>'
+      f'<div class="small">Health {x["health"]} · Intelligence quality {x["quality"]}</div></div>' for x in rows
+    ) or '<p class="muted">No projects available.</p>'
+    return shell("Company Command",'<div class="hero"><div class="eyebrow">Company Intelligence</div><h1>Portfolio Command</h1><p class="muted">Rank projects by current risk and health.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/subcontractor-command",response_class=HTMLResponse)
+def v470_subcommand():
+    rows=_v470_subs()
+    h="".join(
+      f'<div class="action"><span class="badge">{_v470_sub_score(r)}</span> <b>{esc(r["name"])}</b><div class="small">Transparent current-data score only; future versions can add verified schedule/quality/safety history.</div></div>'
+      for r in rows
+    ) or '<p class="muted">No subcontractor records available.</p>'
+    return shell("Subcontractor Command",'<div class="hero"><div class="eyebrow">Trade Partner Intelligence</div><h1>Subcontractor Command</h1></div><div class="card">'+h+'</div>')
+
+@app.get("/forecast-command",response_class=HTMLResponse)
+def v470_forecast_page():
+    f=_v470_forecast(project_id())
+    return shell("Forecast Command",f'<div class="hero"><div class="eyebrow">Forecast Intelligence</div><h1>Forward Project Risk</h1><p class="muted">Forecast confidence {f["confidence"]}.</p></div><div class="grid3"><div class="card"><div class="label">High Sequence Risks</div><div class="kpi">{f["high_sequence"]}</div></div><div class="card"><div class="label">6-Week Not Ready</div><div class="kpi">{f["not_ready"]}</div></div><div class="card"><div class="label">Known Change Exposure</div><div class="kpi">${f["known_change"]:,.0f}</div></div></div>')
+
+@app.get("/agent-network",response_class=HTMLResponse)
+def v470_agents_page():
+    rows=_v470_agents(project_id())
+    h="".join(
+      f'<div class="action"><span class="badge">{esc(a["status"])}</span> <b>{esc(a["name"])}</b><div class="small">{esc(a["focus"])}</div></div>' for a in rows
+    )
+    return shell("Agent Network",'<div class="hero"><div class="eyebrow">Construction Agent Network</div><h1>Specialized agents. Shared project context.</h1><p class="muted">Agents remain decision-support components; human project teams retain authority.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/workflow-command",response_class=HTMLResponse)
+def v470_workflows_page():
+    rows=_v470_workflows(project_id())
+    h="".join(
+      f'<div class="action"><span class="badge READY">{esc(status)}</span> <b>{esc(name)}</b><div class="small">{esc(scope)}</div></div>' for name,scope,status in rows
+    )
+    return shell("Workflow Command",'<div class="hero"><div class="eyebrow">Autonomous Workflow Framework</div><h1>Repeatable construction operating workflows</h1><p class="muted">Ready for controlled, human-reviewed execution.</p></div><div class="card">'+h+'</div>')
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
