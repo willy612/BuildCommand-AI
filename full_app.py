@@ -753,7 +753,7 @@ def categorized_nav():
         ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
         ("MANAGE",[("Manage Home","/manage"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
-        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
+        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
         ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
     html='<div class="bc-topnav">'
@@ -1227,6 +1227,8 @@ def v39_intelligence_center():
     body += '<div class="grid3">' + _v37_link_card("Field Context & Assembly Intelligence","Rooms, assemblies, systems, prerequisites, hold points, commissioning and field work packages.","/field-context","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Master Construction Reasoning","One connected project judgment across scope, sequence, risk, field, quality and commercial intelligence.","/master-reasoning","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Real Construction Reasoning 2.0","Cause, dependency, consequence, ownership, alternatives and uncertainty.","/reasoning-2","Open") + '</div>'
+    body += '<div class="grid3">' + _v37_link_card("Project Memory & Continuous Learning","Approved corrections, RFI answers, lessons and cross-project patterns.","/project-memory","Open") + '</div>'
+
 
 
 
@@ -4498,6 +4500,269 @@ def v51_command_page():
         body+=f'<div class="action"><span class="badge WATCH">{esc(u["severity"])}</span> <b>{esc(u["title"])}</b><p>{esc(u["cause"])}</p><p><b>Next:</b> {esc(u["action"])}</p><div class="small">Owner {esc(u["owner"] or "Review")} · Score {u["reasoning_score"]}/100 · Certainty {esc(u["certainty"])}</div></div>'
     body+='</div>'
     return shell("Reasoning Command",body)
+
+
+# ============================================================
+# v54 PROJECT MEMORY & CONTINUOUS LEARNING
+# ============================================================
+
+def _v54_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS project_memory(
+        id {pk},company_id BIGINT,project_id BIGINT,memory_type TEXT,subject TEXT,
+        lesson TEXT,approved_result TEXT,source_ref TEXT,scope_level TEXT DEFAULT 'PROJECT ONLY',
+        approval_status TEXT DEFAULT 'APPROVED',approved_by TEXT,confidence TEXT DEFAULT 'HIGH',
+        created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS project_pattern_memory(
+        id {pk},company_id BIGINT,pattern_type TEXT,pattern_key TEXT,pattern_summary TEXT,
+        occurrence_count INTEGER DEFAULT 1,latest_project_id BIGINT,last_seen TEXT,
+        approved_only INTEGER DEFAULT 1,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS learning_application_log(
+        id {pk},company_id BIGINT,project_id BIGINT,memory_id BIGINT,applied_to_type TEXT,
+        applied_to_key TEXT,application_result TEXT,confidence TEXT DEFAULT 'MEDIUM',
+        created TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit(); c.close()
+
+def _v54_memory_rows(pid=None):
+    _v54_ensure_tables()
+    if pid:
+        return _v39_rows("""
+            SELECT * FROM project_memory
+            WHERE company_id=? AND project_id=? AND approval_status='APPROVED'
+            ORDER BY id DESC
+        """,(current_company_id(),pid))
+    return _v39_rows("""
+        SELECT * FROM project_memory
+        WHERE company_id=? AND approval_status='APPROVED'
+        ORDER BY id DESC LIMIT 500
+    """,(current_company_id(),))
+
+def _v54_seed_from_existing(pid):
+    """
+    Import already-approved learning and answered project decisions into project memory
+    without changing their original source tables.
+    """
+    _v54_ensure_tables()
+    existing=_v39_rows("SELECT subject,lesson,source_ref FROM project_memory WHERE company_id=? AND project_id=?",(current_company_id(),pid))
+    seen={(str(r["subject"] or ""),str(r["lesson"] or ""),str(r["source_ref"] or "")) for r in existing}
+    c=db()
+    now=datetime.utcnow().isoformat()
+
+    # Approved learning rules
+    for r in _v48_learning_rules(pid):
+        key=(str(r["subject"] or ""),str(r["learned_rule"] or ""),str(r["source_ref"] or ""))
+        if key in seen: continue
+        c.execute("""INSERT INTO project_memory(
+            company_id,project_id,memory_type,subject,lesson,approved_result,source_ref,
+            scope_level,approval_status,approved_by,confidence,created,updated
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
+            current_company_id(),pid,"APPROVED LEARNING",r["subject"],r["learned_rule"],r["learned_rule"],
+            r["source_ref"],r["scope_level"],"APPROVED",r["approved_by"],r["confidence"],now,now
+        ))
+        seen.add(key)
+
+    # Answered / closed RFIs
+    try:
+        for r in _v42_rfis(pid):
+            status=str(r["status"] or "").upper()
+            if status not in {"ANSWERED","CLOSED","COMPLETE"} or not str(r["answer"] or "").strip():
+                continue
+            subject=f'RFI {r["number"] or r["id"]}: {r["title"]}'
+            lesson=str(r["answer"] or "").strip()
+            key=(subject,lesson,str(r["source_ref"] or ""))
+            if key in seen: continue
+            c.execute("""INSERT INTO project_memory(
+                company_id,project_id,memory_type,subject,lesson,approved_result,source_ref,
+                scope_level,approval_status,approved_by,confidence,created,updated
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
+                current_company_id(),pid,"RFI ANSWER",subject,lesson,lesson,r["source_ref"] or "",
+                "PROJECT ONLY","APPROVED","PROJECT TEAM","HIGH",now,now
+            ))
+            seen.add(key)
+    except Exception:
+        pass
+
+    # Completed lessons learned
+    try:
+        lessons=_v39_rows("""
+            SELECT * FROM lessons_learned
+            WHERE company_id=? AND project_id=? AND approval_status='APPROVED'
+            ORDER BY id DESC
+        """,(current_company_id(),pid))
+        for r in lessons:
+            subject=f'{r["category"]}: {r["title"]}'
+            lesson=str(r["lesson"] or "")
+            key=(subject,lesson,str(r["source_ref"] or ""))
+            if key in seen: continue
+            c.execute("""INSERT INTO project_memory(
+                company_id,project_id,memory_type,subject,lesson,approved_result,source_ref,
+                scope_level,approval_status,approved_by,confidence,created,updated
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
+                current_company_id(),pid,"LESSON LEARNED",subject,lesson,r["recommendation"] or lesson,
+                r["source_ref"] or "",r["scope_level"] or "PROJECT ONLY","APPROVED",
+                r["approved_by"] or "PROJECT TEAM","HIGH",now,now
+            ))
+            seen.add(key)
+    except Exception:
+        pass
+
+    c.commit(); c.close()
+
+def _v54_rebuild_patterns():
+    _v54_ensure_tables()
+    rows=_v54_memory_rows()
+    patterns={}
+    for r in rows:
+        if str(r["scope_level"] or "")=="PROJECT ONLY":
+            continue
+        typ=str(r["memory_type"] or "OTHER")
+        key=re.sub(r'\s+',' ',str(r["subject"] or "").lower()).strip()[:180]
+        if not key: continue
+        p=patterns.setdefault((typ,key),{"summary":r["lesson"],"count":0,"latest":r["project_id"]})
+        p["count"]+=1
+        p["latest"]=r["project_id"]
+
+    c=db()
+    c.execute("DELETE FROM project_pattern_memory WHERE company_id=?",(current_company_id(),))
+    now=datetime.utcnow().isoformat()
+    for (typ,key),p in patterns.items():
+        c.execute("""INSERT INTO project_pattern_memory(
+            company_id,pattern_type,pattern_key,pattern_summary,occurrence_count,
+            latest_project_id,last_seen,approved_only,created,updated
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",(
+            current_company_id(),typ,key,p["summary"],p["count"],p["latest"],now,1,now,now
+        ))
+    c.commit(); c.close()
+
+def _v54_company_patterns():
+    _v54_rebuild_patterns()
+    return _v39_rows("""
+        SELECT * FROM project_pattern_memory
+        WHERE company_id=?
+        ORDER BY occurrence_count DESC,id DESC LIMIT 250
+    """,(current_company_id(),))
+
+def _v54_apply_memory_to_scope(pid):
+    """
+    Preview how approved company memory would influence current scope.
+    Does not silently overwrite saved scope.
+    """
+    memories=[r for r in _v54_memory_rows() if str(r["scope_level"] or "")=="COMPANY STANDARD"]
+    scopes=_v452_scope_rows(pid)
+    proposals=[]
+    for r in scopes:
+        low=str(r["requirement"] or "").lower()
+        for m in memories:
+            subject=str(m["subject"] or "").lower().strip()
+            if subject and subject in low:
+                proposals.append((r,m))
+    return proposals[:200]
+
+def _v54_memory_quality():
+    rows=_v54_memory_rows()
+    project=sum(1 for r in rows if r["scope_level"]=="PROJECT ONLY")
+    company=sum(1 for r in rows if r["scope_level"]=="COMPANY STANDARD")
+    globaln=sum(1 for r in rows if r["scope_level"]=="GLOBAL BUILDCOMMAND RULE")
+    return {"total":len(rows),"project":project,"company":company,"global":globaln}
+
+@app.get("/project-memory",response_class=HTMLResponse)
+def v54_memory_home():
+    pid=project_id()
+    _v54_seed_from_existing(pid)
+    q=_v54_memory_quality()
+    patterns=_v54_company_patterns()
+    proposals=_v54_apply_memory_to_scope(pid)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v54 - Project Memory & Continuous Learning</div><h1>Do not make the same construction mistake twice.</h1><p class="muted">{q["total"]} approved memory item(s) · {q["project"]} project-only · {q["company"]} company standards · {q["global"]} global rules · {len(patterns)} reusable pattern(s) · {len(proposals)} current-project memory match(es).</p></div><div class="grid3">'
+    cards=[
+      ("Approved Project Memory","See approved corrections, RFI answers and lessons from this project.","/project-memory/current"),
+      ("Company Standards Memory","Approved reusable construction rules across projects.","/project-memory/company"),
+      ("Recurring Pattern Brain","Find repeated approved lessons across completed work.","/project-memory/patterns"),
+      ("Memory-to-Scope Preview","See where approved company memory would influence current scope.","/project-memory/apply"),
+      ("RFI Answer Memory","Reuse approved clarifications instead of rediscovering the same question.","/project-memory/rfis"),
+      ("Lessons-Learned Memory","Carry approved lessons into future project intelligence.","/project-memory/lessons"),
+      ("Trade Correction Memory","See approved ownership corrections that should affect Blueprint Brain.","/project-memory/trade-corrections"),
+      ("Memory Quality","Understand what is project-specific versus reusable.","/project-memory/quality"),
+      ("Project-to-Project Learning","Compare current project needs against approved company patterns.","/project-memory/cross-project"),
+      ("Continuous Learning Command","One view of what BuildCommand has learned and where it can help next.","/project-memory/command")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Project Memory",body)
+
+@app.get("/project-memory/current",response_class=HTMLResponse)
+def v54_current_memory():
+    pid=project_id(); _v54_seed_from_existing(pid)
+    rows=_v54_memory_rows(pid)
+    h="".join(f'<div class="action"><span class="badge READY">{esc(r["memory_type"])}</span> <b>{esc(r["subject"])}</b><div>{esc(r["lesson"])}</div><div class="small">{esc(r["scope_level"])} · {esc(r["source_ref"])} · Approved by {esc(r["approved_by"])}</div></div>' for r in rows)
+    return shell("Approved Project Memory",'<div class="hero"><h1>Approved Project Memory</h1><p class="muted">Only approved decisions become durable project memory.</p></div><div class="card">'+(h or '<p class="muted">No approved project memory yet.</p>')+'</div>')
+
+@app.get("/project-memory/company",response_class=HTMLResponse)
+def v54_company_memory():
+    rows=[r for r in _v54_memory_rows() if r["scope_level"]=="COMPANY STANDARD"]
+    h="".join(f'<div class="action"><span class="badge READY">COMPANY STANDARD</span> <b>{esc(r["subject"])}</b><div>{esc(r["lesson"])}</div><div class="small">{esc(r["memory_type"])} · {esc(r["source_ref"])}</div></div>' for r in rows)
+    return shell("Company Standards Memory",'<div class="hero"><h1>Company Standards Memory</h1><p class="muted">Approved reusable rules can influence future projects; project-only memory cannot silently promote itself.</p></div><div class="card">'+(h or '<p class="muted">No company-standard memory yet.</p>')+'</div>')
+
+@app.get("/project-memory/patterns",response_class=HTMLResponse)
+def v54_patterns_page():
+    rows=_v54_company_patterns()
+    h="".join(f'<div class="action"><span class="badge">{r["occurrence_count"]}x</span> <b>{esc(r["pattern_type"])}</b> - {esc(r["pattern_key"])}<div>{esc(r["pattern_summary"])}</div></div>' for r in rows)
+    return shell("Recurring Pattern Brain",'<div class="hero"><h1>Recurring Pattern Brain</h1><p class="muted">Repeated approved lessons become visible patterns; they are not automatically promoted to global truth.</p></div><div class="card">'+(h or '<p class="muted">No recurring approved patterns yet.</p>')+'</div>')
+
+@app.get("/project-memory/apply",response_class=HTMLResponse)
+def v54_apply_page():
+    rows=_v54_apply_memory_to_scope(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">MEMORY MATCH</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Approved company memory: {esc(m["subject"])} → {esc(m["lesson"])}</div></div>' for r,m in rows)
+    return shell("Memory-to-Scope Preview",'<div class="hero"><h1>Memory-to-Scope Preview</h1><p class="muted">Shows where approved company memory matches current scope. Preview only—no silent overwrite.</p></div><div class="card">'+(h or '<p class="muted">No current scope matches approved company memory.</p>')+'</div>')
+
+@app.get("/project-memory/rfis",response_class=HTMLResponse)
+def v54_rfi_memory():
+    rows=[r for r in _v54_memory_rows() if r["memory_type"]=="RFI ANSWER"]
+    h="".join(f'<div class="action"><b>{esc(r["subject"])}</b><div>{esc(r["lesson"])}</div><div class="small">{esc(r["source_ref"])}</div></div>' for r in rows)
+    return shell("RFI Answer Memory",'<div class="hero"><h1>RFI Answer Memory</h1><p class="muted">Approved clarifications remain searchable project knowledge instead of disappearing in old RFIs.</p></div><div class="card">'+(h or '<p class="muted">No approved RFI-answer memory yet.</p>')+'</div>')
+
+@app.get("/project-memory/lessons",response_class=HTMLResponse)
+def v54_lessons_memory():
+    rows=[r for r in _v54_memory_rows() if r["memory_type"]=="LESSON LEARNED"]
+    h="".join(f'<div class="action"><b>{esc(r["subject"])}</b><div>{esc(r["lesson"])}</div><div class="small">{esc(r["scope_level"])} · {esc(r["source_ref"])}</div></div>' for r in rows)
+    return shell("Lessons-Learned Memory",'<div class="hero"><h1>Lessons-Learned Memory</h1><p class="muted">Approved project lessons can become company intelligence when deliberately promoted.</p></div><div class="card">'+(h or '<p class="muted">No approved lessons-learned memory yet.</p>')+'</div>')
+
+@app.get("/project-memory/trade-corrections",response_class=HTMLResponse)
+def v54_trade_memory():
+    rows=[r for r in _v54_memory_rows() if r["memory_type"]=="APPROVED LEARNING" and ("trade" in str(r["subject"] or "").lower() or "->" in str(r["lesson"] or ""))]
+    h="".join(f'<div class="action"><span class="badge READY">{esc(r["scope_level"])}</span> <b>{esc(r["subject"])}</b><div>{esc(r["lesson"])}</div></div>' for r in rows)
+    return shell("Trade Correction Memory",'<div class="hero"><h1>Trade Correction Memory</h1><p class="muted">Human-approved ownership corrections should influence future Blueprint Brain decisions.</p></div><div class="card">'+(h or '<p class="muted">No approved trade-correction memory found.</p>')+'</div>')
+
+@app.get("/project-memory/quality",response_class=HTMLResponse)
+def v54_memory_quality_page():
+    q=_v54_memory_quality()
+    return shell("Memory Quality",f'<div class="hero"><h1>Memory Quality</h1><p class="muted">{q["total"]} approved memories available.</p></div><div class="grid3"><div class="card"><div class="label">Project Only</div><div class="kpi">{q["project"]}</div></div><div class="card"><div class="label">Company Standards</div><div class="kpi">{q["company"]}</div></div><div class="card"><div class="label">Global Rules</div><div class="kpi">{q["global"]}</div></div></div>')
+
+@app.get("/project-memory/cross-project",response_class=HTMLResponse)
+def v54_cross_project():
+    patterns=_v54_company_patterns()
+    h="".join(f'<div class="action"><span class="badge">{r["occurrence_count"]}x</span> <b>{esc(r["pattern_key"])}</b><div>{esc(r["pattern_summary"])}</div><div class="small">Latest project {esc(r["latest_project_id"])}</div></div>' for r in patterns)
+    return shell("Project-to-Project Learning",'<div class="hero"><h1>Project-to-Project Learning</h1><p class="muted">Approved company-level patterns help the next project start smarter.</p></div><div class="card">'+(h or '<p class="muted">No reusable cross-project patterns yet.</p>')+'</div>')
+
+@app.get("/project-memory/command",response_class=HTMLResponse)
+def v54_command():
+    pid=project_id(); _v54_seed_from_existing(pid)
+    q=_v54_memory_quality(); proposals=_v54_apply_memory_to_scope(pid); patterns=_v54_company_patterns()[:10]
+    body=f'<div class="hero"><div class="eyebrow">Continuous Learning Command</div><h1>What has BuildCommand learned?</h1><p class="muted">{q["total"]} approved memories · {q["company"]} company standards · {len(proposals)} current scope matches · {len(patterns)} recurring patterns.</p></div>'
+    body+='<div class="grid3">'
+    body+=_v37_link_card("Current Project Memory","Approved corrections, RFIs and lessons.","/project-memory/current","Open")
+    body+=_v37_link_card("Memory Matches","Where prior approved knowledge applies now.","/project-memory/apply","Review")
+    body+=_v37_link_card("Recurring Patterns","Approved patterns across projects.","/project-memory/patterns","Review")
+    body+='</div>'
+    return shell("Continuous Learning Command",body)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
