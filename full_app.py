@@ -818,7 +818,7 @@ def shell(title, body):
     </div>'''
 
     _groups=[
-      ("PROJECT",[("Project Command","/"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
+      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("System Status","/system-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
       ("BUILD",[("Build Home","/build"),("Blueprint Brain","/blueprint-brain"),("Daily Superintendent","/daily-superintendent"),("Look-Ahead","/lookahead-intelligence"),("Trade Readiness","/trade-readiness"),("Trade Coordination","/trade-coordination")]),
       ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction","/preconstruction"),("Scope Gap Intelligence","/scope-gap-intelligence")]),
       ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Change Order Intelligence","/change-order-intelligence"),("Performance Monitor","/performance")]),
@@ -7672,6 +7672,119 @@ def v474_create_linked(markup_id:int,kind:str=Form(...),title:str=Form(...)):
     except Exception as exc:
         c.rollback();msg=f"Could not create {kind}: {exc}"
     c.close();return JSONResponse({"message":msg,"id":created_id})
+
+
+# ============================================================
+# BuildCommand 1.0 - PRODUCTION FOUNDATION
+# Stabilization layer over v474.
+# ============================================================
+
+BC_RELEASE="1.0"
+BC_RELEASE_NAME="Production Foundation"
+
+def _bc10_safe_count(table,where="",args=()):
+    try:
+        c=db()
+        sql=f"SELECT COUNT(*) AS n FROM {table}"
+        if where: sql+=" WHERE "+where
+        row=c.execute(sql,args).fetchone()
+        c.close()
+        try: return int(row["n"])
+        except Exception: return int(row[0])
+    except Exception:
+        return 0
+
+def _bc10_health():
+    checks=[]
+    try:
+        c=db(); c.execute("SELECT 1").fetchone(); c.close()
+        checks.append(("Database","PASS","Connection successful"))
+    except Exception as exc:
+        checks.append(("Database","FAIL",str(exc)[:160]))
+    try:
+        os.makedirs(UPLOAD_DIR,exist_ok=True)
+        probe=os.path.join(UPLOAD_DIR,".bc_health")
+        with open(probe,"w") as f: f.write("ok")
+        os.remove(probe)
+        checks.append(("Document Storage","PASS","Writable"))
+    except Exception as exc:
+        checks.append(("Document Storage","FAIL",str(exc)[:160]))
+    for table in ["projects","attachments","subcontractors"]:
+        try:
+            c=db(); c.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone(); c.close()
+            checks.append((f"Table: {table}","PASS","Available"))
+        except Exception as exc:
+            checks.append((f"Table: {table}","WARN",str(exc)[:120]))
+    return checks
+
+@app.get("/healthz")
+def bc10_healthz():
+    checks=_bc10_health()
+    ok=all(x[1]!="FAIL" for x in checks)
+    return JSONResponse({
+      "status":"ok" if ok else "degraded",
+      "product":"BuildCommand AI",
+      "release":BC_RELEASE,
+      "database":DATABASE_KIND,
+      "checks":[{"name":a,"status":b,"detail":c} for a,b,c in checks]
+    },status_code=200 if ok else 503)
+
+@app.get("/readyz")
+def bc10_readyz():
+    try:
+        c=db(); c.execute("SELECT 1").fetchone(); c.close()
+        return JSONResponse({"ready":True,"release":BC_RELEASE})
+    except Exception as exc:
+        return JSONResponse({"ready":False,"error":str(exc)[:200]},status_code=503)
+
+@app.get("/system-status",response_class=HTMLResponse)
+def bc10_system_status():
+    checks=_bc10_health()
+    rows="".join(
+      f'<div class="action"><span class="badge">{esc(status)}</span> <b>{esc(name)}</b><div class="small">{esc(detail)}</div></div>'
+      for name,status,detail in checks
+    )
+    metrics=[
+      ("Projects",_bc10_safe_count("projects","company_id=?",(current_company_id(),))),
+      ("Documents",_bc10_safe_count("attachments","company_id=?",(current_company_id(),))),
+      ("Subcontractors",_bc10_safe_count("subcontractors","company_id=?",(current_company_id(),))),
+      ("Blueprint Markups",_bc10_safe_count("blueprint_markups","company_id=?",(current_company_id(),))),
+    ]
+    cards="".join(f'<div class="card"><div class="label">{esc(k)}</div><div class="kpi">{v}</div></div>' for k,v in metrics)
+    body=(
+      '<div class="hero"><div class="eyebrow">BuildCommand 1.0</div>'
+      '<h1>Production Foundation</h1>'
+      '<p class="muted">Runtime health, data integrity visibility, and deployment readiness.</p></div>'
+      '<div class="grid3">'+cards+'</div>'
+      '<div class="card"><h2>System Checks</h2>'+rows+'</div>'
+      '<div class="card"><h2>Release Discipline</h2>'
+      '<p><b>Stable rollback:</b> v474</p>'
+      '<p><b>Current release:</b> BuildCommand 1.0 Production Foundation</p>'
+      '<p><b>Rule:</b> stabilize core workflows before another large feature batch.</p></div>'
+    )
+    return shell("System Status",body)
+
+@app.get("/production-foundation",response_class=HTMLResponse)
+def bc10_foundation():
+    cards=[
+      ("System Status","Database, storage and core-table health checks.","/system-status"),
+      ("Project Command","Current project operations.","/"),
+      ("Blueprint Markup","Live drawing and interactive markup.","/blueprint-markup"),
+      ("Company Intelligence","Portfolio and company-level intelligence.","/platform-470"),
+      ("Execution & Control","Field execution controls and operating intelligence.","/platform-369"),
+      ("Knowledge Brain","Construction knowledge foundation.","/knowledge-brain-2"),
+    ]
+    h="".join(_v37_link_card(n,d,u,"Open") for n,d,u in cards)
+    body=(
+      '<div class="hero"><div class="eyebrow">BuildCommand 1.0</div>'
+      '<h1>Production Foundation</h1>'
+      '<p class="muted">One stable launch point for the major BuildCommand systems.</p></div>'
+      '<div class="grid3">'+h+'</div>'
+      '<div class="card"><h2>1.0 Hardening Track</h2>'
+      '<p>Database integrity | performance | authentication and permissions | document storage | '
+      'mobile/tablet UX | unified navigation | automated tests | backups | error recovery | onboarding.</p></div>'
+    )
+    return shell("BuildCommand 1.0",body)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
