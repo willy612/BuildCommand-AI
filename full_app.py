@@ -761,9 +761,9 @@ def esc(value):
 def categorized_nav():
     groups=[
         ("PROJECTS",[("Projects Home","/"),("Add Project","/projects/new"),("Recent Activity","/recent-activity"),("Archive Projects","/project-archive")]),
-        ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
-        ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
-        ("MANAGE",[("Manage Home","/manage"),("Performance Monitor","/performance"),("Project Autopilot","/autopilot"),("Daily Superintendent Command","/daily-superintendent"),("Look-Ahead Intelligence","/lookahead-intelligence"),("Trade Readiness Brain","/trade-readiness"),("Trade Coordination Engine","/trade-coordination"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
+        ("BUILD",[("Build Home","/build"),("Field Command 3.0","/field-command-3"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
+        ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction Command","/precon-command"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
+        ("MANAGE",[("Manage Home","/manage"),("PM Command","/pm-command"),("Performance Monitor","/performance"),("Project Autopilot","/autopilot"),("Daily Superintendent Command","/daily-superintendent"),("Look-Ahead Intelligence","/lookahead-intelligence"),("Trade Readiness Brain","/trade-readiness"),("Trade Coordination Engine","/trade-coordination"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
         ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Knowledge Brain 2.0","/knowledge-brain-2"),("Smart RFI & Conflict Detection","/smart-rfi"),("Long-Lead Prediction","/longlead-intelligence"),("Inspection & QC Intelligence","/quality-intelligence"),("Scope Gap & Buyout Intelligence","/scope-gap-intelligence"),("Change Order Intelligence","/change-order-intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
         ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
@@ -816,6 +816,23 @@ def shell(title, body):
       </form>
       <a class="bc-add-project" href="/projects/new">+ Add Project</a>
     </div>'''
+
+    _groups=[
+      ("PROJECT",[("Project Command","/"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
+      ("BUILD",[("Build Home","/build"),("Blueprint Brain","/blueprint-brain"),("Daily Superintendent","/daily-superintendent"),("Look-Ahead","/lookahead-intelligence"),("Trade Readiness","/trade-readiness"),("Trade Coordination","/trade-coordination")]),
+      ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction","/preconstruction"),("Scope Gap Intelligence","/scope-gap-intelligence")]),
+      ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Change Order Intelligence","/change-order-intelligence"),("Performance Monitor","/performance")]),
+      ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Knowledge Brain 2.0","/knowledge-brain-2"),("Event Intelligence","/event-intelligence"),("Smart RFI","/smart-rfi"),("Long-Lead Intelligence","/longlead-intelligence"),("Quality Intelligence","/quality-intelligence")])
+    ]
+    _side='<aside class="bc170-side" id="bc170-side"><div class="bc170-brand">BuildCommand AI<small>CONSTRUCTION OPERATION INTELLIGENCE SYSTEM</small></div>'
+    for _g,_items in _groups:
+        _side+=f'<div class="bc170-group"><button type="button" onclick="this.parentElement.classList.toggle(\'open\')">{esc(_g)} ▾</button><div class="bc170-links">'
+        for _label,_href in _items: _side+=f'<a href="{_href}">{esc(_label)}</a>'
+        _side+='</div></div>'
+    _side+='</aside>'
+    _top=f'<header class="bc170-top"><button class="bc170-menu" type="button" onclick="document.getElementById(\'bc170-side\').classList.toggle(\'show\')">☰</button><div class="bc170-title">{esc(title)}</div><div class="bc170-quick"><a href="/ask-buildcommand">Ask BuildCommand</a><a href="/autopilot">Autopilot</a></div></header>'
+    _rail='<details class="bc170-rail"><summary>AI Command ▴</summary><div><a href="/proactive-superintendent/command">What should I deal with next?</a><a href="/lookahead-intelligence">Upcoming work readiness</a><a href="/event-intelligence/command">What changed?</a><a href="/performance">Performance monitor</a></div></details>'
+    body=_side+_top+'<main class="bc170-main"><div class="bc170-work">'+body+'</div></main>'+_rail
 
     return f'''<!doctype html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -875,7 +892,8 @@ body{{margin:0}}
   .bc-projectbar{{padding:8px 12px}}
   .bc-home-grid{{grid-template-columns:1fr}}
 }}
-</style>
+/* v170 Professional Command Center */
+:root{{--bc170-side:255px;--bc170-top:62px}}.bc170-side{{position:fixed;left:0;top:0;bottom:0;width:var(--bc170-side);background:#101820;color:#fff;z-index:200;overflow:auto;padding:16px 12px;box-sizing:border-box}}.bc170-brand{{font-size:19px;font-weight:850;padding:7px 9px 18px}}.bc170-brand small{{display:block;font-size:9px;opacity:.55;letter-spacing:1.2px;margin-top:4px}}.bc170-group{{margin:4px 0}}.bc170-group button{{width:100%;border:0;background:transparent;color:#d9e0e6;text-align:left;padding:10px;border-radius:9px;font-weight:750;cursor:pointer}}.bc170-group button:hover{{background:rgba(255,255,255,.08)}}.bc170-links{{display:none;padding-bottom:5px}}.bc170-group.open .bc170-links{{display:block}}.bc170-links a{{display:block;color:#c7d0d8;text-decoration:none;padding:8px 10px 8px 18px;border-radius:8px;font-size:13px}}.bc170-links a:hover{{background:rgba(255,255,255,.08);color:#fff}}.bc170-top{{position:fixed;left:var(--bc170-side);right:0;top:0;height:var(--bc170-top);z-index:190;background:rgba(255,255,255,.97);border-bottom:1px solid #e5e9ee;display:flex;align-items:center;gap:10px;padding:0 18px;box-sizing:border-box}}.bc170-title{{font-weight:850;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}.bc170-quick{{display:flex;gap:7px}}.bc170-quick a{{text-decoration:none;border:1px solid #dce2e8;border-radius:8px;padding:7px 10px;font-size:12px}}.bc170-main{{margin-left:var(--bc170-side);padding-top:var(--bc170-top);min-height:100vh}}.bc170-work{{max-width:1500px;margin:auto;padding:20px}}.bc170-menu{{display:none;border:1px solid #dce2e8;background:#fff;border-radius:8px;padding:7px 10px}}.bc170-rail{{position:fixed;right:14px;bottom:14px;width:285px;background:#fff;border:1px solid #e2e7ec;border-radius:14px;box-shadow:0 12px 35px rgba(0,0,0,.13);z-index:180}}.bc170-rail summary{{padding:13px 15px;font-weight:850;cursor:pointer}}.bc170-rail div{{padding:0 15px 13px}}.bc170-rail a{{display:block;text-decoration:none;padding:6px 0;font-size:12px}}@media(max-width:900px){{.bc170-side{{transform:translateX(-100%);transition:.18s}}.bc170-side.show{{transform:translateX(0)}}.bc170-top{{left:0}}.bc170-main{{margin-left:0}}.bc170-menu{{display:block}}.bc170-rail{{width:calc(100% - 28px)}}}}</style>
 <script>
 function bcToggleMenu(btn,event){{
   if(event) event.stopPropagation();
@@ -5936,6 +5954,346 @@ def v169_dashboard_command_api():
         })
     finally:
         _v56_perf_end(token)
+
+
+# ============================================================
+# v171-v269 NEXT 99 + v170 = 100-VERSION PLATFORM PHASE
+# Shared intelligence architecture, not 99 disconnected pages.
+# ============================================================
+
+_V269_CAPABILITIES=[(171, 'Customizable Dashboard', 'UI_WORKFLOW'), (172, 'Saved Dashboard Layouts', 'UI_WORKFLOW'), (173, 'Compact Navigation Mode', 'UI_WORKFLOW'), (174, 'Mobile Field Layout', 'UI_WORKFLOW'), (175, 'Quick Action Bar', 'UI_WORKFLOW'), (176, 'Global Command Search', 'UI_WORKFLOW'), (177, 'Recent Work History', 'UI_WORKFLOW'), (178, 'Favorite Tools', 'UI_WORKFLOW'), (179, 'Role-Based Home Screens', 'UI_WORKFLOW'), (180, 'Notification Center', 'UI_WORKFLOW'), (181, 'Smart Alert Prioritization', 'UI_WORKFLOW'), (182, 'Read/Unread Intelligence Alerts', 'UI_WORKFLOW'), (183, 'Project Context Header', 'UI_WORKFLOW'), (184, 'Command Breadcrumbs', 'UI_WORKFLOW'), (185, 'Side-by-Side Intelligence View', 'UI_WORKFLOW'), (186, 'Sheet + Scope Split View', 'UI_WORKFLOW'), (187, 'Full-Screen Blueprint Review Workspace', 'UI_WORKFLOW'), (188, 'Universal Filter & Sort System', 'UI_WORKFLOW'), (189, 'UI Performance Optimization 2.0', 'UI_WORKFLOW'), (190, 'Drawing Index Intelligence 2.0', 'BLUEPRINT'), (191, 'Sheet Revision Recognition', 'BLUEPRINT'), (192, 'Detail Callout Linking 2.0', 'BLUEPRINT'), (193, 'Section/Elevation Relationship Brain', 'BLUEPRINT'), (194, 'Keynote Intelligence 2.0', 'BLUEPRINT'), (195, 'Drawing Legend Intelligence 2.0', 'BLUEPRINT'), (196, 'Symbol Intelligence 2.0', 'BLUEPRINT'), (197, 'Room Recognition 2.0', 'BLUEPRINT'), (198, 'Area/Zone Intelligence', 'BLUEPRINT'), (199, 'Building-Level Intelligence', 'BLUEPRINT'), (200, 'Door Schedule Intelligence 2.0', 'BLUEPRINT'), (201, 'Finish Schedule Intelligence 2.0', 'BLUEPRINT'), (202, 'Equipment Schedule Intelligence 2.0', 'BLUEPRINT'), (203, 'Plumbing Fixture Schedule Intelligence 2.0', 'BLUEPRINT'), (204, 'Mechanical Schedule Intelligence 2.0', 'BLUEPRINT'), (205, 'Electrical Panel Intelligence 2.0', 'BLUEPRINT'), (206, 'Lighting Fixture Intelligence 2.0', 'BLUEPRINT'), (207, 'Structural Schedule Intelligence 2.0', 'BLUEPRINT'), (208, 'Specification Cross-Reference Brain', 'BLUEPRINT'), (209, 'Drawing/Spec Conflict Intelligence 2.0', 'BLUEPRINT'), (210, 'Daily Field Plan AI', 'FIELD'), (211, 'Crew Planning Intelligence', 'FIELD'), (212, 'Manpower Forecast 2.0', 'FIELD'), (213, 'Crew Stacking Conflict Detection', 'FIELD'), (214, 'Work Area Availability Brain', 'FIELD'), (215, 'Site Logistics Intelligence', 'FIELD'), (216, 'Delivery Coordination Brain', 'FIELD'), (217, 'Material Staging Intelligence', 'FIELD'), (218, 'Shutdown Planning Intelligence', 'FIELD'), (219, 'Temporary Protection Intelligence', 'FIELD'), (220, 'Trade Mobilization Planner', 'FIELD'), (221, 'Daily Production Tracking', 'FIELD'), (222, 'Production Rate Intelligence', 'FIELD'), (223, 'Planned-vs-Actual Field Production', 'FIELD'), (224, 'Daily Delay Cause Tracking', 'FIELD'), (225, 'Superintendent Recovery Suggestions', 'FIELD'), (226, 'Field Constraint Log Intelligence', 'FIELD'), (227, 'Weather Impact Integration', 'FIELD'), (228, 'Daily Field Risk Forecast', 'FIELD'), (229, 'Superintendent Command 3.0', 'FIELD'), (230, 'RFI Intelligence 3.0', 'PM'), (231, 'RFI Aging & Risk Prediction', 'PM'), (232, 'RFI-to-Schedule Impact Linking', 'PM'), (233, 'RFI-to-Cost Exposure Linking', 'PM'), (234, 'Submittal Intelligence 3.0', 'PM'), (235, 'Submittal Required-Date Prediction', 'PM'), (236, 'Submittal Approval Risk', 'PM'), (237, 'Procurement Chain Intelligence 3.0', 'PM'), (238, 'Vendor Commitment Tracking', 'PM'), (239, 'Long-Lead Recovery Scenarios', 'PM'), (240, 'Meeting Intelligence', 'PM'), (241, 'Automatic Meeting Agenda', 'PM'), (242, 'Meeting Decision Tracker', 'PM'), (243, 'Meeting Action Item Intelligence', 'PM'), (244, 'Owner Decision Intelligence 2.0', 'PM'), (245, 'Architect/Engineer Response Tracking', 'PM'), (246, 'Correspondence Intelligence', 'PM'), (247, 'Contract Notice Intelligence', 'PM'), (248, 'PM Command Center', 'PM'), (249, 'Project Management Autopilot', 'PM'), (250, 'Bid Package Generator 2.0', 'PRECON'), (251, 'Scope Coverage Matrix', 'PRECON'), (252, 'Bidder Scope Comparison', 'PRECON'), (253, 'Exclusion Intelligence', 'PRECON'), (254, 'Allowance Intelligence', 'PRECON'), (255, 'Alternate Intelligence', 'PRECON'), (256, 'Bid Leveling 2.0', 'PRECON'), (257, 'Proposal Normalization Brain', 'PRECON'), (258, 'Missing Scope Detection 3.0', 'PRECON'), (259, 'Duplicate Scope Detection 3.0', 'PRECON'), (260, 'Buyout Recommendation Engine', 'PRECON'), (261, 'Subcontractor Risk Scoring', 'PRECON'), (262, 'Historical Cost Intelligence 2.0', 'PRECON'), (263, 'Quantity Confidence Engine', 'PRECON'), (264, 'Estimate Revision Comparison', 'PRECON'), (265, 'Budget-to-Buyout Intelligence', 'PRECON'), (266, 'Preconstruction Risk Register', 'PRECON'), (267, 'Preconstruction Command Center', 'PRECON'), (268, 'Estimator/PM Handoff Intelligence', 'PRECON'), (269, 'Unified Preconstruction Operating Brain 3.0', 'PRECON')]
+
+def _v269_table_exists(name):
+    try:
+        c=db()
+        if DB_KIND=="postgres":
+            return bool(c.execute("SELECT to_regclass(?)",(name,)).fetchone()[0])
+        return bool(c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?",(name,)).fetchone())
+    except Exception: return False
+
+def _v269_count(table,pid):
+    try:
+        if not _v269_table_exists(table): return 0
+        return int(db().execute(f"SELECT COUNT(*) FROM {table} WHERE project_id=?",(pid,)).fetchone()[0])
+    except Exception: return 0
+
+def _v269_context(pid):
+    s=_v56_cached("snapshot",pid,lambda:_v37_snapshot(pid))
+    return {
+      "snapshot":s,
+      "activities":_v269_count("activities",pid),
+      "issues":_v269_count("issues",pid),
+      "rfis":_v269_count("rfis",pid),
+      "submittals":_v269_count("submittals",pid),
+      "procurement":_v269_count("procurement",pid),
+      "inspections":_v269_count("inspections",pid),
+      "scope":len(_v452_scope_rows(pid)) if callable(globals().get("_v452_scope_rows")) else 0
+    }
+
+def _v269_cap_status(pid,cap):
+    v,name,group=cap; c=_v269_context(pid)
+    if group=="UI_WORKFLOW": return "ACTIVE"
+    if group=="BLUEPRINT": return "ACTIVE" if c["scope"] else "WAITING FOR DOCUMENT DATA"
+    if group=="FIELD": return "ACTIVE" if c["activities"] else "WAITING FOR SCHEDULE DATA"
+    if group=="PM": return "ACTIVE" if (c["rfis"]+c["submittals"]+c["procurement"]+c["issues"]) else "WAITING FOR PM DATA"
+    if group=="PRECON": return "ACTIVE" if c["scope"] else "WAITING FOR SCOPE DATA"
+    return "LEARNING"
+
+def _v269_search(pid,q):
+    q=str(q or "").strip().lower()
+    if not q:return []
+    results=[]
+    for v,name,group in _V269_CAPABILITIES:
+        if q in name.lower() or q in group.lower():
+            results.append(("TOOL",name,f"/platform-269/group/{group}",f"v{v} · {group}"))
+    for r in _v452_scope_rows(pid)[:1000]:
+        blob=" ".join(str(r[x] or "") for x in ["trade","requirement","source_sheet","source_spec"]).lower()
+        if q in blob:
+            results.append(("SCOPE",str(r["trade"] or "Scope"),"/blueprint-brain",str(r["requirement"] or "")[:180]))
+        if len(results)>=100: break
+    return results[:100]
+
+def _v269_field_command(pid):
+    try: brief=_v62_daily_brief(pid)
+    except Exception: brief={"priorities":{"now":[],"today":[],"week":[]},"activities":[],"inspections":[],"materials":[]}
+    try: readiness=_v60_trade_readiness(pid)
+    except Exception: readiness=[]
+    return brief,readiness
+
+def _v269_pm_command(pid):
+    try: decisions=_v47_decision_deadlines(pid)[:30]
+    except Exception: decisions=[]
+    try: agenda=_v47_coordination_agenda(pid)[:30]
+    except Exception: agenda=[]
+    return decisions,agenda
+
+def _v269_precon_command(pid):
+    try: gaps=_v66_scope_gaps(pid)
+    except Exception: gaps=[]
+    rows=_v452_scope_rows(pid)
+    by_trade={}
+    for r in rows:
+        tr=str(r["trade"] or "UNASSIGNED")
+        by_trade[tr]=by_trade.get(tr,0)+1
+    return gaps,sorted(by_trade.items(),key=lambda x:(-x[1],x[0]))
+
+@app.get("/platform-269",response_class=HTMLResponse)
+def v269_platform():
+    pid=project_id(); c=_v269_context(pid)
+    active=sum(1 for x in _V269_CAPABILITIES if _v269_cap_status(pid,x)=="ACTIVE")
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v269</div><h1>Unified Construction Operating Platform</h1><p class="muted">{active} / 99 new capabilities active against current project data. v170 layout + v171-v269 intelligence phase.</p></div><div class="grid3">'
+    cards=[
+      ("Command Search","Search tools and project scope from one place.","/platform-269/search"),
+      ("UI & Workflow","Dashboard, navigation, alerts and workflow capabilities.","/platform-269/group/UI_WORKFLOW"),
+      ("Blueprint Workspace","Advanced drawing/specification intelligence.","/platform-269/group/BLUEPRINT"),
+      ("Field Command","Superintendent operations and readiness.","/field-command-3"),
+      ("PM Command","RFI, submittal, procurement and decision intelligence.","/pm-command"),
+      ("Preconstruction Command","Scope coverage, gaps, buyout and risk.","/precon-command"),
+      ("100-Phase Capability Map","See v170-v269 platform capabilities.","/platform-269/capabilities"),
+      ("Project Autopilot","Existing project operating intelligence.","/autopilot"),
+      ("Knowledge Brain 2.0","Construction knowledge foundation.","/knowledge-brain-2"),
+    ]
+    for n,d,h in cards: body+=_v37_link_card(n,d,h,"Open")
+    body+='</div>'
+    return shell("Unified Operating Platform",body)
+
+@app.get("/platform-269/capabilities",response_class=HTMLResponse)
+def v269_caps():
+    pid=project_id()
+    h='<div class="action"><span class="badge READY">ACTIVE</span> <b>v170 - Professional Command Center Layout</b><div class="small">UI WORKFLOW</div></div>'
+    for cap in _V269_CAPABILITIES:
+        v,name,group=cap; status=_v269_cap_status(pid,cap)
+        h+=f'<div class="action"><span class="badge">{esc(status)}</span> <b>v{v} - {esc(name)}</b><div class="small">{esc(group.replace("_"," "))}</div></div>'
+    return shell("v170-v269 Capability Map",'<div class="hero"><h1>100-Version Platform Phase</h1><p class="muted">One shared operating architecture instead of 100 independent pages.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/platform-269/group/{group}",response_class=HTMLResponse)
+def v269_group(group:str):
+    group=group.upper(); pid=project_id()
+    rows=[x for x in _V269_CAPABILITIES if x[2]==group]
+    h="".join(f'<div class="action"><span class="badge">{esc(_v269_cap_status(pid,x))}</span> <b>v{x[0]} - {esc(x[1])}</b></div>' for x in rows)
+    return shell(group.replace("_"," "),f'<div class="hero"><h1>{esc(group.replace("_"," "))}</h1><p class="muted">{len(rows)} integrated capabilities.</p></div><div class="card">{h}</div>')
+
+@app.get("/platform-269/search",response_class=HTMLResponse)
+def v269_search_page(q:str=""):
+    rows=_v269_search(project_id(),q)
+    form=f'<form method="get"><input name="q" value="{esc(q)}" placeholder="Search BuildCommand tools, trades, scope, sheets..." style="width:min(760px,90%);padding:12px"><button type="submit">Search</button></form>'
+    h="".join(f'<div class="action"><span class="badge">{esc(kind)}</span> <a href="{href}"><b>{esc(title)}</b></a><div class="small">{esc(detail)}</div></div>' for kind,title,href,detail in rows)
+    return shell("Command Search",'<div class="hero"><h1>Global Command Search</h1><p class="muted">Search the platform and current project knowledge.</p>'+form+'</div><div class="card">'+(h or '<p class="muted">Enter a search above.</p>')+'</div>')
+
+@app.get("/field-command-3",response_class=HTMLResponse)
+def v269_field():
+    brief,ready=_v269_field_command(project_id())
+    p=brief["priorities"]
+    def ph(rows):return "".join(f'<div class="action"><span class="badge WATCH">{esc(x["severity"])}</span> <b>{esc(x["title"])}</b><div class="small">{esc(x["action"])}</div></div>' for x in rows[:8]) or '<p class="muted">Clear.</p>'
+    nr="".join(f'<div class="action"><span class="badge WATCH">{esc(state)}</span> <b>{esc(a["trade"])} - {esc(a["name"])}</b><div class="small">{esc(", ".join(failed))}</div></div>' for a,state,failed,checks in ready if state!="READY") or '<p class="muted">Upcoming trades ready.</p>'
+    body='<div class="hero"><div class="eyebrow">v229 Superintendent Command 3.0</div><h1>Field Command</h1></div><div class="grid2"><div class="card"><h2>DO NOW</h2>'+ph(p["now"])+'</div><div class="card"><h2>TODAY</h2>'+ph(p["today"])+'</div></div><div class="card"><h2>Trade Readiness</h2>'+nr+'</div>'
+    return shell("Field Command",body)
+
+@app.get("/pm-command",response_class=HTMLResponse)
+def v269_pm():
+    decisions,agenda=_v269_pm_command(project_id())
+    dh="".join(f'<div class="action"><span class="badge WATCH">{esc(sev)}</span> <b>{esc(typ)} - {esc(title)}</b><div class="small">Due {esc(due)} · ${cost:,.0f} known exposure · {days:g} schedule day(s)</div></div>' for typ,title,due,sev,cost,days,source in decisions) or '<p class="muted">No urgent decisions.</p>'
+    ah="".join(f'<div class="action"><span class="badge">{esc(kind)}</span> <b>{esc(title)}</b><div class="small">{esc(detail)}</div></div>' for kind,title,detail in agenda) or '<p class="muted">No coordination agenda items.</p>'
+    return shell("PM Command",'<div class="hero"><div class="eyebrow">v248-v249</div><h1>Project Management Command</h1></div><div class="grid2"><div class="card"><h2>Decisions</h2>'+dh+'</div><div class="card"><h2>Coordination</h2>'+ah+'</div></div>')
+
+@app.get("/precon-command",response_class=HTMLResponse)
+def v269_precon():
+    gaps,trades=_v269_precon_command(project_id())
+    gh="".join(f'<div class="action"><span class="badge WATCH">{esc(kind)}</span> <b>{esc(r["trade"] or "UNASSIGNED")}</b><div>{esc(r["requirement"])}</div><div class="small">{esc(reason)}</div></div>' for kind,r,reason in gaps[:40]) or '<p class="muted">No obvious scope gaps.</p>'
+    th="".join(f'<div class="action"><b>{esc(trade)}</b><div class="small">{count} scope requirement(s)</div></div>' for trade,count in trades[:40])
+    return shell("Preconstruction Command",'<div class="hero"><div class="eyebrow">v267-v269</div><h1>Preconstruction Command</h1><p class="muted">Scope coverage, ownership and buyout risk in one workspace.</p></div><div class="grid2"><div class="card"><h2>Scope Risk</h2>'+gh+'</div><div class="card"><h2>Coverage by Trade</h2>'+th+'</div></div>')
+
+
+# ============================================================
+# v270-v369 EXECUTION, CONTROLS, SCHEDULE, COST & QUALITY INTELLIGENCE
+# 100 capabilities in five shared operating workspaces.
+# ============================================================
+
+_V369_CAPABILITIES=[(270, 'Daily Workface Planning', 'FIELD_EXECUTION'), (271, 'Crew Availability Intelligence', 'FIELD_EXECUTION'), (272, 'Trade Stacking Forecast', 'FIELD_EXECUTION'), (273, 'Work Area Conflict Detection', 'FIELD_EXECUTION'), (274, 'Material Staging Planner', 'FIELD_EXECUTION'), (275, 'Delivery Window Intelligence', 'FIELD_EXECUTION'), (276, 'Access Route Intelligence', 'FIELD_EXECUTION'), (277, 'Temporary Protection Planner', 'FIELD_EXECUTION'), (278, 'Shutdown Coordination Brain', 'FIELD_EXECUTION'), (279, 'Site Logistics Command', 'FIELD_EXECUTION'), (280, 'Production Quantity Tracking', 'FIELD_EXECUTION'), (281, 'Planned vs Actual Production', 'FIELD_EXECUTION'), (282, 'Daily Delay Cause Intelligence', 'FIELD_EXECUTION'), (283, 'Recovery Action Recommender', 'FIELD_EXECUTION'), (284, 'Constraint Removal Planner', 'FIELD_EXECUTION'), (285, 'Field Issue Escalation Brain', 'FIELD_EXECUTION'), (286, 'Weather Exposure Planning', 'FIELD_EXECUTION'), (287, 'Trade Mobilization Forecast', 'FIELD_EXECUTION'), (288, 'Foreman Coordination Intelligence', 'FIELD_EXECUTION'), (289, 'Field Execution Command 4.0', 'FIELD_EXECUTION'), (290, 'RFI Aging Intelligence 4.0', 'PM_CONTROL'), (291, 'RFI Impact Propagation', 'PM_CONTROL'), (292, 'Submittal Aging Intelligence', 'PM_CONTROL'), (293, 'Submittal Required-Date Engine', 'PM_CONTROL'), (294, 'Procurement Commitment Tracking', 'PM_CONTROL'), (295, 'Vendor Response Risk', 'PM_CONTROL'), (296, 'Owner Decision Aging', 'PM_CONTROL'), (297, 'Architect Response Tracking', 'PM_CONTROL'), (298, 'Meeting Agenda Intelligence 2.0', 'PM_CONTROL'), (299, 'Meeting Decision Register', 'PM_CONTROL'), (300, 'Meeting Action Follow-Up', 'PM_CONTROL'), (301, 'Correspondence Intelligence 2.0', 'PM_CONTROL'), (302, 'Contract Notice Trigger Brain', 'PM_CONTROL'), (303, 'Potential Change Register 2.0', 'PM_CONTROL'), (304, 'Change Documentation Completeness', 'PM_CONTROL'), (305, 'PM Risk Register', 'PM_CONTROL'), (306, 'Responsibility Escalation Engine', 'PM_CONTROL'), (307, 'Communication Gap Detection', 'PM_CONTROL'), (308, 'Project Controls Integration', 'PM_CONTROL'), (309, 'PM Command 4.0', 'PM_CONTROL'), (310, 'CPM Relationship Readiness', 'SCHEDULE'), (311, 'Predecessor Quality Audit', 'SCHEDULE'), (312, 'Successor Exposure Intelligence', 'SCHEDULE'), (313, 'Float Consumption Predictor', 'SCHEDULE'), (314, 'Near-Critical Path Intelligence', 'SCHEDULE'), (315, 'Constraint Date Intelligence', 'SCHEDULE'), (316, 'Milestone Risk Forecast', 'SCHEDULE'), (317, 'Look-Ahead Reliability Score', 'SCHEDULE'), (318, 'Production-to-Schedule Feedback', 'SCHEDULE'), (319, 'Procurement-to-Schedule Link', 'SCHEDULE'), (320, 'RFI-to-Schedule Link 2.0', 'SCHEDULE'), (321, 'Inspection-to-Schedule Link', 'SCHEDULE'), (322, 'Weather-to-Schedule Link', 'SCHEDULE'), (323, 'Crew Capacity Schedule Risk', 'SCHEDULE'), (324, 'Area Turnover Sequence Brain', 'SCHEDULE'), (325, 'Recovery Scenario Generator', 'SCHEDULE'), (326, 'Resequencing Opportunity Brain', 'SCHEDULE'), (327, 'Delay Cause Classification', 'SCHEDULE'), (328, 'Schedule Confidence Engine', 'SCHEDULE'), (329, 'Schedule Command 4.0', 'SCHEDULE'), (330, 'Commitment Intelligence', 'COST'), (331, 'Pending Change Exposure', 'COST'), (332, 'Known vs Unpriced Cost Separation', 'COST'), (333, 'Cost-to-Complete Forecast', 'COST'), (334, 'Estimate-at-Completion Predictor', 'COST'), (335, 'Allowance Burn Intelligence', 'COST'), (336, 'Contingency Consumption Brain', 'COST'), (337, 'Buyout Variance Intelligence', 'COST'), (338, 'Production Cost Variance', 'COST'), (339, 'Schedule Cost Exposure', 'COST'), (340, 'RFI Cost Exposure 2.0', 'COST'), (341, 'Procurement Cost Risk', 'COST'), (342, 'Labor Productivity Cost Signal', 'COST'), (343, 'Subcontractor Cost Risk', 'COST'), (344, 'Forecast Confidence Engine', 'COST'), (345, 'Cash Exposure Snapshot', 'COST'), (346, 'Commercial Risk Register', 'COST'), (347, 'Budget Trend Intelligence', 'COST'), (348, 'Executive Cost Forecast', 'COST'), (349, 'Cost Command 4.0', 'COST'), (350, 'Activity Safety Readiness', 'SAFETY_QUALITY_COMPANY'), (351, 'JHA Requirement Intelligence', 'SAFETY_QUALITY_COMPANY'), (352, 'Permit-to-Work Intelligence', 'SAFETY_QUALITY_COMPANY'), (353, 'High-Risk Activity Detection', 'SAFETY_QUALITY_COMPANY'), (354, 'Quality Hold Point Intelligence 2.0', 'SAFETY_QUALITY_COMPANY'), (355, 'Preinstallation Conference Intelligence', 'SAFETY_QUALITY_COMPANY'), (356, 'Mockup Requirement Brain', 'SAFETY_QUALITY_COMPANY'), (357, 'Manufacturer Inspection Requirement', 'SAFETY_QUALITY_COMPANY'), (358, 'Testing Witness Requirement', 'SAFETY_QUALITY_COMPANY'), (359, 'Deficiency Recurrence Intelligence', 'SAFETY_QUALITY_COMPANY'), (360, 'Punch Trend Intelligence', 'SAFETY_QUALITY_COMPANY'), (361, 'Commissioning Readiness 2.0', 'SAFETY_QUALITY_COMPANY'), (362, 'Closeout Quality Intelligence', 'SAFETY_QUALITY_COMPANY'), (363, 'Subcontractor Quality Score', 'SAFETY_QUALITY_COMPANY'), (364, 'Subcontractor Safety Score', 'SAFETY_QUALITY_COMPANY'), (365, 'Project Lessons Pattern Brain', 'SAFETY_QUALITY_COMPANY'), (366, 'Company Benchmark Intelligence', 'SAFETY_QUALITY_COMPANY'), (367, 'Cross-Project Risk Pattern', 'SAFETY_QUALITY_COMPANY'), (368, 'Portfolio Health Intelligence', 'SAFETY_QUALITY_COMPANY'), (369, 'Safety Quality Company Command', 'SAFETY_QUALITY_COMPANY')]
+
+def _v369_context(pid):
+    try: snap=_v56_cached("snapshot",pid,lambda:_v37_snapshot(pid))
+    except Exception: snap={}
+    def cnt(table):
+        try:
+            c=db()
+            row=c.execute(f"SELECT COUNT(*) FROM {table} WHERE project_id=?",(pid,)).fetchone()
+            c.close()
+            return int(row[0] if row else 0)
+        except Exception:
+            return 0
+    return {
+      "snapshot":snap,
+      "activities":cnt("activities"),
+      "issues":cnt("issues"),
+      "rfis":cnt("rfis"),
+      "submittals":cnt("submittals"),
+      "procurement":cnt("procurement"),
+      "inspections":cnt("inspections"),
+      "changes":cnt("change_events"),
+      "scope":len(_v452_scope_rows(pid)) if callable(globals().get("_v452_scope_rows")) else 0
+    }
+
+def _v369_status(pid,cap):
+    _,_,group=cap
+    c=_v369_context(pid)
+    if group=="FIELD_EXECUTION":
+        return "ACTIVE" if c["activities"] else "WAITING FOR SCHEDULE DATA"
+    if group=="PM_CONTROL":
+        return "ACTIVE" if (c["rfis"]+c["submittals"]+c["issues"]+c["procurement"]) else "WAITING FOR PM DATA"
+    if group=="SCHEDULE":
+        return "ACTIVE" if c["activities"] else "WAITING FOR SCHEDULE DATA"
+    if group=="COST":
+        return "ACTIVE" if (c["changes"] or c["scope"]) else "WAITING FOR COMMERCIAL DATA"
+    if group=="SAFETY_QUALITY_COMPANY":
+        return "ACTIVE" if (c["activities"] or c["inspections"] or c["scope"]) else "WAITING FOR PROJECT DATA"
+    return "LEARNING"
+
+def _v369_field(pid):
+    try: brief=_v62_daily_brief(pid)
+    except Exception: brief={"priorities":{"now":[],"today":[],"week":[]},"activities":[]}
+    try: ready=_v60_trade_readiness(pid)
+    except Exception: ready=[]
+    try: handoffs=_v61_handoffs(pid)
+    except Exception: handoffs=[]
+    return brief,ready,handoffs
+
+def _v369_pm(pid):
+    try: decisions=_v47_decision_deadlines(pid)[:40]
+    except Exception: decisions=[]
+    try: agenda=_v47_coordination_agenda(pid)[:40]
+    except Exception: agenda=[]
+    try: changes=_v39_rows("SELECT * FROM change_events WHERE project_id=? ORDER BY id DESC LIMIT 40",(pid,))
+    except Exception: changes=[]
+    return decisions,agenda,changes
+
+def _v369_schedule(pid):
+    try: seq=_v56_sequence(pid)
+    except Exception: seq=[]
+    high=[x for x in seq if x.get("risk") in {"CRITICAL","HIGH"}]
+    try: look=_v59_lookahead(pid,6)
+    except Exception: look=[]
+    return high,look
+
+def _v369_cost(pid):
+    try: changes=_v39_changes(pid)
+    except Exception: changes=[]
+    known=sum(float(r["estimated_cost"] or 0) for r in changes)
+    try:
+        rev=_v55_summary(pid)
+        revnet=float(rev.get("added_cost",0))-float(rev.get("removed_cost",0))
+    except Exception:
+        revnet=0
+    return {"known_change":known,"revision_net":revnet,"total_known":known+revnet}
+
+def _v369_quality(pid):
+    try: qc=_v65_qc_points(pid)
+    except Exception: qc=[]
+    try: holds=[x for x in _v49_hold_points(pid) if str(x[0]["result"] or "").upper()!="PASSED"]
+    except Exception: holds=[]
+    return qc,holds
+
+@app.get("/platform-369",response_class=HTMLResponse)
+def v369_platform():
+    pid=project_id()
+    active=sum(1 for x in _V369_CAPABILITIES if _v369_status(pid,x)=="ACTIVE")
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v369</div><h1>Execution & Control Intelligence Platform</h1><p class="muted">{active} / 100 new capabilities active against current project data.</p></div><div class="grid3">'
+    cards=[
+      ("Field Execution Command","Production, crews, logistics, constraints and recovery.","/field-execution-4"),
+      ("PM Command 4.0","RFI, submittal, decisions, meetings and change controls.","/pm-command-4"),
+      ("Schedule Command 4.0","Sequence, near-critical exposure, float and recovery intelligence.","/schedule-command-4"),
+      ("Cost Command 4.0","Known exposure, changes, forecast and commercial risk.","/cost-command-4"),
+      ("Safety / Quality / Company","Safety readiness, QC, commissioning and company patterns.","/sqc-command"),
+      ("Capability Map","See all v270-v369 capabilities.","/platform-369/capabilities"),
+      ("Project Autopilot","Continue using the operating command center.","/autopilot"),
+      ("Unified Platform v269","Prior platform phase.","/platform-269"),
+      ("Knowledge Brain 2.0","Construction knowledge foundation.","/knowledge-brain-2"),
+    ]
+    for n,d,h in cards:
+        body+=_v37_link_card(n,d,h,"Open")
+    body+='</div>'
+    return shell("Execution & Control Platform",body)
+
+@app.get("/platform-369/capabilities",response_class=HTMLResponse)
+def v369_caps():
+    pid=project_id()
+    h="".join(
+        f'<div class="action"><span class="badge">{esc(_v369_status(pid,x))}</span> '
+        f'<b>v{x[0]} - {esc(x[1])}</b><div class="small">{esc(x[2].replace("_"," "))}</div></div>'
+        for x in _V369_CAPABILITIES
+    )
+    return shell("v270-v369 Capability Map",'<div class="hero"><h1>Next 100 Capability Map</h1><p class="muted">Shared workspaces, not 100 separate top-level pages.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/field-execution-4",response_class=HTMLResponse)
+def v369_field_page():
+    brief,ready,handoffs=_v369_field(project_id())
+    p=brief["priorities"]
+    def ph(rows): return "".join(
+        f'<div class="action"><span class="badge WATCH">{esc(x["severity"])}</span> '
+        f'<b>{esc(x["title"])}</b><div class="small">{esc(x["action"])}</div></div>' for x in rows[:10]
+    ) or '<p class="muted">Clear.</p>'
+    rh="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(state)}</span> '
+        f'<b>{esc(a["trade"])} - {esc(a["name"])}</b><div class="small">{esc(", ".join(failed))}</div></div>'
+        for a,state,failed,checks in ready if state!="READY"
+    ) or '<p class="muted">Upcoming trades ready.</p>'
+    hh="".join(
+        f'<div class="action"><span class="badge">HANDOFF</span> <b>{esc(a["trade"])} → {esc(b["trade"])}</b>'
+        f'<div class="small">{esc(a["name"])} → {esc(b["name"])}</div></div>' for a,b,note in handoffs[:12]
+    ) or '<p class="muted">No immediate handoffs.</p>'
+    body='<div class="hero"><div class="eyebrow">v289 Field Execution Command 4.0</div><h1>Field Execution Command</h1></div>'
+    body+='<div class="grid2"><div class="card"><h2>DO NOW</h2>'+ph(p["now"])+'</div><div class="card"><h2>TODAY</h2>'+ph(p["today"])+'</div></div>'
+    body+='<div class="grid2"><div class="card"><h2>Trade Readiness</h2>'+rh+'</div><div class="card"><h2>Upcoming Handoffs</h2>'+hh+'</div></div>'
+    return shell("Field Execution Command",body)
+
+@app.get("/pm-command-4",response_class=HTMLResponse)
+def v369_pm_page():
+    decisions,agenda,changes=_v369_pm(project_id())
+    dh="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(sev)}</span> <b>{esc(typ)} - {esc(title)}</b>'
+        f'<div class="small">Due {esc(due)} · ${cost:,.0f} known exposure · {days:g} day(s)</div></div>'
+        for typ,title,due,sev,cost,days,source in decisions
+    ) or '<p class="muted">No urgent decisions.</p>'
+    ah="".join(
+        f'<div class="action"><span class="badge">{esc(kind)}</span> <b>{esc(title)}</b><div class="small">{esc(detail)}</div></div>'
+        for kind,title,detail in agenda
+    ) or '<p class="muted">No current agenda items.</p>'
+    ch="".join(
+        f'<div class="action"><b>{esc(r["title"])}</b><div class="small">${float(r["estimated_cost"] or 0):,.0f} · {float(r["schedule_days"] or 0):g} day(s)</div></div>'
+        for r in changes[:20]
+    ) or '<p class="muted">No change events.</p>'
+    return shell("PM Command 4.0",'<div class="hero"><div class="eyebrow">v309</div><h1>PM Command 4.0</h1></div><div class="grid3"><div class="card"><h2>Decisions</h2>'+dh+'</div><div class="card"><h2>Coordination</h2>'+ah+'</div><div class="card"><h2>Changes</h2>'+ch+'</div></div>')
+
+@app.get("/schedule-command-4",response_class=HTMLResponse)
+def v369_schedule_page():
+    high,look=_v369_schedule(project_id())
+    hh="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(x["risk"])}</span> <b>{esc(x["activity"]["name"])}</b>'
+        f'<div class="small">{esc(x["activity"]["trade"])} · {esc(x["blocking_reason"])}</div></div>' for x in high[:30]
+    ) or '<p class="muted">No high sequence risks.</p>'
+    lh="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(state)}</span> <b>{esc(a["name"])}</b>'
+        f'<div class="small">{esc(a["trade"])} · {esc(a["start"])} → {esc(a["finish"])}</div></div>' for a,state,risk,reason in look[:30]
+    ) or '<p class="muted">No look-ahead activities.</p>'
+    return shell("Schedule Command 4.0",'<div class="hero"><div class="eyebrow">v329</div><h1>Schedule Command 4.0</h1><p class="muted">Sequence exposure plus six-week readiness.</p></div><div class="grid2"><div class="card"><h2>High-Risk Sequence</h2>'+hh+'</div><div class="card"><h2>6-Week Look-Ahead</h2>'+lh+'</div></div>')
+
+@app.get("/cost-command-4",response_class=HTMLResponse)
+def v369_cost_page():
+    c=_v369_cost(project_id())
+    return shell("Cost Command 4.0",f'<div class="hero"><div class="eyebrow">v349</div><h1>Cost Command 4.0</h1><p class="muted">Known values only; unpriced exposure remains explicitly unpriced.</p></div><div class="grid3"><div class="card"><div class="label">Known Change Exposure</div><div class="kpi">${c["known_change"]:,.0f}</div></div><div class="card"><div class="label">Revision Net</div><div class="kpi">${c["revision_net"]:,.0f}</div></div><div class="card"><div class="label">Total Known</div><div class="kpi">${c["total_known"]:,.0f}</div></div></div>')
+
+@app.get("/sqc-command",response_class=HTMLResponse)
+def v369_sqc_page():
+    qc,holds=_v369_quality(project_id())
+    qh="".join(
+        f'<div class="action"><span class="badge">QC</span> <b>{esc(a["name"])}</b><div class="small">{esc(kind)} · {esc(check)}</div></div>'
+        for a,kind,check in qc[:30]
+    ) or '<p class="muted">No QC checkpoints generated.</p>'
+    hh="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(i["result"])}</span> <b>{esc(i["inspection_type"])}</b>'
+        f'<div class="small">{esc(i["scheduled_date"])} · {esc(i["authority"])}</div></div>' for i,a in holds[:30]
+    ) or '<p class="muted">No open inspection hold points.</p>'
+    return shell("Safety Quality Company Command",'<div class="hero"><div class="eyebrow">v369</div><h1>Safety / Quality / Company Command</h1></div><div class="grid2"><div class="card"><h2>Quality Checkpoints</h2>'+qh+'</div><div class="card"><h2>Open Hold Points</h2>'+hh+'</div></div>')
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
