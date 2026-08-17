@@ -748,35 +748,151 @@ def esc(value):
 # ============================================================
 
 def categorized_nav():
-    items=[
-        ("Projects","/"),
-        ("Build","/build"),
-        ("Estimate","/estimate"),
-        ("Manage","/manage"),
-        ("Ask BuildCommand","/ask-buildcommand"),
+    groups=[
+        ("PROJECTS",[("Projects Home","/"),("Add Project","/projects/new"),("Recent Activity","/recent-activity"),("Archive Projects","/project-archive")]),
+        ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
+        ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
+        ("MANAGE",[("Manage Home","/manage"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
+        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
+        ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
-    return "".join(
-        f'<a href="{href}" style="display:block;padding:12px 10px;margin:4px 0;border-radius:9px;">{_v37_esc(label)}</a>'
-        for label,href in items
-    )
+    html='<div class="bc-topnav">'
+    for label,items in groups:
+        links=''.join(f'<a class="bc-drop-link" href="{href}">{_v37_esc(name)}</a>' for name,href in items)
+        html+=(
+            '<div class="bc-navdrop">'
+            f'<button type="button" class="bc-navbtn" onclick="bcToggleMenu(this,event)">{_v37_esc(label)} <span class="bc-caret">▾</span></button>'
+            f'<div class="bc-dropdown">{links}</div>'
+            '</div>'
+        )
+    html+='</div>'
+    return html
 
 def shell(title, body):
     current_pid = project_id()
     company_id = current_company_id()
     user = current_user()
     c = db()
-    projects = c.execute("SELECT p.id,p.name,p.number,p.status FROM projects p LEFT JOIN project_archive_state a ON a.project_id=p.id WHERE p.company_id=? AND COALESCE(a.archived,0)=0 ORDER BY p.name", (company_id,)).fetchall()
-    current = c.execute("SELECT * FROM projects WHERE id=? AND company_id=?", (current_pid, company_id)).fetchone() if current_pid else None
+    projects = c.execute(
+        "SELECT p.id,p.name,p.number,p.status FROM projects p "
+        "LEFT JOIN project_archive_state a ON a.project_id=p.id "
+        "WHERE p.company_id=? AND COALESCE(a.archived,0)=0 ORDER BY p.name",
+        (company_id,)
+    ).fetchall()
+    current = c.execute(
+        "SELECT * FROM projects WHERE id=? AND company_id=?",
+        (current_pid, company_id)
+    ).fetchone() if current_pid else None
     c.close()
+
     nav = categorized_nav()
-    project_options = "".join(f'<option value="{p["id"]}" {"selected" if p["id"]==current_pid else ""}>{_v37_esc(p["number"])} - {_v37_esc(p["name"])}</option>' for p in projects)
+    project_options = "".join(
+        f'<option value="{p["id"]}" {"selected" if p["id"]==current_pid else ""}>{_v37_esc(p["number"])} - {_v37_esc(p["name"])}</option>'
+        for p in projects
+    )
     current_name = _v37_esc(current["name"]) if current else "No Project Selected"
     company_name = _v37_esc(user["company_name"]) if user else "BuildCommand Company"
     display_name = _v37_esc(user["display_name"]) if user else ""
-    selector = f'''<div style="margin-bottom:20px;"><div class="small" style="margin-bottom:6px;">CURRENT PROJECT</div><form method="post" action="/projects/select"><select name="project_id" style="margin-bottom:8px;">{project_options}</select><button type="submit" style="width:100%;">Switch Project</button></form><div style="margin-top:10px;"><a href="/projects/new" style="color:#f0b44d;text-decoration:none;font-weight:700;">+ Add Project</a></div></div>'''
-    return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{_v37_esc(title)} · BuildCommand AI</title><style>{CSS}
-.nav-group{{border-bottom:1px solid rgba(255,255,255,.08);padding:2px 0}}.nav-group summary{{cursor:pointer;padding:11px 10px;font-weight:800;color:#f4f4f4;list-style:none;border-radius:8px}}.nav-group summary::-webkit-details-marker{{display:none}}.nav-group summary:after{{content:"▾";float:right;opacity:.7}}.nav-group[open] summary:after{{content:"▴"}}.nav-items{{padding:0 0 8px 8px}}.nav-items a{{display:block;padding:8px 10px;font-size:13px}}.search-result{{padding:12px 0;border-bottom:1px solid var(--line)}}
-</style></head><body><div class="app"><aside class="side"><div class="brand">BuildCommand AI</div><div class="company">{company_name}<br>{current_name}</div>{selector}<button type="button" class="mobile-menu-btn" onclick="document.getElementById('bcnav').classList.toggle('mobile-open')">☰ Menu</button><nav class="nav" id="bcnav">{nav}</nav><div class="creator-footer">{display_name}<br>Built by Wilson LaHood<br>© 2026 Wilson LaHood<form method="post" action="/logout" style="margin-top:10px;"><button type="submit" style="width:100%;">Sign Out</button></form></div></aside><main class="main">{body}</main></div></body></html>'''
+
+    project_bar = f'''<div class="bc-projectbar">
+      <div class="bc-project-meta">
+        <div class="bc-project-label">CURRENT PROJECT</div>
+        <div class="bc-project-name">{current_name}</div>
+      </div>
+      <form method="post" action="/projects/select" class="bc-project-switch">
+        <select name="project_id">{project_options}</select>
+        <button type="submit">Switch</button>
+      </form>
+      <a class="bc-add-project" href="/projects/new">+ Add Project</a>
+    </div>'''
+
+    return f'''<!doctype html><html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_v37_esc(title)} · BuildCommand AI</title>
+<style>
+{CSS}
+body{{margin:0}}
+.app{{display:block;min-height:100vh}}
+.side{{position:sticky;top:0;z-index:1000;width:100%;min-height:auto;padding:0;background:rgba(12,15,19,.98);border-right:0;border-bottom:1px solid rgba(255,255,255,.10)}}
+.main{{max-width:1500px;margin:0 auto;padding:28px 26px 70px}}
+.bc-header{{display:flex;align-items:center;gap:22px;padding:12px 22px 10px;border-bottom:1px solid rgba(255,255,255,.07)}}
+.bc-brand-wrap{{min-width:210px}}
+.brand{{font-size:22px;font-weight:900;letter-spacing:-.4px;margin:0}}
+.company{{font-size:11px;color:var(--muted);margin-top:2px}}
+.bc-nav-wrap{{flex:1;min-width:0}}
+.bc-topnav{{display:flex;align-items:center;gap:4px;flex-wrap:wrap}}
+.bc-navdrop{{position:relative}}
+.bc-navbtn{{width:auto;border:0;background:transparent;color:#f3f3f3;padding:10px 12px;border-radius:8px;font-weight:800;font-size:12px;letter-spacing:.35px;cursor:pointer}}
+.bc-navbtn:hover,.bc-navdrop.open .bc-navbtn{{background:rgba(255,255,255,.08);color:#f0b44d}}
+.bc-caret{{font-size:10px;margin-left:3px}}
+.bc-dropdown{{display:none;position:absolute;top:calc(100% + 7px);left:0;min-width:275px;max-height:70vh;overflow:auto;padding:8px;background:#171b20;border:1px solid rgba(255,255,255,.12);border-radius:12px;box-shadow:0 18px 45px rgba(0,0,0,.45);z-index:1200}}
+.bc-navdrop.open .bc-dropdown{{display:block}}
+.bc-drop-link{{display:block;padding:10px 11px;border-radius:8px;text-decoration:none;color:#eee;font-size:13px;font-weight:650}}
+.bc-drop-link:hover{{background:rgba(240,180,77,.12);color:#f0b44d}}
+.bc-projectbar{{display:flex;align-items:center;gap:12px;padding:8px 22px 10px;background:rgba(255,255,255,.025)}}
+.bc-project-meta{{min-width:210px}}
+.bc-project-label{{font-size:9px;letter-spacing:1.2px;color:var(--muted);font-weight:800}}
+.bc-project-name{{font-size:13px;font-weight:800}}
+.bc-project-switch{{display:flex;gap:7px;align-items:center;flex:1;max-width:560px;margin:0}}
+.bc-project-switch select{{margin:0;min-width:240px;padding:8px 10px}}
+.bc-project-switch button{{width:auto;padding:8px 13px}}
+.bc-add-project{{color:#f0b44d;text-decoration:none;font-weight:800;font-size:12px}}
+.bc-user-actions{{margin-left:auto;display:flex;align-items:center;gap:10px}}
+.bc-user-name{{font-size:11px;color:var(--muted)}}
+.bc-signout{{margin:0}}
+.bc-signout button{{width:auto;padding:8px 11px;font-size:11px}}
+.creator-footer{{text-align:center;color:var(--muted);font-size:11px;padding:18px 10px 24px;border-top:1px solid rgba(255,255,255,.06)}}
+.mobile-menu-btn{{display:none}}
+.bc-home-grid{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}}
+.bc-priority{{border-left:3px solid #f0b44d}}
+@media(max-width:980px){{
+  .bc-header{{align-items:flex-start;flex-wrap:wrap}}
+  .bc-brand-wrap{{min-width:0}}
+  .bc-nav-wrap{{width:100%;order:3}}
+  .bc-topnav{{display:grid;grid-template-columns:repeat(3,1fr);width:100%}}
+  .bc-navbtn{{width:100%;text-align:left}}
+  .bc-dropdown{{position:fixed;left:18px;right:18px;top:120px;min-width:0;max-height:65vh}}
+  .bc-projectbar{{flex-wrap:wrap}}
+  .bc-project-switch{{max-width:none;width:100%;flex-basis:100%}}
+  .bc-project-switch select{{min-width:0;flex:1}}
+  .main{{padding:20px 14px 50px}}
+  .bc-home-grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}
+}}
+@media(max-width:620px){{
+  .bc-topnav{{grid-template-columns:repeat(2,1fr)}}
+  .bc-header{{padding:10px 12px}}
+  .bc-projectbar{{padding:8px 12px}}
+  .bc-home-grid{{grid-template-columns:1fr}}
+}}
+</style>
+<script>
+function bcToggleMenu(btn,event){{
+  if(event) event.stopPropagation();
+  var parent=btn.parentElement;
+  document.querySelectorAll('.bc-navdrop.open').forEach(function(el){{if(el!==parent) el.classList.remove('open');}});
+  parent.classList.toggle('open');
+}}
+document.addEventListener('click',function(e){{
+  if(!e.target.closest('.bc-navdrop')){{
+    document.querySelectorAll('.bc-navdrop.open').forEach(function(el){{el.classList.remove('open');}});
+  }}
+}});
+document.addEventListener('keydown',function(e){{
+  if(e.key==='Escape') document.querySelectorAll('.bc-navdrop.open').forEach(function(el){{el.classList.remove('open');}});
+}});
+</script>
+</head><body><div class="app">
+<header class="side">
+  <div class="bc-header">
+    <div class="bc-brand-wrap"><div class="brand">BuildCommand AI</div><div class="company">{company_name}</div></div>
+    <div class="bc-nav-wrap">{nav}</div>
+    <div class="bc-user-actions"><div class="bc-user-name">{display_name}</div><form method="post" action="/logout" class="bc-signout"><button type="submit">Sign Out</button></form></div>
+  </div>
+  {project_bar}
+</header>
+<main class="main">{body}</main>
+<footer class="creator-footer">Built by Wilson LaHood · © 2026 Wilson LaHood</footer>
+</div></body></html>'''
 
 def project_id():
     user_id = current_user_id(); company_id = current_company_id()
@@ -868,146 +984,42 @@ def _v37_link_card(title,desc,href,label="Open"):
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
-    pid=project_id(); s=_v37_snapshot(pid)
+    pid=project_id()
+    s=_v37_snapshot(pid)
+    try:
+        score=_v50_score(pid)
+    except Exception:
+        score={"health":100,"risk":0,"quality":100}
+    try:
+        top=_v50_top_priorities(pid,5)
+    except Exception:
+        top=[]
+
     attention=s["issues"]+s["submittals"]+s["actions"]+s["inspections"]
-    c=db(); current=c.execute("SELECT * FROM projects WHERE id=? AND company_id=?",(pid,current_company_id())).fetchone() if pid else None; c.close()
-    name=_v37_esc(current["name"]) if current else "Select or create a project"
+    top_html="".join(
+        f'<div class="action bc-priority"><span class="badge WATCH">{_v37_esc(f["severity"])}</span> '
+        f'<b>{_v37_esc(f["type"])}</b> - {_v37_esc(f["title"])}'
+        f'<div class="small">{_v37_esc(f["reason"])}</div></div>'
+        for f in top
+    ) or '<p class="muted">No major project priorities detected.</p>'
+
     body=(
-      '<div class="hero"><div class="eyebrow">BuildCommand AI · Construction Operations Intelligence System</div><h1>'+name+'</h1>'
-      '<p class="muted">What is happening? What needs attention? What should happen next?</p></div>'
-      '<div class="grid4">'
-      f'<div class="card"><div class="label">Things That Need You</div><div class="kpi">{attention}</div><a href="/actions">Review →</a></div>'
-      f'<div class="card"><div class="label">Scope Items</div><div class="kpi">{s["scope"]}</div><a href="/build">Build →</a></div>'
-      f'<div class="card"><div class="label">Estimate Review</div><div class="kpi">{s["review"]}</div><a href="/estimate">Estimate →</a></div>'
-      f'<div class="card"><div class="label">Open Issues</div><div class="kpi">{s["issues"]}</div><a href="/manage">Manage →</a></div></div>'
-      '<div class="grid3">'
-      +_v37_link_card("BUILD","Plans, specifications, project scope and construction intelligence.","/build")
-      +_v37_link_card("ESTIMATE","Takeoff, estimator review, pricing and cost intelligence.","/estimate")
-      +_v37_link_card("MANAGE","Schedule, field, RFIs, submittals, inspections and subcontractors.","/manage")
+      '<div class="hero"><div class="eyebrow">PROJECT COMMAND</div><h1>Run the project from one place.</h1>'
+      '<p class="muted">BuildCommand surfaces what matters now. Deeper tools stay organized in the dropdown navigation above.</p></div>'
+      '<div class="bc-home-grid">'
+      f'<div class="card"><div class="label">Project Health</div><div class="kpi">{score["health"]}</div><div class="small">Risk {score["risk"]}/100</div></div>'
+      f'<div class="card"><div class="label">Needs Attention</div><div class="kpi">{attention}</div><div class="small">Issues · submittals · actions · inspections</div></div>'
+      f'<div class="card"><div class="label">Scope Intelligence</div><div class="kpi">{s["scope"]}</div><div class="small">Source-backed scope items</div></div>'
+      f'<div class="card"><div class="label">Brain Quality</div><div class="kpi">{score["quality"]}</div><div class="small">Current intelligence quality</div></div>'
+      '</div>'
+      '<div class="grid3" style="margin-top:16px">'
+      +_v37_link_card("Analyze Project","Upload plans/specs and run the intelligence pipeline.","/build/analyze-project","Analyze")
+      +_v37_link_card("Today","Field Command for readiness, deliveries, inspections and decisions.","/field-command","Open")
+      +_v37_link_card("Ask BuildCommand","Ask questions across the current project.","/ask-buildcommand","Ask")
       +'</div>'
-      +_v37_link_card("Ask BuildCommand","Do not hunt through menus. Ask the project what you need.","/ask-buildcommand","Ask")
-      +'<details class="card"><summary><b>Advanced tools</b></summary><p class="muted">Nothing was removed.</p><p><a href="/legacy-dashboard">Open legacy dashboard →</a></p></details>'
+      '<div class="card"><h2>Top Project Priorities</h2>'+top_html+'</div>'
     )
-    return shell("Projects",body)
-
-# ============================================================
-# v38 UNIFIED PROJECT INTELLIGENCE PIPELINE
-# ============================================================
-
-def _v38_selected_docs(pid, attachment_ids):
-    ids=list(dict.fromkeys(attachment_ids or []))
-    if not ids: return []
-    c=db(); docs=[]
-    for aid in ids:
-        d=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",(aid,current_company_id(),pid)).fetchone()
-        if d: docs.append(d)
-    c.close(); return docs
-
-def _v38_run_blueprint(pid, docs, focus=""):
-    if not os.environ.get("OPENAI_API_KEY"): raise RuntimeError("OPENAI_API_KEY is not configured.")
-    if not docs: raise RuntimeError("No project documents were selected.")
-    total=sum(int(d["size_bytes"] or 0) for d in docs)
-    if total>=50*1024*1024: raise RuntimeError(f"Selected files total {total/1024/1024:.1f} MB. Keep each Analyze Project batch under 50 MB.")
-    model=os.environ.get("OPENAI_MODEL","gpt-5.6")
-    client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    uploaded=[]; input_content=[]; text_fallback=[]
-    try:
-        for d in docs:
-            path=os.path.join(UPLOAD_DIR,d["stored_name"])
-            if not os.path.isfile(path): continue
-            ext=Path(d["original_name"] or "").suffix.lower()
-            if ext==".pdf":
-                with open(path,"rb") as fh:
-                    remote=client.files.create(file=fh,purpose="user_data")
-                uploaded.append(remote.id); input_content.append({"type":"input_file","file_id":remote.id,"detail":"high"})
-            else:
-                extracted=_attachment_text(d)
-                if extracted: text_fallback.append(f"\n--- FILE: {d['original_name']} ---\n{extracted[:120000]}")
-        if not input_content and not text_fallback: raise RuntimeError("No readable selected files were available on the server.")
-        names="\n".join(f"- {d['original_name']}" for d in docs)
-        prompt=_blueprint_prompt(names)
-        if focus.strip(): prompt += "\n\nGC ANALYSIS FOCUS:\n"+focus.strip()
-        if text_fallback: prompt += "\n\nEXTRACTED NON-PDF DOCUMENT CONTENT:\n"+"\n".join(text_fallback)
-        input_content.append({"type":"input_text","text":prompt})
-        response=client.responses.create(model=model,input=[{"role":"user","content":input_content}])
-        data=_blueprint_json(response.output_text)
-        if not isinstance(data.get("trade_scopes"),list): raise RuntimeError("Plan Intelligence response did not contain trade scopes.")
-        run_id=_save_blueprint_result(pid,docs,data,model)
-        return {"run_id":run_id,"trades":len(data.get("trade_scopes") or [])}
-    finally:
-        for fid in uploaded:
-            try: client.files.delete(fid)
-            except Exception: pass
-
-def _v38_run_component_split(pid):
-    _seed_estimator_from_latest(pid); _ensure_takeoff_component_tables()
-    run=_latest_blueprint_run(pid)
-    if not run: return {"created":0,"skipped":"No plan intelligence run"}
-    c=db()
-    rows=c.execute("SELECT e.* FROM estimator_items e JOIN blueprint_scope_items b ON b.id=e.blueprint_scope_item_id WHERE e.company_id=? AND e.project_id=? AND b.run_id=? ORDER BY e.trade,e.id LIMIT 180",(current_company_id(),pid,run["id"])).fetchall()
-    c.close()
-    if not rows or not os.environ.get("OPENAI_API_KEY"): return {"created":0,"skipped":"No estimator items or AI key"}
-    client=OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    resp=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),input=_component_split_prompt(rows))
-    data=_v36_parse_json(resp.output_text); valid={int(r["id"]):r for r in rows}; now=datetime.utcnow().isoformat()
-    c=db(); created=0
-    for result in data.get("results") or []:
-        try: eid=int(result.get("estimator_id"))
-        except Exception: continue
-        if eid not in valid: continue
-        comps=result.get("components") or []
-        if len(comps)<=1: continue
-        c.execute("DELETE FROM takeoff_components WHERE company_id=? AND project_id=? AND estimator_item_id=? AND status='PROPOSED'",(current_company_id(),pid,eid))
-        for comp in comps[:25]:
-            name=str(comp.get("name") or "").strip(); desc=str(comp.get("description") or name).strip(); unit=str(comp.get("unit") or "").upper()
-            if not name or unit not in {"EA","LF","SF","CY","LS","HR","DAY","TON","GAL"}: continue
-            source=str(comp.get("source") or valid[eid]["source_ref"] or "")
-            c.execute("INSERT INTO takeoff_components(company_id,project_id,estimator_item_id,component_name,description,unit,quantity,confidence,basis,source_ref,status,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",(current_company_id(),pid,eid,name,desc,unit,None,"VERIFY","Component split from cleaned parent scope; quantity not yet verified.",source,"PROPOSED",now,now))
-            created+=1
-    c.commit(); c.close(); return {"created":created}
-
-def _v38_run_auto_takeoff(pid):
-    _seed_estimator_from_latest(pid)
-    run,docs=_v36_latest_plan_docs(pid)
-    if not run or not docs or not os.environ.get("OPENAI_API_KEY"): return {"reviewed":0,"proposed":0,"verify":0,"skipped":"No run, docs, or AI key"}
-    targets=_v36_scope_targets(pid,run["id"])
-    if not targets: return {"reviewed":0,"proposed":0,"verify":0,"skipped":"No estimator targets"}
-    total=sum(int(d["size_bytes"] or 0) for d in docs if Path(d["original_name"] or "").suffix.lower()==".pdf")
-    if total>=50*1024*1024: return {"reviewed":0,"proposed":0,"verify":0,"skipped":"Plan set over 50 MB"}
-    client=OpenAI(api_key=os.environ["OPENAI_API_KEY"]); uploaded=[]; content=[]
-    try:
-        for d in docs:
-            path=os.path.join(UPLOAD_DIR,d["stored_name"])
-            if not os.path.isfile(path): continue
-            if Path(d["original_name"] or "").suffix.lower()==".pdf":
-                with open(path,"rb") as fh: remote=client.files.create(file=fh,purpose="user_data")
-                uploaded.append(remote.id); content.append({"type":"input_file","file_id":remote.id,"detail":"high"})
-        if not content: return {"reviewed":0,"proposed":0,"verify":0,"skipped":"No PDF plan files"}
-        content.append({"type":"input_text","text":_v36_takeoff_prompt(targets)})
-        response=client.responses.create(model=os.environ.get("OPENAI_MODEL","gpt-5.6"),input=[{"role":"user","content":content}])
-        data=_v36_parse_json(response.output_text); results=data.get("results") or []; valid_ids={int(r["estimator_id"]) for r in targets}; now=datetime.utcnow().isoformat()
-        c=db(); saved=0; proposed=0; verify=0
-        for item in results:
-            try: eid=int(item.get("estimator_id"))
-            except Exception: continue
-            if eid not in valid_ids: continue
-            q=item.get("quantity")
-            try: q=float(q) if q is not None else None
-            except Exception: q=None
-            unit=str(item.get("unit") or "").upper().strip()
-            if unit not in {"EA","LF","SF","CY","LS","HR","DAY","TON","GAL"}: unit=""
-            confidence=str(item.get("confidence") or "VERIFY").upper()
-            if confidence not in {"HIGH","MEDIUM","LOW","VERIFY"}: confidence="VERIFY"
-            basis=str(item.get("basis") or "")[:4000]; source=str(item.get("source") or "")[:1500]
-            c.execute("UPDATE estimator_items SET ai_quantity=?,ai_unit=?,ai_confidence=?,ai_basis=?,ai_source=?,ai_updated=? WHERE id=? AND company_id=? AND project_id=?",(q,unit,confidence,basis,source,now,eid,current_company_id(),pid))
-            saved+=1
-            if q is not None and confidence in {"HIGH","MEDIUM"}: proposed+=1
-            else: verify+=1
-        c.commit(); c.close(); return {"reviewed":saved,"proposed":proposed,"verify":verify}
-    finally:
-        for fid in uploaded:
-            try: client.files.delete(fid)
-            except Exception: pass
+    return shell("Project Command",body)
 
 @app.get("/build/analyze-project",response_class=HTMLResponse)
 def unified_analyze_project_page():
