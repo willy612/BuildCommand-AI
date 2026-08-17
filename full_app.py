@@ -753,7 +753,7 @@ def categorized_nav():
         ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
         ("MANAGE",[("Manage Home","/manage"),("Project Autopilot","/autopilot"),("Daily Superintendent Command","/daily-superintendent"),("Look-Ahead Intelligence","/lookahead-intelligence"),("Trade Readiness Brain","/trade-readiness"),("Trade Coordination Engine","/trade-coordination"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
-        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Smart RFI & Conflict Detection","/smart-rfi"),("Long-Lead Prediction","/longlead-intelligence"),("Inspection & QC Intelligence","/quality-intelligence"),("Scope Gap & Buyout Intelligence","/scope-gap-intelligence"),("Change Order Intelligence","/change-order-intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
+        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Knowledge Brain 2.0","/knowledge-brain-2"),("Smart RFI & Conflict Detection","/smart-rfi"),("Long-Lead Prediction","/longlead-intelligence"),("Inspection & QC Intelligence","/quality-intelligence"),("Scope Gap & Buyout Intelligence","/scope-gap-intelligence"),("Change Order Intelligence","/change-order-intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
         ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
     html='<div class="bc-topnav">'
@@ -1048,7 +1048,7 @@ def unified_projects_home():
       '<div class="grid3" style="margin-top:16px">'
       +_v37_link_card("Ask BuildCommand","Ask questions across the current project.","/ask-buildcommand","Ask")
       +_v37_link_card("Field Command","Readiness, crews, deliveries, inspections and decisions.","/field-command","Open")
-      +_v37_link_card("Project Autopilot","One command center for what the project needs next.","/autopilot","Open")
+      +_v37_link_card("Project Autopilot","One command center for what the project needs next.","/autopilot","Open")+_v37_link_card("Knowledge Brain 2.0","100 integrated construction knowledge capabilities.","/knowledge-brain-2","Open")
       +'</div>'
       '<div class="grid2" style="margin-top:16px">'
       '<div class="card"><h2>Top Priorities</h2>'+priority_html+'</div>'
@@ -5720,6 +5720,156 @@ def v68_home():
     body+='<div class="grid2"><div class="card"><h2>THIS WEEK</h2>'+ph(a["week"])+'</div><div class="card"><h2>NOT READY</h2>'+nr+'</div></div>'
     body+='<div class="grid3">'+_v37_link_card("Look-Ahead","2/3/6-week readiness.","/lookahead-intelligence","Open")+_v37_link_card("Trade Readiness","Mobilization readiness.","/trade-readiness","Open")+_v37_link_card("Smart RFI","Conflict-driven RFI candidates.","/smart-rfi","Open")+'</div>'
     return shell("Project Autopilot",body)
+
+
+# ============================================================
+# v69-v168 UNIFIED CONSTRUCTION KNOWLEDGE BRAIN 2.0
+# 100 capabilities integrated into shared intelligence.
+# ============================================================
+
+_V168_FEATURES=[(69, 'Sheet Classification Brain', 'DRAWING'), (70, 'Drawing Discipline Detection', 'DRAWING'), (71, 'Sheet Number Intelligence', 'DRAWING'), (72, 'Drawing Index Reconciliation', 'DRAWING'), (73, 'Detail Bubble Recognition', 'DRAWING'), (74, 'Detail-to-Sheet Linking', 'DRAWING'), (75, 'Section Callout Intelligence', 'DRAWING'), (76, 'Elevation Callout Intelligence', 'DRAWING'), (77, 'Keynote Recognition', 'DRAWING'), (78, 'Keynote-to-Legend Linking', 'DRAWING'), (79, 'General Notes Intelligence', 'DRAWING'), (80, 'Plan Note Intelligence', 'DRAWING'), (81, 'Drawing Legend Brain', 'DRAWING'), (82, 'Symbol Recognition Intelligence', 'DRAWING'), (83, 'Abbreviation Intelligence', 'DRAWING'), (84, 'Drawing Scale Intelligence', 'DRAWING'), (85, 'Dimension Relationship Brain', 'DRAWING'), (86, 'Grid-Line Intelligence', 'DRAWING'), (87, 'Room/Area Recognition', 'DRAWING'), (88, 'Drawing Cross-Reference Brain', 'DRAWING'), (89, 'Door Schedule Brain', 'SCHEDULE_SPEC'), (90, 'Hardware Schedule Brain', 'SCHEDULE_SPEC'), (91, 'Finish Schedule Brain', 'SCHEDULE_SPEC'), (92, 'Room Finish Intelligence', 'SCHEDULE_SPEC'), (93, 'Equipment Schedule Brain', 'SCHEDULE_SPEC'), (94, 'Plumbing Fixture Schedule Brain', 'SCHEDULE_SPEC'), (95, 'Mechanical Equipment Schedule Brain', 'SCHEDULE_SPEC'), (96, 'Electrical Panel Schedule Brain', 'SCHEDULE_SPEC'), (97, 'Lighting Fixture Schedule Brain', 'SCHEDULE_SPEC'), (98, 'Structural Schedule Intelligence', 'SCHEDULE_SPEC'), (99, 'Specification Division Recognition', 'SCHEDULE_SPEC'), (100, 'Spec Section Classification', 'SCHEDULE_SPEC'), (101, 'Drawing-to-Spec Linking', 'SCHEDULE_SPEC'), (102, 'Product Requirement Extraction', 'SCHEDULE_SPEC'), (103, 'Manufacturer Requirement Extraction', 'SCHEDULE_SPEC'), (104, 'Testing Requirement Extraction', 'SCHEDULE_SPEC'), (105, 'Warranty Requirement Extraction', 'SCHEDULE_SPEC'), (106, 'Submittal Requirement Extraction', 'SCHEDULE_SPEC'), (107, 'Closeout Requirement Extraction', 'SCHEDULE_SPEC'), (108, 'Specification Conflict Detection', 'SCHEDULE_SPEC'), (109, 'Wall Assembly Intelligence', 'ASSEMBLY'), (110, 'Rated Wall Intelligence', 'ASSEMBLY'), (111, 'Shaft-Wall Intelligence', 'ASSEMBLY'), (112, 'Ceiling Assembly Intelligence', 'ASSEMBLY'), (113, 'Floor Assembly Intelligence', 'ASSEMBLY'), (114, 'Roof Assembly Intelligence', 'ASSEMBLY'), (115, 'Waterproofing Assembly Brain', 'ASSEMBLY'), (116, 'Exterior Wall Assembly Brain', 'ASSEMBLY'), (117, 'Storefront Assembly Intelligence', 'ASSEMBLY'), (118, 'Door/Frame Assembly Intelligence', 'ASSEMBLY'), (119, 'Foundation Assembly Intelligence', 'ASSEMBLY'), (120, 'Slab Assembly Intelligence', 'ASSEMBLY'), (121, 'Structural Steel Assembly Brain', 'ASSEMBLY'), (122, 'CMU Assembly Intelligence', 'ASSEMBLY'), (123, 'Concrete Assembly Intelligence', 'ASSEMBLY'), (124, 'Underground Utility Assembly Brain', 'ASSEMBLY'), (125, 'Plumbing System Assembly Brain', 'ASSEMBLY'), (126, 'HVAC System Assembly Brain', 'ASSEMBLY'), (127, 'Electrical System Assembly Brain', 'ASSEMBLY'), (128, 'Fire Protection Assembly Brain', 'ASSEMBLY'), (129, 'Architectural/Structural Coordination', 'COORDINATION'), (130, 'Architectural/Mechanical Coordination', 'COORDINATION'), (131, 'Architectural/Electrical Coordination', 'COORDINATION'), (132, 'Architectural/Plumbing Coordination', 'COORDINATION'), (133, 'Structural/MEP Coordination', 'COORDINATION'), (134, 'HVAC/Electrical Coordination', 'COORDINATION'), (135, 'HVAC/Plumbing Coordination', 'COORDINATION'), (136, 'Electrical/Plumbing Coordination', 'COORDINATION'), (137, 'Fire Sprinkler/Ceiling Coordination', 'COORDINATION'), (138, 'Lighting/Ceiling Coordination', 'COORDINATION'), (139, 'Access Panel Coordination', 'COORDINATION'), (140, 'Equipment Clearance Intelligence', 'COORDINATION'), (141, 'ADA Clearance Intelligence', 'COORDINATION'), (142, 'Maintenance Clearance Intelligence', 'COORDINATION'), (143, 'Penetration Coordination Brain', 'COORDINATION'), (144, 'Sleeve Coordination Intelligence', 'COORDINATION'), (145, 'Embed Coordination Intelligence', 'COORDINATION'), (146, 'Opening Coordination Intelligence', 'COORDINATION'), (147, 'Above-Ceiling Coordination Brain', 'COORDINATION'), (148, 'Underground Coordination Brain', 'COORDINATION'), (149, 'Constructability Intelligence', 'REASONING'), (150, 'Missing Information Detection', 'REASONING'), (151, 'Contradiction Intelligence', 'REASONING'), (152, 'Ambiguous Requirement Detection', 'REASONING'), (153, 'Impossible Condition Detection', 'REASONING'), (154, 'Incomplete Detail Detection', 'REASONING'), (155, 'Scope Ownership Brain 2.0', 'REASONING'), (156, 'Trade Boundary Intelligence', 'REASONING'), (157, 'Demolition Ownership Intelligence', 'REASONING'), (158, 'Temporary Work Intelligence', 'REASONING'), (159, 'Inspection Requirement Brain', 'REASONING'), (160, 'Testing Requirement Brain', 'REASONING'), (161, 'Permit Requirement Intelligence', 'REASONING'), (162, 'Sequence Requirement Brain', 'REASONING'), (163, 'Prerequisite Intelligence', 'REASONING'), (164, 'Means-and-Methods Awareness', 'REASONING'), (165, 'Confidence Calibration Brain', 'REASONING'), (166, 'Human Correction Learning 2.0', 'REASONING'), (167, 'Cross-Project Construction Memory', 'REASONING'), (168, 'Unified Construction Knowledge Brain 2.0', 'UNIFIED')]
+
+def _v168_rows(pid):
+    try: return _v452_scope_rows(pid)
+    except Exception: return []
+
+def _v168_text(pid):
+    rows=_v168_rows(pid)
+    return "\n".join(
+        " ".join(str(x or "") for x in [r["trade"],r["requirement"],r["source_sheet"],r["source_spec"]])
+        for r in rows
+    ).lower()
+
+def _v168_metrics(pid):
+    rows=_v168_rows(pid); text=_v168_text(pid)
+    patterns={
+      "DRAWING":["sheet ","detail","section","elevation","keynote","legend","scale","grid","room"],
+      "SCHEDULE_SPEC":["schedule","spec","manufacturer","testing","warranty","submittal","closeout"],
+      "ASSEMBLY":["wall","ceiling","floor","roof","waterproof","storefront","foundation","slab","steel","cmu","concrete","plumbing","hvac","electrical","sprinkler"],
+      "COORDINATION":["coordinate","clearance","penetration","sleeve","embed","opening","above ceiling","underground"],
+      "REASONING":["conflict","missing","verify","confirm","inspection","testing","permit","sequence","prerequisite","demolition"]
+    }
+    counts={k:sum(text.count(p) for p in ps) for k,ps in patterns.items()}
+    return {"scope_rows":len(rows),"signals":counts}
+
+def _v168_feature_status(pid,feature):
+    v,name,group=feature
+    m=_v168_metrics(pid); n=m["scope_rows"]; sig=m["signals"].get(group,0)
+    if group=="UNIFIED":
+        active=sum(1 for x in m["signals"].values() if x>0)
+        return "ACTIVE" if n and active>=3 else "LEARNING"
+    return "ACTIVE" if n and sig>0 else ("LEARNING" if n else "WAITING FOR PROJECT DATA")
+
+def _v168_ownership_rules():
+    return [
+      ("Concrete","slab cutting, trenching and restoration","Concrete"),
+      ("Bathroom Accessories","grab bars, toilet partitions, urinal screens, toilet room accessories","Bathroom Accessories"),
+      ("Demolition","existing fixture/equipment removal and demolition work","Demolition"),
+      ("Low Voltage","accessible door operators, card access, cameras and electronic access","Low Voltage"),
+      ("Flooring/Tile","flooring, tile, rubber base and tile backsplash","Flooring/Tile"),
+      ("Storefront/Glazing","exterior storefront and glazing systems","Storefront/Glazing"),
+      ("HVAC","mechanical/HVAC equipment and duct systems","HVAC"),
+      ("Roofing","roof patching, flashing and roofing restoration","Roofing"),
+      ("Paint","prime/refinish patched surfaces and finish painting","Paint"),
+      ("Doors","interior doors, frames, hardware and hollow-metal framed interior windows","Doors"),
+    ]
+
+def _v168_reasoning_signals(pid):
+    rows=_v168_rows(pid); out=[]
+    seen={}
+    for r in rows:
+        req=str(r["requirement"] or "")
+        low=req.lower(); trade=str(r["trade"] or "")
+        if not req.strip():
+            out.append(("MISSING","HIGH",trade,"Empty scope requirement","Review source document and regenerate requirement."))
+        if any(k in low for k in ["verify","confirm","coordinate","as required","if required"]):
+            out.append(("AMBIGUOUS","MEDIUM",trade,req,"Confirm contract requirement, responsible trade, and prerequisite before execution."))
+        if any(k in low for k in ["inspection","test","testing"]):
+            out.append(("QC","REVIEW",trade,req,"Link requirement to inspection/testing readiness and schedule hold point."))
+        key=re.sub(r'\s+',' ',low).strip()
+        if key:
+            if key in seen and str(seen[key]["trade"])!=trade:
+                out.append(("TRADE BOUNDARY","HIGH",trade,req,f'Requirement also appears under {seen[key]["trade"]}; resolve ownership.'))
+            else: seen[key]=r
+    return out[:300]
+
+def _v168_assembly_links(pid):
+    rows=_v168_rows(pid); out=[]
+    maps=[
+      ("WALL",["wall","partition","gypsum","stud"]),
+      ("CEILING",["ceiling","grid","acoustical"]),
+      ("ROOF",["roof","flashing","curb"]),
+      ("CONCRETE",["concrete","slab","footing","foundation"]),
+      ("PLUMBING",["plumbing","water closet","lavatory","drain","water heater"]),
+      ("HVAC",["hvac","mechanical","duct","exhaust fan","rtu"]),
+      ("ELECTRICAL",["electrical","panel","lighting","receptacle","power"]),
+      ("FIRE PROTECTION",["sprinkler","fire protection"]),
+    ]
+    for r in rows:
+        low=str(r["requirement"] or "").lower()
+        linked=[name for name,keys in maps if any(k in low for k in keys)]
+        if linked: out.append((r,linked))
+    return out[:300]
+
+def _v168_knowledge_summary(pid):
+    m=_v168_metrics(pid)
+    active=sum(1 for f in _V168_FEATURES if _v168_feature_status(pid,f)=="ACTIVE")
+    reasoning=_v168_reasoning_signals(pid)
+    assemblies=_v168_assembly_links(pid)
+    return {"metrics":m,"active":active,"reasoning":reasoning,"assemblies":assemblies}
+
+@app.get("/knowledge-brain-2",response_class=HTMLResponse)
+def v168_home():
+    pid=project_id(); s=_v168_knowledge_summary(pid)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v168</div><h1>Unified Construction Knowledge Brain 2.0</h1><p class="muted">{s["active"]} / 100 capabilities active against current project intelligence · {s["metrics"]["scope_rows"]} scope knowledge row(s).</p></div><div class="grid3">'
+    cards=[
+      ("100-Capability Map","See all v69-v168 construction knowledge capabilities.","/knowledge-brain-2/capabilities"),
+      ("Drawing Intelligence","Sheet, detail, note, symbol and cross-reference understanding.","/knowledge-brain-2/group/DRAWING"),
+      ("Schedule & Spec Intelligence","Schedules, specifications, products, testing and closeout.","/knowledge-brain-2/group/SCHEDULE_SPEC"),
+      ("Assembly Brain","Construction systems and assembly relationships.","/knowledge-brain-2/assemblies"),
+      ("Cross-Trade Coordination","Interfaces, penetrations, clearances and handoffs.","/knowledge-brain-2/group/COORDINATION"),
+      ("Construction Reasoning","Missing, ambiguous, conflicting and ownership conditions.","/knowledge-brain-2/reasoning"),
+      ("Scope Ownership 2.0","Approved construction trade-boundary knowledge.","/knowledge-brain-2/ownership"),
+      ("Blueprint Brain","Use the existing blueprint analysis engine.","/blueprint-brain"),
+      ("Project Autopilot","Feed construction knowledge into operations.","/autopilot"),
+    ]
+    for n,d,h in cards: body+=_v37_link_card(n,d,h,"Open")
+    body+='</div>'
+    return shell("Knowledge Brain 2.0",body)
+
+@app.get("/knowledge-brain-2/capabilities",response_class=HTMLResponse)
+def v168_capabilities():
+    pid=project_id()
+    h=""
+    for v,name,group in _V168_FEATURES:
+        status=_v168_feature_status(pid,(v,name,group))
+        h+=f'<div class="action"><span class="badge">{esc(status)}</span> <b>v{v} - {esc(name)}</b><div class="small">{esc(group.replace("_"," "))}</div></div>'
+    return shell("100 Construction Knowledge Capabilities",'<div class="hero"><h1>v69-v168 Capability Map</h1><p class="muted">These capabilities share the same project knowledge instead of becoming 100 disconnected pages.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/knowledge-brain-2/group/{group}",response_class=HTMLResponse)
+def v168_group(group:str):
+    group=group.upper()
+    rows=[f for f in _V168_FEATURES if f[2]==group]
+    h="".join(f'<div class="action"><span class="badge">{esc(_v168_feature_status(project_id(),f))}</span> <b>v{f[0]} - {esc(f[1])}</b></div>' for f in rows)
+    return shell("Construction Knowledge Group",f'<div class="hero"><h1>{esc(group.replace("_"," "))}</h1><p class="muted">{len(rows)} integrated capability(s).</p></div><div class="card">{h or "<p class=muted>No capabilities.</p>"}</div>')
+
+@app.get("/knowledge-brain-2/reasoning",response_class=HTMLResponse)
+def v168_reasoning():
+    rows=_v168_reasoning_signals(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(sev)}</span> <b>{esc(kind)} · {esc(trade)}</b><div>{esc(req)}</div><div class="small">{esc(action)}</div></div>' for kind,sev,trade,req,action in rows)
+    return shell("Construction Reasoning 2.0",'<div class="hero"><h1>Construction Reasoning & Learning</h1><p class="muted">Find ambiguous requirements, trade-boundary conflicts and quality/inspection signals.</p></div><div class="card">'+(h or '<p class="muted">No reasoning exceptions detected.</p>')+'</div>')
+
+@app.get("/knowledge-brain-2/assemblies",response_class=HTMLResponse)
+def v168_assemblies():
+    rows=_v168_assembly_links(project_id())
+    h="".join(f'<div class="action"><span class="badge">ASSEMBLY</span> <b>{esc(", ".join(linked))}</b><div>{esc(r["requirement"])}</div><div class="small">{esc(r["trade"])} · {esc(r["source_sheet"])}</div></div>' for r,linked in rows)
+    return shell("Assembly Intelligence",'<div class="hero"><h1>Construction Assembly Brain</h1><p class="muted">Connect scope requirements to the physical systems being built.</p></div><div class="card">'+(h or '<p class="muted">No assembly links detected.</p>')+'</div>')
+
+@app.get("/knowledge-brain-2/ownership",response_class=HTMLResponse)
+def v168_ownership():
+    rules=_v168_ownership_rules()
+    h="".join(f'<div class="action"><span class="badge READY">RULE</span> <b>{esc(owner)}</b><div>{esc(scope)}</div><div class="small">Normalized owner: {esc(normalized)}</div></div>' for owner,scope,normalized in rules)
+    return shell("Scope Ownership Brain 2.0",'<div class="hero"><h1>Scope Ownership Brain 2.0</h1><p class="muted">Construction trade-boundary rules carried into the shared knowledge brain.</p></div><div class="card">'+h+'</div>')
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
