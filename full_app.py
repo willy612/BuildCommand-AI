@@ -753,7 +753,7 @@ def categorized_nav():
         ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
         ("MANAGE",[("Manage Home","/manage"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
-        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
+        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
         ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
     html='<div class="bc-topnav">'
@@ -985,42 +985,9 @@ def _v37_link_card(title,desc,href,label="Open"):
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
     pid=project_id()
-    s=_v37_snapshot(pid)
-
-    try:
-        score=_v50_score(pid)
-    except Exception:
-        score={"health":100,"risk":0,"quality":100}
-
-    try:
-        top=_v50_top_priorities(pid,8)
-    except Exception:
-        top=[]
-
-    try:
-        decisions=_v47_decision_deadlines(pid)[:8]
-    except Exception:
-        decisions=[]
-
-    try:
-        materials=[x for x in _v47_material_readiness(pid) if x[2] in {"CRITICAL","HIGH","TODAY"}][:8]
-    except Exception:
-        materials=[]
-
-    try:
-        holds=[x for x in _v49_hold_points(pid) if str(x[0]["result"] or "").upper()!="PASSED"][:8]
-    except Exception:
-        holds=[]
-
-    try:
-        agenda=_v47_coordination_agenda(pid)[:8]
-    except Exception:
-        agenda=[]
-
-    try:
-        sequence=[x for x in _v45_sequence_analysis(pid) if x["risk"] in {"CRITICAL","HIGH"}][:8]
-    except Exception:
-        sequence=[]
+    d=_v56_dashboard_bundle(pid)
+    s=d["snapshot"]; score=d["score"]; top=d["top"]; decisions=d["decisions"]
+    materials=d["materials"]; holds=d["holds"]; agenda=d["agenda"]; sequence=d["sequence"]
 
     attention=s["issues"]+s["submittals"]+s["actions"]+s["inspections"]
 
@@ -1071,36 +1038,28 @@ def unified_projects_home():
     body=(
       '<div class="hero"><div class="eyebrow">PROJECT COMMAND</div>'
       '<h1>Today’s construction command center.</h1>'
-      '<p class="muted">What needs attention, what is blocked, what is late, and what BuildCommand recommends doing next.</p></div>'
-
+      '<p class="muted">Fast cached intelligence: what needs attention, what is blocked, and what to do next.</p></div>'
       '<div class="bc-home-grid">'
       f'<div class="card"><div class="label">Project Health</div><div class="kpi">{score["health"]}</div><div class="small">Risk {score["risk"]}/100</div></div>'
       f'<div class="card"><div class="label">Needs Attention</div><div class="kpi">{attention}</div><div class="small">Issues · submittals · actions · inspections</div></div>'
       f'<div class="card"><div class="label">Open Blockers</div><div class="kpi">{len(sequence)}</div><div class="small">Critical/high sequence risks</div></div>'
       f'<div class="card"><div class="label">Brain Quality</div><div class="kpi">{score["quality"]}</div><div class="small">Current intelligence quality</div></div>'
       '</div>'
-
       '<div class="grid3" style="margin-top:16px">'
       +_v37_link_card("Ask BuildCommand","Ask questions across the current project.","/ask-buildcommand","Ask")
       +_v37_link_card("Field Command","Readiness, crews, deliveries, inspections and decisions.","/field-command","Open")
-      +_v37_link_card("Master Reasoning","See the connected project judgment behind the priorities.","/master-reasoning","Open")
+      +_v37_link_card("Performance","See what pages/calculations are actually slow.","/performance","Open")
       +'</div>'
-
       '<div class="grid2" style="margin-top:16px">'
       '<div class="card"><h2>Top Priorities</h2>'+priority_html+'</div>'
       '<div class="card"><h2>What Is Blocking Work</h2>'+seq_html+'</div>'
       '</div>'
-
       '<div class="grid3">'
       '<div class="card"><h2>Inspection Hold Points</h2>'+insp_html+'</div>'
       '<div class="card"><h2>Material Risk</h2>'+mat_html+'</div>'
       '<div class="card"><h2>Decisions Needed</h2>'+dec_html+'</div>'
       '</div>'
-
-      '<div class="card"><h2>Coordination Agenda</h2>'
-      '<p class="muted">Use this as the starting point for today’s subcontractor/coordination discussion.</p>'
-      +agenda_html+
-      '</div>'
+      '<div class="card"><h2>Coordination Agenda</h2>'+agenda_html+'</div>'
     )
     return shell("Project Command",body)
 
@@ -1228,6 +1187,8 @@ def v39_intelligence_center():
     body += '<div class="grid3">' + _v37_link_card("Master Construction Reasoning","One connected project judgment across scope, sequence, risk, field, quality and commercial intelligence.","/master-reasoning","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Real Construction Reasoning 2.0","Cause, dependency, consequence, ownership, alternatives and uncertainty.","/reasoning-2","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Project Memory & Continuous Learning","Approved corrections, RFI answers, lessons and cross-project patterns.","/project-memory","Open") + '</div>'
+    body += '<div class="grid3">' + _v37_link_card("Drawing Revision & Change Intelligence","Added/removed scope, affected trades, cost/schedule exposure and downstream controls.","/revision-intelligence","Open") + '</div>'
+
 
 
 
@@ -2346,7 +2307,7 @@ def _v45_gate_requirements(stage):
         gates.append("punch/testing/final documentation progressing")
     return gates
 
-def _v45_sequence_analysis(pid):
+def _v45_sequence_analysis_uncached(pid):
     _v45_ensure_tables()
     today=datetime.utcnow().date()
     acts=_v39_rows("SELECT * FROM activities WHERE project_id=? ORDER BY start,id",(pid,))
@@ -2454,6 +2415,9 @@ def _v45_sequence_analysis(pid):
         ))
     c.commit(); c.close()
     return analyzed
+
+def _v45_sequence_analysis(pid):
+    return _v56_sequence(pid)
 
 @app.get("/sequence-intelligence",response_class=HTMLResponse)
 def v45_sequence_home():
@@ -3451,7 +3415,7 @@ def _v48_calibrated_confidence(r):
     reason=f"Source quality {source_level}; second opinion {'agrees' if agrees else 'disagrees'} with saved trade."
     return calibrated,score,reason,verify
 
-def _v48_self_audit(pid):
+def _v48_self_audit_uncached(pid):
     rows=_v452_scope_rows(pid)
     out=[]
     for r in rows:
@@ -3461,6 +3425,9 @@ def _v48_self_audit(pid):
         contradiction=1 if agreement=="DISAGREE" else 0
         out.append((r,verify,agreement,source_level,calibrated,score,contradiction,reason))
     return out[:300]
+
+def _v48_self_audit(pid):
+    return _v56_self_audit(pid)
 
 def _v48_contradictions(pid):
     rows=_v452_scope_rows(pid)
@@ -3967,7 +3934,7 @@ def _v50_ensure_tables():
         c.execute(s)
     c.commit(); c.close()
 
-def _v50_collect_findings(pid):
+def _v50_collect_findings_uncached(pid):
     findings=[]
 
     # 1) Blueprint / scope quality
@@ -4097,13 +4064,12 @@ def _v50_collect_findings(pid):
     findings.sort(key=lambda x:(rank.get(x["severity"],9),x["type"],x["title"]))
     return findings[:500]
 
+def _v50_collect_findings(pid):
+    return _v56_master_findings(pid)
+
 def _v50_score(pid):
-    findings=_v50_collect_findings(pid)
-    weights={"CRITICAL":12,"HIGH":7,"MEDIUM":3,"REVIEW":1,"LOW":0}
-    risk=min(100,sum(weights.get(f["severity"],1) for f in findings))
-    quality=_v48_quality_score(pid)["score"]
-    health=max(0,round((100-risk)*0.65 + quality*0.35))
-    return {"health":health,"risk":risk,"quality":quality,"count":len(findings)}
+    return _v56_master_score(pid)
+
 
 def _v50_run(pid):
     _v50_ensure_tables()
@@ -4127,12 +4093,8 @@ def _v50_run(pid):
     return run_id,findings,score
 
 def _v50_top_priorities(pid,limit=10):
-    findings=_v50_collect_findings(pid)
-    # Suppress low-value HANDOFF review items unless priority space remains.
-    priority=[f for f in findings if f["severity"] in {"CRITICAL","HIGH","MEDIUM"}]
-    if len(priority)<limit:
-        priority.extend([f for f in findings if f["severity"]=="REVIEW"][:limit-len(priority)])
-    return priority[:limit]
+    return _v56_top_priorities(pid,limit)
+
 
 def _v50_trade_brief(pid,trade):
     findings=[f for f in _v50_collect_findings(pid) if str(f["trade"] or "").lower()==str(trade or "").lower()]
@@ -4763,6 +4725,419 @@ def v54_command():
     body+=_v37_link_card("Recurring Patterns","Approved patterns across projects.","/project-memory/patterns","Review")
     body+='</div>'
     return shell("Continuous Learning Command",body)
+
+
+# ============================================================
+# v55 AUTOMATIC DRAWING REVISION & CHANGE INTELLIGENCE
+# ============================================================
+
+def _v55_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS drawing_revision_runs(
+        id {pk},company_id BIGINT,project_id BIGINT,new_attachment_id BIGINT,
+        prior_attachment_id BIGINT,revision_group TEXT,status TEXT DEFAULT 'REVIEW',
+        summary TEXT,affected_trades TEXT,cost_risk TEXT DEFAULT 'REVIEW',
+        schedule_risk TEXT DEFAULT 'REVIEW',created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS drawing_revision_findings(
+        id {pk},company_id BIGINT,project_id BIGINT,run_id BIGINT,
+        finding_type TEXT,subject TEXT,trade TEXT,source_new TEXT,source_prior TEXT,
+        change_summary TEXT,cost_exposure {num} DEFAULT 0,schedule_days {num} DEFAULT 0,
+        severity TEXT DEFAULT 'REVIEW',status TEXT DEFAULT 'OPEN',
+        recommended_action TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS revision_downstream_links(
+        id {pk},company_id BIGINT,project_id BIGINT,run_id BIGINT,
+        finding_id BIGINT,related_type TEXT,related_key TEXT,related_title TEXT,
+        relationship TEXT,reason TEXT,created TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit(); c.close()
+
+def _v55_doc_group(name):
+    n=str(name or "")
+    n=re.sub(r'(?i)\b(rev(?:ision)?|addendum|bulletin|asi|sk)[\s_-]*[A-Z0-9.-]+\b','',n)
+    n=re.sub(r'(?i)\b\d{4}[-_]\d{2}[-_]\d{2}\b','',n)
+    return re.sub(r'[^a-z0-9]+',' ',n.lower()).strip()
+
+def _v55_revision_pairs(pid):
+    docs=_v46_docs(pid)
+    groups={}
+    for d in docs:
+        groups.setdefault(_v55_doc_group(d["original_name"]),[]).append(d)
+    out=[]
+    for group,items in groups.items():
+        if not group or len(items)<2:
+            continue
+        items=sorted(items,key=lambda x:x["id"],reverse=True)
+        out.append((items[0],items[1],group))
+    return out[:100]
+
+def _v55_scope_by_run(pid):
+    rows=_v452_scope_rows(pid)
+    runs={}
+    for r in rows:
+        runs.setdefault(int(r["run_id"]),[]).append(r)
+    return runs
+
+def _v55_scope_delta(pid):
+    runs=_v55_scope_by_run(pid)
+    run_ids=sorted(runs.keys(),reverse=True)
+    if len(run_ids)<2:
+        return [],[],[]
+    new_rows=runs[run_ids[0]]
+    old_rows=runs[run_ids[1]]
+
+    def key(r):
+        return re.sub(r'\s+',' ',str(r["requirement"] or "").lower()).strip()
+
+    new_map={key(r):r for r in new_rows if key(r)}
+    old_map={key(r):r for r in old_rows if key(r)}
+
+    added=[new_map[k] for k in new_map.keys()-old_map.keys()]
+    removed=[old_map[k] for k in old_map.keys()-new_map.keys()]
+    changed=[]
+    common=new_map.keys() & old_map.keys()
+    for k in common:
+        nr,orow=new_map[k],old_map[k]
+        if str(nr["trade"])!=str(orow["trade"]) or str(nr["source_sheet"])!=str(orow["source_sheet"]) or str(nr["source_spec"])!=str(orow["source_spec"]):
+            changed.append((orow,nr))
+    return added[:200],removed[:200],changed[:200]
+
+def _v55_affected_trades(pid):
+    added,removed,changed=_v55_scope_delta(pid)
+    trades=set()
+    for r in added+removed:
+        if r["trade"]: trades.add(str(r["trade"]))
+    for old,new in changed:
+        if old["trade"]: trades.add(str(old["trade"]))
+        if new["trade"]: trades.add(str(new["trade"]))
+    return sorted(trades)
+
+def _v55_cost_schedule_exposure(pid):
+    added,removed,changed=_v55_scope_delta(pid)
+    estimate=_v39_rows("SELECT * FROM estimator_items WHERE company_id=? AND project_id=?",(current_company_id(),pid))
+    est_by_scope={}
+    for e in estimate:
+        sid=e["blueprint_scope_item_id"]
+        if sid is not None:
+            total=(float(e["quantity"] or 0)*float(e["material_unit_cost"] or 0)
+                   +float(e["quantity"] or 0)*float(e["labor_unit_cost"] or 0)
+                   +float(e["subcontract_quote"] or 0)+float(e["allowance"] or 0))
+            est_by_scope[int(sid)]=total
+    added_cost=sum(est_by_scope.get(int(r["id"]),0) for r in added)
+    removed_cost=sum(est_by_scope.get(int(r["id"]),0) for r in removed)
+    schedule_days=min(30,len(added)*0.5+len(changed)*0.25)
+    return added_cost,removed_cost,schedule_days
+
+def _v55_downstream(pid):
+    affected=_v55_affected_trades(pid)
+    rfis=_v42_rfis(pid)
+    subs=_v39_rows("SELECT * FROM submittals WHERE project_id=?",(pid,))
+    acts=_v39_rows("SELECT * FROM activities WHERE project_id=?",(pid,))
+    links=[]
+    for tr in affected:
+        for a in acts:
+            if str(a["trade"] or "").lower()==tr.lower():
+                links.append(("ACTIVITY",a["id"],a["name"],tr))
+        for s in subs:
+            if tr.lower() in str(s["responsible_party"] or "").lower() or tr.lower() in str(s["title"] or "").lower():
+                links.append(("SUBMITTAL",s["id"],s["title"],tr))
+        for r in rfis:
+            blob=(str(r["title"] or "")+" "+str(r["question"] or "")).lower()
+            if tr.lower() in blob:
+                links.append(("RFI",r["id"],r["title"],tr))
+    return links[:200]
+
+def _v55_summary(pid):
+    def build():
+        pairs=_v55_revision_pairs(pid)
+        added,removed,changed=_v55_scope_delta(pid)
+        trades=_v55_affected_trades(pid)
+        add_cost,remove_cost,days=_v55_cost_schedule_exposure(pid)
+        links=_v55_downstream(pid)
+        return {
+            "pairs":pairs,"added":added,"removed":removed,"changed":changed,"trades":trades,
+            "added_cost":add_cost,"removed_cost":remove_cost,"days":days,"links":links
+        }
+    return _v56_cached("revision_summary",pid,build)
+
+
+@app.get("/revision-intelligence",response_class=HTMLResponse)
+def v55_revision_home():
+    pid=project_id(); _v55_ensure_tables()
+    s=_v55_summary(pid)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v55 - Drawing Revision & Change Intelligence</div><h1>Know what changed before it hits the field.</h1><p class="muted">{len(s["pairs"])} likely revision pair(s) · {len(s["added"])} added scope item(s) · {len(s["removed"])} removed item(s) · {len(s["changed"])} changed ownership/source item(s) · {len(s["trades"])} affected trade(s).</p></div><div class="grid3">'
+    cards=[
+      ("Revision Pairing","Find likely prior/new versions of project documents.","/revision-intelligence/pairs"),
+      ("Added Scope","See requirements appearing in the latest analyzed run.","/revision-intelligence/added"),
+      ("Removed Scope","See requirements no longer present in the latest analyzed run.","/revision-intelligence/removed"),
+      ("Changed Scope","See ownership/source changes between recent analyses.","/revision-intelligence/changed"),
+      ("Affected Trades","See which subcontractor scopes may need review.","/revision-intelligence/trades"),
+      ("Cost Exposure","Estimate known priced exposure tied to changed scope.","/revision-intelligence/cost"),
+      ("Schedule Exposure","Show likely schedule review pressure from revision volume.","/revision-intelligence/schedule"),
+      ("RFI / Submittal Impact","Connect affected trades to downstream control items.","/revision-intelligence/downstream"),
+      ("Revision Action List","Prioritize what the project team should review next.","/revision-intelligence/actions"),
+      ("Revision Command","One concise revision/change intelligence view.","/revision-intelligence/command")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Revision Intelligence",body)
+
+@app.get("/revision-intelligence/pairs",response_class=HTMLResponse)
+def v55_pairs_page():
+    rows=_v55_revision_pairs(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">COMPARE</span> <b>{esc(new["original_name"])}</b><div class="small">Prior candidate: {esc(old["original_name"])} · Group {esc(group)}</div></div>' for new,old,group in rows)
+    return shell("Revision Pairing",'<div class="hero"><h1>Revision Pairing</h1><p class="muted">Filename-based candidate pairing only; human review still confirms the actual revision relationship.</p></div><div class="card">'+(h or '<p class="muted">No likely revision pairs detected.</p>')+'</div>')
+
+@app.get("/revision-intelligence/added",response_class=HTMLResponse)
+def v55_added_page():
+    rows=_v55_scope_delta(project_id())[0]
+    h="".join(f'<div class="action"><span class="badge WATCH">ADDED</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">{esc(r["source_sheet"])} · {esc(r["source_spec"])}</div></div>' for r in rows)
+    return shell("Added Scope",'<div class="hero"><h1>Added Scope Intelligence</h1><p class="muted">Requirements present in the latest Blueprint Brain run but not the immediately prior run.</p></div><div class="card">'+(h or '<p class="muted">No added scope detected.</p>')+'</div>')
+
+@app.get("/revision-intelligence/removed",response_class=HTMLResponse)
+def v55_removed_page():
+    rows=_v55_scope_delta(project_id())[1]
+    h="".join(f'<div class="action"><span class="badge WATCH">REMOVED</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">{esc(r["source_sheet"])} · {esc(r["source_spec"])}</div></div>' for r in rows)
+    return shell("Removed Scope",'<div class="hero"><h1>Removed Scope Intelligence</h1><p class="muted">Requirements present in the prior Blueprint Brain run but not the latest run.</p></div><div class="card">'+(h or '<p class="muted">No removed scope detected.</p>')+'</div>')
+
+@app.get("/revision-intelligence/changed",response_class=HTMLResponse)
+def v55_changed_page():
+    rows=_v55_scope_delta(project_id())[2]
+    h="".join(f'<div class="action"><span class="badge WATCH">CHANGED</span> <b>{esc(old["trade"])} → {esc(new["trade"])}</b> - {esc(new["requirement"])}<div class="small">Old {esc(old["source_sheet"])} / New {esc(new["source_sheet"])}</div></div>' for old,new in rows)
+    return shell("Changed Scope",'<div class="hero"><h1>Changed Scope Intelligence</h1><p class="muted">Highlights ownership/source changes between the two most recent Blueprint Brain runs.</p></div><div class="card">'+(h or '<p class="muted">No changed scope signals detected.</p>')+'</div>')
+
+@app.get("/revision-intelligence/trades",response_class=HTMLResponse)
+def v55_trades_page():
+    trades=_v55_affected_trades(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">REVIEW</span> <b>{esc(tr)}</b><div class="small">Scope/bid/schedule review recommended due to detected revision changes.</div></div>' for tr in trades)
+    return shell("Affected Trades",'<div class="hero"><h1>Affected Trades</h1><p class="muted">Trade list derived from added, removed and changed Blueprint Brain scope.</p></div><div class="card">'+(h or '<p class="muted">No affected trades detected.</p>')+'</div>')
+
+@app.get("/revision-intelligence/cost",response_class=HTMLResponse)
+def v55_cost_page():
+    add,remove,days=_v55_cost_schedule_exposure(project_id())
+    return shell("Revision Cost Exposure",f'<div class="hero"><h1>Revision Cost Exposure</h1><p class="muted">Known estimator-linked scope only. Added ${add:,.0f} · Removed ${remove:,.0f} · Net ${add-remove:,.0f}.</p></div><div class="card"><p>Unpriced scope remains review exposure and is not fabricated into a dollar value.</p></div>')
+
+@app.get("/revision-intelligence/schedule",response_class=HTMLResponse)
+def v55_schedule_page():
+    s=_v55_summary(project_id())
+    return shell("Revision Schedule Exposure",f'<div class="hero"><h1>Revision Schedule Exposure</h1><p class="muted">{len(s["added"])} added + {len(s["changed"])} changed scope signals suggest approximately {s["days"]:.1f} review-day(s) of schedule pressure proxy.</p></div><div class="card"><p>This is a transparent review proxy, not CPM-calculated delay entitlement.</p></div>')
+
+@app.get("/revision-intelligence/downstream",response_class=HTMLResponse)
+def v55_downstream_page():
+    rows=_v55_downstream(project_id())
+    h="".join(f'<div class="action"><span class="badge">{esc(kind)}</span> <b>{esc(title)}</b><div class="small">Affected trade: {esc(trade)}</div></div>' for kind,key,title,trade in rows)
+    return shell("Revision Downstream Impact",'<div class="hero"><h1>RFI / Submittal / Schedule Impact</h1><p class="muted">Connect revision-affected trades to downstream project controls that deserve review.</p></div><div class="card">'+(h or '<p class="muted">No downstream linked items detected.</p>')+'</div>')
+
+@app.get("/revision-intelligence/actions",response_class=HTMLResponse)
+def v55_actions_page():
+    s=_v55_summary(project_id())
+    actions=[]
+    if s["added"]: actions.append(("HIGH","Review added scope",f'{len(s["added"])} new requirement(s) detected.'))
+    if s["removed"]: actions.append(("HIGH","Review deleted scope",f'{len(s["removed"])} prior requirement(s) no longer detected.'))
+    if s["changed"]: actions.append(("HIGH","Review changed ownership/source",f'{len(s["changed"])} changed item(s) detected.'))
+    if s["trades"]: actions.append(("HIGH","Notify affected trades",", ".join(s["trades"])))
+    if s["links"]: actions.append(("REVIEW","Review downstream controls",f'{len(s["links"])} RFI/submittal/activity link(s) may be affected.'))
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(title)}</b><div class="small">{esc(detail)}</div></div>' for level,title,detail in actions)
+    return shell("Revision Action List",'<div class="hero"><h1>Revision Action List</h1><p class="muted">Human review remains required before scope, cost, or schedule commitments change.</p></div><div class="card">'+(h or '<p class="muted">No revision actions detected.</p>')+'</div>')
+
+@app.get("/revision-intelligence/command",response_class=HTMLResponse)
+def v55_command_page():
+    s=_v55_summary(project_id())
+    net=s["added_cost"]-s["removed_cost"]
+    body=f'<div class="hero"><div class="eyebrow">Revision Command</div><h1>What changed and what should the team do?</h1><p class="muted">{len(s["added"])} added · {len(s["removed"])} removed · {len(s["changed"])} changed · {len(s["trades"])} affected trades · ${net:,.0f} known net estimator-linked exposure.</p></div><div class="grid3">'
+    body+=_v37_link_card("Review Added Scope","Latest-run additions.","/revision-intelligence/added","Review")
+    body+=_v37_link_card("Affected Trades","Who needs scope review.","/revision-intelligence/trades","Review")
+    body+=_v37_link_card("Action List","What the team should review next.","/revision-intelligence/actions","Open")
+    body+='</div>'
+    return shell("Revision Command",body)
+
+
+# ============================================================
+# v56 PERFORMANCE & ARCHITECTURE OPTIMIZATION
+# ============================================================
+
+_V56_CACHE={}
+_V56_PERF={}
+_V56_TTL={
+    "snapshot":15,
+    "sequence":30,
+    "self_audit":60,
+    "master_findings":45,
+    "master_score":45,
+    "top_priorities":45,
+    "decisions":30,
+    "materials":30,
+    "hold_points":30,
+    "agenda":30,
+    "revision_summary":60,
+}
+
+def _v56_now_ts():
+    return datetime.utcnow().timestamp()
+
+def _v56_cache_get(name,pid):
+    key=(name,current_company_id(),pid)
+    row=_V56_CACHE.get(key)
+    if not row:
+        return None
+    ttl=_V56_TTL.get(name,30)
+    if _v56_now_ts()-row["ts"]>ttl:
+        _V56_CACHE.pop(key,None)
+        return None
+    return row["value"]
+
+def _v56_cache_set(name,pid,value):
+    _V56_CACHE[(name,current_company_id(),pid)]={"ts":_v56_now_ts(),"value":value}
+    return value
+
+def _v56_cached(name,pid,builder):
+    hit=_v56_cache_get(name,pid)
+    if hit is not None:
+        return hit
+    return _v56_cache_set(name,pid,builder())
+
+def _v56_clear_project_cache(pid=None):
+    cid=current_company_id()
+    keys=list(_V56_CACHE.keys())
+    for k in keys:
+        if k[1]==cid and (pid is None or k[2]==pid):
+            _V56_CACHE.pop(k,None)
+
+def _v56_perf_start(label):
+    return (label,_v56_now_ts())
+
+def _v56_perf_end(token):
+    label,start=token
+    elapsed=max(0,_v56_now_ts()-start)
+    row=_V56_PERF.setdefault(label,{"count":0,"total":0.0,"max":0.0,"last":0.0})
+    row["count"]+=1
+    row["total"]+=elapsed
+    row["max"]=max(row["max"],elapsed)
+    row["last"]=elapsed
+    return elapsed
+
+def _v56_ensure_indexes():
+    """
+    Safe, idempotent indexes for the most common project-scoped reads.
+    """
+    c=db()
+    indexes=[
+        ("idx_activities_project_start","activities","project_id,start"),
+        ("idx_readiness_project_activity","activity_readiness","project_id,activity_id"),
+        ("idx_inspections_project_activity","inspections_tracker","project_id,activity_id"),
+        ("idx_procurement_project_activity","procurement","project_id,activity_id"),
+        ("idx_submittals_project_activity","submittals","project_id,activity_id"),
+        ("idx_issues_project_activity_status","project_issues","project_id,activity_id,status"),
+        ("idx_scope_company_project_run","blueprint_scope_items","company_id,project_id,run_id"),
+        ("idx_scope_company_project_trade","blueprint_scope_items","company_id,project_id,trade"),
+        ("idx_scope_trade_scope","blueprint_scope_items","trade_scope_id"),
+        ("idx_trade_scopes_company_project_run","blueprint_trade_scopes","company_id,project_id,run_id"),
+        ("idx_attachments_company_project","attachments","company_id,project_id"),
+        ("idx_estimator_company_project_scope","estimator_items","company_id,project_id,blueprint_scope_item_id"),
+        ("idx_changes_project_status","change_events","project_id,status"),
+        ("idx_closeout_company_project","closeout_items","company_id,project_id"),
+        ("idx_learning_company_project_approval","learning_rules","company_id,project_id,approval_status"),
+        ("idx_memory_company_project_approval","project_memory","company_id,project_id,approval_status"),
+    ]
+    for name,table,cols in indexes:
+        try:
+            c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({cols})")
+        except Exception:
+            try: c.rollback()
+            except Exception: pass
+    try: c.commit()
+    except Exception: pass
+    c.close()
+
+_V56_INDEXES_READY=False
+def _v56_indexes_once():
+    global _V56_INDEXES_READY
+    if not _V56_INDEXES_READY:
+        try:
+            _v56_ensure_indexes()
+        finally:
+            _V56_INDEXES_READY=True
+
+def _v56_sequence(pid):
+    return _v56_cached("sequence",pid,lambda:_v45_sequence_analysis_uncached(pid))
+
+def _v56_self_audit(pid):
+    return _v56_cached("self_audit",pid,lambda:_v48_self_audit_uncached(pid))
+
+def _v56_master_findings(pid):
+    return _v56_cached("master_findings",pid,lambda:_v50_collect_findings_uncached(pid))
+
+def _v56_master_score(pid):
+    def build():
+        findings=_v56_master_findings(pid)
+        weights={"CRITICAL":12,"HIGH":7,"MEDIUM":3,"REVIEW":1,"LOW":0}
+        risk=min(100,sum(weights.get(f["severity"],1) for f in findings))
+        quality=_v48_quality_score(pid)["score"]
+        health=max(0,round((100-risk)*0.65 + quality*0.35))
+        return {"health":health,"risk":risk,"quality":quality,"count":len(findings)}
+    return _v56_cached("master_score",pid,build)
+
+def _v56_top_priorities(pid,limit=10):
+    cached=_v56_cache_get("top_priorities",pid)
+    if cached is None:
+        findings=_v56_master_findings(pid)
+        priority=[f for f in findings if f["severity"] in {"CRITICAL","HIGH","MEDIUM"}]
+        if len(priority)<50:
+            priority.extend([f for f in findings if f["severity"]=="REVIEW"][:50-len(priority)])
+        cached=_v56_cache_set("top_priorities",pid,priority[:50])
+    return cached[:limit]
+
+def _v56_dashboard_bundle(pid):
+    """
+    Compute the home screen once and share the same cached module results.
+    """
+    token=_v56_perf_start("home_dashboard_bundle")
+    try:
+        _v56_indexes_once()
+        s=_v56_cached("snapshot",pid,lambda:_v37_snapshot(pid))
+        score=_v56_master_score(pid)
+        top=_v56_top_priorities(pid,8)
+        decisions=_v56_cached("decisions",pid,lambda:_v47_decision_deadlines(pid)[:8])
+        materials=_v56_cached("materials",pid,lambda:[x for x in _v47_material_readiness(pid) if x[2] in {"CRITICAL","HIGH","TODAY"}][:8])
+        holds=_v56_cached("hold_points",pid,lambda:[x for x in _v49_hold_points(pid) if str(x[0]["result"] or "").upper()!="PASSED"][:8])
+        agenda=_v56_cached("agenda",pid,lambda:_v47_coordination_agenda(pid)[:8])
+        sequence=[x for x in _v56_sequence(pid) if x["risk"] in {"CRITICAL","HIGH"}][:8]
+        return {
+            "snapshot":s,"score":score,"top":top,"decisions":decisions,
+            "materials":materials,"holds":holds,"agenda":agenda,"sequence":sequence
+        }
+    finally:
+        _v56_perf_end(token)
+
+@app.get("/performance",response_class=HTMLResponse)
+def v56_performance_page():
+    _v56_indexes_once()
+    cache_count=len(_V56_CACHE)
+    rows=[]
+    for name,r in sorted(_V56_PERF.items(), key=lambda kv:kv[1]["last"], reverse=True):
+        avg=(r["total"]/r["count"]) if r["count"] else 0
+        rows.append((name,r["count"],r["last"],avg,r["max"]))
+    h="".join(
+        f'<div class="action"><b>{esc(name)}</b>'
+        f'<div class="small">runs {count} · last {last*1000:.0f} ms · avg {avg*1000:.0f} ms · max {maxv*1000:.0f} ms</div></div>'
+        for name,count,last,avg,maxv in rows
+    )
+    return shell("Performance Monitor",
+        f'<div class="hero"><div class="eyebrow">v56 Performance</div><h1>BuildCommand Performance Monitor</h1>'
+        f'<p class="muted">{cache_count} cached project intelligence snapshot(s). Heavy intelligence is reused until its short TTL expires.</p></div>'
+        f'<div class="card">{h or "<p class=muted>No timing samples yet. Open the dashboard, then return here.</p>"}</div>')
+
+@app.post("/performance/clear-cache")
+def v56_clear_cache():
+    _v56_clear_project_cache(project_id())
+    return RedirectResponse("/performance",status_code=303)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
