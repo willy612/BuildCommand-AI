@@ -753,7 +753,7 @@ def categorized_nav():
         ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
         ("MANAGE",[("Manage Home","/manage"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
-        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
+        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
         ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
     html='<div class="bc-topnav">'
@@ -1188,6 +1188,8 @@ def v39_intelligence_center():
     body += '<div class="grid3">' + _v37_link_card("Real Construction Reasoning 2.0","Cause, dependency, consequence, ownership, alternatives and uncertainty.","/reasoning-2","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Project Memory & Continuous Learning","Approved corrections, RFI answers, lessons and cross-project patterns.","/project-memory","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Drawing Revision & Change Intelligence","Added/removed scope, affected trades, cost/schedule exposure and downstream controls.","/revision-intelligence","Open") + '</div>'
+    body += '<div class="grid3">' + _v37_link_card("Event-Driven Intelligence","Refresh only the brain modules affected by a project change.","/event-intelligence","Open") + '</div>'
+
 
 
 
@@ -5138,6 +5140,162 @@ def v56_performance_page():
 def v56_clear_cache():
     _v56_clear_project_cache(project_id())
     return RedirectResponse("/performance",status_code=303)
+
+
+# ============================================================
+# v57 EVENT-DRIVEN INTELLIGENCE
+# Refresh only the intelligence affected by a project change.
+# ============================================================
+
+_V57_EVENTS=[]
+_V57_DIRTY={}
+
+_V57_DEPENDENCIES={
+    "DRAWING_UPLOAD":{"snapshot","master_findings","master_score","top_priorities","revision_summary","self_audit"},
+    "BLUEPRINT_ANALYSIS":{"snapshot","master_findings","master_score","top_priorities","revision_summary","self_audit"},
+    "SCOPE_CHANGE":{"snapshot","master_findings","master_score","top_priorities","revision_summary","self_audit"},
+    "RFI_CHANGE":{"snapshot","master_findings","master_score","top_priorities","decisions","agenda","self_audit"},
+    "SUBMITTAL_CHANGE":{"snapshot","master_findings","master_score","top_priorities","decisions","agenda","sequence"},
+    "INSPECTION_CHANGE":{"snapshot","master_findings","master_score","top_priorities","hold_points","agenda","sequence"},
+    "PROCUREMENT_CHANGE":{"snapshot","master_findings","master_score","top_priorities","materials","agenda","sequence"},
+    "SCHEDULE_CHANGE":{"snapshot","master_findings","master_score","top_priorities","sequence","agenda","decisions"},
+    "ISSUE_CHANGE":{"snapshot","master_findings","master_score","top_priorities","agenda","sequence"},
+    "LEARNING_CHANGE":{"master_findings","master_score","top_priorities","self_audit","revision_summary"},
+    "PROJECT_CHANGE":{"snapshot","master_findings","master_score","top_priorities","sequence","agenda","decisions","materials","hold_points"},
+}
+
+def _v57_emit(pid,event_type,subject="",source="SYSTEM"):
+    event_type=str(event_type or "PROJECT_CHANGE").upper()
+    affected=set(_V57_DEPENDENCIES.get(event_type,_V57_DEPENDENCIES["PROJECT_CHANGE"]))
+    cid=current_company_id()
+    dirty=_V57_DIRTY.setdefault((cid,pid),set())
+    dirty.update(affected)
+
+    # Invalidate only the affected v56 cache keys.
+    for name in affected:
+        _V56_CACHE.pop((name,cid,pid),None)
+
+    event={
+        "ts":datetime.utcnow().isoformat(),
+        "company_id":cid,"project_id":pid,"event_type":event_type,
+        "subject":subject,"source":source,"affected":sorted(affected)
+    }
+    _V57_EVENTS.append(event)
+    if len(_V57_EVENTS)>500:
+        del _V57_EVENTS[:-500]
+    return event
+
+def _v57_dirty(pid):
+    return sorted(_V57_DIRTY.get((current_company_id(),pid),set()))
+
+def _v57_mark_clean(pid,names):
+    dirty=_V57_DIRTY.setdefault((current_company_id(),pid),set())
+    for n in names: dirty.discard(n)
+
+def _v57_refresh(pid,names=None):
+    names=set(names or _v57_dirty(pid))
+    token=_v56_perf_start("event_driven_refresh")
+    refreshed=[]
+    try:
+        if "snapshot" in names:
+            _v56_cached("snapshot",pid,lambda:_v37_snapshot(pid)); refreshed.append("snapshot")
+        if "sequence" in names:
+            _v56_sequence(pid); refreshed.append("sequence")
+        if "self_audit" in names:
+            _v56_self_audit(pid); refreshed.append("self_audit")
+        if "master_findings" in names:
+            _v56_master_findings(pid); refreshed.append("master_findings")
+        if "master_score" in names:
+            _v56_master_score(pid); refreshed.append("master_score")
+        if "top_priorities" in names:
+            _v56_top_priorities(pid,50); refreshed.append("top_priorities")
+        if "decisions" in names:
+            _v56_cached("decisions",pid,lambda:_v47_decision_deadlines(pid)[:8]); refreshed.append("decisions")
+        if "materials" in names:
+            _v56_cached("materials",pid,lambda:[x for x in _v47_material_readiness(pid) if x[2] in {"CRITICAL","HIGH","TODAY"}][:8]); refreshed.append("materials")
+        if "hold_points" in names:
+            _v56_cached("hold_points",pid,lambda:[x for x in _v49_hold_points(pid) if str(x[0]["result"] or "").upper()!="PASSED"][:8]); refreshed.append("hold_points")
+        if "agenda" in names:
+            _v56_cached("agenda",pid,lambda:_v47_coordination_agenda(pid)[:8]); refreshed.append("agenda")
+        if "revision_summary" in names:
+            _v55_summary(pid); refreshed.append("revision_summary")
+        _v57_mark_clean(pid,refreshed)
+        return refreshed
+    finally:
+        _v56_perf_end(token)
+
+def _v57_recent_events(pid,limit=50):
+    cid=current_company_id()
+    return [e for e in reversed(_V57_EVENTS) if e["company_id"]==cid and e["project_id"]==pid][:limit]
+
+@app.get("/event-intelligence",response_class=HTMLResponse)
+def v57_event_home():
+    pid=project_id()
+    dirty=_v57_dirty(pid)
+    events=_v57_recent_events(pid,20)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v57 - Event-Driven Intelligence</div><h1>Update only what changed.</h1><p class="muted">{len(dirty)} intelligence area(s) currently marked for refresh · {len(events)} recent project event(s).</p></div><div class="grid3">'
+    cards=[
+      ("Event Command","See project changes and affected intelligence.","/event-intelligence/command"),
+      ("Dirty Intelligence","See exactly what needs recalculation.","/event-intelligence/dirty"),
+      ("Dependency Map","See which project changes affect which brain modules.","/event-intelligence/dependencies"),
+      ("Recent Events","Audit recent intelligence-triggering project changes.","/event-intelligence/events"),
+      ("Refresh Changed Intelligence","Recalculate only dirty modules.","/event-intelligence/refresh"),
+      ("Performance Monitor","Measure event-driven refresh speed.","/performance"),
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Event-Driven Intelligence",body)
+
+@app.get("/event-intelligence/command",response_class=HTMLResponse)
+def v57_event_command():
+    pid=project_id(); dirty=_v57_dirty(pid); events=_v57_recent_events(pid,10)
+    ehtml="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(e["event_type"])}</span> <b>{esc(e["subject"] or "Project change")}</b>'
+        f'<div class="small">{esc(e["ts"])} · refreshes {esc(", ".join(e["affected"]))}</div></div>'
+        for e in events
+    ) or '<p class="muted">No project change events recorded in this process yet.</p>'
+    dhtml="".join(f'<span class="badge WATCH" style="margin:4px">{esc(x)}</span>' for x in dirty) or '<span class="badge READY">CLEAN</span>'
+    body=f'<div class="hero"><div class="eyebrow">Event Command</div><h1>What changed, and what brain work does it require?</h1><p class="muted">Dirty intelligence: {len(dirty)} module(s).</p></div><div class="card"><h2>Needs Refresh</h2>{dhtml}</div><div class="card"><h2>Recent Events</h2>{ehtml}</div>'
+    return shell("Event Command",body)
+
+@app.get("/event-intelligence/dirty",response_class=HTMLResponse)
+def v57_dirty_page():
+    dirty=_v57_dirty(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">DIRTY</span> <b>{esc(x)}</b><div class="small">This module was invalidated by a relevant project change.</div></div>' for x in dirty)
+    return shell("Dirty Intelligence",'<div class="hero"><h1>Dirty Intelligence</h1><p class="muted">Only these modules need recalculation.</p></div><div class="card">'+(h or '<p class="muted">All tracked intelligence is clean.</p>')+'</div>')
+
+@app.get("/event-intelligence/dependencies",response_class=HTMLResponse)
+def v57_dependencies_page():
+    h=""
+    for event,names in _V57_DEPENDENCIES.items():
+        h+=f'<div class="action"><b>{esc(event)}</b><div class="small">{esc(", ".join(sorted(names)))}</div></div>'
+    return shell("Intelligence Dependency Map",'<div class="hero"><h1>Intelligence Dependency Map</h1><p class="muted">A drawing change should not force unrelated procurement or field calculations unless they actually depend on it.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/event-intelligence/events",response_class=HTMLResponse)
+def v57_events_page():
+    rows=_v57_recent_events(project_id(),100)
+    h="".join(f'<div class="action"><span class="badge">{esc(e["event_type"])}</span> <b>{esc(e["subject"] or "Project change")}</b><div class="small">{esc(e["ts"])} · source {esc(e["source"])} · affected {esc(", ".join(e["affected"]))}</div></div>' for e in rows)
+    return shell("Recent Intelligence Events",'<div class="hero"><h1>Recent Intelligence Events</h1><p class="muted">Transparent audit trail for cache invalidation and targeted refresh.</p></div><div class="card">'+(h or '<p class="muted">No events recorded yet.</p>')+'</div>')
+
+@app.get("/event-intelligence/refresh",response_class=HTMLResponse)
+def v57_refresh_page():
+    pid=project_id()
+    dirty=_v57_dirty(pid)
+    if not dirty:
+        return shell("Refresh Changed Intelligence",'<div class="hero"><h1>Nothing needs refreshing.</h1><p class="muted">Tracked intelligence is currently clean.</p></div>')
+    h="".join(f'<li>{esc(x)}</li>' for x in dirty)
+    return shell("Refresh Changed Intelligence",f'<div class="hero"><h1>Refresh only changed intelligence</h1><p class="muted">{len(dirty)} module(s) are dirty.</p></div><div class="card"><ul>{h}</ul><form method="post" action="/event-intelligence/refresh"><button type="submit">Refresh Changed Intelligence</button></form></div>')
+
+@app.post("/event-intelligence/refresh")
+def v57_refresh_post():
+    _v57_refresh(project_id())
+    return RedirectResponse("/event-intelligence/command",status_code=303)
+
+@app.post("/event-intelligence/test-event")
+def v57_test_event(event_type:str=Form("PROJECT_CHANGE"),subject:str=Form("Manual project update")):
+    _v57_emit(project_id(),event_type,subject,"MANUAL")
+    return RedirectResponse("/event-intelligence/command",status_code=303)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
@@ -10086,6 +10244,7 @@ def create_procurement(
     c.commit()
     c.close()
 
+    _v57_emit(project_id(),"PROCUREMENT_CHANGE","Procurement updated","UI")
     return RedirectResponse(url="/procurement", status_code=303)
 
 
@@ -10578,6 +10737,7 @@ def create_issue(
     c.commit()
     c.close()
 
+    _v57_emit(project_id(),"ISSUE_CHANGE","Issue created","UI")
     return RedirectResponse(url="/issues", status_code=303)
 
 
@@ -11478,6 +11638,7 @@ def create_inspection(
     c.commit()
     c.close()
 
+    _v57_emit(project_id(),"INSPECTION_CHANGE","Inspection updated","UI")
     return RedirectResponse(url="/inspections", status_code=303)
 
 
@@ -11887,6 +12048,7 @@ def create_submittal(
     c.commit()
     c.close()
 
+    _v57_emit(project_id(),"SUBMITTAL_CHANGE","Submittal created","UI")
     return RedirectResponse(url="/submittals", status_code=303)
 
 
