@@ -6637,7 +6637,7 @@ def v471_workspace(attachment_id:int):
         <a href="/issues">Issues</a><br>
         <a href="/smart-rfi">Smart RFI</a><br>
         <a href="/blueprint-brain">Blueprint Brain</a><br>
-        <a href="/revision-intelligence">Revision Intelligence</a>
+        <a href="/revision-intelligence">Revision Intelligence</a><br><a href="/blueprint-markup/pro?attachment_id=__ATTACHMENT_ID__">Markup Pro</a>
       </div>
     </div>
 
@@ -6747,6 +6747,199 @@ def v471_new_markup(
         "type":markup_type,"x":x,"y":y,"w":w,"h":h,
         "text":text_value,"layer_id":layer_id
     })
+
+
+# ============================================================
+# v472 BLUEPRINT MARKUP PRO
+# Adds saved edit/delete, visibility controls, zoom/pan controls,
+# calibration + measurement records, and markup-to-project links.
+# ============================================================
+
+def _v472_ensure_tables():
+    _v471_ensure_tables()
+    c=db()
+    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
+    c.execute(f"""CREATE TABLE IF NOT EXISTS blueprint_measurement_calibrations(
+      id {pk},company_id BIGINT,project_id BIGINT,attachment_id BIGINT,page_number INTEGER DEFAULT 1,
+      pixel_distance REAL,real_distance REAL,unit TEXT,created TEXT,updated TEXT)""")
+    c.commit(); c.close()
+
+def _v472_markup(pid,mid):
+    rows=_v39_rows("SELECT * FROM blueprint_markups WHERE company_id=? AND project_id=? AND id=?",
+                   (current_company_id(),pid,mid))
+    return rows[0] if rows else None
+
+@app.get("/blueprint-markup/pro",response_class=HTMLResponse)
+def v472_pro(attachment_id:int):
+    pid=project_id(); _v472_ensure_tables()
+    docs=_v471_docs(pid)
+    doc=next((d for d in docs if int(d["id"])==int(attachment_id)),None)
+    if not doc:
+        return shell("Blueprint Markup Pro",'<div class="card"><p class="muted">Document not found.</p></div>')
+    layers=_v471_layers(pid,attachment_id)
+    markups=_v471_markups(pid,attachment_id)
+    layer_html="".join(
+      f'<label class="v472-layer"><input type="checkbox" checked onchange="v472Layer({r["id"]},this.checked)"> '
+      f'<b>{esc(r["name"])}</b><span>{esc(r["trade"] or "General")}</span></label>' for r in layers
+    )
+    items=[]
+    for r in markups:
+        items.append({
+          "id":r["id"],"type":r["markup_type"],"x":r["x"],"y":r["y"],"w":r["w"],"h":r["h"],
+          "text":r["text_value"] or "","layer":r["layer_id"],"status":r["status"] or "OPEN"
+        })
+
+    html="""<style>
+    .v472-app{display:grid;grid-template-columns:220px minmax(0,1fr) 260px;gap:10px}
+    .v472-panel{background:#fff;border:1px solid #e1e7ec;border-radius:13px;padding:12px}
+    .v472-stage{height:72vh;overflow:auto;background:#dfe5e9;border-radius:13px;position:relative}
+    .v472-sheet{width:1200px;height:850px;position:relative;background:#fff;margin:24px auto;transform-origin:0 0;box-shadow:0 5px 20px rgba(0,0,0,.15)}
+    .v472-paper{position:absolute;inset:0;background:repeating-linear-gradient(0deg,#fff,#fff 23px,#f5f7f8 24px);display:flex;align-items:center;justify-content:center;color:#7a8791;font-weight:800}
+    .v472-overlay{position:absolute;inset:0}
+    .v472-mark{position:absolute;border:2px solid #111820;background:rgba(255,255,255,.82);padding:4px;min-width:24px;min-height:20px;font-size:11px;cursor:pointer}
+    .v472-mark.pin{border-radius:50%;width:24px;height:24px;min-width:24px;min-height:24px;padding:0;background:#111820;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800}
+    .v472-mark.selected{outline:3px solid rgba(17,24,32,.25)}
+    .v472-tools button{display:block;width:100%;margin:4px 0;padding:8px;text-align:left;border:1px solid #dce3e8;border-radius:8px;background:#fff}
+    .v472-layer{display:block;padding:7px 0;border-bottom:1px solid #edf1f3;font-size:12px}.v472-layer span{display:block;margin-left:20px;opacity:.6}
+    .v472-top{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}.v472-top button{padding:8px 11px;border:1px solid #dce3e8;background:#fff;border-radius:8px}
+    @media(max-width:1000px){.v472-app{grid-template-columns:1fr}.v472-stage{height:60vh}}
+    </style>
+    <div class="hero"><div class="eyebrow">BuildCommand v472</div><h1>Blueprint Markup Pro</h1><p class="muted">Zoom, layer visibility, saved annotations, measurement calibration, and project-linked markup controls.</p></div>
+    <div class="v472-top">
+      <button onclick="v472Zoom(.15)">Zoom +</button><button onclick="v472Zoom(-.15)">Zoom −</button><button onclick="v472Reset()">Fit / Reset</button>
+      <button onclick="v472Calibrate()">Calibrate Measurement</button>
+      <a class="button" href="/blueprint-markup/workspace?attachment_id=__AID__">Basic Workspace</a>
+    </div>
+    <div class="v472-app">
+      <div class="v472-panel v472-tools">
+        <h3>Tools</h3>
+        <button onclick="v472Tool='select'">Select / Inspect</button>
+        <button onclick="v472Tool='cloud'">Cloud / Box</button>
+        <button onclick="v472Tool='text'">Text Note</button>
+        <button onclick="v472Tool='issue'">Issue Pin</button>
+        <button onclick="v472Tool='rfi'">RFI Pin</button>
+        <button onclick="v472Tool='measure'">Measure</button>
+        <hr><h3>Layers</h3>__LAYERS__
+      </div>
+      <div class="v472-stage" id="v472-stage">
+        <div class="v472-sheet" id="v472-sheet">
+          <div class="v472-paper">DRAWING MARKUP SURFACE<br><small>__DOC__</small></div>
+          <div class="v472-overlay" id="v472-overlay"></div>
+        </div>
+      </div>
+      <div class="v472-panel">
+        <h3>Selected Markup</h3>
+        <div id="v472-inspector"><p class="muted">Select a markup.</p></div>
+        <hr>
+        <h3>Project Connections</h3>
+        <p class="small">Selected markups can be tagged as an Issue, RFI, trade coordination item, or field note.</p>
+        <button onclick="v472Link('ISSUE')">Tag as Issue</button>
+        <button onclick="v472Link('RFI')">Tag as RFI</button>
+        <button onclick="v472Link('COORDINATION')">Tag as Coordination</button>
+      </div>
+    </div>
+    <script>
+    let v472Tool="select",v472Scale=1,v472Selected=null;
+    const v472Data=__DATA__;
+    const hiddenLayers=new Set();
+
+    function v472Render(){
+      const ov=document.getElementById("v472-overlay");ov.innerHTML="";
+      v472Data.forEach(m=>{
+        if(hiddenLayers.has(String(m.layer)))return;
+        const el=document.createElement("div");
+        el.className="v472-mark"+((m.type==="issue"||m.type==="rfi")?" pin":"")+(v472Selected===m.id?" selected":"");
+        el.style.left=(m.x||0)+"px";el.style.top=(m.y||0)+"px";
+        if(m.w)el.style.width=m.w+"px";if(m.h)el.style.height=m.h+"px";
+        el.textContent=(m.type==="issue"?"I":m.type==="rfi"?"R":m.text||m.type.toUpperCase());
+        el.onclick=(e)=>{e.stopPropagation();v472Select(m.id)};ov.appendChild(el);
+      });
+    }
+    function v472Select(id){
+      v472Selected=id;const m=v472Data.find(x=>x.id===id);v472Render();
+      document.getElementById("v472-inspector").innerHTML=
+       '<p><b>'+m.type.toUpperCase()+'</b></p><textarea id="v472-text" style="width:100%">'+(m.text||'')+'</textarea>'+
+       '<p class="small">X '+m.x+' · Y '+m.y+' · '+m.status+'</p>'+
+       '<button onclick="v472Save()">Save Note</button> <button onclick="v472Delete()">Delete</button>';
+    }
+    function v472Zoom(d){v472Scale=Math.max(.35,Math.min(3,v472Scale+d));document.getElementById("v472-sheet").style.transform="scale("+v472Scale+")"}
+    function v472Reset(){v472Scale=1;document.getElementById("v472-sheet").style.transform="scale(1)"}
+    function v472Layer(id,on){if(on)hiddenLayers.delete(String(id));else hiddenLayers.add(String(id));v472Render()}
+    function v472Save(){
+      if(!v472Selected)return;const data=new URLSearchParams();data.set("text_value",document.getElementById("v472-text").value);
+      fetch("/blueprint-markup/markups/"+v472Selected+"/update",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:data})
+      .then(r=>r.json()).then(x=>{let m=v472Data.find(z=>z.id===v472Selected);m.text=x.text;v472Select(v472Selected)})
+    }
+    function v472Delete(){
+      if(!v472Selected||!confirm("Delete this markup?"))return;
+      fetch("/blueprint-markup/markups/"+v472Selected+"/delete",{method:"POST"}).then(()=>{
+        const i=v472Data.findIndex(x=>x.id===v472Selected);if(i>=0)v472Data.splice(i,1);v472Selected=null;v472Render();document.getElementById("v472-inspector").innerHTML="<p class='muted'>Select a markup.</p>";
+      })
+    }
+    function v472Link(kind){
+      if(!v472Selected){alert("Select a markup first.");return}
+      const title=prompt(kind+" title / reference:","")||"";
+      const data=new URLSearchParams();data.set("linked_type",kind);data.set("linked_id",title);
+      fetch("/blueprint-markup/markups/"+v472Selected+"/link",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:data})
+      .then(()=>alert("Markup tagged as "+kind+"."));
+    }
+    function v472Calibrate(){
+      const px=prompt("Known pixel/reference distance:","100");if(!px)return;
+      const real=prompt("Real drawing distance:","10");if(!real)return;
+      const unit=prompt("Unit (ft, in, m):","ft")||"ft";
+      const data=new URLSearchParams();data.set("attachment_id","__AID__");data.set("pixel_distance",px);data.set("real_distance",real);data.set("unit",unit);
+      fetch("/blueprint-markup/calibration",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:data}).then(()=>alert("Measurement scale saved."));
+    }
+    document.getElementById("v472-overlay").onclick=function(e){
+      if(v472Tool==="select")return;
+      const rect=this.getBoundingClientRect();const x=Math.round((e.clientX-rect.left)/v472Scale),y=Math.round((e.clientY-rect.top)/v472Scale);
+      const layer=document.querySelector(".v472-layer input:checked");if(!layer){alert("Turn on/select a layer first.");return}
+      const layerId=layer.closest(".v472-layer").getAttribute("data-id")||layer.value;
+      let text=["text","cloud","measure"].includes(v472Tool)?(prompt("Markup note:","")||""):"";
+      const data=new URLSearchParams();data.set("attachment_id","__AID__");data.set("layer_id",layer.value);data.set("markup_type",v472Tool);data.set("x",x);data.set("y",y);data.set("w",v472Tool==="cloud"?140:0);data.set("h",v472Tool==="cloud"?70:0);data.set("text_value",text);
+      fetch("/blueprint-markup/markups/new",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:data})
+      .then(r=>r.json()).then(m=>{m.id=Date.now();v472Data.push(m);v472Render()});
+    };
+    v472Render();
+    </script>"""
+    # checkbox values for creation
+    layer_html2="".join(
+      f'<label class="v472-layer" data-id="{r["id"]}"><input type="checkbox" value="{r["id"]}" checked onchange="v472Layer({r["id"]},this.checked)"> <b>{esc(r["name"])}</b><span>{esc(r["trade"] or "General")}</span></label>'
+      for r in layers
+    )
+    html=html.replace("__AID__",str(attachment_id)).replace("__DOC__",esc(doc["original_name"] or "Drawing"))
+    html=html.replace("__LAYERS__",layer_html2).replace("__DATA__",repr(items))
+    return shell("Blueprint Markup Pro",html)
+
+@app.post("/blueprint-markup/markups/{markup_id}/update")
+def v472_update_markup(markup_id:int,text_value:str=Form("")):
+    m=_v472_markup(project_id(),markup_id)
+    if not m:return JSONResponse({"error":"not found"},status_code=404)
+    c=db();c.execute("UPDATE blueprint_markups SET text_value=?,updated=? WHERE id=? AND company_id=? AND project_id=?",
+                     (text_value,datetime.utcnow().isoformat(),markup_id,current_company_id(),project_id()))
+    c.commit();c.close()
+    return JSONResponse({"ok":True,"text":text_value})
+
+@app.post("/blueprint-markup/markups/{markup_id}/delete")
+def v472_delete_markup(markup_id:int):
+    c=db();c.execute("DELETE FROM blueprint_markups WHERE id=? AND company_id=? AND project_id=?",
+                     (markup_id,current_company_id(),project_id()));c.commit();c.close()
+    return JSONResponse({"ok":True})
+
+@app.post("/blueprint-markup/markups/{markup_id}/link")
+def v472_link_markup(markup_id:int,linked_type:str=Form(...),linked_id:str=Form("")):
+    c=db();c.execute("UPDATE blueprint_markups SET linked_type=?,linked_id=?,updated=? WHERE id=? AND company_id=? AND project_id=?",
+                     (linked_type,linked_id,datetime.utcnow().isoformat(),markup_id,current_company_id(),project_id()))
+    c.commit();c.close()
+    return JSONResponse({"ok":True})
+
+@app.post("/blueprint-markup/calibration")
+def v472_calibration(attachment_id:int=Form(...),pixel_distance:float=Form(...),real_distance:float=Form(...),unit:str=Form("ft")):
+    _v472_ensure_tables();c=db();now=datetime.utcnow().isoformat()
+    c.execute("""INSERT INTO blueprint_measurement_calibrations(company_id,project_id,attachment_id,page_number,pixel_distance,real_distance,unit,created,updated)
+                 VALUES(?,?,?,?,?,?,?,?,?)""",(current_company_id(),project_id(),attachment_id,1,pixel_distance,real_distance,unit,now,now))
+    c.commit();c.close()
+    return JSONResponse({"ok":True})
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
