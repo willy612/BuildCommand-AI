@@ -1130,6 +1130,10 @@ def v39_intelligence_center():
     body += '<div class="grid3">' + _v37_link_card("Prediction & Decision Intelligence","Dependency impacts, decision deadlines, manpower, materials, closeout and risk propagation.","/prediction-intelligence","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Brain Quality & Self-Learning","Verification, confidence calibration, source quality, contradiction detection and improvement queue.","/brain-quality","Open") + '</div>'
     body += '<div class="grid3">' + _v37_link_card("Field Context & Assembly Intelligence","Rooms, assemblies, systems, prerequisites, hold points, commissioning and field work packages.","/field-context","Open") + '</div>'
+    body += '<div class="grid3">' + _v37_link_card("Master Construction Reasoning","One connected project judgment across scope, sequence, risk, field, quality and commercial intelligence.","/master-reasoning","Open") + '</div>'
+    body += '<div class="grid3">' + _v37_link_card("Real Construction Reasoning 2.0","Cause, dependency, consequence, ownership, alternatives and uncertainty.","/reasoning-2","Open") + '</div>'
+
+
 
 
 
@@ -3834,6 +3838,571 @@ def v49_command_page():
     body+=_v37_link_card("Work Packages","Location/trade execution packages from current intelligence.","/field-context/work-packages","Review")
     body+='</div>'
     return shell("Field Context Command",body)
+
+
+# ============================================================
+# v50 MASTER CONSTRUCTION REASONING ENGINE
+# ============================================================
+
+def _v50_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS master_reasoning_runs(
+        id {pk},company_id BIGINT,project_id BIGINT,run_time TEXT,
+        health_score {num} DEFAULT 100,risk_score {num} DEFAULT 0,
+        quality_score {num} DEFAULT 100,summary TEXT,status TEXT DEFAULT 'COMPLETE',
+        created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS master_reasoning_findings(
+        id {pk},company_id BIGINT,project_id BIGINT,run_id BIGINT,
+        finding_type TEXT,title TEXT,severity TEXT,trade TEXT,location TEXT,
+        reason TEXT,source_ref TEXT,downstream_impact TEXT,recommended_action TEXT,
+        confidence TEXT DEFAULT 'MEDIUM',human_review INTEGER DEFAULT 1,created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS master_reasoning_links(
+        id {pk},company_id BIGINT,project_id BIGINT,run_id BIGINT,
+        from_type TEXT,from_key TEXT,to_type TEXT,to_key TEXT,
+        relationship TEXT,reason TEXT,created TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit(); c.close()
+
+def _v50_collect_findings(pid):
+    findings=[]
+
+    # 1) Blueprint / scope quality
+    for r,verify,agreement,source_level,calibrated,score,contradiction,reason in _v48_self_audit(pid):
+        if agreement=="DISAGREE" or calibrated=="LOW" or source_level=="LOW":
+            sev="HIGH" if agreement=="DISAGREE" else "MEDIUM"
+            findings.append({
+                "type":"SCOPE QUALITY","title":r["requirement"],"severity":sev,
+                "trade":r["trade"],"location":_v49_room_key(r["requirement"]),
+                "reason":reason,
+                "source": " · ".join(x for x in [r["source_sheet"],r["source_detail"],r["source_spec"]] if x),
+                "impact":"Bad ownership/source quality can contaminate estimating, bidding, schedule and field execution.",
+                "action":f"Review saved trade ownership versus second opinion: {verify}.",
+                "confidence":calibrated
+            })
+
+    # 2) Constructability
+    for r in _v452_constructability(pid):
+        findings.append({
+            "type":"CONSTRUCTABILITY","title":r["title"],"severity":r["severity"],
+            "trade":r["trade"],"location":_v49_room_key(r["description"]),
+            "reason":r["description"],"source":r["source"],
+            "impact":"Potential field coordination, access, clearance or installation problem.",
+            "action":r["action"],"confidence":"MEDIUM"
+        })
+
+    # 3) Sequence
+    for x in _v45_sequence_analysis(pid):
+        if x["risk"] in {"CRITICAL","HIGH"}:
+            a=x["activity"]
+            findings.append({
+                "type":"SEQUENCE","title":a["name"],"severity":x["risk"],
+                "trade":a["trade"],"location":"",
+                "reason":x["blocking_reason"] or "High sequence exposure.",
+                "source":f'Schedule {a["start"]} to {a["finish"]}',
+                "impact":x["downstream"],
+                "action":x["recommendation"],"confidence":"HIGH"
+            })
+
+    # 4) Procurement
+    for r,level,exposure,reason,action in _v452_procurement_analysis(pid):
+        if level in {"CRITICAL","HIGH","TODAY"}:
+            findings.append({
+                "type":"PROCUREMENT","title":r["item"],"severity":"CRITICAL" if level=="TODAY" else level,
+                "trade":"","location":"","reason":reason,
+                "source":f'Need {r["required_on_site"]} · Promised {r["promised_date"]}',
+                "impact":"Late material can delay installation and downstream activities.",
+                "action":action,"confidence":"HIGH"
+            })
+
+    # 5) Decision deadlines
+    for typ,title,due,severity,cost,days,source in _v47_decision_deadlines(pid):
+        if severity in {"CRITICAL","HIGH"}:
+            findings.append({
+                "type":"DECISION","title":title,"severity":severity,"trade":"","location":"",
+                "reason":f"{typ} decision due {due}.",
+                "source":source,
+                "impact":f"Potential ${cost:,.0f} cost exposure and {days:g} schedule day(s).",
+                "action":"Escalate and obtain decision before downstream commitment.",
+                "confidence":"HIGH"
+            })
+
+    # 6) Inspection hold points
+    for i,a in _v49_hold_points(pid):
+        if str(i["result"] or "").upper()!="PASSED":
+            findings.append({
+                "type":"INSPECTION","title":i["inspection_type"],"severity":"HIGH",
+                "trade":a["trade"] if a else "","location":"",
+                "reason":f'Inspection gate is {i["result"] or "PENDING"}.',
+                "source":f'{i["scheduled_date"]} · {i["authority"]}',
+                "impact":"Downstream concealment/finish work should not proceed past an unmet hold point.",
+                "action":"Verify readiness and pass required inspection before releasing downstream work.",
+                "confidence":"HIGH"
+            })
+
+    # 7) Cost risk
+    for level,kind,title,reason,source in _v46_cost_risk(pid):
+        if level in {"HIGH","CRITICAL"}:
+            findings.append({
+                "type":"COST RISK","title":title,"severity":level,
+                "trade":"","location":"","reason":reason,"source":source,
+                "impact":"Potential added cost or commercial exposure.",
+                "action":"Review contract scope, source documents and change documentation.",
+                "confidence":"MEDIUM"
+            })
+
+    # 8) Field prerequisites
+    for a,ready,risk,gates,blocking in _v49_install_prereqs(pid):
+        if ready!="READY" and risk in {"CRITICAL","HIGH"}:
+            findings.append({
+                "type":"MAKE READY","title":a["name"],"severity":risk,
+                "trade":a["trade"],"location":"",
+                "reason":blocking or "Installation prerequisites are incomplete.",
+                "source":"; ".join(gates),
+                "impact":"Activity may start unprepared or force downstream rework.",
+                "action":"Close make-ready gaps before releasing crew.",
+                "confidence":"HIGH"
+            })
+
+    # 9) Closeout
+    for r,level in _v47_closeout_prediction(pid):
+        if level in {"CRITICAL","HIGH"}:
+            findings.append({
+                "type":"CLOSEOUT","title":r["item"],"severity":level,
+                "trade":r["responsible_party"],"location":"",
+                "reason":f'Status {r["status"]} · Due {r["due_date"]}',
+                "source":r["category"],
+                "impact":"Late turnover requirement can delay substantial/final completion.",
+                "action":"Assign owner and recover closeout requirement before project end.",
+                "confidence":"HIGH"
+            })
+
+    # 10) Cross-trade dependencies / handoffs
+    for r,rels in _v46_dependencies(pid):
+        if rels:
+            findings.append({
+                "type":"HANDOFF","title":r["requirement"],"severity":"REVIEW",
+                "trade":r["trade"],"location":_v49_room_key(r["requirement"]),
+                "reason":f'Primary trade depends on {", ".join(rels)}.',
+                "source":" · ".join(x for x in [r["source_sheet"],r["source_detail"],r["source_spec"]] if x),
+                "impact":"Missed handoff can create scope gaps, rework or delay.",
+                "action":"Confirm responsibility boundary and readiness between trades.",
+                "confidence":"MEDIUM"
+            })
+
+    rank={"CRITICAL":0,"HIGH":1,"MEDIUM":2,"REVIEW":3,"LOW":4}
+    findings.sort(key=lambda x:(rank.get(x["severity"],9),x["type"],x["title"]))
+    return findings[:500]
+
+def _v50_score(pid):
+    findings=_v50_collect_findings(pid)
+    weights={"CRITICAL":12,"HIGH":7,"MEDIUM":3,"REVIEW":1,"LOW":0}
+    risk=min(100,sum(weights.get(f["severity"],1) for f in findings))
+    quality=_v48_quality_score(pid)["score"]
+    health=max(0,round((100-risk)*0.65 + quality*0.35))
+    return {"health":health,"risk":risk,"quality":quality,"count":len(findings)}
+
+def _v50_run(pid):
+    _v50_ensure_tables()
+    findings=_v50_collect_findings(pid)
+    score=_v50_score(pid)
+    now=datetime.utcnow().isoformat()
+    summary=f'{score["count"]} connected findings · health {score["health"]}/100 · risk {score["risk"]}/100 · quality {score["quality"]}/100.'
+    c=db()
+    c.execute("""INSERT INTO master_reasoning_runs(company_id,project_id,run_time,health_score,risk_score,quality_score,summary,status,created)
+                 VALUES(?,?,?,?,?,?,?,?,?)""",
+              (current_company_id(),pid,now,score["health"],score["risk"],score["quality"],summary,"COMPLETE",now))
+    run_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    for f in findings:
+        c.execute("""INSERT INTO master_reasoning_findings(
+            company_id,project_id,run_id,finding_type,title,severity,trade,location,reason,
+            source_ref,downstream_impact,recommended_action,confidence,human_review,created
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (current_company_id(),pid,run_id,f["type"],f["title"],f["severity"],f["trade"],f["location"],
+         f["reason"],f["source"],f["impact"],f["action"],f["confidence"],1,now))
+    c.commit(); c.close()
+    return run_id,findings,score
+
+def _v50_top_priorities(pid,limit=10):
+    findings=_v50_collect_findings(pid)
+    # Suppress low-value HANDOFF review items unless priority space remains.
+    priority=[f for f in findings if f["severity"] in {"CRITICAL","HIGH","MEDIUM"}]
+    if len(priority)<limit:
+        priority.extend([f for f in findings if f["severity"]=="REVIEW"][:limit-len(priority)])
+    return priority[:limit]
+
+def _v50_trade_brief(pid,trade):
+    findings=[f for f in _v50_collect_findings(pid) if str(f["trade"] or "").lower()==str(trade or "").lower()]
+    scopes=[r for r in _v452_scope_rows(pid) if str(r["trade"] or "").lower()==str(trade or "").lower()]
+    return findings,scopes
+
+def _v50_location_brief(pid,room):
+    findings=[f for f in _v50_collect_findings(pid) if str(f["location"] or "")==str(room or "")]
+    rooms=[r for r in _v49_rooms(pid) if r["room"]==room]
+    return findings,rooms
+
+def _v50_reasoning_chain(pid,title):
+    q=str(title or "").lower()
+    chain=[]
+    for f in _v50_collect_findings(pid):
+        text=(f["title"]+" "+f["reason"]+" "+f["trade"]).lower()
+        tokens=[w for w in re.findall(r'[a-z0-9]+',q) if len(w)>3]
+        if tokens and any(tok in text for tok in tokens):
+            chain.append(f)
+    return chain[:30]
+
+@app.get("/master-reasoning",response_class=HTMLResponse)
+def v50_master_reasoning_home():
+    pid=project_id()
+    run_id,findings,score=_v50_run(pid)
+    top=_v50_top_priorities(pid,10)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v50 - Master Construction Reasoning Engine</div><h1>One brain. One project judgment.</h1><p class="muted">Health {score["health"]}/100 · Risk {score["risk"]}/100 · Intelligence quality {score["quality"]}/100 · {score["count"]} connected findings.</p></div>'
+    body+='<div class="grid3">'
+    cards=[
+      ("Master Project Brief","The 10 most important connected project findings.","/master-reasoning/brief"),
+      ("Reasoning Findings","All connected findings from Blueprint, sequence, risk, field and quality intelligence.","/master-reasoning/findings"),
+      ("Trade Command","See connected intelligence by subcontractor/trade.","/master-reasoning/trades"),
+      ("Location Command","See connected intelligence by room/location where explicit context exists.","/master-reasoning/locations"),
+      ("Reasoning Chain","Trace why BuildCommand thinks an issue matters.","/master-reasoning/chain"),
+      ("Quality Gate","See which findings should be trusted versus reviewed.","/master-reasoning/quality-gate"),
+      ("Field Release Gate","Check whether high-risk work should be released to the field.","/master-reasoning/release-gate"),
+      ("Commercial Exposure","Combine cost, decision and change signals.","/master-reasoning/commercial"),
+      ("Schedule Exposure","Combine sequence, procurement, inspection and decision risks.","/master-reasoning/schedule"),
+      ("Executive Judgment","One concise project health and leadership view.","/master-reasoning/executive")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div><div class="card"><h2>Top 10</h2>'
+    body+="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["type"])}</b> - {esc(f["title"])}<div class="small">{esc(f["reason"])}</div></div>' for f in top)
+    body+='</div>'
+    return shell("Master Construction Reasoning",body)
+
+@app.get("/master-reasoning/brief",response_class=HTMLResponse)
+def v50_brief_page():
+    rows=_v50_top_priorities(project_id(),10)
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["type"])} - {esc(f["title"])}</b><p>{esc(f["reason"])}</p><p><b>Impact:</b> {esc(f["impact"])}</p><p><b>Recommended:</b> {esc(f["action"])}</p><div class="small">{esc(f["trade"])} {("· Room "+esc(f["location"])) if f["location"] else ""} · {esc(f["source"])}</div></div>' for f in rows)
+    return shell("Master Project Brief",'<div class="hero"><h1>Master Project Brief</h1><p class="muted">The highest-priority connected project findings from across BuildCommand.</p></div><div class="card">'+(h or '<p class="muted">No major findings detected.</p>')+'</div>')
+
+@app.get("/master-reasoning/findings",response_class=HTMLResponse)
+def v50_findings_page():
+    rows=_v50_collect_findings(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["type"])}</b> - {esc(f["title"])}<div>{esc(f["reason"])}</div><div class="small">Trade {esc(f["trade"])} · Confidence {esc(f["confidence"])} · {esc(f["source"])}</div></div>' for f in rows)
+    return shell("Reasoning Findings",'<div class="hero"><h1>Connected Reasoning Findings</h1><p class="muted">This is the combined output of the major BuildCommand intelligence layers.</p></div><div class="card">'+(h or '<p class="muted">No findings.</p>')+'</div>')
+
+@app.get("/master-reasoning/trades",response_class=HTMLResponse)
+def v50_trade_page(trade:str=''):
+    pid=project_id()
+    trades=sorted(set(str(r["trade"] or "") for r in _v452_scope_rows(pid) if r["trade"]))
+    options="".join(f'<option value="{esc(tr)}" {"selected" if tr==trade else ""}>{esc(tr)}</option>' for tr in trades)
+    body='<div class="hero"><h1>Trade Command</h1><p class="muted">Connected scope, risk and handoff intelligence by trade.</p></div><div class="card"><form method="get"><select name="trade">'+options+'</select><button type="submit">Open Trade</button></form></div>'
+    if trade:
+        findings,scopes=_v50_trade_brief(pid,trade)
+        body+=f'<div class="card"><h2>{esc(trade)}</h2><p>{len(scopes)} scope item(s) · {len(findings)} connected finding(s)</p>'
+        body+="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> {esc(f["title"])}<div class="small">{esc(f["reason"])}</div></div>' for f in findings)
+        body+='</div>'
+    return shell("Trade Command",body)
+
+@app.get("/master-reasoning/locations",response_class=HTMLResponse)
+def v50_location_page(room:str=''):
+    pid=project_id()
+    rooms=sorted(r["room"] for r in _v49_rooms(pid))
+    options="".join(f'<option value="{esc(r)}" {"selected" if r==room else ""}>Room {esc(r)}</option>' for r in rooms)
+    body='<div class="hero"><h1>Location Command</h1><p class="muted">Connected intelligence by explicit room/location context.</p></div><div class="card"><form method="get"><select name="room">'+options+'</select><button type="submit">Open Location</button></form></div>'
+    if room:
+        findings,roomdata=_v50_location_brief(pid,room)
+        body+=f'<div class="card"><h2>Room {esc(room)}</h2><p>{len(findings)} connected finding(s)</p>'
+        body+="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["type"])}</b> - {esc(f["title"])}<div class="small">{esc(f["reason"])}</div></div>' for f in findings)
+        body+='</div>'
+    return shell("Location Command",body)
+
+@app.get("/master-reasoning/chain",response_class=HTMLResponse)
+def v50_chain_page(q:str=''):
+    rows=_v50_reasoning_chain(project_id(),q) if q else []
+    body='<div class="hero"><h1>Reasoning Chain</h1><p class="muted">Trace the connected evidence behind a project issue or subject.</p></div><div class="card"><form method="get"><input name="q" value="'+esc(q)+'" placeholder="Example: water heater, storefront, ceiling"><button type="submit">Trace</button></form></div>'
+    if q:
+        body+='<div class="card">'+("".join(f'<div class="action"><span class="badge">{esc(f["type"])}</span> <b>{esc(f["title"])}</b><p>{esc(f["reason"])}</p><div class="small">{esc(f["source"])}</div></div>' for f in rows) or '<p class="muted">No connected reasoning chain found.</p>')+'</div>'
+    return shell("Reasoning Chain",body)
+
+@app.get("/master-reasoning/quality-gate",response_class=HTMLResponse)
+def v50_quality_gate():
+    rows=_v50_collect_findings(project_id())
+    review=[f for f in rows if f["confidence"]=="LOW" or f["severity"]=="REVIEW"]
+    h="".join(f'<div class="action"><span class="badge WATCH">HUMAN REVIEW</span> <b>{esc(f["type"])}</b> - {esc(f["title"])}<div class="small">Confidence {esc(f["confidence"])} · {esc(f["reason"])}</div></div>' for f in review)
+    return shell("Quality Gate",'<div class="hero"><h1>Master Quality Gate</h1><p class="muted">Low-confidence and review-only findings should not silently drive consequential project action.</p></div><div class="card">'+(h or '<p class="muted">No current quality-gate exceptions.</p>')+'</div>')
+
+@app.get("/master-reasoning/release-gate",response_class=HTMLResponse)
+def v50_release_gate():
+    rows=[f for f in _v50_collect_findings(project_id()) if f["type"] in {"SEQUENCE","MAKE READY","INSPECTION","PROCUREMENT"} and f["severity"] in {"CRITICAL","HIGH"}]
+    h="".join(f'<div class="action"><span class="badge WATCH">HOLD / REVIEW</span> <b>{esc(f["title"])}</b><div>{esc(f["reason"])}</div><p><b>Before release:</b> {esc(f["action"])}</p></div>' for f in rows)
+    return shell("Field Release Gate",'<div class="hero"><h1>Field Release Gate</h1><p class="muted">High-risk prerequisites, inspections, sequence and procurement conditions should be reviewed before releasing work.</p></div><div class="card">'+(h or '<p class="muted">No high-risk field release blockers detected.</p>')+'</div>')
+
+@app.get("/master-reasoning/commercial",response_class=HTMLResponse)
+def v50_commercial():
+    rows=[f for f in _v50_collect_findings(project_id()) if f["type"] in {"COST RISK","DECISION"}]
+    changes=_v39_changes(project_id())
+    total=sum(float(r["estimated_cost"] or 0) for r in changes)
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["title"])}</b><div class="small">{esc(f["reason"])}</div></div>' for f in rows)
+    return shell("Commercial Exposure",f'<div class="hero"><h1>Commercial Exposure</h1><p class="muted">${total:,.0f} known open change exposure plus {len(rows)} connected cost/decision risk signal(s).</p></div><div class="card">'+(h or '<p class="muted">No major commercial exposure signals.</p>')+'</div>')
+
+@app.get("/master-reasoning/schedule",response_class=HTMLResponse)
+def v50_schedule():
+    rows=[f for f in _v50_collect_findings(project_id()) if f["type"] in {"SEQUENCE","PROCUREMENT","DECISION","INSPECTION","MAKE READY"}]
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["type"])}</b> - {esc(f["title"])}<div class="small">{esc(f["reason"])}</div></div>' for f in rows)
+    return shell("Schedule Exposure",'<div class="hero"><h1>Schedule Exposure</h1><p class="muted">One connected schedule-risk view across readiness, procurement, inspections and decisions.</p></div><div class="card">'+(h or '<p class="muted">No major schedule exposure signals.</p>')+'</div>')
+
+@app.get("/master-reasoning/executive",response_class=HTMLResponse)
+def v50_executive():
+    pid=project_id()
+    score=_v50_score(pid)
+    top=_v50_top_priorities(pid,5)
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["type"])}</b> - {esc(f["title"])}<div class="small">{esc(f["impact"])}</div></div>' for f in top)
+    return shell("Executive Judgment",f'<div class="hero"><h1>Executive Project Judgment</h1><p class="muted">Health {score["health"]}/100 · Risk {score["risk"]}/100 · Intelligence quality {score["quality"]}/100.</p></div><div class="card"><h2>Top Leadership Attention</h2>{h or "<p class=muted>No major leadership issues detected.</p>"}</div>')
+
+
+# ============================================================
+# v51 REAL CONSTRUCTION REASONING 2.0
+# ============================================================
+
+def _v51_reasoning_units(pid):
+    """
+    Convert master findings into cause -> dependency -> consequence -> owner -> action units.
+    """
+    findings=_v50_collect_findings(pid)
+    deps=_v46_dependencies(pid)
+    dep_map={}
+    for r,rels in deps:
+        dep_map[str(r["requirement"] or "").strip().lower()]=rels
+
+    units=[]
+    for f in findings:
+        key=str(f["title"] or "").strip().lower()
+        rels=dep_map.get(key,[])
+        owner=f["trade"] or (rels[0] if rels else "")
+        cause=f["reason"]
+        dependency=", ".join(rels) if rels else "No explicit cross-trade dependency detected."
+        consequence=f["impact"]
+        action=f["action"]
+        units.append({
+            "severity":f["severity"],"type":f["type"],"title":f["title"],
+            "cause":cause,"dependency":dependency,"consequence":consequence,
+            "owner":owner,"action":action,"source":f["source"],
+            "confidence":f["confidence"]
+        })
+    return units[:500]
+
+def _v51_alternatives(unit):
+    """
+    Transparent option generation. These are review alternatives, not automatic directives.
+    """
+    typ=unit["type"]
+    opts=[]
+    if typ in {"SEQUENCE","MAKE READY"}:
+        opts=[
+            ("Hold downstream work","Protect sequence and avoid rework until prerequisites are complete."),
+            ("Resequence unaffected work","Move crews to independent work while the blocker is resolved."),
+            ("Recover prerequisite","Add manpower/material/coordination to clear the blocker faster.")
+        ]
+    elif typ=="PROCUREMENT":
+        opts=[
+            ("Expedite current source","Confirm fabrication/shipping recovery with current vendor."),
+            ("Evaluate approved alternate","Use only if contract/submittal requirements allow an alternate."),
+            ("Resequence installation","Move unaffected work ahead while protecting downstream milestones.")
+        ]
+    elif typ=="INSPECTION":
+        opts=[
+            ("Hold concealment","Do not cover work before required inspection/testing."),
+            ("Resolve deficiencies first","Correct known issues before requesting inspection."),
+            ("Coordinate inspection timing","Align inspector availability with field readiness.")
+        ]
+    elif typ in {"COST RISK","DECISION"}:
+        opts=[
+            ("Clarify contract responsibility","Review drawings/specs/subcontract scope before authorizing extra work."),
+            ("Issue/advance RFI","Seek documented clarification where design intent is ambiguous."),
+            ("Track potential change","Preserve cost/schedule documentation pending entitlement review.")
+        ]
+    elif typ=="CONSTRUCTABILITY":
+        opts=[
+            ("Coordinate affected trades","Resolve interfaces before installation."),
+            ("Request design clarification","Use RFI if drawings/specs do not establish a buildable solution."),
+            ("Field-verify existing conditions","Confirm dimensions/access before committing material or labor.")
+        ]
+    else:
+        opts=[
+            ("Review source documents","Confirm the governing requirement before action."),
+            ("Coordinate responsible trade","Verify ownership and handoff."),
+            ("Document decision","Record the approved resolution and downstream impact.")
+        ]
+    return opts
+
+def _v51_uncertainty(unit):
+    conf=str(unit["confidence"] or "MEDIUM").upper()
+    missing_source=not bool(str(unit["source"] or "").strip())
+    if conf=="LOW" or missing_source:
+        return ("LOW","Project evidence is incomplete or weak; human review is required before relying on this conclusion.")
+    if unit["severity"]=="REVIEW":
+        return ("MEDIUM","This is a coordination/review signal rather than a confirmed project condition.")
+    return ("HIGH","Current project data provides a reasonably strong basis for this reasoning path.")
+
+def _v51_reasoning_score(unit):
+    score=50
+    sev={"CRITICAL":25,"HIGH":18,"MEDIUM":10,"REVIEW":3}.get(unit["severity"],0)
+    score+=sev
+    if unit["source"]: score+=10
+    if unit["dependency"] and "No explicit" not in unit["dependency"]: score+=5
+    if str(unit["confidence"]).upper()=="HIGH": score+=10
+    elif str(unit["confidence"]).upper()=="LOW": score-=20
+    return max(0,min(100,score))
+
+def _v51_top_units(pid,limit=20):
+    units=_v51_reasoning_units(pid)
+    for u in units:
+        u["reasoning_score"]=_v51_reasoning_score(u)
+        u["certainty"],u["certainty_note"]=_v51_uncertainty(u)
+    units.sort(key=lambda x:(-x["reasoning_score"],x["type"],x["title"]))
+    return units[:limit]
+
+@app.get("/reasoning-2",response_class=HTMLResponse)
+def v51_reasoning_home():
+    pid=project_id()
+    units=_v51_top_units(pid,25)
+    low=sum(1 for u in units if u["certainty"]=="LOW")
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v51 - Real Construction Reasoning 2.0</div><h1>Explain the problem, the dependency, and what to do next.</h1><p class="muted">{len(units)} prioritized reasoning paths · {low} low-certainty path(s) requiring stronger human review.</p></div><div class="grid3">'
+    cards=[
+      ("Cause → Consequence","See the full reasoning chain for the highest-risk project findings.","/reasoning-2/chains"),
+      ("Alternative Resolutions","Compare practical response options before choosing a path.","/reasoning-2/alternatives"),
+      ("Responsible Trade Logic","See who owns the action versus who is only affected.","/reasoning-2/ownership"),
+      ("Uncertainty Engine","Show when BuildCommand should not make a confident call.","/reasoning-2/uncertainty"),
+      ("Reasoning Score","Rank findings by evidence strength and project consequence.","/reasoning-2/scores"),
+      ("What Happens Next","Show downstream consequences if a blocker stays unresolved.","/reasoning-2/downstream"),
+      ("Best Next Action","Prioritize the next recommended move for each major issue.","/reasoning-2/actions"),
+      ("Decision Comparison","Compare hold / resequence / clarify / recover alternatives.","/reasoning-2/compare"),
+      ("Explain This Finding","Search a topic and trace BuildCommand's reasoning path.","/reasoning-2/explain"),
+      ("Reasoning Command","One concise project view of what matters, why, and what to do.","/reasoning-2/command")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Real Construction Reasoning 2.0",body)
+
+@app.get("/reasoning-2/chains",response_class=HTMLResponse)
+def v51_chains():
+    units=_v51_top_units(project_id(),100)
+    h="".join(
+        f'<div class="card"><span class="badge WATCH">{esc(u["severity"])}</span><h3>{esc(u["title"])}</h3>'
+        f'<p><b>Cause:</b> {esc(u["cause"])}</p>'
+        f'<p><b>Dependency:</b> {esc(u["dependency"])}</p>'
+        f'<p><b>Consequence:</b> {esc(u["consequence"])}</p>'
+        f'<p><b>Responsible:</b> {esc(u["owner"] or "Needs ownership review")}</p>'
+        f'<p><b>Recommended:</b> {esc(u["action"])}</p>'
+        f'<div class="small">Reasoning score {u["reasoning_score"]}/100 · Certainty {esc(u["certainty"])} · {esc(u["source"])}</div></div>'
+        for u in units
+    )
+    return shell("Cause to Consequence",'<div class="hero"><h1>Cause → Dependency → Consequence</h1><p class="muted">The master brain now explains why each major finding matters.</p></div>'+h)
+
+@app.get("/reasoning-2/alternatives",response_class=HTMLResponse)
+def v51_alternatives_page():
+    units=_v51_top_units(project_id(),30)
+    body='<div class="hero"><h1>Alternative Resolution Intelligence</h1><p class="muted">Options are decision support, not automatic field directives.</p></div>'
+    for u in units:
+        body+=f'<div class="card"><h3>{esc(u["title"])}</h3><p>{esc(u["cause"])}</p>'
+        for title,why in _v51_alternatives(u):
+            body+=f'<div class="action"><b>{esc(title)}</b><div class="small">{esc(why)}</div></div>'
+        body+='</div>'
+    return shell("Alternative Resolutions",body)
+
+@app.get("/reasoning-2/ownership",response_class=HTMLResponse)
+def v51_ownership():
+    units=_v51_top_units(project_id(),100)
+    h="".join(
+        f'<div class="action"><b>{esc(u["owner"] or "Ownership review needed")}</b> - {esc(u["title"])}'
+        f'<div class="small">Affected dependency: {esc(u["dependency"])}</div></div>'
+        for u in units
+    )
+    return shell("Responsible Trade Logic",'<div class="hero"><h1>Responsible Trade Logic</h1><p class="muted">Primary ownership is separated from downstream affected trades.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/reasoning-2/uncertainty",response_class=HTMLResponse)
+def v51_uncertainty_page():
+    units=_v51_top_units(project_id(),150)
+    h="".join(
+        f'<div class="action"><span class="badge {"WATCH" if u["certainty"]!="HIGH" else "READY"}">{esc(u["certainty"])}</span> '
+        f'<b>{esc(u["title"])}</b><div class="small">{esc(u["certainty_note"])}</div></div>'
+        for u in units
+    )
+    return shell("Uncertainty Engine",'<div class="hero"><h1>Uncertainty Engine</h1><p class="muted">BuildCommand should expose weak evidence instead of sounding certain when the project documents do not support certainty.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/reasoning-2/scores",response_class=HTMLResponse)
+def v51_scores():
+    units=_v51_top_units(project_id(),150)
+    h="".join(
+        f'<div class="action"><span class="badge">{u["reasoning_score"]}</span> <b>{esc(u["title"])}</b>'
+        f'<div class="small">{esc(u["type"])} · {esc(u["severity"])} · Certainty {esc(u["certainty"])}</div></div>'
+        for u in units
+    )
+    return shell("Reasoning Score",'<div class="hero"><h1>Reasoning Strength Score</h1><p class="muted">Ranks findings using consequence, source evidence, dependency context and confidence.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/reasoning-2/downstream",response_class=HTMLResponse)
+def v51_downstream_page():
+    units=_v51_top_units(project_id(),100)
+    h="".join(
+        f'<div class="action"><b>{esc(u["title"])}</b><p>{esc(u["consequence"])}</p>'
+        f'<div class="small">If unresolved: downstream work may remain exposed. Dependency: {esc(u["dependency"])}</div></div>'
+        for u in units
+    )
+    return shell("What Happens Next",'<div class="hero"><h1>What Happens Next?</h1><p class="muted">Focuses the team on downstream consequence, not only the immediate problem.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/reasoning-2/actions",response_class=HTMLResponse)
+def v51_actions_page():
+    units=_v51_top_units(project_id(),50)
+    h="".join(
+        f'<div class="action"><span class="badge WATCH">{esc(u["severity"])}</span> <b>{esc(u["action"])}</b>'
+        f'<div class="small">Because: {esc(u["cause"])} · Owner: {esc(u["owner"] or "Review")}</div></div>'
+        for u in units
+    )
+    return shell("Best Next Action",'<div class="hero"><h1>Best Next Action</h1><p class="muted">Recommended actions are tied to the reason they matter.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/reasoning-2/compare",response_class=HTMLResponse)
+def v51_compare_page():
+    units=_v51_top_units(project_id(),20)
+    body='<div class="hero"><h1>Decision Comparison</h1><p class="muted">Compare practical response paths before committing the project.</p></div>'
+    for u in units:
+        body+=f'<div class="card"><h3>{esc(u["title"])}</h3>'
+        for idx,(title,why) in enumerate(_v51_alternatives(u),1):
+            body+=f'<div class="action"><b>Option {idx}: {esc(title)}</b><div class="small">{esc(why)}</div></div>'
+        body+=f'<p><b>Current recommended action:</b> {esc(u["action"])}</p></div>'
+    return shell("Decision Comparison",body)
+
+@app.get("/reasoning-2/explain",response_class=HTMLResponse)
+def v51_explain_page(q:str=''):
+    units=_v51_top_units(project_id(),200)
+    matches=[]
+    if q:
+        tokens=[w for w in re.findall(r'[a-z0-9]+',q.lower()) if len(w)>3]
+        for u in units:
+            text=(u["title"]+" "+u["cause"]+" "+u["dependency"]+" "+u["owner"]).lower()
+            if tokens and any(tok in text for tok in tokens):
+                matches.append(u)
+    body='<div class="hero"><h1>Explain This Finding</h1><p class="muted">Search a project subject and see the reasoning path behind BuildCommand\'s conclusion.</p></div><div class="card"><form method="get"><input name="q" value="'+esc(q)+'" placeholder="Example: storefront, water heater, ceiling"><button type="submit">Explain</button></form></div>'
+    if q:
+        body+='<div class="card">'+("".join(
+            f'<div class="action"><b>{esc(u["title"])}</b><p><b>Cause:</b> {esc(u["cause"])}</p><p><b>Dependency:</b> {esc(u["dependency"])}</p><p><b>Consequence:</b> {esc(u["consequence"])}</p><p><b>Action:</b> {esc(u["action"])}</p></div>'
+            for u in matches[:30]
+        ) or '<p class="muted">No reasoning path matched that subject.</p>')+'</div>'
+    return shell("Explain This Finding",body)
+
+@app.get("/reasoning-2/command",response_class=HTMLResponse)
+def v51_command_page():
+    units=_v51_top_units(project_id(),10)
+    body='<div class="hero"><div class="eyebrow">Reasoning Command</div><h1>What matters, why, and what should happen next?</h1><p class="muted">Top connected reasoning paths from the current project.</p></div><div class="card">'
+    for u in units:
+        body+=f'<div class="action"><span class="badge WATCH">{esc(u["severity"])}</span> <b>{esc(u["title"])}</b><p>{esc(u["cause"])}</p><p><b>Next:</b> {esc(u["action"])}</p><div class="small">Owner {esc(u["owner"] or "Review")} · Score {u["reasoning_score"]}/100 · Certainty {esc(u["certainty"])}</div></div>'
+    body+='</div>'
+    return shell("Reasoning Command",body)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
