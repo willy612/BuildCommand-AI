@@ -6637,7 +6637,7 @@ def v471_workspace(attachment_id:int):
         <a href="/issues">Issues</a><br>
         <a href="/smart-rfi">Smart RFI</a><br>
         <a href="/blueprint-brain">Blueprint Brain</a><br>
-        <a href="/revision-intelligence">Revision Intelligence</a><br><a href="/blueprint-markup/pro?attachment_id=__ATTACHMENT_ID__">Markup Pro</a>
+        <a href="/revision-intelligence">Revision Intelligence</a><br><a href="/blueprint-markup/pro?attachment_id=__ATTACHMENT_ID__">Markup Pro</a><br><a href="/blueprint-markup/pdf?attachment_id=__ATTACHMENT_ID__">Live PDF Markup</a>
       </div>
     </div>
 
@@ -6938,6 +6938,296 @@ def v472_calibration(attachment_id:int=Form(...),pixel_distance:float=Form(...),
     _v472_ensure_tables();c=db();now=datetime.utcnow().isoformat()
     c.execute("""INSERT INTO blueprint_measurement_calibrations(company_id,project_id,attachment_id,page_number,pixel_distance,real_distance,unit,created,updated)
                  VALUES(?,?,?,?,?,?,?,?,?)""",(current_company_id(),project_id(),attachment_id,1,pixel_distance,real_distance,unit,now,now))
+    c.commit();c.close()
+    return JSONResponse({"ok":True})
+
+
+# ============================================================
+# v473 REAL PDF BLUEPRINT MARKUP
+# Actual uploaded PDF rendered beneath the markup canvas.
+# ============================================================
+
+@app.get("/documents/{attachment_id}/inline")
+def v473_document_inline(attachment_id:int):
+    c=db()
+    row=c.execute(
+        "SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",
+        (attachment_id,current_company_id(),project_id())
+    ).fetchone()
+    c.close()
+    if not row:
+        return HTMLResponse("File not found.",status_code=404)
+    path=os.path.join(UPLOAD_DIR,row["stored_name"])
+    if not os.path.isfile(path):
+        return HTMLResponse("Stored file is unavailable.",status_code=404)
+    mime=row["mime_type"] or mimetypes.guess_type(row["original_name"] or "")[0] or "application/octet-stream"
+    try:
+        return FileResponse(
+            path,
+            media_type=mime,
+            filename=row["original_name"],
+            content_disposition_type="inline"
+        )
+    except TypeError:
+        # Compatibility with older Starlette versions.
+        response=FileResponse(path,media_type=mime,filename=row["original_name"])
+        response.headers["Content-Disposition"]=f'inline; filename="{row["original_name"]}"'
+        return response
+
+def _v473_page_markups(pid,attachment_id,page_number):
+    _v471_ensure_tables()
+    return _v39_rows(
+        """SELECT * FROM blueprint_markups
+           WHERE company_id=? AND project_id=? AND attachment_id=? AND page_number=?
+           ORDER BY id ASC""",
+        (current_company_id(),pid,attachment_id,page_number)
+    )
+
+@app.get("/blueprint-markup/pdf",response_class=HTMLResponse)
+def v473_pdf_workspace(attachment_id:int,page:int=1):
+    pid=project_id()
+    docs=_v471_docs(pid)
+    doc=next((d for d in docs if int(d["id"])==int(attachment_id)),None)
+    if not doc:
+        return shell("PDF Blueprint Markup",'<div class="card"><p class="muted">Document not found.</p></div>')
+
+    name=str(doc["original_name"] or "")
+    mime=str(doc["mime_type"] or "").lower()
+    if not (name.lower().endswith(".pdf") or "pdf" in mime):
+        return shell(
+            "PDF Blueprint Markup",
+            f'<div class="hero"><h1>{esc(name)}</h1></div><div class="card">'
+            f'<p>This document is not a PDF. Open it in the standard markup workspace.</p>'
+            f'<a href="/blueprint-markup/workspace?attachment_id={attachment_id}">Open Standard Markup</a></div>'
+        )
+
+    layers=_v471_layers(pid,attachment_id)
+    if not layers:
+        c=db(); now=datetime.utcnow().isoformat()
+        c.execute("""INSERT INTO blueprint_markup_layers(
+            company_id,project_id,attachment_id,name,trade,color_label,status,created_by,created,updated
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (current_company_id(),pid,attachment_id,"General Markup","General","default","ACTIVE","USER",now,now))
+        c.commit(); c.close()
+        layers=_v471_layers(pid,attachment_id)
+
+    layer_options="".join(
+        f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["trade"] or "General")}</option>'
+        for r in layers
+    )
+    layer_checks="".join(
+        f'<label class="v473-layer"><input type="checkbox" checked value="{r["id"]}" '
+        f'onchange="v473ToggleLayer({r["id"]},this.checked)"> <b>{esc(r["name"])}</b>'
+        f'<small>{esc(r["trade"] or "General")}</small></label>'
+        for r in layers
+    )
+
+    html = """
+    <style>
+    .v473-shell{display:grid;grid-template-columns:220px minmax(0,1fr) 270px;gap:10px}
+    .v473-panel{background:#fff;border:1px solid #dfe6eb;border-radius:14px;padding:12px}
+    .v473-stage{height:76vh;overflow:auto;background:#cfd7dd;border-radius:14px;position:relative}
+    .v473-page{position:relative;margin:24px auto;background:white;box-shadow:0 5px 22px rgba(0,0,0,.2);transform-origin:top left}
+    #v473-pdf{display:block}
+    #v473-overlay{position:absolute;inset:0;z-index:3;cursor:crosshair}
+    .v473-toolbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+    .v473-toolbar button,.v473-toolbar a{border:1px solid #dbe2e7;background:#fff;border-radius:8px;padding:8px 11px;text-decoration:none;cursor:pointer}
+    .v473-tools button{display:block;width:100%;text-align:left;margin:4px 0;padding:8px;border:1px solid #dbe2e7;background:#fff;border-radius:8px}
+    .v473-tools button.active{background:#111820;color:#fff}
+    .v473-layer{display:block;padding:7px 0;border-bottom:1px solid #edf1f3;font-size:12px}.v473-layer small{display:block;margin-left:20px;opacity:.55}
+    .v473-mark{position:absolute;border:2px solid #e33;background:rgba(255,255,255,.72);padding:3px;font-size:11px;min-width:24px;min-height:18px;box-sizing:border-box;cursor:pointer}
+    .v473-mark.highlight{background:rgba(255,235,59,.35);border-color:rgba(255,193,7,.8)}
+    .v473-mark.pin{width:25px;height:25px;min-width:25px;min-height:25px;border-radius:50%;padding:0;background:#e33;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900}
+    .v473-mark.selected{outline:3px solid rgba(17,24,32,.25)}
+    .v473-pageinfo{font-size:12px;font-weight:800;padding:8px 4px}
+    @media(max-width:1050px){.v473-shell{grid-template-columns:1fr}.v473-stage{height:65vh}}
+    </style>
+
+    <div class="hero">
+      <div class="eyebrow">BuildCommand v473 · LIVE DRAWING MARKUP</div>
+      <h1>__DOC__</h1>
+      <p class="muted">The actual uploaded PDF is rendered beneath the project markup layer.</p>
+    </div>
+
+    <div class="v473-toolbar">
+      <button onclick="v473Prev()">← Previous Page</button>
+      <button onclick="v473Next()">Next Page →</button>
+      <button onclick="v473Zoom(.15)">Zoom +</button>
+      <button onclick="v473Zoom(-.15)">Zoom −</button>
+      <button onclick="v473Fit()">Fit</button>
+      <a href="/documents/__AID__/download">Download Original</a>
+      <a href="/blueprint-markup/pro?attachment_id=__AID__">Markup Pro</a>
+      <span class="v473-pageinfo" id="v473-pageinfo">Loading PDF…</span>
+    </div>
+
+    <div class="v473-shell">
+      <div class="v473-panel v473-tools">
+        <h3>Markup</h3>
+        <button onclick="v473Tool(this,'select')">Pointer / Select</button>
+        <button onclick="v473Tool(this,'cloud')">Cloud / Box</button>
+        <button onclick="v473Tool(this,'text')">Text Note</button>
+        <button onclick="v473Tool(this,'highlight')">Highlight</button>
+        <button onclick="v473Tool(this,'issue')">Issue Pin</button>
+        <button onclick="v473Tool(this,'rfi')">RFI Pin</button>
+        <button onclick="v473Tool(this,'measure')">Measure Note</button>
+        <hr>
+        <label>Active Layer</label>
+        <select id="v473-layer" style="width:100%">__LAYER_OPTIONS__</select>
+        <hr><h3>Visible Layers</h3>__LAYER_CHECKS__
+      </div>
+
+      <div class="v473-stage" id="v473-stage">
+        <div class="v473-page" id="v473-page">
+          <canvas id="v473-pdf"></canvas>
+          <div id="v473-overlay"></div>
+        </div>
+      </div>
+
+      <div class="v473-panel">
+        <h3>Selected Markup</h3>
+        <div id="v473-inspector"><p class="muted">Select a markup to edit it.</p></div>
+        <hr>
+        <h3>Drawing Intelligence</h3>
+        <a href="/blueprint-brain">Ask Blueprint Brain</a><br>
+        <a href="/smart-rfi">Smart RFI</a><br>
+        <a href="/revision-intelligence">Revision Intelligence</a><br>
+        <a href="/issues">Project Issues</a>
+        <hr>
+        <p class="small">Markups are stored by PDF page and layer. Zoom changes the view, not the saved drawing coordinates.</p>
+      </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs" type="module"></script>
+    <script type="module">
+    import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
+    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
+
+    const pdfUrl="/documents/__AID__/inline";
+    let pdfDoc=null,pageNum=__PAGE__,baseScale=1.35,viewScale=1,currentTool="select",selected=null;
+    let data=[],hiddenLayers=new Set();
+
+    async function loadMarkups(){
+      const r=await fetch("/blueprint-markup/pdf/markups?attachment_id=__AID__&page_number="+pageNum);
+      data=await r.json(); renderMarkups();
+    }
+
+    async function renderPage(){
+      const page=await pdfDoc.getPage(pageNum);
+      const viewport=page.getViewport({scale:baseScale});
+      const canvas=document.getElementById("v473-pdf");
+      const ctx=canvas.getContext("2d");
+      canvas.width=viewport.width;canvas.height=viewport.height;
+      const pageEl=document.getElementById("v473-page");
+      pageEl.style.width=viewport.width+"px";pageEl.style.height=viewport.height+"px";
+      await page.render({canvasContext:ctx,viewport:viewport}).promise;
+      document.getElementById("v473-pageinfo").textContent="Page "+pageNum+" of "+pdfDoc.numPages;
+      viewScale=1;pageEl.style.transform="scale(1)";
+      await loadMarkups();
+    }
+
+    function renderMarkups(){
+      const ov=document.getElementById("v473-overlay");ov.innerHTML="";
+      data.forEach(m=>{
+        if(hiddenLayers.has(String(m.layer_id)))return;
+        const el=document.createElement("div");
+        let cls="v473-mark";
+        if(m.type==="issue"||m.type==="rfi")cls+=" pin";
+        if(m.type==="highlight")cls+=" highlight";
+        if(selected===m.id)cls+=" selected";
+        el.className=cls;
+        el.style.left=(m.x||0)+"px";el.style.top=(m.y||0)+"px";
+        if(m.w)el.style.width=m.w+"px";if(m.h)el.style.height=m.h+"px";
+        el.textContent=m.type==="issue"?"I":m.type==="rfi"?"R":(m.text||m.type.toUpperCase());
+        el.onclick=(e)=>{e.stopPropagation();selectMarkup(m.id)};
+        ov.appendChild(el);
+      });
+    }
+
+    function selectMarkup(id){
+      selected=id;renderMarkups();
+      const m=data.find(x=>x.id===id);
+      document.getElementById("v473-inspector").innerHTML=
+        '<b>'+m.type.toUpperCase()+'</b><br><textarea id="v473-text" style="width:100%;margin:8px 0">'+(m.text||'')+'</textarea>'+
+        '<div class="small">Page '+pageNum+' · X '+Math.round(m.x)+' · Y '+Math.round(m.y)+'</div>'+
+        '<button onclick="window.v473Save()">Save</button> <button onclick="window.v473Delete()">Delete</button>';
+    }
+
+    window.v473Tool=(btn,t)=>{currentTool=t;document.querySelectorAll(".v473-tools button").forEach(b=>b.classList.remove("active"));btn.classList.add("active")};
+    window.v473Prev=async()=>{if(pageNum>1){pageNum--;selected=null;await renderPage()}};
+    window.v473Next=async()=>{if(pageNum<pdfDoc.numPages){pageNum++;selected=null;await renderPage()}};
+    window.v473Zoom=(d)=>{viewScale=Math.max(.4,Math.min(2.5,viewScale+d));document.getElementById("v473-page").style.transform="scale("+viewScale+")"};
+    window.v473Fit=()=>{const st=document.getElementById("v473-stage"),pg=document.getElementById("v473-page");viewScale=Math.min(1,(st.clientWidth-40)/pg.offsetWidth);pg.style.transform="scale("+viewScale+")"};
+    window.v473ToggleLayer=(id,on)=>{if(on)hiddenLayers.delete(String(id));else hiddenLayers.add(String(id));renderMarkups()};
+
+    window.v473Save=async()=>{
+      if(!selected)return;
+      const fd=new URLSearchParams();fd.set("text_value",document.getElementById("v473-text").value);
+      await fetch("/blueprint-markup/markups/"+selected+"/update",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
+      await loadMarkups();selectMarkup(selected);
+    };
+
+    window.v473Delete=async()=>{
+      if(!selected||!confirm("Delete this markup?"))return;
+      await fetch("/blueprint-markup/markups/"+selected+"/delete",{method:"POST"});
+      selected=null;await loadMarkups();
+      document.getElementById("v473-inspector").innerHTML='<p class="muted">Select a markup to edit it.</p>';
+    };
+
+    document.getElementById("v473-overlay").onclick=async function(e){
+      if(currentTool==="select")return;
+      const rect=this.getBoundingClientRect();
+      const x=(e.clientX-rect.left)/viewScale,y=(e.clientY-rect.top)/viewScale;
+      const layer=document.getElementById("v473-layer").value;if(!layer)return;
+      let text="";
+      if(["text","cloud","highlight","measure"].includes(currentTool))text=prompt("Markup note:","")||"";
+      const fd=new URLSearchParams();
+      fd.set("attachment_id","__AID__");fd.set("layer_id",layer);fd.set("page_number",pageNum);
+      fd.set("markup_type",currentTool);fd.set("x",x);fd.set("y",y);
+      fd.set("w",currentTool==="cloud"||currentTool==="highlight"?150:0);
+      fd.set("h",currentTool==="cloud"||currentTool==="highlight"?65:0);
+      fd.set("text_value",text);
+      await fetch("/blueprint-markup/pdf/markups/new",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
+      await loadMarkups();
+    };
+
+    pdfDoc=await pdfjsLib.getDocument(pdfUrl).promise;
+    pageNum=Math.max(1,Math.min(pageNum,pdfDoc.numPages));
+    await renderPage();
+    </script>
+    """
+
+    html=html.replace("__AID__",str(attachment_id))
+    html=html.replace("__DOC__",esc(name))
+    html=html.replace("__PAGE__",str(max(1,page)))
+    html=html.replace("__LAYER_OPTIONS__",layer_options)
+    html=html.replace("__LAYER_CHECKS__",layer_checks)
+    return shell("Live PDF Blueprint Markup",html)
+
+@app.get("/blueprint-markup/pdf/markups")
+def v473_get_markups(attachment_id:int,page_number:int=1):
+    rows=_v473_page_markups(project_id(),attachment_id,page_number)
+    return JSONResponse([
+      {
+        "id":r["id"],"type":r["markup_type"],"x":r["x"],"y":r["y"],
+        "w":r["w"],"h":r["h"],"text":r["text_value"] or "",
+        "layer_id":r["layer_id"],"status":r["status"] or "OPEN"
+      } for r in rows
+    ])
+
+@app.post("/blueprint-markup/pdf/markups/new")
+def v473_new_page_markup(
+    attachment_id:int=Form(...),layer_id:int=Form(...),page_number:int=Form(1),
+    markup_type:str=Form(...),x:float=Form(0),y:float=Form(0),
+    w:float=Form(0),h:float=Form(0),text_value:str=Form("")
+):
+    _v471_ensure_tables()
+    c=db();now=datetime.utcnow().isoformat()
+    c.execute("""INSERT INTO blueprint_markups(
+      company_id,project_id,attachment_id,layer_id,page_number,markup_type,
+      x,y,w,h,text_value,stroke_label,linked_type,linked_id,status,created_by,created,updated
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+    (current_company_id(),project_id(),attachment_id,layer_id,page_number,markup_type,
+     x,y,w,h,text_value,"default","","","OPEN","USER",now,now))
     c.commit();c.close()
     return JSONResponse({"ok":True})
 
