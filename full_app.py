@@ -761,7 +761,7 @@ def esc(value):
 def categorized_nav():
     groups=[
         ("PROJECTS",[("Projects Home","/"),("Add Project","/projects/new"),("Recent Activity","/recent-activity"),("Archive Projects","/project-archive")]),
-        ("BUILD",[("Build Home","/build"),("Field Command 3.0","/field-command-3"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
+        ("BUILD",[("Build Home","/build"),("Blueprint Markup","/blueprint-markup"),("Field Command 3.0","/field-command-3"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction Command","/precon-command"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
         ("MANAGE",[("Manage Home","/manage"),("PM Command","/pm-command"),("Performance Monitor","/performance"),("Project Autopilot","/autopilot"),("Daily Superintendent Command","/daily-superintendent"),("Look-Ahead Intelligence","/lookahead-intelligence"),("Trade Readiness Brain","/trade-readiness"),("Trade Coordination Engine","/trade-coordination"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
         ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Knowledge Brain 2.0","/knowledge-brain-2"),("Smart RFI & Conflict Detection","/smart-rfi"),("Long-Lead Prediction","/longlead-intelligence"),("Inspection & QC Intelligence","/quality-intelligence"),("Scope Gap & Buyout Intelligence","/scope-gap-intelligence"),("Change Order Intelligence","/change-order-intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
@@ -6470,6 +6470,283 @@ def v470_workflows_page():
       f'<div class="action"><span class="badge READY">{esc(status)}</span> <b>{esc(name)}</b><div class="small">{esc(scope)}</div></div>' for name,scope,status in rows
     )
     return shell("Workflow Command",'<div class="hero"><div class="eyebrow">Autonomous Workflow Framework</div><h1>Repeatable construction operating workflows</h1><p class="muted">Ready for controlled, human-reviewed execution.</p></div><div class="card">'+h+'</div>')
+
+
+# ============================================================
+# v471 BLUEPRINT MARKUP & COLLABORATION WORKSPACE
+# ============================================================
+
+def _v471_ensure_tables():
+    c=db()
+    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS blueprint_markup_layers(
+        id {pk},company_id BIGINT,project_id BIGINT,attachment_id BIGINT,
+        name TEXT,trade TEXT,color_label TEXT,status TEXT DEFAULT 'ACTIVE',
+        created_by TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS blueprint_markups(
+        id {pk},company_id BIGINT,project_id BIGINT,attachment_id BIGINT,
+        layer_id BIGINT,page_number INTEGER DEFAULT 1,markup_type TEXT,
+        x REAL,y REAL,w REAL,h REAL,text_value TEXT,stroke_label TEXT,
+        linked_type TEXT,linked_id TEXT,status TEXT DEFAULT 'OPEN',
+        created_by TEXT,created TEXT,updated TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit()
+    c.close()
+
+def _v471_docs(pid):
+    try:
+        return _v39_rows(
+            "SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",
+            (current_company_id(),pid)
+        )
+    except Exception:
+        return []
+
+def _v471_layers(pid,attachment_id):
+    _v471_ensure_tables()
+    return _v39_rows(
+        "SELECT * FROM blueprint_markup_layers WHERE company_id=? AND project_id=? AND attachment_id=? ORDER BY id DESC",
+        (current_company_id(),pid,attachment_id)
+    )
+
+def _v471_markups(pid,attachment_id):
+    _v471_ensure_tables()
+    return _v39_rows(
+        "SELECT * FROM blueprint_markups WHERE company_id=? AND project_id=? AND attachment_id=? ORDER BY id ASC",
+        (current_company_id(),pid,attachment_id)
+    )
+
+@app.get("/blueprint-markup",response_class=HTMLResponse)
+def v471_home():
+    pid=project_id()
+    docs=_v471_docs(pid)
+    cards=""
+    for d in docs[:60]:
+        title=esc(d["original_name"] or f'Document {d["id"]}')
+        cards+=_v37_link_card(
+            title,
+            "Open this project document in the markup workspace.",
+            f'/blueprint-markup/workspace?attachment_id={d["id"]}',
+            "Open"
+        )
+    body=(
+      '<div class="hero"><div class="eyebrow">BuildCommand v471</div>'
+      '<h1>Blueprint Markup & Collaboration Workspace</h1>'
+      '<p class="muted">Open a drawing, add field markups, organize layers, and connect notes to project issues and RFIs.</p></div>'
+      '<div class="grid3">'+(cards or '<div class="card"><p class="muted">No project documents found.</p></div>')+'</div>'
+    )
+    return shell("Blueprint Markup",body)
+
+@app.get("/blueprint-markup/workspace",response_class=HTMLResponse)
+def v471_workspace(attachment_id:int):
+    pid=project_id()
+    docs=_v471_docs(pid)
+    doc=next((d for d in docs if int(d["id"])==int(attachment_id)),None)
+    if not doc:
+        return shell("Blueprint Markup",'<div class="card"><p class="muted">Document not found.</p></div>')
+
+    layers=_v471_layers(pid,attachment_id)
+    markups=_v471_markups(pid,attachment_id)
+
+    if not layers:
+        c=db(); now=datetime.utcnow().isoformat()
+        c.execute("""INSERT INTO blueprint_markup_layers(
+            company_id,project_id,attachment_id,name,trade,color_label,status,created_by,created,updated
+        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (current_company_id(),pid,attachment_id,"General Markup","General","default","ACTIVE","USER",now,now))
+        c.commit(); c.close()
+        layers=_v471_layers(pid,attachment_id)
+
+    layer_options="".join(
+        f'<option value="{r["id"]}">{esc(r["name"])}</option>' for r in layers
+    )
+
+    layer_list="".join(
+        f'<div class="bm-layer"><b>{esc(r["name"])}</b><div>{esc(r["trade"] or "General")}</div></div>'
+        for r in layers
+    )
+
+    markup_js=[]
+    for r in markups:
+        markup_js.append({
+            "id":r["id"],"type":r["markup_type"],"x":r["x"],"y":r["y"],
+            "w":r["w"],"h":r["h"],"text":r["text_value"] or "","layer_id":r["layer_id"]
+        })
+
+    html = """
+    <style>
+    .bm-wrap{display:grid;grid-template-columns:220px 1fr 260px;gap:12px;min-height:72vh}
+    .bm-panel{background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:14px}
+    .bm-stage{position:relative;background:#eef2f5;border:1px solid #dfe5ea;border-radius:14px;overflow:auto;min-height:70vh}
+    .bm-canvas{position:relative;width:1200px;height:850px;background:white;margin:20px auto;box-shadow:0 4px 18px rgba(0,0,0,.1)}
+    .bm-sheet{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#6f7d88;font-weight:800;background:repeating-linear-gradient(0deg,#fff,#fff 24px,#f8fafb 25px)}
+    .bm-overlay{position:absolute;inset:0}
+    .bm-toolbar button{width:100%;margin:4px 0;padding:9px;border:1px solid #dce3e8;border-radius:8px;background:#fff;cursor:pointer;text-align:left}
+    .bm-toolbar button.active{background:#111820;color:#fff}
+    .bm-layer{padding:8px;border-bottom:1px solid #edf0f2;font-size:12px}
+    .bm-note{position:absolute;border:2px solid #111820;background:rgba(255,255,255,.8);padding:4px;font-size:12px;min-width:60px;min-height:28px}
+    .bm-pin{position:absolute;width:24px;height:24px;border-radius:50%;background:#111820;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
+    @media(max-width:1000px){.bm-wrap{grid-template-columns:1fr}}
+    </style>
+
+    <div class="hero">
+      <div class="eyebrow">BLUEPRINT MARKUP</div>
+      <h1>__DOCNAME__</h1>
+      <p class="muted">Markup tools are collaborative project notes. Final contract interpretation still requires project-team review.</p>
+    </div>
+
+    <div class="bm-wrap">
+      <div class="bm-panel bm-toolbar">
+        <h3>Markup Tools</h3>
+        <button type="button" onclick="bmTool(this,'select')">Pointer / Select</button>
+        <button type="button" onclick="bmTool(this,'cloud')">Cloud / Box</button>
+        <button type="button" onclick="bmTool(this,'arrow')">Arrow</button>
+        <button type="button" onclick="bmTool(this,'text')">Text Note</button>
+        <button type="button" onclick="bmTool(this,'highlight')">Highlight</button>
+        <button type="button" onclick="bmTool(this,'freehand')">Freehand</button>
+        <button type="button" onclick="bmTool(this,'measure')">Measure</button>
+        <button type="button" onclick="bmTool(this,'issue')">Issue Pin</button>
+        <button type="button" onclick="bmTool(this,'rfi')">RFI Pin</button>
+        <hr>
+        <label>Layer</label>
+        <select id="bm-layer" style="width:100%">__LAYER_OPTIONS__</select>
+
+        <form method="post" action="/blueprint-markup/layers/new" style="margin-top:10px">
+          <input type="hidden" name="attachment_id" value="__ATTACHMENT_ID__">
+          <input name="name" placeholder="New layer name" style="width:100%;box-sizing:border-box">
+          <input name="trade" placeholder="Trade (optional)" style="width:100%;box-sizing:border-box;margin-top:6px">
+          <button type="submit">+ Add Layer</button>
+        </form>
+      </div>
+
+      <div class="bm-stage">
+        <div class="bm-canvas">
+          <div class="bm-sheet">PLAN SHEET PREVIEW / MARKUP SURFACE<br><small>__DOCNAME__</small></div>
+          <div class="bm-overlay" id="bm-overlay"></div>
+        </div>
+      </div>
+
+      <div class="bm-panel">
+        <h3>Layers</h3>
+        __LAYER_LIST__
+        <hr>
+        <h3>Quick Links</h3>
+        <a href="/issues">Issues</a><br>
+        <a href="/smart-rfi">Smart RFI</a><br>
+        <a href="/blueprint-brain">Blueprint Brain</a><br>
+        <a href="/revision-intelligence">Revision Intelligence</a>
+      </div>
+    </div>
+
+    <script>
+    let bmCurrentTool="select";
+    const bmInitial=__MARKUPS__;
+
+    function bmTool(btn,t){
+      bmCurrentTool=t;
+      document.querySelectorAll(".bm-toolbar button").forEach(b=>b.classList.remove("active"));
+      btn.classList.add("active");
+    }
+
+    function bmRender(m){
+      const ov=document.getElementById("bm-overlay");
+      const el=document.createElement("div");
+      if(m.type==="issue"||m.type==="rfi"){
+        el.className="bm-pin";
+        el.textContent=m.type==="rfi"?"R":"I";
+      }else{
+        el.className="bm-note";
+        el.textContent=m.text||m.type.toUpperCase();
+      }
+      el.style.left=(m.x||0)+"px";
+      el.style.top=(m.y||0)+"px";
+      if(m.w)el.style.width=m.w+"px";
+      if(m.h)el.style.height=m.h+"px";
+      ov.appendChild(el);
+    }
+
+    bmInitial.forEach(bmRender);
+
+    document.getElementById("bm-overlay").addEventListener("click",function(e){
+      if(bmCurrentTool==="select")return;
+      const rect=this.getBoundingClientRect();
+      const x=Math.round(e.clientX-rect.left);
+      const y=Math.round(e.clientY-rect.top);
+      let text="";
+      if(["text","cloud","arrow","highlight","freehand","measure"].includes(bmCurrentTool)){
+        text=prompt("Markup note (optional):","")||"";
+      }
+      const layer=document.getElementById("bm-layer").value;
+      if(!layer){alert("Create or select a markup layer first.");return;}
+
+      const data=new URLSearchParams();
+      data.set("attachment_id","__ATTACHMENT_ID__");
+      data.set("layer_id",layer);
+      data.set("markup_type",bmCurrentTool);
+      data.set("x",x);
+      data.set("y",y);
+      data.set("w",bmCurrentTool==="cloud"?140:0);
+      data.set("h",bmCurrentTool==="cloud"?70:0);
+      data.set("text_value",text);
+
+      fetch("/blueprint-markup/markups/new",{
+        method:"POST",
+        headers:{"Content-Type":"application/x-www-form-urlencoded"},
+        body:data.toString()
+      }).then(r=>r.json()).then(m=>bmRender(m));
+    });
+    </script>
+    """
+
+    html=html.replace("__DOCNAME__",esc(doc["original_name"] or "Drawing"))
+    html=html.replace("__LAYER_OPTIONS__",layer_options)
+    html=html.replace("__LAYER_LIST__",layer_list)
+    html=html.replace("__ATTACHMENT_ID__",str(attachment_id))
+    html=html.replace("__MARKUPS__",repr(markup_js))
+    return shell("Blueprint Markup Workspace",html)
+
+@app.post("/blueprint-markup/layers/new")
+def v471_new_layer(
+    attachment_id:int=Form(...),
+    name:str=Form(...),
+    trade:str=Form("")
+):
+    _v471_ensure_tables()
+    c=db(); now=datetime.utcnow().isoformat()
+    c.execute("""INSERT INTO blueprint_markup_layers(
+        company_id,project_id,attachment_id,name,trade,color_label,status,created_by,created,updated
+    ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+    (current_company_id(),project_id(),attachment_id,name,trade,"default","ACTIVE","USER",now,now))
+    c.commit(); c.close()
+    return RedirectResponse(f"/blueprint-markup/workspace?attachment_id={attachment_id}",status_code=303)
+
+@app.post("/blueprint-markup/markups/new")
+def v471_new_markup(
+    attachment_id:int=Form(...),
+    layer_id:int=Form(...),
+    markup_type:str=Form(...),
+    x:float=Form(0),
+    y:float=Form(0),
+    w:float=Form(0),
+    h:float=Form(0),
+    text_value:str=Form("")
+):
+    _v471_ensure_tables()
+    c=db(); now=datetime.utcnow().isoformat()
+    c.execute("""INSERT INTO blueprint_markups(
+        company_id,project_id,attachment_id,layer_id,page_number,markup_type,
+        x,y,w,h,text_value,stroke_label,linked_type,linked_id,status,created_by,created,updated
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+    (current_company_id(),project_id(),attachment_id,layer_id,1,markup_type,
+     x,y,w,h,text_value,"default","","","OPEN","USER",now,now))
+    c.commit(); c.close()
+    return JSONResponse({
+        "type":markup_type,"x":x,"y":y,"w":w,"h":h,
+        "text":text_value,"layer_id":layer_id
+    })
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
