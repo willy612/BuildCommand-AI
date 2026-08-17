@@ -1,6 +1,14 @@
 from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, Response, FileResponse
 import sqlite3
+import time
+import threading
+import uuid
+import logging
+try:
+    import boto3
+except Exception:
+    boto3=None
 
 try:
     import openpyxl
@@ -18,6 +26,10 @@ try:
 except Exception:
     psycopg = None
     dict_row = None
+try:
+    from psycopg_pool import ConnectionPool
+except Exception:
+    ConnectionPool = None
 import os
 import io
 import csv
@@ -95,9 +107,55 @@ class PgCompatConnection:
     def rollback(self): self.conn.rollback()
     def close(self): self.conn.close()
 
+class PooledPgCompatConnection(PgCompatConnection):
+    """Same compatibility API, but close() returns the physical connection to the pool."""
+    def __init__(self,conn,pool):
+        super().__init__(conn)
+        self.pool=pool
+        self._returned=False
+    def close(self):
+        if self._returned:
+            return
+        try:
+            # Never let an unfinished transaction leak into the next request.
+            self.conn.rollback()
+        except Exception:
+            pass
+        self.pool.putconn(self.conn)
+        self._returned=True
+
+_PG_POOL=None
+_PG_POOL_LOCK=threading.Lock()
+
+def _get_pg_pool():
+    global _PG_POOL
+    if _PG_POOL is not None:
+        return _PG_POOL
+    if ConnectionPool is None:
+        return None
+    with _PG_POOL_LOCK:
+        if _PG_POOL is None:
+            min_size=max(1,int(os.environ.get("DB_POOL_MIN","1")))
+            max_size=max(min_size,int(os.environ.get("DB_POOL_MAX","5")))
+            timeout=float(os.environ.get("DB_POOL_TIMEOUT","10"))
+            _PG_POOL=ConnectionPool(
+                conninfo=DATABASE_URL,
+                min_size=min_size,
+                max_size=max_size,
+                timeout=timeout,
+                kwargs={"row_factory":dict_row},
+                open=True
+            )
+    return _PG_POOL
+
 def db():
     if DATABASE_KIND=="postgres":
-        if psycopg is None: raise RuntimeError("PostgreSQL DATABASE_URL is set but psycopg is not installed")
+        if psycopg is None:
+            raise RuntimeError("PostgreSQL DATABASE_URL is set but psycopg is not installed")
+        pool=_get_pg_pool()
+        if pool is not None:
+            return PooledPgCompatConnection(pool.getconn(),pool)
+        # Safe compatibility fallback if psycopg_pool is unavailable.
         return PgCompatConnection(psycopg.connect(DATABASE_URL,row_factory=dict_row))
     conn=sqlite3.connect(DB)
     conn.row_factory=sqlite3.Row
@@ -413,7 +471,27 @@ CREATE TABLE IF NOT EXISTS quick_entries(id INTEGER PRIMARY KEY,company_id INTEG
     c.close()
 
 
-init()
+
+def _production_init():
+    """Run schema bootstrap once safely even when multiple web workers start together."""
+    if DATABASE_KIND!="postgres" or psycopg is None:
+        init()
+        return
+    lock_id=84741001
+    direct=None
+    try:
+        direct=psycopg.connect(DATABASE_URL,row_factory=dict_row,autocommit=True)
+        direct.execute("SELECT pg_advisory_lock(%s)",(lock_id,))
+        init()
+    finally:
+        if direct is not None:
+            try: direct.execute("SELECT pg_advisory_unlock(%s)",(lock_id,))
+            except Exception: pass
+            try: direct.close()
+            except Exception: pass
+
+_production_init()
+
 
 def hash_password(password):
     salt = secrets.token_bytes(16)
@@ -818,7 +896,7 @@ def shell(title, body):
     </div>'''
 
     _groups=[
-      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("System Status","/system-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
+      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("System Status","/system-status"),("Scale Status","/scale-status"),("Storage Status","/storage-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
       ("BUILD",[("Build Home","/build"),("Blueprint Brain","/blueprint-brain"),("Daily Superintendent","/daily-superintendent"),("Look-Ahead","/lookahead-intelligence"),("Trade Readiness","/trade-readiness"),("Trade Coordination","/trade-coordination")]),
       ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction","/preconstruction"),("Scope Gap Intelligence","/scope-gap-intelligence")]),
       ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Change Order Intelligence","/change-order-intelligence"),("Performance Monitor","/performance")]),
@@ -6957,22 +7035,8 @@ def v473_document_inline(attachment_id:int):
     c.close()
     if not row:
         return HTMLResponse("File not found.",status_code=404)
-    path=os.path.join(UPLOAD_DIR,row["stored_name"])
-    if not os.path.isfile(path):
-        return HTMLResponse("Stored file is unavailable.",status_code=404)
-    mime=row["mime_type"] or mimetypes.guess_type(row["original_name"] or "")[0] or "application/octet-stream"
-    try:
-        return FileResponse(
-            path,
-            media_type=mime,
-            filename=row["original_name"],
-            content_disposition_type="inline"
-        )
-    except TypeError:
-        # Compatibility with older Starlette versions.
-        response=FileResponse(path,media_type=mime,filename=row["original_name"])
-        response.headers["Content-Disposition"]=f'inline; filename="{row["original_name"]}"'
-        return response
+    return bc_storage_stream_response(row,inline=True)
+
 
 def _v473_page_markups(pid,attachment_id,page_number):
     _v471_ensure_tables()
@@ -7715,6 +7779,10 @@ def _bc10_health():
             checks.append((f"Table: {table}","PASS","Available"))
         except Exception as exc:
             checks.append((f"Table: {table}","WARN",str(exc)[:120]))
+    try:
+        checks.append(_bc_storage_health())
+    except Exception as exc:
+        checks.append(("Object Storage","FAIL",str(exc)[:160]))
     return checks
 
 @app.get("/healthz")
@@ -7785,6 +7853,126 @@ def bc10_foundation():
       'mobile/tablet UX | unified navigation | automated tests | backups | error recovery | onboarding.</p></div>'
     )
     return shell("BuildCommand 1.0",body)
+
+
+# ============================================================
+# BuildCommand 1.0 - SCALE FOUNDATION PHASE 2
+# ============================================================
+
+BC_SCALE_RELEASE="1.0-scale-2"
+_BC_REQ_LOCK=threading.Lock()
+_BC_REQ_STATS={"count":0,"errors":0,"total_ms":0.0,"max_ms":0.0}
+_BC_SLOW=[]
+
+def _bc_scale_indexes():
+    """Idempotent indexes for common multi-tenant/project-scoped reads."""
+    statements=[
+      ("idx_users_company_email","users","company_id,email"),
+      ("idx_sessions_token","sessions","token_hash"),
+      ("idx_projects_company","projects","company_id"),
+      ("idx_attachments_company_project","attachments","company_id,project_id"),
+      ("idx_notifications_company_project_status","notifications","company_id,project_id,status"),
+      ("idx_scope_company_project_run","blueprint_scope_items","company_id,project_id,run_id"),
+      ("idx_scope_company_project_trade","blueprint_scope_items","company_id,project_id,trade"),
+      ("idx_trade_scopes_company_project_run","blueprint_trade_scopes","company_id,project_id,run_id"),
+      ("idx_document_chunks_project_attachment","document_ai_chunks","company_id,project_id,attachment_id"),
+      ("idx_markups_company_project_attachment","blueprint_markups","company_id,project_id,attachment_id"),
+      ("idx_markups_page","blueprint_markups","company_id,project_id,attachment_id,page_number"),
+      ("idx_activities_project_dates","activities","project_id,start,finish"),
+      ("idx_issues_project_status","project_issues","project_id,status"),
+      ("idx_submittals_project_status","submittals","project_id,status"),
+      ("idx_procurement_project_required","procurement","project_id,required_on_site"),
+      ("idx_inspections_project_date","inspections_tracker","project_id,scheduled_date"),
+    ]
+    c=db()
+    try:
+        for name,table,cols in statements:
+            try:
+                c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({cols})")
+                c.commit()
+            except Exception:
+                try:c.rollback()
+                except Exception:pass
+    finally:
+        c.close()
+
+try:
+    _bc_scale_indexes()
+except Exception:
+    # Index hardening must never keep the web service from booting.
+    pass
+
+@app.middleware("http")
+async def bc10_scale_request_middleware(request,call_next):
+    started=time.perf_counter()
+    request_id=request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
+    try:
+        response=await call_next(request)
+    except Exception:
+        with _BC_REQ_LOCK:
+            _BC_REQ_STATS["errors"]+=1
+        logging.exception("BuildCommand request failure request_id=%s path=%s",request_id,request.url.path)
+        raise
+    elapsed=(time.perf_counter()-started)*1000
+    with _BC_REQ_LOCK:
+        _BC_REQ_STATS["count"]+=1
+        _BC_REQ_STATS["total_ms"]+=elapsed
+        _BC_REQ_STATS["max_ms"]=max(_BC_REQ_STATS["max_ms"],elapsed)
+        if elapsed>=float(os.environ.get("SLOW_REQUEST_MS","1500")):
+            _BC_SLOW.append({"path":request.url.path,"method":request.method,"ms":round(elapsed,1),"at":datetime.utcnow().isoformat()})
+            if len(_BC_SLOW)>100: del _BC_SLOW[:-100]
+    response.headers["X-Request-ID"]=request_id
+    response.headers["X-Response-Time-Ms"]=f"{elapsed:.1f}"
+    response.headers["X-Content-Type-Options"]="nosniff"
+    response.headers["X-Frame-Options"]="SAMEORIGIN"
+    response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"]="camera=(), microphone=(), geolocation=()"
+    return response
+
+@app.get("/metrics-lite")
+def bc10_metrics_lite():
+    with _BC_REQ_LOCK:
+        count=_BC_REQ_STATS["count"]
+        avg=(_BC_REQ_STATS["total_ms"]/count) if count else 0
+        data={
+          "release":BC_SCALE_RELEASE,
+          "requests":count,
+          "errors":_BC_REQ_STATS["errors"],
+          "average_ms":round(avg,1),
+          "max_ms":round(_BC_REQ_STATS["max_ms"],1),
+          "slow_requests":list(reversed(_BC_SLOW[-20:])),
+          "pool_enabled":bool(_PG_POOL is not None),
+          "database":DATABASE_KIND
+        }
+    return JSONResponse(data)
+
+@app.get("/scale-status",response_class=HTMLResponse)
+def bc10_scale_status():
+    with _BC_REQ_LOCK:
+        count=_BC_REQ_STATS["count"]
+        avg=(_BC_REQ_STATS["total_ms"]/count) if count else 0
+        max_ms=_BC_REQ_STATS["max_ms"]
+        errors=_BC_REQ_STATS["errors"]
+        slow=list(reversed(_BC_SLOW[-20:]))
+    slow_html="".join(
+      f'<div class="action"><b>{esc(r["method"])} {esc(r["path"])}</b><div class="small">{r["ms"]:.1f} ms · {esc(r["at"])}</div></div>'
+      for r in slow
+    ) or '<p class="muted">No slow requests recorded in this worker yet.</p>'
+    pool_state="ENABLED" if _PG_POOL is not None else ("AVAILABLE AFTER FIRST DB REQUEST" if DATABASE_KIND=="postgres" and ConnectionPool is not None else "FALLBACK")
+    body=(
+      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation</div>'
+      '<h1>Production Scale Status</h1><p class="muted">Database pooling, request timing, security headers, indexes, and multi-worker deployment readiness.</p></div>'
+      '<div class="grid3">'
+      f'<div class="card"><div class="label">Requests</div><div class="kpi">{count}</div></div>'
+      f'<div class="card"><div class="label">Average Response</div><div class="kpi">{avg:.0f} ms</div></div>'
+      f'<div class="card"><div class="label">Max Response</div><div class="kpi">{max_ms:.0f} ms</div></div>'
+      f'<div class="card"><div class="label">Errors</div><div class="kpi">{errors}</div></div>'
+      f'<div class="card"><div class="label">Postgres Pool</div><div class="kpi" style="font-size:20px">{esc(pool_state)}</div></div>'
+      f'<div class="card"><div class="label">Release</div><div class="kpi" style="font-size:20px">{BC_SCALE_RELEASE}</div></div>'
+      '</div><div class="card"><h2>Slow Requests</h2>'+slow_html+'</div>'
+      '<div class="card"><h2>Scale Rules</h2><p>Use multiple web workers, keep DB_POOL_MAX conservative per worker, move large files to object storage, and move heavy AI/document analysis to worker jobs before large customer rollout.</p></div>'
+    )
+    return shell("Scale Status",body)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
@@ -15745,6 +15933,153 @@ def notifications_page():
     return shell("Notifications",f'<div class="hero"><div class="eyebrow">Notifications</div><h1>What needs your attention?</h1></div><div class="card"><form method="post" action="/notifications/email-digest"><button type="submit">Email My Alert Digest</button></form><div class="small">Requires SMTP settings in Render.</div></div><div class="grid2">{cards}</div>')
 
 
+
+# ============================================================
+# BuildCommand 1.0 - SCALE FOUNDATION PHASE 3
+# Shared object storage abstraction for blueprints/documents.
+# ============================================================
+
+BC_STORAGE_BACKEND=os.environ.get("STORAGE_BACKEND","local").strip().lower()
+BC_S3_BUCKET=os.environ.get("S3_BUCKET","").strip()
+BC_S3_REGION=os.environ.get("S3_REGION","").strip() or None
+BC_S3_ENDPOINT=os.environ.get("S3_ENDPOINT_URL","").strip() or None
+BC_S3_PREFIX=os.environ.get("S3_PREFIX","buildcommand").strip().strip("/")
+
+def _bc_storage_key(stored_name,company_id=None,project_id=None):
+    company_id=company_id or current_company_id()
+    project_id=project_id or project_id_safe()
+    parts=[BC_S3_PREFIX,str(company_id),str(project_id),str(stored_name)]
+    return "/".join(p.strip("/") for p in parts if str(p).strip("/"))
+
+def project_id_safe():
+    try:
+        return project_id()
+    except Exception:
+        return 0
+
+_BC_S3_CLIENT=None
+_BC_S3_LOCK=threading.Lock()
+
+def _bc_s3_client():
+    global _BC_S3_CLIENT
+    if _BC_S3_CLIENT is not None:
+        return _BC_S3_CLIENT
+    if boto3 is None:
+        raise RuntimeError("boto3 is not installed")
+    if not BC_S3_BUCKET:
+        raise RuntimeError("S3_BUCKET is not configured")
+    with _BC_S3_LOCK:
+        if _BC_S3_CLIENT is None:
+            kwargs={}
+            if BC_S3_REGION: kwargs["region_name"]=BC_S3_REGION
+            if BC_S3_ENDPOINT: kwargs["endpoint_url"]=BC_S3_ENDPOINT
+            access=os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("S3_ACCESS_KEY_ID")
+            secret=os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("S3_SECRET_ACCESS_KEY")
+            if access: kwargs["aws_access_key_id"]=access
+            if secret: kwargs["aws_secret_access_key"]=secret
+            _BC_S3_CLIENT=boto3.client("s3",**kwargs)
+    return _BC_S3_CLIENT
+
+def bc_storage_put_bytes(stored_name,data,content_type="application/octet-stream",company_id=None,project_id_value=None):
+    """
+    Persist bytes to configured shared storage.
+    Returns storage locator metadata.
+    """
+    if BC_STORAGE_BACKEND=="s3":
+        key=_bc_storage_key(stored_name,company_id,project_id_value)
+        _bc_s3_client().put_object(
+            Bucket=BC_S3_BUCKET,Key=key,Body=data,
+            ContentType=content_type or "application/octet-stream"
+        )
+        return {"backend":"s3","key":key}
+    os.makedirs(UPLOAD_DIR,exist_ok=True)
+    path=os.path.join(UPLOAD_DIR,stored_name)
+    with open(path,"wb") as f:
+        f.write(data)
+    return {"backend":"local","path":path}
+
+def bc_storage_exists(stored_name,company_id=None,project_id_value=None):
+    if BC_STORAGE_BACKEND=="s3":
+        try:
+            key=_bc_storage_key(stored_name,company_id,project_id_value)
+            _bc_s3_client().head_object(Bucket=BC_S3_BUCKET,Key=key)
+            return True
+        except Exception:
+            return False
+    return os.path.isfile(os.path.join(UPLOAD_DIR,stored_name))
+
+def bc_storage_get_bytes(stored_name,company_id=None,project_id_value=None):
+    if BC_STORAGE_BACKEND=="s3":
+        key=_bc_storage_key(stored_name,company_id,project_id_value)
+        obj=_bc_s3_client().get_object(Bucket=BC_S3_BUCKET,Key=key)
+        return obj["Body"].read()
+    path=os.path.join(UPLOAD_DIR,stored_name)
+    with open(path,"rb") as f:
+        return f.read()
+
+def bc_storage_stream_response(row,inline=False):
+    stored_name=row["stored_name"]
+    mime=row["mime_type"] or mimetypes.guess_type(row["original_name"] or "")[0] or "application/octet-stream"
+    filename=row["original_name"] or stored_name
+    if BC_STORAGE_BACKEND=="s3":
+        key=_bc_storage_key(stored_name,row["company_id"],row["project_id"])
+        obj=_bc_s3_client().get_object(Bucket=BC_S3_BUCKET,Key=key)
+        data=obj["Body"].read()
+        headers={"Content-Disposition":f'{"inline" if inline else "attachment"}; filename="{filename}"'}
+        return Response(content=data,media_type=mime,headers=headers)
+    path=os.path.join(UPLOAD_DIR,stored_name)
+    if not os.path.isfile(path):
+        return HTMLResponse("Stored file is unavailable.",status_code=404)
+    try:
+        return FileResponse(
+            path,media_type=mime,filename=filename,
+            content_disposition_type="inline" if inline else "attachment"
+        )
+    except TypeError:
+        response=FileResponse(path,media_type=mime,filename=filename)
+        response.headers["Content-Disposition"]=f'{"inline" if inline else "attachment"}; filename="{filename}"'
+        return response
+
+def bc_storage_delete(stored_name,company_id=None,project_id_value=None):
+    if BC_STORAGE_BACKEND=="s3":
+        key=_bc_storage_key(stored_name,company_id,project_id_value)
+        _bc_s3_client().delete_object(Bucket=BC_S3_BUCKET,Key=key)
+        return True
+    path=os.path.join(UPLOAD_DIR,stored_name)
+    if os.path.isfile(path):
+        os.remove(path)
+    return True
+
+def _bc_storage_health():
+    if BC_STORAGE_BACKEND=="s3":
+        try:
+            _bc_s3_client().head_bucket(Bucket=BC_S3_BUCKET)
+            return ("Object Storage","PASS",f"S3 bucket {BC_S3_BUCKET} reachable")
+        except Exception as exc:
+            return ("Object Storage","FAIL",str(exc)[:160])
+    try:
+        os.makedirs(UPLOAD_DIR,exist_ok=True)
+        return ("Object Storage","WARN",f"Local fallback active: {UPLOAD_DIR}")
+    except Exception as exc:
+        return ("Object Storage","FAIL",str(exc)[:160])
+
+@app.get("/storage-status",response_class=HTMLResponse)
+def bc_storage_status():
+    check=_bc_storage_health()
+    count=_bc10_safe_count("attachments","company_id=?",(current_company_id(),))
+    body=(
+      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation</div>'
+      '<h1>Shared Storage Status</h1><p class="muted">Blueprints and documents must remain available across multiple web workers and instances.</p></div>'
+      '<div class="grid3">'
+      f'<div class="card"><div class="label">Backend</div><div class="kpi" style="font-size:22px">{esc(BC_STORAGE_BACKEND.upper())}</div></div>'
+      f'<div class="card"><div class="label">Documents</div><div class="kpi">{count}</div></div>'
+      f'<div class="card"><div class="label">Storage Health</div><div class="kpi" style="font-size:20px">{esc(check[1])}</div></div>'
+      '</div>'
+      f'<div class="card"><h2>{esc(check[0])}</h2><p>{esc(check[2])}</p></div>'
+      '<div class="card"><h2>Production Rule</h2><p>Use S3-compatible shared object storage before horizontally scaling web instances. Local disk remains a development/rollback fallback only.</p></div>'
+    )
+    return shell("Storage Status",body)
+
 @app.get("/documents",response_class=HTMLResponse)
 def documents_page():
     pid=project_id(); c=db(); rows=c.execute("SELECT a.*,u.display_name FROM attachments a LEFT JOIN users u ON u.id=a.created_by WHERE a.company_id=? AND a.project_id=? ORDER BY a.id DESC",(current_company_id(),pid)).fetchall(); c.close()
@@ -15767,12 +16102,15 @@ async def documents_upload(category:str=Form("OTHER"),title:str=Form(""),file:Up
 
 @app.get("/documents/{attachment_id}/download")
 def document_download(attachment_id:int):
-    c=db(); row=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=?",(attachment_id,current_company_id())).fetchone(); c.close()
-    if not row: return HTMLResponse("File not found.",status_code=404)
-    path=os.path.join(UPLOAD_DIR,row["stored_name"])
-    if not os.path.isfile(path): return HTMLResponse("Stored file is unavailable. Configure persistent storage.",status_code=404)
-    return FileResponse(path,media_type=row["mime_type"] or "application/octet-stream",filename=row["original_name"])
-
+    c=db()
+    row=c.execute(
+        "SELECT * FROM attachments WHERE id=? AND company_id=?",
+        (attachment_id,current_company_id())
+    ).fetchone()
+    c.close()
+    if not row:
+        return HTMLResponse("File not found.",status_code=404)
+    return bc_storage_stream_response(row,inline=False)
 
 @app.get("/morning-brief",response_class=HTMLResponse)
 def morning_brief_page():
