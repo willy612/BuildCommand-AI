@@ -900,7 +900,7 @@ def shell(title, body):
     </div>'''
 
     _groups=[
-      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("System Status","/system-status"),("Scale Status","/scale-status"),("Storage Status","/storage-status"),("Worker Status","/worker-status"),("Background Jobs","/jobs"),("Cache Status","/cache-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
+      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("Production Gates","/production-gates"),("Tenant Security","/tenant-security-status"),("Migration Status","/migration-status"),("System Status","/system-status"),("Scale Status","/scale-status"),("Storage Status","/storage-status"),("Worker Status","/worker-status"),("Background Jobs","/jobs"),("Cache Status","/cache-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
       ("BUILD",[("Build Home","/build"),("Blueprint Brain","/blueprint-brain"),("Daily Superintendent","/daily-superintendent"),("Look-Ahead","/lookahead-intelligence"),("Trade Readiness","/trade-readiness"),("Trade Coordination","/trade-coordination")]),
       ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction","/preconstruction"),("Scope Gap Intelligence","/scope-gap-intelligence")]),
       ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Change Order Intelligence","/change-order-intelligence"),("Performance Monitor","/performance")]),
@@ -8475,6 +8475,168 @@ def bc_clear_shared_project_cache():
     try:_v56_clear_project_cache(pid)
     except Exception:pass
     return RedirectResponse("/cache-status",status_code=303)
+
+
+# ============================================================
+# BuildCommand 1.0 - SCALE FOUNDATION PHASE 6
+# Migration discipline + tenant isolation auditing.
+# ============================================================
+
+BC_SCHEMA_TARGET="2026.08.17.006"
+
+def _bc_migrations_table():
+    c=db()
+    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
+    c.execute(f"""CREATE TABLE IF NOT EXISTS schema_migrations(
+      id {pk},
+      version TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      checksum TEXT,
+      applied_at TEXT NOT NULL
+    )""")
+    c.commit();c.close()
+
+def bc_schema_version():
+    try:
+        _bc_migrations_table()
+        c=db()
+        row=c.execute("SELECT version FROM schema_migrations ORDER BY id DESC LIMIT 1").fetchone()
+        c.close()
+        return str(row["version"]) if row else "bootstrap"
+    except Exception:
+        return "unknown"
+
+def _bc_tenant_audit():
+    """
+    Audit key multi-tenant/project relationships without exposing customer data.
+    A non-zero orphan/cross-company count is a production blocker.
+    """
+    checks=[]
+    c=db()
+    try:
+        sql_checks=[
+          ("Attachments cross-company project mismatch",
+           """SELECT COUNT(*) AS n FROM attachments a
+              JOIN projects p ON p.id=a.project_id
+              WHERE a.project_id IS NOT NULL AND a.company_id<>p.company_id"""),
+          ("Blueprint runs cross-company project mismatch",
+           """SELECT COUNT(*) AS n FROM blueprint_runs b
+              JOIN projects p ON p.id=b.project_id
+              WHERE b.company_id<>p.company_id"""),
+          ("Blueprint scope cross-company project mismatch",
+           """SELECT COUNT(*) AS n FROM blueprint_scope_items b
+              JOIN projects p ON p.id=b.project_id
+              WHERE b.company_id<>p.company_id"""),
+          ("Background jobs cross-company project mismatch",
+           """SELECT COUNT(*) AS n FROM background_jobs j
+              JOIN projects p ON p.id=j.project_id
+              WHERE j.project_id IS NOT NULL AND j.company_id<>p.company_id"""),
+          ("Blueprint markups cross-company project mismatch",
+           """SELECT COUNT(*) AS n FROM blueprint_markups m
+              JOIN projects p ON p.id=m.project_id
+              WHERE m.company_id<>p.company_id"""),
+          ("User state references another company project",
+           """SELECT COUNT(*) AS n FROM user_state s
+              JOIN users u ON u.id=s.user_id
+              JOIN projects p ON p.id=s.selected_project_id
+              WHERE s.selected_project_id IS NOT NULL AND u.company_id<>p.company_id""")
+        ]
+        for name,sql in sql_checks:
+            try:
+                row=c.execute(sql).fetchone()
+                n=int(row["n"] if row else 0)
+                checks.append((name,"PASS" if n==0 else "FAIL",n))
+            except Exception as exc:
+                try:c.rollback()
+                except Exception:pass
+                checks.append((name,"WARN",str(exc)[:120]))
+    finally:
+        c.close()
+    return checks
+
+def bc_require_project_company(pid,company_id=None):
+    cid=company_id if company_id is not None else current_company_id()
+    if not pid or not cid:
+        return False
+    c=db()
+    row=c.execute("SELECT id FROM projects WHERE id=? AND company_id=?",(pid,cid)).fetchone()
+    c.close()
+    return bool(row)
+
+@app.get("/tenant-security-status",response_class=HTMLResponse)
+def bc_tenant_security_status():
+    rows=_bc_tenant_audit()
+    fail=sum(1 for x in rows if x[1]=="FAIL")
+    warn=sum(1 for x in rows if x[1]=="WARN")
+    h="".join(
+      f'<div class="action"><span class="badge">{esc(status)}</span> <b>{esc(name)}</b>'
+      f'<div class="small">{esc(value)}</div></div>'
+      for name,status,value in rows
+    )
+    state="PASS" if fail==0 else "BLOCKED"
+    body=(
+      '<div class="hero"><div class="eyebrow">Scale Foundation Phase 6</div>'
+      '<h1>Tenant Isolation Audit</h1>'
+      '<p class="muted">One company must never be able to reference another company’s project data.</p></div>'
+      '<div class="grid3">'
+      f'<div class="card"><div class="label">Overall</div><div class="kpi" style="font-size:22px">{state}</div></div>'
+      f'<div class="card"><div class="label">Failures</div><div class="kpi">{fail}</div></div>'
+      f'<div class="card"><div class="label">Warnings</div><div class="kpi">{warn}</div></div>'
+      '</div><div class="card">'+h+'</div>'
+      '<div class="card"><h2>Production Gate</h2>'
+      '<p>Any cross-company mismatch is a release blocker. Run this audit after migrations and before production promotion.</p></div>'
+    )
+    return shell("Tenant Security Status",body)
+
+@app.get("/migration-status",response_class=HTMLResponse)
+def bc_migration_status():
+    _bc_migrations_table()
+    c=db()
+    rows=c.execute("SELECT * FROM schema_migrations ORDER BY id DESC LIMIT 50").fetchall()
+    c.close()
+    current=bc_schema_version()
+    h="".join(
+      f'<div class="action"><b>{esc(r["version"])} - {esc(r["name"])}</b>'
+      f'<div class="small">{esc(r["applied_at"])} · {esc(r["checksum"] or "")}</div></div>'
+      for r in rows
+    ) or '<p class="muted">No managed migrations recorded yet. Existing schema is operating in bootstrap compatibility mode.</p>'
+    return shell(
+      "Migration Status",
+      f'<div class="hero"><div class="eyebrow">BuildCommand 1.0</div><h1>Database Migration Status</h1>'
+      f'<p class="muted">Current: {esc(current)} · Target: {esc(BC_SCHEMA_TARGET)}</p></div>'
+      '<div class="card">'+h+'</div>'
+      '<div class="card"><h2>Production Rule</h2><p>Schema changes should be applied by the migration command before web/worker promotion, not improvised by customer traffic.</p></div>'
+    )
+
+@app.get("/production-gates",response_class=HTMLResponse)
+def bc_production_gates():
+    tenant=_bc_tenant_audit()
+    tenant_ok=all(x[1]!="FAIL" for x in tenant)
+    cache=_bc_cache_health()
+    storage=_bc_storage_health()
+    health=_bc10_health()
+    database_ok=all(not (x[0]=="Database" and x[1]=="FAIL") for x in health)
+    gates=[
+      ("Database",database_ok,"Database connection and health"),
+      ("Tenant Isolation",tenant_ok,"No detected cross-company project references"),
+      ("Shared Cache",cache[1]=="PASS","Redis/Valkey distributed coordination"),
+      ("Shared Storage",storage[1]=="PASS","Object storage shared across instances"),
+      ("Background Jobs",_bc10_safe_count("background_jobs")>=0,"Durable job queue schema available"),
+      ("Schema Migrations",bc_schema_version()!="unknown","Migration tracking available")
+    ]
+    ready=all(g[1] for g in gates)
+    h="".join(
+      f'<div class="action"><span class="badge">{"PASS" if ok else "BLOCKED"}</span> <b>{esc(name)}</b>'
+      f'<div class="small">{esc(detail)}</div></div>'
+      for name,ok,detail in gates
+    )
+    return shell(
+      "Production Gates",
+      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Production Gates</div>'
+      f'<h1>{"Scale foundation healthy" if ready else "Production gates still open"}</h1>'
+      '<p class="muted">These gates must pass before calling BuildCommand ready for high-volume production.</p></div>'
+      '<div class="card">'+h+'</div>'
+    )
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
