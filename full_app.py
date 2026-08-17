@@ -752,7 +752,7 @@ def categorized_nav():
         ("PROJECTS",[("Projects Home","/"),("Add Project","/projects/new"),("Recent Activity","/recent-activity"),("Archive Projects","/project-archive")]),
         ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
-        ("MANAGE",[("Manage Home","/manage"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
+        ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
         ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
         ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
@@ -1048,7 +1048,7 @@ def unified_projects_home():
       '<div class="grid3" style="margin-top:16px">'
       +_v37_link_card("Ask BuildCommand","Ask questions across the current project.","/ask-buildcommand","Ask")
       +_v37_link_card("Field Command","Readiness, crews, deliveries, inspections and decisions.","/field-command","Open")
-      +_v37_link_card("Performance","See what pages/calculations are actually slow.","/performance","Open")
+      +_v37_link_card("Superintendent AI","What should I deal with next?","/proactive-superintendent/command","Open")
       +'</div>'
       '<div class="grid2" style="margin-top:16px">'
       '<div class="card"><h2>Top Priorities</h2>'+priority_html+'</div>'
@@ -5296,6 +5296,215 @@ def v57_refresh_post():
 def v57_test_event(event_type:str=Form("PROJECT_CHANGE"),subject:str=Form("Manual project update")):
     _v57_emit(project_id(),event_type,subject,"MANUAL")
     return RedirectResponse("/event-intelligence/command",status_code=303)
+
+
+# ============================================================
+# v58 PROACTIVE SUPERINTENDENT AI
+# ============================================================
+
+def _v58_days_until(value):
+    if not value: return None
+    try:
+        d=datetime.fromisoformat(str(value)[:10]).date()
+        return (d-date.today()).days
+    except Exception:
+        return None
+
+def _v58_proactive_findings(pid):
+    findings=[]
+
+    # Start with master reasoning priorities.
+    try:
+        for f in _v56_top_priorities(pid,30):
+            findings.append({
+                "severity":f["severity"],"category":f["type"],"title":f["title"],
+                "why":f["reason"],"action":f["action"],"source":"MASTER REASONING"
+            })
+    except Exception:
+        pass
+
+    # Upcoming activities and readiness.
+    try:
+        for x in _v56_sequence(pid):
+            a=x["activity"]
+            days=_v58_days_until(a["start"])
+            if days is None or days < 0 or days > 14: continue
+            if x["risk"] in {"CRITICAL","HIGH","MEDIUM"}:
+                findings.append({
+                    "severity":x["risk"],"category":"UPCOMING WORK",
+                    "title":f'{a["name"]} starts in {days} day(s)',
+                    "why":x["blocking_reason"] or "Upcoming activity has readiness/sequence exposure.",
+                    "action":"Clear predecessor, readiness, material, inspection, and coordination blockers before mobilization.",
+                    "source":"SEQUENCE INTELLIGENCE"
+                })
+    except Exception:
+        pass
+
+    # Material risk.
+    try:
+        for r,act,level,exposure,reason,action in _v47_material_readiness(pid):
+            if level not in {"CRITICAL","HIGH","TODAY"}: continue
+            findings.append({
+                "severity":"CRITICAL" if level=="CRITICAL" else "HIGH",
+                "category":"MATERIAL",
+                "title":f'{r["item"]} threatens upcoming work',
+                "why":reason,
+                "action":action,
+                "source":"PROCUREMENT"
+            })
+    except Exception:
+        pass
+
+    # Inspection hold points.
+    try:
+        for i,a in _v49_hold_points(pid):
+            if str(i["result"] or "").upper()=="PASSED": continue
+            findings.append({
+                "severity":"HIGH","category":"INSPECTION",
+                "title":f'{i["inspection_type"]} is an open hold point',
+                "why":f'Scheduled {i["scheduled_date"] or "date not set"}; related activity {a["name"] if a else "not linked"}.',
+                "action":"Confirm prerequisite work is complete and inspection is scheduled/passed before covering or proceeding.",
+                "source":"INSPECTIONS"
+            })
+    except Exception:
+        pass
+
+    # Decisions / RFIs / submittals.
+    try:
+        for typ,title,due,severity,cost,days,source in _v47_decision_deadlines(pid)[:30]:
+            findings.append({
+                "severity":severity,"category":"DECISION",
+                "title":title,
+                "why":f'{typ} due {due}; ${cost:,.0f} known exposure; {days:g} schedule day(s) exposure.',
+                "action":"Drive the responsible party to resolution before downstream work is affected.",
+                "source":source or typ
+            })
+    except Exception:
+        pass
+
+    # Deduplicate and rank.
+    rank={"CRITICAL":0,"HIGH":1,"MEDIUM":2,"REVIEW":3,"LOW":4}
+    seen=set(); clean=[]
+    for f in findings:
+        k=(str(f["category"]).lower(),str(f["title"]).lower())
+        if k in seen: continue
+        seen.add(k); clean.append(f)
+    clean.sort(key=lambda x:rank.get(x["severity"],3))
+    return clean[:100]
+
+def _v58_now_today_week(pid):
+    rows=_v58_proactive_findings(pid)
+    now=[]; today=[]; week=[]; upcoming=[]
+    for f in rows:
+        sev=f["severity"]
+        if sev=="CRITICAL":
+            now.append(f)
+        elif sev=="HIGH":
+            today.append(f)
+        elif sev=="MEDIUM":
+            week.append(f)
+        else:
+            upcoming.append(f)
+    return now[:12],today[:15],week[:15],upcoming[:15]
+
+def _v58_trade_alerts(pid):
+    rows=_v58_proactive_findings(pid)
+    alerts={}
+    known_trades=[str(x["trade"] or "") for x in _v39_rows("SELECT DISTINCT trade FROM activities WHERE project_id=?",(pid,)) if x["trade"]]
+    for f in rows:
+        blob=(f["title"]+" "+f["why"]+" "+f["action"]).lower()
+        for tr in known_trades:
+            if tr.lower() in blob:
+                alerts.setdefault(tr,[]).append(f)
+    return alerts
+
+def _v58_super_brief(pid):
+    now,today,week,upcoming=_v58_now_today_week(pid)
+    return {
+        "now":now,"today":today,"week":week,"upcoming":upcoming,
+        "total":len(now)+len(today)+len(week)+len(upcoming)
+    }
+
+@app.get("/proactive-superintendent",response_class=HTMLResponse)
+def v58_home():
+    pid=project_id(); b=_v58_super_brief(pid)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v58 - Proactive Superintendent AI</div><h1>BuildCommand should tell you before you have to ask.</h1><p class="muted">{len(b["now"])} do-now · {len(b["today"])} today · {len(b["week"])} this-week · {len(b["upcoming"])} upcoming intelligence item(s).</p></div><div class="grid3">'
+    cards=[
+      ("Superintendent Command","Prioritized proactive construction intelligence.","/proactive-superintendent/command"),
+      ("Do Now","Critical items needing immediate attention.","/proactive-superintendent/now"),
+      ("Today","High-priority actions for today.","/proactive-superintendent/today"),
+      ("This Week","Medium-term coordination and readiness actions.","/proactive-superintendent/week"),
+      ("Upcoming Risk","Watch items before they become field problems.","/proactive-superintendent/upcoming"),
+      ("Trade Alerts","Group proactive intelligence by affected trade.","/proactive-superintendent/trades"),
+      ("Inspection Readiness","Surface open hold points before work gets covered.","/proactive-superintendent/inspections"),
+      ("Material Alerts","Catch procurement exposure before installation dates.","/proactive-superintendent/materials"),
+      ("Decision Alerts","Push RFIs/submittals/decisions before downstream impact.","/proactive-superintendent/decisions"),
+      ("Event Intelligence","See what project changes triggered intelligence refresh.","/event-intelligence","Open"),
+    ]
+    for n,d,h in cards: body+=_v37_link_card(n,d,h,"Open")
+    body+='</div>'
+    return shell("Proactive Superintendent AI",body)
+
+def _v58_render(title,subtitle,rows):
+    h="".join(
+        f'<div class="action bc-priority"><span class="badge WATCH">{esc(f["severity"])}</span> '
+        f'<b>{esc(f["category"])} - {esc(f["title"])}</b>'
+        f'<div class="small">{esc(f["why"])}</div><p><b>Recommended next action:</b> {esc(f["action"])}</p>'
+        f'<div class="small">Source: {esc(f["source"])}</div></div>'
+        for f in rows
+    ) or '<p class="muted">No items in this priority group.</p>'
+    return shell(title,f'<div class="hero"><h1>{esc(title)}</h1><p class="muted">{esc(subtitle)}</p></div><div class="card">{h}</div>')
+
+@app.get("/proactive-superintendent/now",response_class=HTMLResponse)
+def v58_now_page():
+    return _v58_render("Do Now","Critical project conditions BuildCommand believes deserve immediate superintendent attention.",_v58_now_today_week(project_id())[0])
+
+@app.get("/proactive-superintendent/today",response_class=HTMLResponse)
+def v58_today_page():
+    return _v58_render("Today","High-priority project actions to drive today.",_v58_now_today_week(project_id())[1])
+
+@app.get("/proactive-superintendent/week",response_class=HTMLResponse)
+def v58_week_page():
+    return _v58_render("This Week","Coordination, readiness and decision items to clear this week.",_v58_now_today_week(project_id())[2])
+
+@app.get("/proactive-superintendent/upcoming",response_class=HTMLResponse)
+def v58_upcoming_page():
+    return _v58_render("Upcoming Risk","Watch these conditions before they become field blockers.",_v58_now_today_week(project_id())[3])
+
+@app.get("/proactive-superintendent/inspections",response_class=HTMLResponse)
+def v58_inspections_page():
+    rows=[f for f in _v58_proactive_findings(project_id()) if f["category"]=="INSPECTION"]
+    return _v58_render("Inspection Readiness","Open hold points that can stop covering, startup, energization or downstream work.",rows)
+
+@app.get("/proactive-superintendent/materials",response_class=HTMLResponse)
+def v58_materials_page():
+    rows=[f for f in _v58_proactive_findings(project_id()) if f["category"]=="MATERIAL"]
+    return _v58_render("Material Alerts","Procurement conditions that threaten upcoming installation work.",rows)
+
+@app.get("/proactive-superintendent/decisions",response_class=HTMLResponse)
+def v58_decisions_page():
+    rows=[f for f in _v58_proactive_findings(project_id()) if f["category"]=="DECISION"]
+    return _v58_render("Decision Alerts","RFIs, submittals and project decisions that need to move before downstream impact.",rows)
+
+@app.get("/proactive-superintendent/trades",response_class=HTMLResponse)
+def v58_trades_page():
+    alerts=_v58_trade_alerts(project_id())
+    h=""
+    for tr,rows in alerts.items():
+        h+=f'<div class="card"><h2>{esc(tr)}</h2>'
+        h+="".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["title"])}</b><div class="small">{esc(f["action"])}</div></div>' for f in rows[:10])
+        h+='</div>'
+    return shell("Trade Alerts",'<div class="hero"><h1>Trade Alerts</h1><p class="muted">Proactive project intelligence grouped by affected trade.</p></div>'+(h or '<div class="card"><p class="muted">No trade-specific alerts detected.</p></div>'))
+
+@app.get("/proactive-superintendent/command",response_class=HTMLResponse)
+def v58_command():
+    pid=project_id(); b=_v58_super_brief(pid)
+    def compact(rows):
+        return "".join(f'<div class="action"><span class="badge WATCH">{esc(f["severity"])}</span> <b>{esc(f["title"])}</b><div class="small">{esc(f["action"])}</div></div>' for f in rows[:8]) or '<p class="muted">Clear.</p>'
+    body=f'<div class="hero"><div class="eyebrow">SUPERINTENDENT COMMAND</div><h1>What should I deal with next?</h1><p class="muted">{b["total"]} proactive intelligence item(s) prioritized from project controls and construction reasoning.</p></div>'
+    body+='<div class="grid2"><div class="card"><h2>DO NOW</h2>'+compact(b["now"])+'</div><div class="card"><h2>DO TODAY</h2>'+compact(b["today"])+'</div></div>'
+    body+='<div class="grid2"><div class="card"><h2>THIS WEEK</h2>'+compact(b["week"])+'</div><div class="card"><h2>UPCOMING RISK</h2>'+compact(b["upcoming"])+'</div></div>'
+    return shell("Superintendent Command",body)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
