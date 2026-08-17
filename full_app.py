@@ -1126,6 +1126,10 @@ def v39_intelligence_center():
         body+=f'<div class="card"><div class="label">{esc(name)}</div><div class="kpi">{count}</div><p class="muted">{esc(desc)}</p><a href="{href}">Open →</a></div>'
     body+='</div>'
     body += '<div class="grid3">'+_v37_link_card("Constructability Intelligence","Find access, clearance, penetration, ceiling and coordination risks.","/intelligence-engine/constructability","Open")+_v37_link_card("Superintendent Command Intelligence","Prioritized view of sequence, procurement, conflicts, gaps and inspections.","/intelligence-engine/command","Open")+_v37_link_card("Full Intelligence Engine","Conflict, RFI, scope, change, procurement, inspection and learning intelligence.","/intelligence-engine","Open")+'</div>'
+    body += '<div class="grid3">' + _v37_link_card("Project Knowledge Graph","Drawing revisions, dependencies, equipment chains, prediction and verification.","/knowledge-graph","Open") + '</div>'
+    body += '<div class="grid3">' + _v37_link_card("Prediction & Decision Intelligence","Dependency impacts, decision deadlines, manpower, materials, closeout and risk propagation.","/prediction-intelligence","Open") + '</div>'
+
+
 
     return shell("Intelligence",body)
 
@@ -2682,6 +2686,607 @@ def v452_command_page():
     h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(kind)}</b> - {esc(title)}<div class="small">{esc(detail)}</div></div>' for level,kind,title,detail in d["top"])
     body=f'<div class="hero"><div class="eyebrow">Superintendent Command Intelligence</div><h1>What can hurt the job now?</h1><p class="muted">{d["sequence_critical"]} critical sequence · {d["sequence_high"]} high sequence · {d["proc_critical"]} critical procurement · {d["conflicts"]} conflicts · {d["gaps"]} scope gaps · {d["inspection_candidates"]} derived inspection candidates.</p></div><div class="card"><h2>Top Priorities</h2>{h or "<p class=muted>No major current intelligence exceptions.</p>"}</div>'
     return shell("Superintendent Command Intelligence",body)
+
+
+# ============================================================
+# v46 PROJECT KNOWLEDGE GRAPH + DEEPER REASONING
+# ============================================================
+
+def _v46_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS knowledge_nodes(
+        id {pk},company_id BIGINT,project_id BIGINT,node_type TEXT,node_key TEXT,
+        label TEXT,trade TEXT,source_ref TEXT,status TEXT DEFAULT 'ACTIVE',
+        confidence TEXT DEFAULT 'MEDIUM',metadata TEXT DEFAULT '',created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS knowledge_edges(
+        id {pk},company_id BIGINT,project_id BIGINT,from_key TEXT,to_key TEXT,
+        relationship TEXT,source_ref TEXT,confidence TEXT DEFAULT 'MEDIUM',
+        status TEXT DEFAULT 'ACTIVE',created TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS revision_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,new_attachment_id BIGINT,
+        prior_attachment_id BIGINT,revision_group TEXT,change_summary TEXT,
+        affected_trades TEXT,cost_risk TEXT DEFAULT 'REVIEW',
+        schedule_risk TEXT DEFAULT 'REVIEW',status TEXT DEFAULT 'REVIEW',
+        created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS equipment_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,equipment_key TEXT,equipment_name TEXT,
+        furnish_trade TEXT,install_trade TEXT,power_trade TEXT,controls_trade TEXT,
+        plumbing_trade TEXT,support_trade TEXT,roofing_trade TEXT,startup_trade TEXT,
+        source_ref TEXT,status TEXT DEFAULT 'REVIEW',created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS verification_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,subject_type TEXT,subject_key TEXT,
+        primary_conclusion TEXT,verification_conclusion TEXT,agreement TEXT DEFAULT 'REVIEW',
+        confidence TEXT DEFAULT 'MEDIUM',reason TEXT,source_ref TEXT,created TEXT,updated TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit(); c.close()
+
+def _v46_docs(pid):
+    return _v39_rows("SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",(current_company_id(),pid))
+
+def _v46_revision_pairs(pid):
+    rows=_v46_docs(pid)
+    groups={}
+    for r in rows:
+        name=str(r["original_name"] or "")
+        base=re.sub(r'(?i)(rev(?:ision)?[\s_-]*[A-Z0-9]+|addendum[\s_-]*[A-Z0-9]+|bulletin[\s_-]*[A-Z0-9]+)','',name)
+        base=re.sub(r'[^a-z0-9]+',' ',base.lower()).strip()
+        groups.setdefault(base,[]).append(r)
+    pairs=[]
+    for base,items in groups.items():
+        if len(items)>1:
+            items=sorted(items,key=lambda x:x["id"],reverse=True)
+            for i in range(len(items)-1):
+                pairs.append((items[i],items[i+1],base))
+    return pairs[:50]
+
+def _v46_dependencies(pid):
+    scopes=_v452_scope_rows(pid)
+    out=[]
+    for r in scopes:
+        req=str(r["requirement"] or "")
+        trade=str(r["trade"] or "")
+        related=set()
+        low=req.lower()
+        if any(x in low for x in ["power","disconnect","electrical connection","branch circuit"]):
+            related.add("Electrical")
+        if any(x in low for x in ["roof curb","roof flashing","roof patch","roof penetration"]):
+            related.add("Roofing")
+        if any(x in low for x in ["thermostat","controls","control wiring"]):
+            related.add("Controls")
+        if any(x in low for x in ["water","drain","condensate","piping","valve"]):
+            related.add("Plumbing")
+        if any(x in low for x in ["duct","diffuser","grille","rtu","ahu","exhaust fan"]):
+            related.add("HVAC / Mechanical")
+        if any(x in low for x in ["blocking","backing","support framing","rough opening"]):
+            related.add("Framing / Drywall")
+        if any(x in low for x in ["storefront","glazing","curtain wall"]):
+            related.add("Storefront / Glazing")
+        if any(x in low for x in ["door operator","access control","card reader","electronic strike"]):
+            related.add("Low Voltage")
+        related.discard(trade)
+        if related:
+            out.append((r,sorted(related)))
+    return out[:200]
+
+def _v46_spec_drawing_checks(pid):
+    rows=_v452_scope_rows(pid)
+    out=[]
+    for r in rows:
+        has_drawing=bool(r["source_sheet"] or r["source_detail"])
+        has_spec=bool(r["source_spec"])
+        if has_drawing != has_spec:
+            out.append((r,"DRAWING ONLY" if has_drawing else "SPEC ONLY"))
+    return out[:150]
+
+def _v46_equipment(pid):
+    rows=_v452_scope_rows(pid)
+    eq=[]
+    patterns=[
+        ("WH","water heater","Plumbing"),
+        ("RTU","rooftop unit","HVAC / Mechanical"),
+        ("AHU","air handler","HVAC / Mechanical"),
+        ("EF","exhaust fan","HVAC / Mechanical"),
+        ("VAV","vav","HVAC / Mechanical"),
+        ("PUMP","pump","Plumbing"),
+        ("PANEL","panelboard","Electrical"),
+        ("XFMR","transformer","Electrical"),
+    ]
+    seen=set()
+    for r in rows:
+        low=str(r["requirement"] or "").lower()
+        for prefix,term,primary in patterns:
+            if term in low:
+                key=f"{prefix}:{re.sub(r'[^a-z0-9]+','-',low[:80]).strip('-')}"
+                if key in seen: continue
+                seen.add(key)
+                eq.append({
+                    "key":key,"name":r["requirement"],"primary":primary,
+                    "source":" · ".join(x for x in [r["source_sheet"],r["source_detail"],r["source_spec"]] if x),
+                    "power":"Electrical" if primary!="Electrical" else "",
+                    "controls":"Controls" if primary=="HVAC / Mechanical" else "",
+                    "plumbing":"Plumbing" if primary in {"HVAC / Mechanical","Plumbing"} else "",
+                    "support":"Framing / Drywall" if any(x in low for x in ["wall mounted","supported","curb","hung"]) else "",
+                    "roof":"Roofing" if any(x in low for x in ["roof","rooftop","curb"]) else "",
+                    "startup":primary
+                })
+    return eq[:100]
+
+def _v46_schedule_prediction(pid):
+    seq=_v45_sequence_analysis(pid)
+    proc=_v452_procurement_analysis(pid)
+    out=[]
+    for x in seq:
+        risk=x["risk"]
+        if risk in {"CRITICAL","HIGH"}:
+            out.append((risk,x["activity"]["name"],x["blocking_reason"],"Sequence / readiness"))
+    for r,level,exposure,reason,action in proc:
+        if level in {"CRITICAL","HIGH"}:
+            out.append((level,r["item"],reason,"Procurement"))
+    return out[:100]
+
+def _v46_cost_risk(pid):
+    conflicts=_v452_conflicts(pid)
+    gaps=_v452_scope_gaps(pid)
+    changes=_v39_changes(pid)
+    out=[]
+    for req,trades,source in conflicts:
+        out.append(("HIGH","Conflict",req,f"Multiple trade ownership: {', '.join(trades)}",source))
+    for r in gaps:
+        out.append(("MEDIUM","Scope Gap",r["requirement"],f"Trade {r['trade']} / confidence {r['confidence']}",r["source_sheet"] or ""))
+    for r in changes:
+        if float(r["estimated_cost"] or 0)>0:
+            out.append(("HIGH","Open Change",r["title"],f"${float(r['estimated_cost'] or 0):,.0f} exposure",""))
+    return out[:100]
+
+def _v46_plan_completeness(pid):
+    rows=_v452_scope_rows(pid)
+    findings=[]
+    for r in rows:
+        if not r["source_sheet"] and not r["source_spec"]:
+            findings.append(("SOURCE","Missing source reference",r["requirement"],r["trade"]))
+        if str(r["confidence"] or "").upper()=="LOW":
+            findings.append(("CONFIDENCE","Low-confidence requirement",r["requirement"],r["trade"]))
+        low=str(r["requirement"] or "").lower()
+        if any(x in low for x in ["verify","confirm","coordinate","as required","where required"]) and str(r["confidence"] or "").upper()!="HIGH":
+            findings.append(("AMBIGUITY","Open-ended requirement",r["requirement"],r["trade"]))
+    return findings[:150]
+
+def _v46_second_opinion(pid):
+    rows=_v452_scope_rows(pid)
+    out=[]
+    for r in rows:
+        primary=str(r["trade"] or "")
+        verify=_v441_primary_trade(r["requirement"],primary)
+        agreement="AGREE" if verify==primary else "DISAGREE"
+        out.append((r,verify,agreement))
+    return out[:200]
+
+def _v46_graph(pid):
+    _v46_ensure_tables()
+    scopes=_v452_scope_rows(pid)
+    deps=_v46_dependencies(pid)
+    eq=_v46_equipment(pid)
+    nodes=[]; edges=[]
+    for r in scopes:
+        key=f"scope:{r['id']}"
+        nodes.append((key,"SCOPE",r["requirement"],r["trade"],r["source_sheet"] or ""))
+        edges.append((f"trade:{r['trade']}",key,"OWNS"))
+        if r["source_sheet"]:
+            edges.append((f"sheet:{r['source_sheet']}",key,"DEFINES"))
+        if r["source_spec"]:
+            edges.append((f"spec:{r['source_spec']}",key,"GOVERNS"))
+    for r,rels in deps:
+        for tr in rels:
+            edges.append((f"scope:{r['id']}",f"trade:{tr}","COORDINATES_WITH"))
+    for e in eq:
+        nodes.append((f"equipment:{e['key']}","EQUIPMENT",e["name"],e["primary"],e["source"]))
+        for rel,tr in [("INSTALLED_BY",e["primary"]),("POWERED_BY",e["power"]),("CONTROLLED_BY",e["controls"]),("PIPED_BY",e["plumbing"]),("SUPPORTED_BY",e["support"]),("ROOFED_BY",e["roof"]),("STARTED_BY",e["startup"])]:
+            if tr:
+                edges.append((f"equipment:{e['key']}",f"trade:{tr}",rel))
+    return nodes,edges
+
+@app.get("/knowledge-graph",response_class=HTMLResponse)
+def v46_knowledge_graph_home():
+    pid=project_id()
+    pairs=_v46_revision_pairs(pid)
+    deps=_v46_dependencies(pid)
+    specchecks=_v46_spec_drawing_checks(pid)
+    equipment=_v46_equipment(pid)
+    schedule=_v46_schedule_prediction(pid)
+    cost=_v46_cost_risk(pid)
+    complete=_v46_plan_completeness(pid)
+    verify=_v46_second_opinion(pid)
+    nodes,edges=_v46_graph(pid)
+    disagreements=sum(1 for _,_,a in verify if a=="DISAGREE")
+
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v46 - Project Knowledge Graph</div><h1>Understand how the project connects.</h1><p class="muted">{len(nodes)} knowledge nodes - {len(edges)} relationships - {len(pairs)} revision pairs - {len(deps)} cross-trade dependencies - {len(equipment)} equipment chains - {disagreements} verification disagreements.</p></div><div class="grid3">'
+    cards=[
+      ("Drawing Revision Intelligence","Identify likely prior/new document pairs and affected-project review needs.","/knowledge-graph/revisions"),
+      ("Cross-Sheet Dependencies","See which trades and systems depend on the same requirement.","/knowledge-graph/dependencies"),
+      ("Spec vs Drawing Verification","Find scope documented only in drawings or only in specifications.","/knowledge-graph/spec-drawing"),
+      ("Equipment Intelligence","Map furnish/install/power/controls/piping/support/roof/startup responsibility.","/knowledge-graph/equipment"),
+      ("Trade Handoff Intelligence","Show responsibility boundaries and coordination handoffs.","/knowledge-graph/handoffs"),
+      ("Schedule Prediction","Predict likely near-term schedule threats from sequence and procurement.","/knowledge-graph/schedule-prediction"),
+      ("Cost-Risk Prediction","Surface conflicts, scope gaps and known change exposure.","/knowledge-graph/cost-risk"),
+      ("Plan Completeness Audit","Find missing sources, low-confidence and open-ended requirements.","/knowledge-graph/completeness"),
+      ("Second Opinion Engine","Challenge Blueprint Brain trade ownership before trusting it.","/knowledge-graph/verification"),
+      ("Project Knowledge Graph","View the connected nodes and relationships behind the intelligence.","/knowledge-graph/graph")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Project Knowledge Graph",body)
+
+@app.get("/knowledge-graph/revisions",response_class=HTMLResponse)
+def v46_revisions():
+    rows=_v46_revision_pairs(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">COMPARE</span> <b>{esc(new["original_name"])}</b><div class="small">Possible prior version: {esc(old["original_name"])} · Group {esc(group)}</div></div>' for new,old,group in rows)
+    return shell("Drawing Revision Intelligence",'<div class="hero"><h1>Drawing Revision Intelligence</h1><p class="muted">Candidate pairs only; document content still requires comparison before scope or cost changes.</p></div><div class="card">'+(h or '<p class="muted">No likely revision pairs detected.</p>')+'</div>')
+
+@app.get("/knowledge-graph/dependencies",response_class=HTMLResponse)
+def v46_dependencies():
+    rows=_v46_dependencies(project_id())
+    h="".join(f'<div class="action"><b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Coordinates with: {esc(", ".join(rels))}</div></div>' for r,rels in rows)
+    return shell("Cross-Sheet Dependencies",'<div class="hero"><h1>Cross-Sheet Dependency Brain</h1><p class="muted">A requirement can belong to one trade while creating dependencies for several others.</p></div><div class="card">'+(h or '<p class="muted">No cross-trade dependency signals detected.</p>')+'</div>')
+
+@app.get("/knowledge-graph/spec-drawing",response_class=HTMLResponse)
+def v46_specdrawing():
+    rows=_v46_spec_drawing_checks(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(kind)}</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Sheet {esc(r["source_sheet"])} · Spec {esc(r["source_spec"])}</div></div>' for r,kind in rows)
+    return shell("Spec vs Drawing Verification",'<div class="hero"><h1>Specification-to-Drawing Verification</h1><p class="muted">Find requirements supported by only one side of the contract-document set.</p></div><div class="card">'+(h or '<p class="muted">No one-sided source signals detected.</p>')+'</div>')
+
+@app.get("/knowledge-graph/equipment",response_class=HTMLResponse)
+def v46_equipment():
+    rows=_v46_equipment(project_id())
+    h=""
+    for e in rows:
+        h+=f'<div class="card"><h3>{esc(e["name"])}</h3><div class="small">{esc(e["source"])}</div><p><b>Install:</b> {esc(e["primary"])}</p><p><b>Power:</b> {esc(e["power"] or "N/A")} · <b>Controls:</b> {esc(e["controls"] or "N/A")} · <b>Plumbing:</b> {esc(e["plumbing"] or "N/A")} · <b>Support:</b> {esc(e["support"] or "N/A")} · <b>Roofing:</b> {esc(e["roof"] or "N/A")} · <b>Startup:</b> {esc(e["startup"])}</p></div>'
+    return shell("Equipment Intelligence",'<div class="hero"><h1>Equipment Responsibility Intelligence</h1><p class="muted">Connect equipment to the trades required to make it operational.</p></div>'+(h or '<div class="card">No major equipment signals detected.</div>'))
+
+@app.get("/knowledge-graph/handoffs",response_class=HTMLResponse)
+def v46_handoffs():
+    rows=_v46_dependencies(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">HANDOFF</span> <b>{esc(r["trade"])}</b> → {esc(", ".join(rels))}<div class="small">{esc(r["requirement"])}</div></div>' for r,rels in rows)
+    return shell("Trade Handoff Intelligence",'<div class="hero"><h1>Trade Handoff Intelligence</h1><p class="muted">Shows where one subcontractor stops and another trade must pick up supporting work.</p></div><div class="card">'+(h or '<p class="muted">No handoff signals detected.</p>')+'</div>')
+
+@app.get("/knowledge-graph/schedule-prediction",response_class=HTMLResponse)
+def v46_schedule_prediction_page():
+    rows=_v46_schedule_prediction(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(title)}</b><div>{esc(reason)}</div><div class="small">{esc(source)}</div></div>' for level,title,reason,source in rows)
+    return shell("Schedule Prediction",'<div class="hero"><h1>Schedule Prediction Brain</h1><p class="muted">Predicts likely near-term schedule trouble from current sequence/readiness and procurement signals.</p></div><div class="card">'+(h or '<p class="muted">No high schedule prediction signals.</p>')+'</div>')
+
+@app.get("/knowledge-graph/cost-risk",response_class=HTMLResponse)
+def v46_costrisk():
+    rows=_v46_cost_risk(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(kind)}</b> - {esc(title)}<div>{esc(reason)}</div><div class="small">{esc(source)}</div></div>' for level,kind,title,reason,source in rows)
+    return shell("Cost Risk Prediction",'<div class="hero"><h1>Cost-Risk Prediction</h1><p class="muted">Early-warning signals only; human review determines contractual cost responsibility.</p></div><div class="card">'+(h or '<p class="muted">No major cost-risk signals detected.</p>')+'</div>')
+
+@app.get("/knowledge-graph/completeness",response_class=HTMLResponse)
+def v46_completeness():
+    rows=_v46_plan_completeness(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(kind)}</span> <b>{esc(trade)}</b> - {esc(title)}<div class="small">{esc(req)}</div></div>' for kind,title,req,trade in rows)
+    return shell("Plan Completeness Audit",'<div class="hero"><h1>Plan Completeness Audit</h1><p class="muted">Asks what an experienced builder would want clarified before relying on the information.</p></div><div class="card">'+(h or '<p class="muted">No obvious completeness exceptions detected.</p>')+'</div>')
+
+@app.get("/knowledge-graph/verification",response_class=HTMLResponse)
+def v46_verification():
+    rows=_v46_second_opinion(project_id())
+    h="".join(f'<div class="action"><span class="badge {"READY" if agreement=="AGREE" else "WATCH"}">{esc(agreement)}</span> <b>{esc(r["trade"])}</b> - {esc(r["requirement"])}<div class="small">Second opinion: {esc(verify)} · Confidence {esc(r["confidence"])}</div></div>' for r,verify,agreement in rows if agreement=="DISAGREE")
+    return shell("Second Opinion Engine",'<div class="hero"><h1>AI Verification / Second Opinion Engine</h1><p class="muted">When ownership logic disagrees with the saved scope, BuildCommand flags it instead of pretending certainty.</p></div><div class="card">'+(h or '<p class="muted">No trade-ownership disagreements detected.</p>')+'</div>')
+
+@app.get("/knowledge-graph/graph",response_class=HTMLResponse)
+def v46_graph_page():
+    nodes,edges=_v46_graph(project_id())
+    node_counts={}
+    edge_counts={}
+    for _,typ,_,_,_ in nodes: node_counts[typ]=node_counts.get(typ,0)+1
+    for _,_,rel in edges: edge_counts[rel]=edge_counts.get(rel,0)+1
+    nh="".join(f'<div class="action"><b>{esc(k)}</b><div class="small">{v} node(s)</div></div>' for k,v in sorted(node_counts.items()))
+    eh="".join(f'<div class="action"><b>{esc(k)}</b><div class="small">{v} relationship(s)</div></div>' for k,v in sorted(edge_counts.items()))
+    return shell("Project Knowledge Graph",f'<div class="hero"><h1>Project Knowledge Graph</h1><p class="muted">{len(nodes)} nodes · {len(edges)} relationships.</p></div><div class="grid2"><div class="card"><h2>Nodes</h2>{nh}</div><div class="card"><h2>Relationships</h2>{eh}</div></div>')
+
+
+# ============================================================
+# v47 PREDICTION + DECISION INTELLIGENCE — NEXT 10
+# ============================================================
+
+def _v47_ensure_tables():
+    c=db()
+    if DATABASE_KIND=="postgres":
+        pk="BIGSERIAL PRIMARY KEY"; num="DOUBLE PRECISION"
+    else:
+        pk="INTEGER PRIMARY KEY"; num="REAL"
+    stmts=[
+      f"""CREATE TABLE IF NOT EXISTS decision_intelligence(
+        id {pk},company_id BIGINT,project_id BIGINT,decision_type TEXT,title TEXT,
+        responsible_party TEXT,decision_needed_by TEXT,affected_activity TEXT,
+        affected_trade TEXT,cost_exposure {num} DEFAULT 0,schedule_days {num} DEFAULT 0,
+        severity TEXT DEFAULT 'REVIEW',status TEXT DEFAULT 'OPEN',source_ref TEXT,
+        recommended_action TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS manpower_forecast(
+        id {pk},company_id BIGINT,project_id BIGINT,forecast_date TEXT,trade TEXT,
+        active_activities INTEGER DEFAULT 0,risk_level TEXT DEFAULT 'LOW',
+        readiness_note TEXT,created TEXT,updated TEXT)""",
+      f"""CREATE TABLE IF NOT EXISTS risk_propagation(
+        id {pk},company_id BIGINT,project_id BIGINT,source_type TEXT,source_key TEXT,
+        source_title TEXT,target_type TEXT,target_key TEXT,target_title TEXT,
+        relationship TEXT,risk_level TEXT DEFAULT 'REVIEW',reason TEXT,created TEXT)"""
+    ]
+    for s in stmts:
+        c.execute(s)
+    c.commit(); c.close()
+
+def _v47_dependency_impacts(pid):
+    deps=_v46_dependencies(pid)
+    seq=_v45_sequence_analysis(pid)
+    seq_by_trade={}
+    for x in seq:
+        seq_by_trade.setdefault(str(x["activity"]["trade"] or ""),[]).append(x)
+
+    impacts=[]
+    for r,related in deps:
+        for tr in related:
+            related_seq=seq_by_trade.get(tr,[])
+            high=[x for x in related_seq if x["risk"] in {"CRITICAL","HIGH"}]
+            level="HIGH" if high else "REVIEW"
+            reason=(f"{len(high)} related {tr} activity risk(s) may affect this requirement."
+                    if high else f"Requirement depends on coordination with {tr}.")
+            impacts.append((r,tr,level,reason))
+    return impacts[:200]
+
+def _v47_critical_path_signals(pid):
+    seq=_v45_sequence_analysis(pid)
+    # No CPM dependency network exists yet, so this is a transparent proxy:
+    # upcoming/high-risk activities with downstream stage exposure.
+    rows=[]
+    for x in seq:
+        a=x["activity"]
+        start=_v39_safe_date(a["start"]); finish=_v39_safe_date(a["finish"])
+        duration=(finish-start).days+1 if start and finish and finish>=start else 0
+        score=0
+        if x["risk"]=="CRITICAL": score+=50
+        elif x["risk"]=="HIGH": score+=30
+        if x["stage"]>=60: score+=10
+        if duration>=10: score+=10
+        if float(a["pct"] or 0)>0 and float(a["pct"] or 0)<100: score+=10
+        if score>=30:
+            rows.append((score,x))
+    rows.sort(key=lambda z:z[0],reverse=True)
+    return rows[:50]
+
+def _v47_decision_deadlines(pid):
+    _v42_ensure_tables()
+    today=datetime.utcnow().date()
+    rows=[]
+    # Owner decisions
+    for r in _v42_owner(pid):
+        due=_v39_safe_date(r["due_date"])
+        days=(due-today).days if due else None
+        severity="CRITICAL" if days is not None and days<0 else "HIGH" if days is not None and days<=3 else "REVIEW"
+        rows.append(("OWNER",r["title"],r["due_date"],severity,float(r["cost_impact"] or 0),float(r["schedule_days"] or 0),r["source_ref"] or ""))
+    # RFIs
+    for r in _v42_rfis(pid):
+        if str(r["status"] or "").upper() in {"CLOSED","ANSWERED","COMPLETE"}: continue
+        due=_v39_safe_date(r["due_date"])
+        days=(due-today).days if due else None
+        severity="CRITICAL" if days is not None and days<0 else "HIGH" if days is not None and days<=3 else "REVIEW"
+        rows.append(("RFI",r["title"],r["due_date"],severity,float(r["cost_impact"] or 0),float(r["schedule_days"] or 0),r["source_ref"] or ""))
+    # Submittals
+    for r in _v39_rows("SELECT * FROM submittals WHERE project_id=? AND COALESCE(status,'PENDING') NOT IN ('APPROVED','CLOSED','COMPLETE') ORDER BY due_date",(pid,)):
+        due=_v39_safe_date(r["due_date"])
+        days=(due-today).days if due else None
+        severity="CRITICAL" if days is not None and days<0 else "HIGH" if days is not None and days<=3 else "REVIEW"
+        rows.append(("SUBMITTAL",r["title"],r["due_date"],severity,0,0,r["spec_section"] or ""))
+    rank={"CRITICAL":0,"HIGH":1,"REVIEW":2}
+    rows.sort(key=lambda x:(rank.get(x[3],9),x[2] or "9999"))
+    return rows[:100]
+
+def _v47_manpower_forecast(pid):
+    acts=_v39_rows("SELECT * FROM activities WHERE project_id=? AND COALESCE(status,'NOT_STARTED')!='COMPLETE' ORDER BY start",(pid,))
+    today=datetime.utcnow().date()
+    buckets={}
+    for a in acts:
+        start=_v39_safe_date(a["start"]); finish=_v39_safe_date(a["finish"])
+        if not start or not finish: continue
+        for offset in range(0,15):
+            d=today+timedelta(days=offset)
+            if start<=d<=finish:
+                tr=str(a["trade"] or "Unassigned")
+                buckets.setdefault((d.isoformat(),tr),[]).append(a)
+    out=[]
+    for (d,tr),items in sorted(buckets.items()):
+        count=len(items)
+        level="HIGH" if count>=3 else "MEDIUM" if count==2 else "LOW"
+        out.append((d,tr,count,level,[x["name"] for x in items]))
+    return out[:200]
+
+def _v47_material_readiness(pid):
+    acts={int(a["id"]):a for a in _v39_rows("SELECT * FROM activities WHERE project_id=?",(pid,))}
+    proc=_v452_procurement_analysis(pid)
+    out=[]
+    for r,level,exposure,reason,action in proc:
+        aid=r["activity_id"]
+        act=acts.get(int(aid)) if aid is not None else None
+        out.append((r,act,level,exposure,reason,action))
+    return out[:150]
+
+def _v47_coordination_agenda(pid):
+    conflicts=_v452_conflicts(pid)
+    construct=_v452_constructability(pid)
+    seq=[x for x in _v45_sequence_analysis(pid) if x["risk"] in {"CRITICAL","HIGH"}]
+    decisions=_v47_decision_deadlines(pid)
+    agenda=[]
+    for req,trades,source in conflicts[:8]:
+        agenda.append(("Conflict",req,f"Trades: {', '.join(trades)} · {source}"))
+    for r in construct[:8]:
+        agenda.append(("Constructability",r["title"],r["description"]))
+    for x in seq[:8]:
+        agenda.append(("Schedule",x["activity"]["name"],x["blocking_reason"]))
+    for typ,title,due,severity,cost,days,source in decisions[:8]:
+        agenda.append(("Decision",title,f"{typ} · Due {due} · {severity}"))
+    return agenda[:25]
+
+def _v47_change_causality(pid):
+    changes=_v39_changes(pid)
+    rfis=_v42_rfis(pid)
+    issues=_v39_rows("SELECT * FROM project_issues WHERE project_id=? ORDER BY id DESC",(pid,))
+    out=[]
+    for c in changes:
+        title=str(c["title"] or "").lower()
+        linked=[]
+        for r in rfis:
+            if title and (title in str(r["title"] or "").lower() or str(r["title"] or "").lower() in title):
+                linked.append(("RFI",r["title"]))
+        for i in issues:
+            if title and (title in str(i["title"] or "").lower() or str(i["title"] or "").lower() in title):
+                linked.append(("ISSUE",i["title"]))
+        out.append((c,linked))
+    return out[:100]
+
+def _v47_closeout_prediction(pid):
+    _v41_closeout_seed(pid)
+    rows=_v39_rows("SELECT * FROM closeout_items WHERE company_id=? AND project_id=? ORDER BY category,id",(current_company_id(),pid))
+    today=datetime.utcnow().date()
+    out=[]
+    for r in rows:
+        status=str(r["status"] or "OPEN").upper()
+        due=_v39_safe_date(r["due_date"])
+        if status in {"COMPLETE","CLOSED","RECEIVED"}:
+            level="READY"
+        elif due and due<today:
+            level="CRITICAL"
+        elif due and (due-today).days<=14:
+            level="HIGH"
+        else:
+            level="REVIEW"
+        out.append((r,level))
+    return out
+
+def _v47_risk_propagation(pid):
+    impacts=[]
+    for r,tr,level,reason in _v47_dependency_impacts(pid):
+        impacts.append(("SCOPE",f"scope:{r['id']}",r["requirement"],"TRADE",f"trade:{tr}",tr,"DEPENDS_ON",level,reason))
+    for score,x in _v47_critical_path_signals(pid):
+        a=x["activity"]
+        impacts.append(("ACTIVITY",f"activity:{a['id']}",a["name"],"PROJECT","project", "Project Completion","CAN_DELAY",x["risk"],x["blocking_reason"]))
+    return impacts[:250]
+
+def _v47_forecast_summary(pid):
+    cp=_v47_critical_path_signals(pid)
+    decisions=_v47_decision_deadlines(pid)
+    material=_v47_material_readiness(pid)
+    closeout=_v47_closeout_prediction(pid)
+    critical_decisions=sum(1 for x in decisions if x[3]=="CRITICAL")
+    critical_material=sum(1 for x in material if x[2]=="CRITICAL")
+    critical_closeout=sum(1 for _,level in closeout if level=="CRITICAL")
+    return {
+        "critical_path":len(cp),
+        "critical_decisions":critical_decisions,
+        "critical_material":critical_material,
+        "critical_closeout":critical_closeout,
+        "risk_propagation":len(_v47_risk_propagation(pid))
+    }
+
+@app.get("/prediction-intelligence",response_class=HTMLResponse)
+def v47_prediction_home():
+    pid=project_id()
+    s=_v47_forecast_summary(pid)
+    body=f'<div class="hero"><div class="eyebrow">BuildCommand v47 - Prediction & Decision Intelligence</div><h1>See problems before they become field problems.</h1><p class="muted">{s["critical_path"]} critical-path proxy signals · {s["critical_decisions"]} overdue decision(s) · {s["critical_material"]} critical material risk(s) · {s["critical_closeout"]} critical closeout risk(s) · {s["risk_propagation"]} propagated dependency risks.</p></div><div class="grid3">'
+    cards=[
+      ("Dependency Impact Engine","Trace how one scope/trade dependency can affect another.","/prediction-intelligence/dependency-impact"),
+      ("Critical Path Intelligence","Prioritize activities most likely to threaten completion.","/prediction-intelligence/critical-path"),
+      ("Decision Deadline Engine","Put RFIs, submittals and owner decisions on one urgency clock.","/prediction-intelligence/decision-deadlines"),
+      ("Manpower Forecast","See overlapping trade demand for the next two weeks.","/prediction-intelligence/manpower"),
+      ("Material Readiness","Connect procurement timing directly to scheduled activities.","/prediction-intelligence/materials"),
+      ("Coordination Agenda Brain","Auto-build coordination meeting topics from live project intelligence.","/prediction-intelligence/agenda"),
+      ("Change Causality","Trace open changes back to related RFIs/issues when evidence exists.","/prediction-intelligence/change-causality"),
+      ("Closeout Readiness Predictor","See turnover items likely to become late before project end.","/prediction-intelligence/closeout"),
+      ("Risk Propagation Graph","Show how scope/activity risk spreads downstream.","/prediction-intelligence/risk-propagation"),
+      ("Predictive Project Brief","One forward-looking view of the next problems to solve.","/prediction-intelligence/brief")
+    ]
+    for name,desc,href in cards:
+        body+=_v37_link_card(name,desc,href,"Open")
+    body+='</div>'
+    return shell("Prediction Intelligence",body)
+
+@app.get("/prediction-intelligence/dependency-impact",response_class=HTMLResponse)
+def v47_dependency_page():
+    rows=_v47_dependency_impacts(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(r["trade"])}</b> → {esc(tr)}<div>{esc(r["requirement"])}</div><div class="small">{esc(reason)}</div></div>' for r,tr,level,reason in rows)
+    return shell("Dependency Impact",'<div class="hero"><h1>Dependency Impact Engine</h1><p class="muted">Shows where supporting-trade risk can affect the primary scope.</p></div><div class="card">'+(h or '<p class="muted">No dependency impacts detected.</p>')+'</div>')
+
+@app.get("/prediction-intelligence/critical-path",response_class=HTMLResponse)
+def v47_critical_path_page():
+    rows=_v47_critical_path_signals(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">SCORE {score}</span> <b>{esc(x["activity"]["name"])}</b><div class="small">{esc(x["activity"]["trade"])} · Stage {x["stage"]} · {esc(x["risk"])}</div><p>{esc(x["blocking_reason"] or "Upcoming activity with completion exposure.")}</p></div>' for score,x in rows)
+    return shell("Critical Path Intelligence",'<div class="hero"><h1>Critical Path Intelligence</h1><p class="muted">This is a transparent risk proxy until a full CPM dependency network is available.</p></div><div class="card">'+(h or '<p class="muted">No major critical-path proxy signals.</p>')+'</div>')
+
+@app.get("/prediction-intelligence/decision-deadlines",response_class=HTMLResponse)
+def v47_decisions_page():
+    rows=_v47_decision_deadlines(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(severity)}</span> <b>{esc(typ)} - {esc(title)}</b><div class="small">Due {esc(due)} · ${cost:,.0f} exposure · {days:g} days · {esc(source)}</div></div>' for typ,title,due,severity,cost,days,source in rows)
+    return shell("Decision Deadlines",'<div class="hero"><h1>Decision Deadline Engine</h1><p class="muted">One urgency clock for owner decisions, RFIs and submittals.</p></div><div class="card">'+(h or '<p class="muted">No open decision deadlines.</p>')+'</div>')
+
+@app.get("/prediction-intelligence/manpower",response_class=HTMLResponse)
+def v47_manpower_page():
+    rows=_v47_manpower_forecast(project_id())
+    h="".join(f'<div class="action"><span class="badge {"WATCH" if level!="LOW" else "READY"}">{esc(level)}</span> <b>{esc(date)} - {esc(trade)}</b><div class="small">{count} active activity(ies): {esc(", ".join(names))}</div></div>' for date,trade,count,level,names in rows)
+    return shell("Manpower Forecast",'<div class="hero"><h1>Manpower Forecast</h1><p class="muted">Predict overlapping trade demand from the next two weeks of scheduled activities.</p></div><div class="card">'+(h or '<p class="muted">No dated activities available for manpower forecasting.</p>')+'</div>')
+
+@app.get("/prediction-intelligence/materials",response_class=HTMLResponse)
+def v47_material_page():
+    rows=_v47_material_readiness(project_id())
+    h=""
+    for r,act,level,exposure,reason,action in rows:
+        h+=f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(r["item"])}</b><div class="small">Activity: {esc(act["name"] if act else "Unlinked")} · Need {esc(r["required_on_site"])} · Promised {esc(r["promised_date"])} · Exposure {exposure} day(s)</div><p>{esc(reason)}</p></div>'
+    return shell("Material Readiness",'<div class="hero"><h1>Material Readiness Intelligence</h1><p class="muted">Procurement risk is most useful when connected directly to installation work.</p></div><div class="card">'+(h or '<p class="muted">No open material-readiness risks.</p>')+'</div>')
+
+@app.get("/prediction-intelligence/agenda",response_class=HTMLResponse)
+def v47_agenda_page():
+    rows=_v47_coordination_agenda(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(kind)}</span> <b>{esc(title)}</b><div class="small">{esc(detail)}</div></div>' for kind,title,detail in rows)
+    return shell("Coordination Agenda Brain",'<div class="hero"><h1>Coordination Agenda Brain</h1><p class="muted">Builds meeting topics from live conflicts, constructability, schedule and decision intelligence.</p></div><div class="card">'+(h or '<p class="muted">No current coordination agenda items.</p>')+'</div>')
+
+@app.get("/prediction-intelligence/change-causality",response_class=HTMLResponse)
+def v47_change_causality_page():
+    rows=_v47_change_causality(project_id())
+    h=""
+    for c,links in rows:
+        linktxt=", ".join(f"{k}: {v}" for k,v in links) if links else "No obvious linked RFI/issue by title."
+        h+=f'<div class="action"><b>{esc(c["title"])}</b><div class="small">{esc(c["event_type"])} · ${float(c["estimated_cost"] or 0):,.0f} · {float(c["schedule_days"] or 0):g} days</div><p>{esc(linktxt)}</p></div>'
+    return shell("Change Causality",'<div class="hero"><h1>Change Causality Intelligence</h1><p class="muted">Helps preserve the reason chain behind change exposure.</p></div><div class="card">'+(h or '<p class="muted">No open change events.</p>')+'</div>')
+
+@app.get("/prediction-intelligence/closeout",response_class=HTMLResponse)
+def v47_closeout_page():
+    rows=_v47_closeout_prediction(project_id())
+    h="".join(f'<div class="action"><span class="badge {"READY" if level=="READY" else "WATCH"}">{esc(level)}</span> <b>{esc(r["category"])}</b> - {esc(r["item"])}<div class="small">{esc(r["status"])} · Due {esc(r["due_date"])} · {esc(r["responsible_party"])}</div></div>' for r,level in rows)
+    return shell("Closeout Readiness",'<div class="hero"><h1>Closeout Readiness Predictor</h1><p class="muted">Turnover risk should be managed before the final month, not discovered at the end.</p></div><div class="card">'+h+'</div>')
+
+@app.get("/prediction-intelligence/risk-propagation",response_class=HTMLResponse)
+def v47_risk_graph_page():
+    rows=_v47_risk_propagation(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(stitle)}</b> → {esc(ttitle)}<div class="small">{esc(rel)} · {esc(reason)}</div></div>' for stype,skey,stitle,ttype,tkey,ttitle,rel,level,reason in rows)
+    return shell("Risk Propagation",'<div class="hero"><h1>Risk Propagation Graph</h1><p class="muted">Shows how one unresolved dependency can create downstream project exposure.</p></div><div class="card">'+(h or '<p class="muted">No propagated risk signals.</p>')+'</div>')
+
+@app.get("/prediction-intelligence/brief",response_class=HTMLResponse)
+def v47_predictive_brief():
+    pid=project_id()
+    cp=_v47_critical_path_signals(pid)[:5]
+    decisions=_v47_decision_deadlines(pid)[:5]
+    materials=[x for x in _v47_material_readiness(pid) if x[2] in {"CRITICAL","HIGH"}][:5]
+    closeout=[x for x in _v47_closeout_prediction(pid) if x[1] in {"CRITICAL","HIGH"}][:5]
+    body='<div class="hero"><div class="eyebrow">Predictive Project Brief</div><h1>What is most likely to hurt the job next?</h1><p class="muted">Forward-looking signals from schedule, decisions, material readiness and closeout.</p></div>'
+    body+='<div class="card"><h2>Critical Path / Sequence</h2>'+("".join(f'<div class="action"><b>{esc(x["activity"]["name"])}</b><div class="small">Score {score} · {esc(x["risk"])}</div></div>' for score,x in cp) or '<p class="muted">No major sequence threats.</p>')+'</div>'
+    body+='<div class="card"><h2>Decision Deadlines</h2>'+("".join(f'<div class="action"><b>{esc(typ)} - {esc(title)}</b><div class="small">Due {esc(due)} · {esc(sev)}</div></div>' for typ,title,due,sev,cost,days,source in decisions) or '<p class="muted">No urgent decisions.</p>')+'</div>'
+    body+='<div class="card"><h2>Material Risk</h2>'+("".join(f'<div class="action"><b>{esc(r["item"])}</b><div class="small">{esc(level)} · {exposure} day(s) exposure</div></div>' for r,act,level,exposure,reason,action in materials) or '<p class="muted">No high material risks.</p>')+'</div>'
+    body+='<div class="card"><h2>Closeout Risk</h2>'+("".join(f'<div class="action"><b>{esc(r["item"])}</b><div class="small">{esc(level)} · Due {esc(r["due_date"])}</div></div>' for r,level in closeout) or '<p class="muted">No high closeout risks.</p>')+'</div>'
+    return shell("Predictive Project Brief",body)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
