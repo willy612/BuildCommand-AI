@@ -752,8 +752,8 @@ def categorized_nav():
         ("PROJECTS",[("Projects Home","/"),("Add Project","/projects/new"),("Recent Activity","/recent-activity"),("Archive Projects","/project-archive")]),
         ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
-        ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
-        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
+        ("MANAGE",[("Manage Home","/manage"),("Project Autopilot","/autopilot"),("Daily Superintendent Command","/daily-superintendent"),("Look-Ahead Intelligence","/lookahead-intelligence"),("Trade Readiness Brain","/trade-readiness"),("Trade Coordination Engine","/trade-coordination"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
+        ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Smart RFI & Conflict Detection","/smart-rfi"),("Long-Lead Prediction","/longlead-intelligence"),("Inspection & QC Intelligence","/quality-intelligence"),("Scope Gap & Buyout Intelligence","/scope-gap-intelligence"),("Change Order Intelligence","/change-order-intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
         ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
     html='<div class="bc-topnav">'
@@ -1048,7 +1048,7 @@ def unified_projects_home():
       '<div class="grid3" style="margin-top:16px">'
       +_v37_link_card("Ask BuildCommand","Ask questions across the current project.","/ask-buildcommand","Ask")
       +_v37_link_card("Field Command","Readiness, crews, deliveries, inspections and decisions.","/field-command","Open")
-      +_v37_link_card("Superintendent AI","What should I deal with next?","/proactive-superintendent/command","Open")
+      +_v37_link_card("Project Autopilot","One command center for what the project needs next.","/autopilot","Open")
       +'</div>'
       '<div class="grid2" style="margin-top:16px">'
       '<div class="card"><h2>Top Priorities</h2>'+priority_html+'</div>'
@@ -5505,6 +5505,221 @@ def v58_command():
     body+='<div class="grid2"><div class="card"><h2>DO NOW</h2>'+compact(b["now"])+'</div><div class="card"><h2>DO TODAY</h2>'+compact(b["today"])+'</div></div>'
     body+='<div class="grid2"><div class="card"><h2>THIS WEEK</h2>'+compact(b["week"])+'</div><div class="card"><h2>UPCOMING RISK</h2>'+compact(b["upcoming"])+'</div></div>'
     return shell("Superintendent Command",body)
+
+
+# ============================================================
+# v59-v68 NEXT 10 OPERATIONS INTELLIGENCE
+# ============================================================
+
+def _v59_lookahead(pid,weeks=3):
+    horizon=date.today()+timedelta(days=weeks*7)
+    rows=_v39_rows("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,))
+    out=[]
+    seq={int(x["activity"]["id"]):x for x in _v56_sequence(pid)}
+    for a in rows:
+        try: sd=datetime.fromisoformat(str(a["start"])[:10]).date()
+        except Exception: continue
+        if not (date.today()<=sd<=horizon): continue
+        x=seq.get(int(a["id"]),{})
+        risk=x.get("risk","LOW")
+        state="READY" if risk=="LOW" else ("NOT READY" if risk in {"CRITICAL","HIGH"} else "AT RISK")
+        out.append((a,state,risk,x.get("blocking_reason","")))
+    return out
+
+def _v60_trade_readiness(pid):
+    out=[]
+    for a,state,risk,reason in _v59_lookahead(pid,6):
+        checks=[]
+        checks.append(("Sequence",state=="READY",reason or "Sequence clear"))
+        try:
+            proc=[x for x in _v47_material_readiness(pid) if x[1] and int(x[1]["id"])==int(a["id"])]
+            checks.append(("Materials",not any(x[2] in {"CRITICAL","HIGH","TODAY"} for x in proc),"Material readiness"))
+        except Exception: pass
+        try:
+            holds=[x for x in _v49_hold_points(pid) if x[1] and int(x[1]["id"])==int(a["id"]) and str(x[0]["result"] or "").upper()!="PASSED"]
+            checks.append(("Inspections",not holds,"Inspection hold points"))
+        except Exception: pass
+        failed=[c[0] for c in checks if not c[1]]
+        readiness="READY" if not failed else ("NOT READY" if len(failed)>1 else "AT RISK")
+        out.append((a,readiness,failed,checks))
+    return out
+
+def _v61_handoffs(pid):
+    rows=_v39_rows("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,))
+    out=[]
+    for i in range(len(rows)-1):
+        a,b=rows[i],rows[i+1]
+        if str(a["trade"] or "")!=str(b["trade"] or ""):
+            out.append((a,b,"Verify predecessor completion, inspection, access, layout and turnover before successor mobilizes."))
+    return out[:100]
+
+def _v62_daily_brief(pid):
+    b=_v58_super_brief(pid)
+    today=str(date.today())
+    acts=_v39_rows("SELECT * FROM activities WHERE project_id=? AND start<=? AND finish>=? ORDER BY start",(pid,today,today))
+    try: inspections=[x for x in _v49_hold_points(pid) if str(x[0]["scheduled_date"] or "")[:10]==today]
+    except Exception: inspections=[]
+    try: mats=[x for x in _v47_material_readiness(pid) if str(x[0]["promised_date"] or "")[:10]==today]
+    except Exception: mats=[]
+    return {"priorities":b,"activities":acts,"inspections":inspections,"materials":mats}
+
+def _v63_rfi_candidates(pid):
+    candidates=[]
+    try:
+        for f in _v50_collect_findings(pid):
+            blob=(str(f["type"])+" "+str(f["title"])+" "+str(f["reason"])).lower()
+            if any(k in blob for k in ["conflict","contradiction","missing","unclear","coordination","constructability"]):
+                candidates.append({
+                    "severity":f["severity"],"title":f["title"],"reason":f["reason"],
+                    "question":f'Please clarify the contract requirement regarding: {f["title"]}.',
+                    "action":f["action"],"source":f.get("source","")
+                })
+    except Exception: pass
+    return candidates[:100]
+
+def _v64_longlead(pid):
+    rows=_v39_rows("SELECT * FROM procurement WHERE project_id=? ORDER BY required_on_site",(pid,))
+    out=[]
+    for r in rows:
+        try:
+            need=datetime.fromisoformat(str(r["required_on_site"])[:10]).date()
+            promised=datetime.fromisoformat(str(r["promised_date"])[:10]).date() if r["promised_date"] else None
+        except Exception: continue
+        exposure=(promised-need).days if promised else None
+        level="HIGH" if exposure is None or exposure>0 else ("MEDIUM" if exposure==0 else "LOW")
+        release_by=need-timedelta(days=42)
+        out.append((r,level,release_by,exposure))
+    return out
+
+def _v65_qc_points(pid):
+    rows=_v39_rows("SELECT * FROM activities WHERE project_id=? ORDER BY start",(pid,))
+    rules=[
+      ("concrete","Pre-pour: reinforcing, embeds, forms, elevations, underground signoff and required inspection/testing."),
+      ("drywall","Before close-in: framing, above-wall MEP rough, fire/smoke assemblies, backing and inspections."),
+      ("ceiling","Before ceiling close: above-ceiling MEP, fire sprinkler, controls, inspections and access coordination."),
+      ("roof","Before concealment: substrate, flashing, penetrations, curbs and manufacturer-required conditions."),
+      ("electrical","Verify rough inspection, labeling, terminations, testing and energization prerequisites."),
+      ("plumbing","Verify pressure/testing, supports, slopes, cleanouts, insulation and inspection prerequisites."),
+    ]
+    out=[]
+    for a in rows:
+        blob=(str(a["name"])+" "+str(a["trade"] or "")).lower()
+        for key,check in rules:
+            if key in blob: out.append((a,key.upper(),check))
+    return out[:200]
+
+def _v66_scope_gaps(pid):
+    scopes=_v452_scope_rows(pid)
+    gaps=[]; seen={}
+    for r in scopes:
+        req=re.sub(r'\s+',' ',str(r["requirement"] or "").lower()).strip()
+        if not str(r["trade"] or "").strip():
+            gaps.append(("UNOWNED",r,"No trade owner assigned."))
+        if req:
+            if req in seen and str(seen[req]["trade"])!=str(r["trade"]):
+                gaps.append(("DUPLICATE",r,f'Also assigned to {seen[req]["trade"]}.'))
+            else: seen[req]=r
+        if any(k in str(r["trade"] or "").lower() for k in ["general","other","unknown","tbd"]):
+            gaps.append(("AMBIGUOUS",r,"Trade ownership should be confirmed before buyout."))
+    return gaps[:200]
+
+def _v67_change_intelligence(pid):
+    s=_v55_summary(pid)
+    return {
+      "added":s["added"],"removed":s["removed"],"changed":s["changed"],
+      "known_net":s["added_cost"]-s["removed_cost"],"schedule_proxy":s["days"],
+      "affected_trades":s["trades"],"downstream":s["links"]
+    }
+
+def _v68_autopilot(pid):
+    proactive=_v58_super_brief(pid)
+    readiness=_v60_trade_readiness(pid)
+    not_ready=[x for x in readiness if x[1]=="NOT READY"]
+    at_risk=[x for x in readiness if x[1]=="AT RISK"]
+    changes=_v67_change_intelligence(pid)
+    return {
+      "now":proactive["now"],"today":proactive["today"],"week":proactive["week"],
+      "upcoming":proactive["upcoming"],"not_ready":not_ready,"at_risk":at_risk,
+      "cost":changes["known_net"],"schedule":changes["schedule_proxy"]
+    }
+
+@app.get("/lookahead-intelligence",response_class=HTMLResponse)
+def v59_home():
+    pid=project_id()
+    body='<div class="hero"><div class="eyebrow">v59 Look-Ahead Planning Intelligence</div><h1>Is upcoming work actually ready?</h1><p class="muted">2-, 3-, and 6-week schedule windows connected to construction readiness.</p></div><div class="grid3">'
+    for weeks in (2,3,6):
+        rows=_v59_lookahead(pid,weeks)
+        bad=sum(1 for x in rows if x[1]!="READY")
+        body+=_v37_link_card(f"{weeks}-Week Look-Ahead",f"{len(rows)} activity(s) · {bad} at risk/not ready.",f"/lookahead-intelligence/{weeks}","Open")
+    body+='</div>'
+    return shell("Look-Ahead Intelligence",body)
+
+@app.get("/lookahead-intelligence/{weeks}",response_class=HTMLResponse)
+def v59_window(weeks:int):
+    weeks=max(1,min(weeks,12)); rows=_v59_lookahead(project_id(),weeks)
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(state)}</span> <b>{esc(a["name"])}</b><div class="small">{esc(a["trade"])} · {esc(a["start"])} → {esc(a["finish"])} · {esc(reason)}</div></div>' for a,state,risk,reason in rows)
+    return shell(f"{weeks}-Week Look-Ahead",f'<div class="hero"><h1>{weeks}-Week Look-Ahead</h1></div><div class="card">{h or "<p class=muted>No activities in this window.</p>"}</div>')
+
+@app.get("/trade-readiness",response_class=HTMLResponse)
+def v60_home():
+    rows=_v60_trade_readiness(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(state)}</span> <b>{esc(a["trade"])} - {esc(a["name"])}</b><div class="small">Failed checks: {esc(", ".join(failed) if failed else "None")}</div></div>' for a,state,failed,checks in rows)
+    return shell("Trade Readiness Brain",'<div class="hero"><div class="eyebrow">v60</div><h1>Trade Readiness Brain</h1><p class="muted">READY / AT RISK / NOT READY before mobilization.</p></div><div class="card">'+(h or '<p class="muted">No upcoming activities.</p>')+'</div>')
+
+@app.get("/trade-coordination",response_class=HTMLResponse)
+def v61_home():
+    rows=_v61_handoffs(project_id())
+    h="".join(f'<div class="action"><span class="badge">HANDOFF</span> <b>{esc(a["trade"])} → {esc(b["trade"])}</b><div>{esc(a["name"])} → {esc(b["name"])}</div><div class="small">{esc(note)}</div></div>' for a,b,note in rows)
+    return shell("Trade Coordination Engine",'<div class="hero"><div class="eyebrow">v61</div><h1>Automatic Trade Coordination Engine</h1></div><div class="card">'+(h or '<p class="muted">No trade handoffs detected.</p>')+'</div>')
+
+@app.get("/daily-superintendent",response_class=HTMLResponse)
+def v62_home():
+    d=_v62_daily_brief(project_id()); b=d["priorities"]
+    def ph(rows): return "".join(f'<div class="action"><span class="badge WATCH">{esc(x["severity"])}</span> <b>{esc(x["title"])}</b><div class="small">{esc(x["action"])}</div></div>' for x in rows[:8]) or '<p class="muted">Clear.</p>'
+    acts="".join(f'<div class="action"><b>{esc(a["trade"])} - {esc(a["name"])}</b></div>' for a in d["activities"]) or '<p class="muted">No scheduled activities today.</p>'
+    body='<div class="hero"><div class="eyebrow">v62 Daily Superintendent Command AI</div><h1>Today’s superintendent briefing.</h1></div><div class="grid2"><div class="card"><h2>DO NOW</h2>'+ph(b["now"])+'</div><div class="card"><h2>TODAY</h2>'+ph(b["today"])+'</div></div><div class="card"><h2>Scheduled Work Today</h2>'+acts+'</div>'
+    return shell("Daily Superintendent Command",body)
+
+@app.get("/smart-rfi",response_class=HTMLResponse)
+def v63_home():
+    rows=_v63_rfi_candidates(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(r["severity"])}</span> <b>{esc(r["title"])}</b><div>{esc(r["question"])}</div><div class="small">Why: {esc(r["reason"])} · Suggested action: {esc(r["action"])}</div></div>' for r in rows)
+    return shell("Smart RFI Generator",'<div class="hero"><div class="eyebrow">v63</div><h1>Smart RFI Generator & Conflict Detection</h1><p class="muted">Draft candidates only. Human approval remains required before sending.</p></div><div class="card">'+(h or '<p class="muted">No RFI candidates detected.</p>')+'</div>')
+
+@app.get("/longlead-intelligence",response_class=HTMLResponse)
+def v64_home():
+    rows=_v64_longlead(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(level)}</span> <b>{esc(r["item"])}</b><div class="small">Required {esc(r["required_on_site"])} · target release by {release_by} · promised {esc(r["promised_date"] or "not set")} · exposure {esc(exposure if exposure is not None else "unknown")} day(s)</div></div>' for r,level,release_by,exposure in rows)
+    return shell("Long-Lead Prediction",'<div class="hero"><div class="eyebrow">v64</div><h1>Procurement & Long-Lead Prediction Brain</h1></div><div class="card">'+(h or '<p class="muted">No procurement records.</p>')+'</div>')
+
+@app.get("/quality-intelligence",response_class=HTMLResponse)
+def v65_home():
+    rows=_v65_qc_points(project_id())
+    h="".join(f'<div class="action"><span class="badge">QC</span> <b>{esc(a["name"])}</b><div class="small">{esc(kind)} · {esc(check)}</div></div>' for a,kind,check in rows)
+    return shell("Inspection & QC Intelligence",'<div class="hero"><div class="eyebrow">v65</div><h1>Inspection & Quality Control Intelligence</h1></div><div class="card">'+(h or '<p class="muted">No QC checkpoints generated.</p>')+'</div>')
+
+@app.get("/scope-gap-intelligence",response_class=HTMLResponse)
+def v66_home():
+    rows=_v66_scope_gaps(project_id())
+    h="".join(f'<div class="action"><span class="badge WATCH">{esc(kind)}</span> <b>{esc(r["trade"] or "UNASSIGNED")}</b> - {esc(r["requirement"])}<div class="small">{esc(reason)}</div></div>' for kind,r,reason in rows)
+    return shell("Scope Gap & Buyout Intelligence",'<div class="hero"><div class="eyebrow">v66</div><h1>Scope Gap & Buyout Intelligence</h1><p class="muted">Find unowned, duplicate and ambiguous scope before buyout.</p></div><div class="card">'+(h or '<p class="muted">No obvious scope gaps detected.</p>')+'</div>')
+
+@app.get("/change-order-intelligence",response_class=HTMLResponse)
+def v67_home():
+    s=_v67_change_intelligence(project_id())
+    body=f'<div class="hero"><div class="eyebrow">v67</div><h1>Change Order Intelligence</h1><p class="muted">{len(s["added"])} added · {len(s["removed"])} removed · {len(s["changed"])} changed · ${s["known_net"]:,.0f} known estimator-linked net exposure · {s["schedule_proxy"]:.1f} schedule review-day proxy.</p></div><div class="card"><p>BuildCommand does not invent entitlement or unpriced costs. Human contract review remains required.</p></div>'
+    return shell("Change Order Intelligence",body)
+
+@app.get("/autopilot",response_class=HTMLResponse)
+def v68_home():
+    a=_v68_autopilot(project_id())
+    def ph(rows): return "".join(f'<div class="action"><span class="badge WATCH">{esc(x["severity"])}</span> <b>{esc(x["title"])}</b><div class="small">{esc(x["action"])}</div></div>' for x in rows[:8]) or '<p class="muted">Clear.</p>'
+    nr="".join(f'<div class="action"><span class="badge WATCH">{esc(state)}</span> <b>{esc(act["trade"])} - {esc(act["name"])}</b><div class="small">{esc(", ".join(failed))}</div></div>' for act,state,failed,checks in a["not_ready"][:10]) or '<p class="muted">No not-ready trades.</p>'
+    body=f'<div class="hero"><div class="eyebrow">v68 PROJECT AUTOPILOT</div><h1>One command center for what the project needs next.</h1><p class="muted">Known change exposure ${a["cost"]:,.0f} · schedule review proxy {a["schedule"]:.1f} day(s).</p></div>'
+    body+='<div class="grid2"><div class="card"><h2>DO NOW</h2>'+ph(a["now"])+'</div><div class="card"><h2>DO TODAY</h2>'+ph(a["today"])+'</div></div>'
+    body+='<div class="grid2"><div class="card"><h2>THIS WEEK</h2>'+ph(a["week"])+'</div><div class="card"><h2>NOT READY</h2>'+nr+'</div></div>'
+    body+='<div class="grid3">'+_v37_link_card("Look-Ahead","2/3/6-week readiness.","/lookahead-intelligence","Open")+_v37_link_card("Trade Readiness","Mobilization readiness.","/trade-readiness","Open")+_v37_link_card("Smart RFI","Conflict-driven RFI candidates.","/smart-rfi","Open")+'</div>'
+    return shell("Project Autopilot",body)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
