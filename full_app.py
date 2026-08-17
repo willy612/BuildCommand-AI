@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Form, Request, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, FileResponse
+from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, Response, FileResponse
 import sqlite3
 
 try:
@@ -508,6 +508,17 @@ def user_from_session(raw_token):
 PUBLIC_PATHS = {"/login", "/register", "/health"}
 
 
+
+@app.middleware("http")
+async def v169_performance_headers(request, call_next):
+    response=await call_next(request)
+    path=request.url.path
+    if path.startswith("/api/dashboard/"):
+        response.headers["Cache-Control"]="private, max-age=10"
+    elif path in {"/","/build","/estimate","/manage","/intelligence"}:
+        response.headers["Cache-Control"]="private, no-store"
+    return response
+
 @app.middleware("http")
 async def authentication_middleware(request: Request, call_next):
     raw_token = request.cookies.get("bc_session")
@@ -752,7 +763,7 @@ def categorized_nav():
         ("PROJECTS",[("Projects Home","/"),("Add Project","/projects/new"),("Recent Activity","/recent-activity"),("Archive Projects","/project-archive")]),
         ("BUILD",[("Build Home","/build"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
-        ("MANAGE",[("Manage Home","/manage"),("Project Autopilot","/autopilot"),("Daily Superintendent Command","/daily-superintendent"),("Look-Ahead Intelligence","/lookahead-intelligence"),("Trade Readiness Brain","/trade-readiness"),("Trade Coordination Engine","/trade-coordination"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
+        ("MANAGE",[("Manage Home","/manage"),("Performance Monitor","/performance"),("Project Autopilot","/autopilot"),("Daily Superintendent Command","/daily-superintendent"),("Look-Ahead Intelligence","/lookahead-intelligence"),("Trade Readiness Brain","/trade-readiness"),("Trade Coordination Engine","/trade-coordination"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
         ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Knowledge Brain 2.0","/knowledge-brain-2"),("Smart RFI & Conflict Detection","/smart-rfi"),("Long-Lead Prediction","/longlead-intelligence"),("Inspection & QC Intelligence","/quality-intelligence"),("Scope Gap & Buyout Intelligence","/scope-gap-intelligence"),("Change Order Intelligence","/change-order-intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
         ("ASK BUILDCOMMAND",[("Ask BuildCommand","/ask-buildcommand"),("Search Everything","/global-search"),("Explain This Finding","/reasoning-2/explain"),("Reasoning Chain","/master-reasoning/chain"),("Answer Guardrails","/brain-quality/answer-guard")]),
     ]
@@ -984,82 +995,71 @@ def _v37_link_card(title,desc,href,label="Open"):
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
+    """
+    v169 fast shell:
+    Render the page immediately using only lightweight snapshot counts.
+    Heavy intelligence panels load after first paint.
+    """
     pid=project_id()
-    d=_v56_dashboard_bundle(pid)
-    s=d["snapshot"]; score=d["score"]; top=d["top"]; decisions=d["decisions"]
-    materials=d["materials"]; holds=d["holds"]; agenda=d["agenda"]; sequence=d["sequence"]
+    try:
+        s=_v56_cached("snapshot",pid,lambda:_v37_snapshot(pid))
+    except Exception:
+        s={"issues":0,"submittals":0,"actions":0,"inspections":0,"scope":0}
 
     attention=s["issues"]+s["submittals"]+s["actions"]+s["inspections"]
-
-    priority_html="".join(
-        f'<div class="action bc-priority"><span class="badge WATCH">{_v37_esc(f["severity"])}</span> '
-        f'<b>{_v37_esc(f["type"])}</b> - {_v37_esc(f["title"])}'
-        f'<div class="small">{_v37_esc(f["reason"])}</div>'
-        f'<p><b>Next:</b> {_v37_esc(f["action"])}</p></div>'
-        for f in top
-    ) or '<p class="muted">No major project priorities detected.</p>'
-
-    seq_html="".join(
-        f'<div class="action"><span class="badge WATCH">{_v37_esc(x["risk"])}</span> '
-        f'<b>{_v37_esc(x["activity"]["name"])}</b>'
-        f'<div class="small">{_v37_esc(x["activity"]["trade"])} · {_v37_esc(x["blocking_reason"] or "Sequence risk")}</div></div>'
-        for x in sequence
-    ) or '<p class="muted">No high sequence blockers.</p>'
-
-    insp_html="".join(
-        f'<div class="action"><span class="badge WATCH">{_v37_esc(i["result"])}</span> '
-        f'<b>{_v37_esc(i["inspection_type"])}</b>'
-        f'<div class="small">{_v37_esc(i["scheduled_date"])} · {_v37_esc(i["authority"])}'
-        f' · Activity {_v37_esc(a["name"] if a else "Unlinked")}</div></div>'
-        for i,a in holds
-    ) or '<p class="muted">No open inspection hold points.</p>'
-
-    mat_html="".join(
-        f'<div class="action"><span class="badge WATCH">{_v37_esc(level)}</span> '
-        f'<b>{_v37_esc(r["item"])}</b>'
-        f'<div class="small">Need {_v37_esc(r["required_on_site"])} · Promised {_v37_esc(r["promised_date"])}'
-        f' · {exposure} day(s) exposure</div></div>'
-        for r,act,level,exposure,reason,action in materials
-    ) or '<p class="muted">No critical/high material risks.</p>'
-
-    dec_html="".join(
-        f'<div class="action"><span class="badge WATCH">{_v37_esc(severity)}</span> '
-        f'<b>{_v37_esc(typ)} - {_v37_esc(title)}</b>'
-        f'<div class="small">Due {_v37_esc(due)} · ${cost:,.0f} exposure · {days:g} schedule day(s)</div></div>'
-        for typ,title,due,severity,cost,days,source in decisions
-    ) or '<p class="muted">No urgent decision deadlines.</p>'
-
-    agenda_html="".join(
-        f'<div class="action"><span class="badge">{_v37_esc(kind)}</span> '
-        f'<b>{_v37_esc(title)}</b><div class="small">{_v37_esc(detail)}</div></div>'
-        for kind,title,detail in agenda
-    ) or '<p class="muted">No current coordination agenda items.</p>'
 
     body=(
       '<div class="hero"><div class="eyebrow">PROJECT COMMAND</div>'
       '<h1>Today’s construction command center.</h1>'
-      '<p class="muted">Fast cached intelligence: what needs attention, what is blocked, and what to do next.</p></div>'
+      '<p class="muted">Fast shell first. Heavy intelligence loads after the page is visible.</p></div>'
+
       '<div class="bc-home-grid">'
-      f'<div class="card"><div class="label">Project Health</div><div class="kpi">{score["health"]}</div><div class="small">Risk {score["risk"]}/100</div></div>'
+      '<div class="card"><div class="label">Project Health</div><div class="kpi" id="bc-health">—</div><div class="small" id="bc-risk">Loading intelligence…</div></div>'
       f'<div class="card"><div class="label">Needs Attention</div><div class="kpi">{attention}</div><div class="small">Issues · submittals · actions · inspections</div></div>'
-      f'<div class="card"><div class="label">Open Blockers</div><div class="kpi">{len(sequence)}</div><div class="small">Critical/high sequence risks</div></div>'
-      f'<div class="card"><div class="label">Brain Quality</div><div class="kpi">{score["quality"]}</div><div class="small">Current intelligence quality</div></div>'
+      f'<div class="card"><div class="label">Scope Intelligence</div><div class="kpi">{s.get("scope",0)}</div><div class="small">Source-backed scope items</div></div>'
+      '<div class="card"><div class="label">Brain Quality</div><div class="kpi" id="bc-quality">—</div><div class="small">Loading quality score…</div></div>'
       '</div>'
+
       '<div class="grid3" style="margin-top:16px">'
+      +_v37_link_card("Project Autopilot","One command center for what the project needs next.","/autopilot","Open")
       +_v37_link_card("Ask BuildCommand","Ask questions across the current project.","/ask-buildcommand","Ask")
-      +_v37_link_card("Field Command","Readiness, crews, deliveries, inspections and decisions.","/field-command","Open")
-      +_v37_link_card("Project Autopilot","One command center for what the project needs next.","/autopilot","Open")+_v37_link_card("Knowledge Brain 2.0","100 integrated construction knowledge capabilities.","/knowledge-brain-2","Open")
+      +_v37_link_card("Performance","See actual timing data.","/performance","Open")
       +'</div>'
+
       '<div class="grid2" style="margin-top:16px">'
-      '<div class="card"><h2>Top Priorities</h2>'+priority_html+'</div>'
-      '<div class="card"><h2>What Is Blocking Work</h2>'+seq_html+'</div>'
+      '<div class="card"><h2>Top Priorities</h2><div id="bc-priorities"><p class="muted">Loading priorities…</p></div></div>'
+      '<div class="card"><h2>What Is Blocking Work</h2><div id="bc-blockers"><p class="muted">Loading blockers…</p></div></div>'
       '</div>'
+
       '<div class="grid3">'
-      '<div class="card"><h2>Inspection Hold Points</h2>'+insp_html+'</div>'
-      '<div class="card"><h2>Material Risk</h2>'+mat_html+'</div>'
-      '<div class="card"><h2>Decisions Needed</h2>'+dec_html+'</div>'
+      '<div class="card"><h2>Inspection Hold Points</h2><div id="bc-inspections"><p class="muted">Loading inspections…</p></div></div>'
+      '<div class="card"><h2>Material Risk</h2><div id="bc-materials"><p class="muted">Loading materials…</p></div></div>'
+      '<div class="card"><h2>Decisions Needed</h2><div id="bc-decisions"><p class="muted">Loading decisions…</p></div></div>'
       '</div>'
-      '<div class="card"><h2>Coordination Agenda</h2>'+agenda_html+'</div>'
+
+      '<div class="card"><h2>Coordination Agenda</h2><div id="bc-agenda"><p class="muted">Loading coordination items…</p></div></div>'
+
+      '<script>'
+      'document.addEventListener("DOMContentLoaded",function(){'
+      'fetch("/api/dashboard/command",{credentials:"same-origin"})'
+      '.then(function(r){if(!r.ok) throw new Error("dashboard"); return r.json();})'
+      '.then(function(d){'
+      'document.getElementById("bc-health").textContent=d.health;'
+      'document.getElementById("bc-risk").textContent="Risk "+d.risk+"/100";'
+      'document.getElementById("bc-quality").textContent=d.quality;'
+      'document.getElementById("bc-priorities").innerHTML=d.priorities_html;'
+      'document.getElementById("bc-blockers").innerHTML=d.blockers_html;'
+      'document.getElementById("bc-inspections").innerHTML=d.inspections_html;'
+      'document.getElementById("bc-materials").innerHTML=d.materials_html;'
+      'document.getElementById("bc-decisions").innerHTML=d.decisions_html;'
+      'document.getElementById("bc-agenda").innerHTML=d.agenda_html;'
+      '}).catch(function(){'
+      '["bc-priorities","bc-blockers","bc-inspections","bc-materials","bc-decisions","bc-agenda"].forEach(function(id){'
+      'var el=document.getElementById(id); if(el) el.innerHTML="<p class=\\"muted\\">Intelligence is still available from the detailed modules.</p>";'
+      '});'
+      '});'
+      '});'
+      '</script>'
     )
     return shell("Project Command",body)
 
@@ -5870,6 +5870,72 @@ def v168_ownership():
     rules=_v168_ownership_rules()
     h="".join(f'<div class="action"><span class="badge READY">RULE</span> <b>{esc(owner)}</b><div>{esc(scope)}</div><div class="small">Normalized owner: {esc(normalized)}</div></div>' for owner,scope,normalized in rules)
     return shell("Scope Ownership Brain 2.0",'<div class="hero"><h1>Scope Ownership Brain 2.0</h1><p class="muted">Construction trade-boundary rules carried into the shared knowledge brain.</p></div><div class="card">'+h+'</div>')
+
+
+@app.get("/api/dashboard/command")
+def v169_dashboard_command_api():
+    """
+    Heavy dashboard intelligence is isolated from first paint and shares v56 caches.
+    """
+    pid=project_id()
+    token=_v56_perf_start("dashboard_lazy_api")
+    try:
+        d=_v56_dashboard_bundle(pid)
+        score=d["score"]; top=d["top"]; decisions=d["decisions"]
+        materials=d["materials"]; holds=d["holds"]; agenda=d["agenda"]; sequence=d["sequence"]
+
+        priorities_html="".join(
+            f'<div class="action bc-priority"><span class="badge WATCH">{_v37_esc(f["severity"])}</span> '
+            f'<b>{_v37_esc(f["type"])}</b> - {_v37_esc(f["title"])}'
+            f'<div class="small">{_v37_esc(f["reason"])}</div>'
+            f'<p><b>Next:</b> {_v37_esc(f["action"])}</p></div>'
+            for f in top
+        ) or '<p class="muted">No major project priorities detected.</p>'
+
+        blockers_html="".join(
+            f'<div class="action"><span class="badge WATCH">{_v37_esc(x["risk"])}</span> '
+            f'<b>{_v37_esc(x["activity"]["name"])}</b>'
+            f'<div class="small">{_v37_esc(x["activity"]["trade"])} · {_v37_esc(x["blocking_reason"] or "Sequence risk")}</div></div>'
+            for x in sequence
+        ) or '<p class="muted">No high sequence blockers.</p>'
+
+        inspections_html="".join(
+            f'<div class="action"><span class="badge WATCH">{_v37_esc(i["result"])}</span> '
+            f'<b>{_v37_esc(i["inspection_type"])}</b>'
+            f'<div class="small">{_v37_esc(i["scheduled_date"])} · {_v37_esc(i["authority"])}'
+            f' · Activity {_v37_esc(a["name"] if a else "Unlinked")}</div></div>'
+            for i,a in holds
+        ) or '<p class="muted">No open inspection hold points.</p>'
+
+        materials_html="".join(
+            f'<div class="action"><span class="badge WATCH">{_v37_esc(level)}</span> '
+            f'<b>{_v37_esc(r["item"])}</b>'
+            f'<div class="small">Need {_v37_esc(r["required_on_site"])} · Promised {_v37_esc(r["promised_date"])}'
+            f' · {exposure} day(s) exposure</div></div>'
+            for r,act,level,exposure,reason,action in materials
+        ) or '<p class="muted">No critical/high material risks.</p>'
+
+        decisions_html="".join(
+            f'<div class="action"><span class="badge WATCH">{_v37_esc(severity)}</span> '
+            f'<b>{_v37_esc(typ)} - {_v37_esc(title)}</b>'
+            f'<div class="small">Due {_v37_esc(due)} · ${cost:,.0f} exposure · {days:g} schedule day(s)</div></div>'
+            for typ,title,due,severity,cost,days,source in decisions
+        ) or '<p class="muted">No urgent decision deadlines.</p>'
+
+        agenda_html="".join(
+            f'<div class="action"><span class="badge">{_v37_esc(kind)}</span> '
+            f'<b>{_v37_esc(title)}</b><div class="small">{_v37_esc(detail)}</div></div>'
+            for kind,title,detail in agenda
+        ) or '<p class="muted">No current coordination agenda items.</p>'
+
+        return JSONResponse({
+            "health":score["health"],"risk":score["risk"],"quality":score["quality"],
+            "priorities_html":priorities_html,"blockers_html":blockers_html,
+            "inspections_html":inspections_html,"materials_html":materials_html,
+            "decisions_html":decisions_html,"agenda_html":agenda_html
+        })
+    finally:
+        _v56_perf_end(token)
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
