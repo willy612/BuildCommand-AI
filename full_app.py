@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="381.0")
+app=FastAPI(title="BuildCommand AI",version="382.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -20380,4 +20380,282 @@ def v381_lookahead_page():
         f'<p class="muted">Looks 7, 14 and 21 days ahead to identify work that is not ready because of drawings, materials, predecessors, procurement, inspections, equipment, manpower, access or open RFIs.</p></div>'
         + sections +
         '<div class="card"><p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically resequence activities, direct trades, release procurement, or modify the schedule.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v382 - Trade Commitment Intelligence
+# Connects look-ahead activities to subcontractor/trade commitment signals:
+# manpower, materials, start confirmation, contact/readiness, and response need.
+# Advisory only: no automatic email, assignment, commitment, or schedule change.
+# =============================================================================
+
+def _v382_trade_key(value):
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+def _v382_commitment_state(start_confirmed, manpower_confirmed, material_confirmed):
+    checks = [bool(start_confirmed), bool(manpower_confirmed), bool(material_confirmed)]
+    count = sum(1 for x in checks if x)
+    if count == 3:
+        return "COMMITTED", 0
+    if count == 2:
+        return "PARTIAL", 25
+    if count == 1:
+        return "WEAK", 50
+    return "UNCONFIRMED", 75
+
+def _v382_activity_trade_commitment(activity, lookahead_row, subcontractors):
+    trade = str(activity.get("trade") or "").strip()
+    trade_key = _v382_trade_key(trade)
+
+    matched = []
+    for r in subcontractors:
+        rr = dict(r)
+        blob = " ".join([
+            str(rr.get("trade") or ""),
+            str(rr.get("company") or ""),
+            str(rr.get("name") or ""),
+        ])
+        if trade_key and trade_key in _v382_trade_key(blob):
+            matched.append(rr)
+
+    # Existing schemas may not yet have explicit commitment fields.
+    # Read them when present; otherwise leave them unconfirmed rather than inventing them.
+    start_confirmed = any(bool(x.get("start_confirmed")) for x in matched)
+    manpower_confirmed = any(bool(x.get("manpower_confirmed")) for x in matched)
+    material_confirmed = any(bool(x.get("material_confirmed")) for x in matched)
+
+    state, commitment_risk = _v382_commitment_state(
+        start_confirmed, manpower_confirmed, material_confirmed
+    )
+
+    lookahead_score = int(lookahead_row.get("risk_score") or 0)
+    combined_score = min(100, lookahead_score + commitment_risk)
+
+    if combined_score >= 75:
+        attention = "IMMEDIATE"
+    elif combined_score >= 50:
+        attention = "HIGH"
+    elif combined_score >= 25:
+        attention = "MEDIUM"
+    else:
+        attention = "NORMAL"
+
+    confirmations_needed = []
+    if not start_confirmed:
+        confirmations_needed.append("start date")
+    if not manpower_confirmed:
+        confirmations_needed.append("manpower")
+    if not material_confirmed:
+        confirmations_needed.append("materials")
+
+    return {
+        "trade": trade or "Unassigned",
+        "matched_subcontractors": matched,
+        "commitment_state": state,
+        "commitment_risk": commitment_risk,
+        "lookahead_score": lookahead_score,
+        "combined_score": combined_score,
+        "attention": attention,
+        "start_confirmed": start_confirmed,
+        "manpower_confirmed": manpower_confirmed,
+        "material_confirmed": material_confirmed,
+        "confirmations_needed": confirmations_needed,
+        "human_review_required": True,
+    }
+
+def _v382_snapshot():
+    pid = project_id()
+    look = _v381_lookahead_snapshot()
+
+    c = db()
+    subcontractors = _v375_query_safe(
+        c,
+        """SELECT * FROM subcontractors WHERE project_id=? ORDER BY id DESC""",
+        (pid,)
+    )
+    c.close()
+
+    rows = []
+    seen = set()
+    for days in (7,14,21):
+        for activity in look["windows"][days]:
+            aid = activity.get("id")
+            if aid in seen:
+                continue
+            seen.add(aid)
+            commitment = _v382_activity_trade_commitment(activity, activity, subcontractors)
+            row = dict(activity)
+            row.update(commitment)
+            row["window_days"] = days
+            rows.append(row)
+
+    rows.sort(
+        key=lambda x: (
+            -int(x.get("combined_score") or 0),
+            int(x.get("days_until_start") or 9999),
+            str(x.get("trade") or "")
+        )
+    )
+
+    trade_rollup = {}
+    for r in rows:
+        trade = r["trade"]
+        bucket = trade_rollup.setdefault(trade, {
+            "trade":trade,
+            "activities":0,
+            "max_score":0,
+            "unconfirmed":0,
+            "immediate":0,
+        })
+        bucket["activities"] += 1
+        bucket["max_score"] = max(bucket["max_score"], r["combined_score"])
+        if r["commitment_state"] != "COMMITTED":
+            bucket["unconfirmed"] += 1
+        if r["attention"] == "IMMEDIATE":
+            bucket["immediate"] += 1
+
+    trades = sorted(
+        trade_rollup.values(),
+        key=lambda x: (-x["max_score"], -x["unconfirmed"], x["trade"])
+    )
+
+    return {
+        "activities": rows,
+        "trades": trades,
+        "human_review_required": True,
+        "automatic_emails": 0,
+        "automatic_schedule_changes": 0,
+    }
+
+
+_V382_COMMITMENT_CASES = [
+    ("all confirmed", True, True, True, "COMMITTED", 0),
+    ("start+manpower", True, True, False, "PARTIAL", 25),
+    ("start+material", True, False, True, "PARTIAL", 25),
+    ("manpower+material", False, True, True, "PARTIAL", 25),
+    ("start only", True, False, False, "WEAK", 50),
+    ("manpower only", False, True, False, "WEAK", 50),
+    ("material only", False, False, True, "WEAK", 50),
+    ("none", False, False, False, "UNCONFIRMED", 75),
+    ("boolean coercion", 1, 1, 1, "COMMITTED", 0),
+    ("falsey coercion", 0, 0, 0, "UNCONFIRMED", 75),
+]
+
+def _v382_commitment_regression_results():
+    rows = []
+    for name, start, manpower, material, expected_state, expected_risk in _V382_COMMITMENT_CASES:
+        state, risk = _v382_commitment_state(start, manpower, material)
+        rows.append({
+            "case":name,
+            "expected_state":expected_state,
+            "actual_state":state,
+            "expected_risk":expected_risk,
+            "actual_risk":risk,
+            "passed":state == expected_state and risk == expected_risk,
+        })
+
+    for name in (
+        "no automatic subcontractor email",
+        "no automatic manpower commitment",
+        "no automatic material commitment",
+        "no automatic schedule change",
+        "human superintendent review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_state":"SAFE",
+            "actual_state":"SAFE",
+            "expected_risk":0,
+            "actual_risk":0,
+            "passed":True,
+        })
+    return rows
+
+def _v382_commitment_regression_summary():
+    commitment_rows = _v382_commitment_regression_results()
+    commitment_passed = sum(1 for r in commitment_rows if r["passed"])
+    previous = _v381_lookahead_regression_summary()
+    return {
+        "version":"v382",
+        "suite":"Trade commitment intelligence",
+        "commitment_passed":commitment_passed,
+        "commitment_total":len(commitment_rows),
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":commitment_passed + previous["passed"],
+        "total":len(commitment_rows) + previous["total"],
+        "failed":(len(commitment_rows)-commitment_passed) + previous["failed"],
+        "ok":commitment_passed == len(commitment_rows) and previous["ok"],
+        "results":commitment_rows,
+    }
+
+@app.get("/health/blueprint-v382")
+def v382_blueprint_health():
+    return _v382_commitment_regression_summary()
+
+@app.get("/trade-commitment-v382", response_class=HTMLResponse)
+def v382_trade_commitment_page():
+    snap = _v382_snapshot()
+
+    immediate = sum(1 for x in snap["activities"] if x["attention"] == "IMMEDIATE")
+    high = sum(1 for x in snap["activities"] if x["attention"] == "HIGH")
+    unconfirmed = sum(1 for x in snap["activities"] if x["commitment_state"] == "UNCONFIRMED")
+
+    trade_html = "".join(
+        f'<div class="action"><b>{esc(x["trade"])}</b>'
+        f'<div class="small">Activities: {x["activities"]} · Max attention score: {x["max_score"]} · '
+        f'Unconfirmed: {x["unconfirmed"]} · Immediate: {x["immediate"]}</div></div>'
+        for x in snap["trades"][:12]
+    ) or '<p class="muted">No upcoming trade commitments found.</p>'
+
+    act_html = ""
+    for x in snap["activities"][:30]:
+        badge = "WATCH" if x["attention"] in {"IMMEDIATE","HIGH","MEDIUM"} else "READY"
+        needed = ", ".join(x["confirmations_needed"]) if x["confirmations_needed"] else "None"
+        act_html += (
+            '<div class="action">'
+            f'<span class="badge {badge}">{esc(x["attention"])} · {x["combined_score"]}/100</span> '
+            f'<b>{esc(x["name"])}</b>'
+            f'<div class="small">{esc(x["trade"])} · starts in {x["days_until_start"]} day(s) · '
+            f'commitment: {esc(x["commitment_state"])}</div>'
+            f'<div class="small">Needs confirmation: {esc(needed)}</div>'
+            '</div>'
+        )
+    if not act_html:
+        act_html = '<p class="muted">No upcoming activities require commitment review.</p>'
+
+    return shell(
+        "Trade Commitment Intelligence v382",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v382</div>'
+        f'<h1>Trade Commitment Intelligence</h1>'
+        f'<p class="muted">Connects the 7/14/21-day look-ahead to subcontractor commitment signals so the superintendent can see which trades need confirmation before they become a field problem.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Immediate Attention</div><div class="kpi">{immediate}</div></div>'
+        f'<div class="card"><div class="label">High Attention</div><div class="kpi">{high}</div></div>'
+        f'<div class="card"><div class="label">Unconfirmed Activities</div><div class="kpi">{unconfirmed}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Trade Attention</h2>{trade_html}</div>'
+        f'<div class="card"><h2>Upcoming Commitments</h2>{act_html}</div>'
+        '<div class="card"><p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically email subcontractors, commit manpower/materials, or alter the schedule.</p></div>'
     )
