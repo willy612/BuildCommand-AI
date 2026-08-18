@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="372.0")
+app=FastAPI(title="BuildCommand AI",version="373.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -17795,9 +17795,230 @@ def v372_blueprint_source_intelligence_page():
         for x in analyzed
     ) or '<p class="muted">No Blueprint Brain scope items yet. Analyze project documents first.</p>'
     return shell('Blueprint Source Intelligence v372',
-        f'<div class="hero"><div class="eyebrow">BuildCommand v372</div><h1>Blueprint Source Intelligence</h1>'
+        f'<div class="hero"><div class="eyebrow">BuildCommand v373</div><h1>Blueprint Source Intelligence</h1>'
         f'<p class="muted">Cross-check sheet, detail, specification and note evidence before scope intelligence is trusted downstream.</p></div>'
         f'<div class="grid3"><div class="card"><div class="label">Ready</div><div class="kpi">{ready}</div></div>'
         f'<div class="card"><div class="label">Trade Review</div><div class="kpi">{review}</div></div>'
         f'<div class="card"><div class="label">Source Verification</div><div class="kpi">{verify}</div></div></div>'
         f'<div class="card"><h2>Source-backed Scope Review</h2>{cards}</div>')
+
+
+# =============================================================================
+# BuildCommand AI v373 - Cross-Document Conflict Intelligence
+# Detects contradictions between plan/spec/detail/note evidence before downstream use.
+# =============================================================================
+
+import re as _v373_re
+
+_V373_NEGATION_PAIRS = [
+    ("existing", "new"),
+    ("remove", "remain"),
+    ("remove", "retain"),
+    ("demolish", "remain"),
+    ("demolish", "retain"),
+    ("provide", "not required"),
+    ("install", "not required"),
+    ("paint", "factory finish"),
+    ("paint", "prefinished"),
+    ("reuse", "replace"),
+]
+
+
+def _v373_norm(value):
+    s=str(value or '').lower().strip()
+    s=_v373_re.sub(r'[^a-z0-9./# -]+',' ',s)
+    s=_v373_re.sub(r'\s+',' ',s)
+    return s
+
+
+def _v373_source_texts(item):
+    """Collect source-specific text when present without assuming every schema has these columns."""
+    fields=(
+        'sheet_text','detail_text','spec_text','note_text',
+        'source_sheet_text','source_detail_text','source_spec_text','source_note_text',
+    )
+    out=[]
+    for field in fields:
+        try:
+            value=item.get(field,'') if hasattr(item,'get') else item[field]
+        except Exception:
+            value=''
+        value=str(value or '').strip()
+        if value:
+            out.append({'field':field,'text':value})
+    return out
+
+
+def _v373_numeric_tokens(text):
+    """Capture construction-relevant sizes/ratings/voltages without treating sheet numbers as conflicts."""
+    s=_v373_norm(text)
+    patterns=[
+        r'\b\d+(?:\.\d+)?\s*(?:v|volt|volts|kw|amp|amps|a)\b',
+        r'\b\d+(?:\.\d+)?\s*(?:inch|inches|in\.?|mm|cm)\b',
+        r'\b\d+\s*(?:hr|hour|hours)\b',
+        r'\btype\s+[a-z0-9-]+\b',
+    ]
+    vals=[]
+    for p in patterns:
+        vals.extend(_v373_re.findall(p,s))
+    return sorted(set(vals))
+
+
+def _v373_conflict_analysis(item):
+    requirement=str(item.get('requirement','') if hasattr(item,'get') else item['requirement'])
+    sources=_v373_source_texts(item)
+    conflicts=[]
+
+    # Direct semantic opposition across different document sources.
+    for i,a in enumerate(sources):
+        na=_v373_norm(a['text'])
+        for b in sources[i+1:]:
+            nb=_v373_norm(b['text'])
+            for left,right in _V373_NEGATION_PAIRS:
+                if ((left in na and right in nb) or (right in na and left in nb)):
+                    conflicts.append({
+                        'type':'SEMANTIC_CONFLICT','severity':'HIGH',
+                        'sources':[a['field'],b['field']],
+                        'detail':f'{left} vs {right}'
+                    })
+
+    # Different explicit technical values can indicate a genuine coordination conflict.
+    numeric=[]
+    for s in sources:
+        vals=_v373_numeric_tokens(s['text'])
+        if vals:
+            numeric.append((s['field'],vals))
+    for i,(fa,va) in enumerate(numeric):
+        for fb,vb in numeric[i+1:]:
+            # Compare only when both sources contain same broad unit/category.
+            cats={
+                'electrical': lambda x: any(u in x for u in (' v','volt','kw','amp')),
+                'dimension': lambda x: any(u in x for u in ('inch',' in','mm','cm')),
+                'rating': lambda x: any(u in x for u in ('hr','hour')),
+                'type': lambda x: x.startswith('type '),
+            }
+            for cat,fn in cats.items():
+                aa={x for x in va if fn(x)}; bb={x for x in vb if fn(x)}
+                if aa and bb and aa != bb:
+                    conflicts.append({
+                        'type':'VALUE_CONFLICT','severity':'HIGH',
+                        'sources':[fa,fb],
+                        'detail':f'{cat}: {sorted(aa)} vs {sorted(bb)}'
+                    })
+
+    # Deduplicate deterministic findings.
+    seen=set(); unique=[]
+    for c in conflicts:
+        key=(c['type'],tuple(c['sources']),c['detail'])
+        if key not in seen:
+            seen.add(key); unique.append(c)
+
+    if unique:
+        disposition='RESOLVE_CONFLICT'
+        risk='HIGH'
+    elif len(sources) >= 2:
+        disposition='NO_CONFLICT_FOUND'
+        risk='LOW'
+    elif len(sources) == 1:
+        disposition='NEEDS_CROSS_CHECK'
+        risk='MEDIUM'
+    else:
+        disposition='NO_COMPARABLE_SOURCE_TEXT'
+        risk='UNKNOWN'
+    return {
+        'requirement':requirement,
+        'source_text_count':len(sources),
+        'conflict_count':len(unique),
+        'risk':risk,
+        'disposition':disposition,
+        'conflicts':unique,
+    }
+
+
+_V373_CONFLICT_CASES = [
+    ({'requirement':'Door D101','sheet_text':'Provide new hollow metal door D101','spec_text':'Door D101 shall be new hollow metal'},0,'NO_CONFLICT_FOUND'),
+    ({'requirement':'Door D102','sheet_text':'Remove door D102','note_text':'Door D102 to remain'},1,'RESOLVE_CONFLICT'),
+    ({'requirement':'WH-1','sheet_text':'WH-1 277 V 8.31 kW','spec_text':'WH-1 208 V 8.31 kW'},1,'RESOLVE_CONFLICT'),
+    ({'requirement':'Partition rating','sheet_text':'Partition shall be 1 hr rated','detail_text':'Partition shall be 2 hr rated'},1,'RESOLVE_CONFLICT'),
+    ({'requirement':'Existing casework','sheet_text':'Existing casework to remain','note_text':'Retain existing casework'},0,'NO_CONFLICT_FOUND'),
+    ({'requirement':'Roof curb','detail_text':'Install new roof curb','spec_text':'Roof curb not required'},1,'RESOLVE_CONFLICT'),
+    ({'requirement':'HM frames','sheet_text':'Paint hollow metal frames','spec_text':'Hollow metal frames factory finish'},1,'RESOLVE_CONFLICT'),
+    ({'requirement':'Ceiling','sheet_text':'Provide ACT ceiling','spec_text':'Provide ACT ceiling system'},0,'NO_CONFLICT_FOUND'),
+    ({'requirement':'Reuse fixture','sheet_text':'Reuse existing fixture','note_text':'Replace existing fixture'},1,'RESOLVE_CONFLICT'),
+    ({'requirement':'Single source item','sheet_text':'Provide floor drain FD-1'},0,'NEEDS_CROSS_CHECK'),
+]
+
+
+def _v373_conflict_regression_results():
+    rows=[]
+    for item,minimum_conflicts,expected_disposition in _V373_CONFLICT_CASES:
+        result=_v373_conflict_analysis(item)
+        passed=(result['conflict_count'] >= minimum_conflicts and result['disposition']==expected_disposition)
+        rows.append({
+            'requirement':item['requirement'],
+            'expected_disposition':expected_disposition,
+            'actual_disposition':result['disposition'],
+            'conflicts':result['conflict_count'],
+            'passed':passed,
+        })
+    return rows
+
+
+def _v373_conflict_regression_summary():
+    conflict_rows=_v373_conflict_regression_results()
+    conflict_passed=sum(1 for r in conflict_rows if r['passed'])
+    previous=_v372_source_regression_summary()
+    return {
+        'version':'v373',
+        'suite':'Blueprint Brain cross-document conflict intelligence',
+        'conflict_passed':conflict_passed,
+        'conflict_total':len(conflict_rows),
+        'source_passed':previous['source_passed'],
+        'source_total':previous['source_total'],
+        'trade_passed':previous['trade_passed'],
+        'trade_total':previous['trade_total'],
+        'passed':conflict_passed+previous['passed'],
+        'total':len(conflict_rows)+previous['total'],
+        'failed':(len(conflict_rows)-conflict_passed)+previous['failed'],
+        'ok':conflict_passed==len(conflict_rows) and previous['ok'],
+        'results':conflict_rows,
+    }
+
+
+@app.get('/health/blueprint-v373')
+def v373_blueprint_health():
+    """Staging gate: trade ownership + source intelligence + conflict intelligence."""
+    return _v373_conflict_regression_summary()
+
+
+@app.get('/blueprint-conflicts-v373', response_class=HTMLResponse)
+def v373_blueprint_conflicts_page():
+    pid=project_id(); cid=current_company_id(); c=db()
+    rows=c.execute("""
+        SELECT * FROM blueprint_scope_items
+        WHERE company_id=? AND project_id=?
+        ORDER BY id DESC LIMIT 250
+    """,(cid,pid)).fetchall()
+    c.close()
+    analyzed=[]
+    for r in rows:
+        try:
+            analyzed.append(_v373_conflict_analysis(dict(r)))
+        except Exception:
+            continue
+    conflicts=sum(1 for x in analyzed if x['disposition']=='RESOLVE_CONFLICT')
+    cross=sum(1 for x in analyzed if x['disposition']=='NEEDS_CROSS_CHECK')
+    clear=sum(1 for x in analyzed if x['disposition']=='NO_CONFLICT_FOUND')
+    cards=''.join(
+        f'<div class="action"><span class="badge {"WATCH" if x["disposition"]=="RESOLVE_CONFLICT" else "READY"}">{esc(x["disposition"])}</span> '
+        f'<b>{esc(x["requirement"])}</b><div class="small">Comparable source text: {x["source_text_count"]} · Conflicts: {x["conflict_count"]} · Risk: {esc(x["risk"])}</div>'
+        + ''.join(f'<div class="small">⚠ {esc(c["type"])} · {esc(c["detail"])}</div>' for c in x['conflicts'])
+        + '</div>' for x in analyzed
+    ) or '<p class="muted">No Blueprint Brain scope items yet. Analyze project documents first.</p>'
+    return shell('Blueprint Conflicts v373',
+        f'<div class="hero"><div class="eyebrow">BuildCommand v373</div><h1>Cross-Document Conflict Intelligence</h1>'
+        f'<p class="muted">Flags contradictions between plan, detail, specification and note evidence before scope, estimating or field execution trusts the requirement.</p></div>'
+        f'<div class="grid3"><div class="card"><div class="label">Conflicts</div><div class="kpi">{conflicts}</div></div>'
+        f'<div class="card"><div class="label">Needs Cross-Check</div><div class="kpi">{cross}</div></div>'
+        f'<div class="card"><div class="label">No Conflict Found</div><div class="kpi">{clear}</div></div></div>'
+        f'<div class="card"><h2>Coordination Review</h2>{cards}</div>')
