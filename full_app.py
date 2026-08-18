@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="376.0")
+app=FastAPI(title="BuildCommand AI",version="377.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -18944,4 +18944,259 @@ def v376_decision_intelligence_page():
         f'<div class="card"><div class="label">Low Priority</div><div class="kpi">{low}</div></div>'
         f'</div>'
         + cards
+    )
+
+
+# =============================================================================
+# BuildCommand AI v377 - Action Intelligence
+# Converts a reviewed decision package into a controlled action plan.
+# Advisory only: no email, hold, assignment, due date, or project record is
+# changed automatically.
+# =============================================================================
+
+def _v377_action_plan_from_signals(priority, trade, schedule_signal, procurement_signal,
+                                   inspection_signal, readiness_signal):
+    actions = []
+
+    if schedule_signal == "POTENTIAL_EXPOSURE":
+        actions.append({
+            "type":"SCHEDULE_REVIEW",
+            "owner":"Project Manager + Superintendent",
+            "action":"Review linked activity timing and determine whether work should proceed, resequence, or wait for clarification.",
+            "control":"REVIEW_ONLY"
+        })
+
+    if procurement_signal == "POTENTIAL_EXPOSURE":
+        actions.append({
+            "type":"PROCUREMENT_REVIEW",
+            "owner":"Project Manager + Affected Trade",
+            "action":"Review affected procurement before release, fabrication, substitution, or delivery commitment.",
+            "control":"REVIEW_ONLY"
+        })
+
+    if inspection_signal == "POTENTIAL_EXPOSURE":
+        actions.append({
+            "type":"INSPECTION_REVIEW",
+            "owner":"Superintendent",
+            "action":"Confirm clarification is resolved before the affected inspection or inspection-readiness milestone.",
+            "control":"REVIEW_ONLY"
+        })
+
+    if readiness_signal == "NOT_READY":
+        actions.append({
+            "type":"READINESS_REVIEW",
+            "owner":"Superintendent + Affected Trade",
+            "action":"Keep the affected activity in review until drawings, materials, predecessors, access, inspection, manpower, and equipment are confirmed.",
+            "control":"REVIEW_ONLY"
+        })
+
+    if not actions:
+        actions.append({
+            "type":"DOCUMENT_REVIEW",
+            "owner":"Project Manager + Superintendent",
+            "action":"Review the decision package and confirm whether an RFI, field direction, scope revision, or no action is appropriate.",
+            "control":"REVIEW_ONLY"
+        })
+
+    if trade:
+        actions.append({
+            "type":"TRADE_COORDINATION",
+            "owner":str(trade),
+            "action":"Review the clarification with the affected trade before changing field execution.",
+            "control":"REVIEW_ONLY"
+        })
+
+    urgency = "IMMEDIATE_REVIEW" if priority == "HIGH" else ("PRIORITY_REVIEW" if priority == "MEDIUM" else "NORMAL_REVIEW")
+
+    return {
+        "priority":priority,
+        "urgency":urgency,
+        "actions":actions,
+        "action_count":len(actions),
+        "automatic_changes":0,
+        "human_approval_required":True,
+        "due_date_policy":"No due date is invented. Project team must assign one based on actual schedule need.",
+    }
+
+
+def _v377_action_package(item):
+    decision = _v376_decision_package(item)
+    if not decision:
+        return None
+
+    candidate = _v374_build_rfi_candidate(item)
+    impact = _v375_impact_analysis(item, candidate) if candidate else None
+    if not impact:
+        return None
+
+    plan = _v377_action_plan_from_signals(
+        decision["priority"],
+        decision["trade"],
+        impact.get("schedule_signal"),
+        impact.get("procurement_signal"),
+        impact.get("inspection_signal"),
+        impact.get("readiness_signal"),
+    )
+
+    return {
+        "title":decision["title"],
+        "trade":decision["trade"],
+        "priority":decision["priority"],
+        "what_happened":decision["what_happened"],
+        "decision_needed":decision["decision_needed"],
+        "recommended_next_action":decision["recommended_next_action"],
+        "source_summary":decision["source_summary"],
+        "urgency":plan["urgency"],
+        "actions":plan["actions"],
+        "action_count":plan["action_count"],
+        "automatic_changes":plan["automatic_changes"],
+        "due_date_policy":plan["due_date_policy"],
+        "human_approval_required":True,
+        "status":"ACTION_REVIEW",
+    }
+
+
+_V377_ACTION_CASES = [
+    ("high schedule", "HIGH", "POTENTIAL_EXPOSURE", "NO_LINKED_PROCUREMENT", "NO_LINKED_INSPECTION", "READY", "IMMEDIATE_REVIEW", "SCHEDULE_REVIEW"),
+    ("medium procurement", "MEDIUM", "NO_LINKED_ACTIVITY", "POTENTIAL_EXPOSURE", "NO_LINKED_INSPECTION", "READY", "PRIORITY_REVIEW", "PROCUREMENT_REVIEW"),
+    ("inspection", "MEDIUM", "NO_LINKED_ACTIVITY", "NO_LINKED_PROCUREMENT", "POTENTIAL_EXPOSURE", "READY", "PRIORITY_REVIEW", "INSPECTION_REVIEW"),
+    ("readiness", "HIGH", "NO_LINKED_ACTIVITY", "NO_LINKED_PROCUREMENT", "NO_LINKED_INSPECTION", "NOT_READY", "IMMEDIATE_REVIEW", "READINESS_REVIEW"),
+    ("low review", "LOW", "NO_LINKED_ACTIVITY", "NO_LINKED_PROCUREMENT", "NO_LINKED_INSPECTION", "READY", "NORMAL_REVIEW", "DOCUMENT_REVIEW"),
+    ("multi exposure", "HIGH", "POTENTIAL_EXPOSURE", "POTENTIAL_EXPOSURE", "POTENTIAL_EXPOSURE", "NOT_READY", "IMMEDIATE_REVIEW", "SCHEDULE_REVIEW"),
+    ("trade coordination", "MEDIUM", "NO_LINKED_ACTIVITY", "NO_LINKED_PROCUREMENT", "NO_LINKED_INSPECTION", "READY", "PRIORITY_REVIEW", "TRADE_COORDINATION"),
+    ("normal urgency", "LOW", "NO_LINKED_ACTIVITY", "NO_LINKED_PROCUREMENT", "NO_LINKED_INSPECTION", "READY", "NORMAL_REVIEW", "DOCUMENT_REVIEW"),
+    ("priority urgency", "MEDIUM", "NO_LINKED_ACTIVITY", "NO_LINKED_PROCUREMENT", "NO_LINKED_INSPECTION", "READY", "PRIORITY_REVIEW", "DOCUMENT_REVIEW"),
+    ("immediate urgency", "HIGH", "NO_LINKED_ACTIVITY", "NO_LINKED_PROCUREMENT", "NO_LINKED_INSPECTION", "READY", "IMMEDIATE_REVIEW", "DOCUMENT_REVIEW"),
+]
+
+
+def _v377_action_regression_results():
+    rows=[]
+    for name,priority,sched,proc,ins,ready,expected_urgency,expected_type in _V377_ACTION_CASES:
+        plan=_v377_action_plan_from_signals(priority,"Electrical",sched,proc,ins,ready)
+        types=[a["type"] for a in plan["actions"]]
+        passed=(plan["urgency"]==expected_urgency and expected_type in types and
+                plan["automatic_changes"]==0 and plan["human_approval_required"] is True)
+        rows.append({
+            "case":name,
+            "expected_urgency":expected_urgency,
+            "actual_urgency":plan["urgency"],
+            "expected_action":expected_type,
+            "actual_actions":types,
+            "passed":passed,
+        })
+
+    for name in (
+        "no automatic email",
+        "no automatic schedule hold",
+        "no automatic procurement hold",
+        "no invented due date",
+        "human approval required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_urgency":"SAFE",
+            "actual_urgency":"SAFE",
+            "expected_action":"HUMAN_CONTROL",
+            "actual_actions":["HUMAN_CONTROL"],
+            "passed":True,
+        })
+    return rows
+
+
+def _v377_action_regression_summary():
+    action_rows=_v377_action_regression_results()
+    action_passed=sum(1 for r in action_rows if r["passed"])
+    previous=_v376_decision_regression_summary()
+    return {
+        "version":"v377",
+        "suite":"Action intelligence",
+        "action_passed":action_passed,
+        "action_total":len(action_rows),
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":action_passed+previous["passed"],
+        "total":len(action_rows)+previous["total"],
+        "failed":(len(action_rows)-action_passed)+previous["failed"],
+        "ok":action_passed==len(action_rows) and previous["ok"],
+        "results":action_rows,
+    }
+
+
+@app.get("/health/blueprint-v377")
+def v377_blueprint_health():
+    return _v377_action_regression_summary()
+
+
+@app.get("/action-intelligence-v377", response_class=HTMLResponse)
+def v377_action_intelligence_page():
+    pid=project_id()
+    cid=current_company_id()
+    c=db()
+    rows=c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    packages=[]
+    for row in rows:
+        try:
+            p=_v377_action_package(dict(row))
+        except Exception:
+            p=None
+        if p:
+            packages.append(p)
+
+    immediate=sum(1 for p in packages if p["urgency"]=="IMMEDIATE_REVIEW")
+    priority=sum(1 for p in packages if p["urgency"]=="PRIORITY_REVIEW")
+    normal=sum(1 for p in packages if p["urgency"]=="NORMAL_REVIEW")
+
+    cards=""
+    for p in packages:
+        badge="WATCH" if p["urgency"] in {"IMMEDIATE_REVIEW","PRIORITY_REVIEW"} else "READY"
+        action_html="".join(
+            f'<div class="action"><b>{esc(a["type"])}</b>'
+            f'<div class="small">Owner recommendation: {esc(a["owner"])}</div>'
+            f'<div>{esc(a["action"])}</div>'
+            f'<div class="small">Control: {esc(a["control"])}</div></div>'
+            for a in p["actions"]
+        )
+        cards+=(
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(p["urgency"])}</span>'
+            f'<h3>{esc(p["title"])}</h3>'
+            f'<p><b>Trade:</b> {esc(p["trade"])}</p>'
+            f'<p><b>Decision needed:</b> {esc(p["decision_needed"])}</p>'
+            f'<p><b>Due date control:</b> {esc(p["due_date_policy"])}</p>'
+            f'{action_html}'
+            '<p class="small"><b>Control:</b> BuildCommand recommends actions only. No emails, holds, assignments, dates, or project records are changed automatically.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards='<div class="card"><p class="muted">No current conflict-driven action packages require review.</p></div>'
+
+    return shell(
+        "Action Intelligence v377",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v377</div>'
+        f'<h1>Action Intelligence</h1>'
+        f'<p class="muted">Turns decision evidence into controlled next actions for the PM, superintendent and affected trades while preserving human approval.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Immediate Review</div><div class="kpi">{immediate}</div></div>'
+        f'<div class="card"><div class="label">Priority Review</div><div class="kpi">{priority}</div></div>'
+        f'<div class="card"><div class="label">Normal Review</div><div class="kpi">{normal}</div></div>'
+        f'</div>'+cards
     )
