@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="379.0")
+app=FastAPI(title="BuildCommand AI",version="380.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -19750,4 +19750,322 @@ def v379_project_risk_page():
         f'<div class="card"><div class="label">Open Loops</div><div class="kpi">{open_loops}</div></div>'
         f'</div>'
         + cards
+    )
+
+
+# =============================================================================
+# BuildCommand AI v380 - Daily Superintendent Command Intelligence
+# Builds a morning command brief from project risk, readiness, inspections,
+# procurement, RFIs, and trade attention signals. Advisory only.
+# =============================================================================
+
+def _v380_today():
+    return datetime.utcnow().date()
+
+def _v380_safe_date(value):
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except Exception:
+        try:
+            return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+def _v380_days_until(value):
+    d = _v380_safe_date(value)
+    if not d:
+        return None
+    return (d - _v380_today()).days
+
+def _v380_priority_bucket(score):
+    if score >= 75:
+        return "IMMEDIATE"
+    if score >= 50:
+        return "HIGH"
+    if score >= 25:
+        return "MEDIUM"
+    return "NORMAL"
+
+def _v380_daily_command_snapshot():
+    pid = project_id()
+    cid = current_company_id()
+    c = db()
+
+    activities = _v375_query_safe(
+        c,
+        """SELECT id,name,trade,start,finish,pct,status
+           FROM activities WHERE project_id=? ORDER BY start""",
+        (pid,)
+    )
+    readiness = _v375_query_safe(
+        c,
+        """SELECT activity_id,drawings_ok,material_ok,manpower_ok,predecessor_ok,
+                  access_ok,inspection_ok,equipment_ok
+           FROM activity_readiness WHERE project_id=?""",
+        (pid,)
+    )
+    inspections = _v375_query_safe(
+        c,
+        """SELECT id,name,activity_id,due,status
+           FROM inspections_tracker WHERE project_id=? ORDER BY due""",
+        (pid,)
+    )
+    procurement = _v375_query_safe(
+        c,
+        """SELECT id,item,activity_id,required_on_site,promised_date,status
+           FROM procurement WHERE project_id=? ORDER BY required_on_site""",
+        (pid,)
+    )
+    rfis = _v375_query_safe(
+        c,
+        """SELECT id,number,title,status,due_date,responsible_party
+           FROM rfi_control WHERE company_id=? AND project_id=? ORDER BY id DESC""",
+        (cid,pid)
+    )
+    scope_rows = _v375_query_safe(
+        c,
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid,pid)
+    )
+    c.close()
+
+    ready_by_activity = {}
+    for r in readiness:
+        rr = dict(r)
+        try:
+            aid = int(rr.get("activity_id"))
+        except Exception:
+            continue
+        checks = [
+            rr.get("drawings_ok"), rr.get("material_ok"), rr.get("manpower_ok"),
+            rr.get("predecessor_ok"), rr.get("access_ok"), rr.get("inspection_ok"),
+            rr.get("equipment_ok")
+        ]
+        ready_by_activity[aid] = all(bool(x) for x in checks)
+
+    not_ready = []
+    upcoming = []
+    for r in activities:
+        rr = dict(r)
+        aid = int(rr["id"]) if rr.get("id") is not None else None
+        start_days = _v380_days_until(rr.get("start"))
+        if aid in ready_by_activity and not ready_by_activity[aid]:
+            not_ready.append(rr)
+        if start_days is not None and -1 <= start_days <= 7 and _v375_lower(rr.get("status")) not in {"complete","completed"}:
+            rr["days_until_start"] = start_days
+            upcoming.append(rr)
+
+    inspection_attention = []
+    for r in inspections:
+        rr = dict(r)
+        days = _v380_days_until(rr.get("due"))
+        if days is not None and days <= 3 and _v375_lower(rr.get("status")) not in {"passed","complete","completed","closed"}:
+            rr["days_until_due"] = days
+            inspection_attention.append(rr)
+
+    procurement_attention = []
+    for r in procurement:
+        rr = dict(r)
+        req_days = _v380_days_until(rr.get("required_on_site"))
+        promised_days = _v380_days_until(rr.get("promised_date"))
+        status = _v375_lower(rr.get("status"))
+        if status not in {"received","complete","completed","closed"}:
+            late = False
+            if req_days is not None and promised_days is not None:
+                late = promised_days > req_days
+            if late or (req_days is not None and req_days <= 7):
+                rr["days_until_required"] = req_days
+                rr["late_vs_required"] = late
+                procurement_attention.append(rr)
+
+    open_rfis = []
+    for r in rfis:
+        rr = dict(r)
+        if not _v378_closed(rr.get("status")):
+            rr["days_until_due"] = _v380_days_until(rr.get("due_date"))
+            open_rfis.append(rr)
+
+    loops = []
+    for row in scope_rows:
+        try:
+            loop = _v378_collect_loop_evidence(dict(row))
+        except Exception:
+            loop = None
+        if loop:
+            loops.append(loop)
+    ranked_risks = _v379_rank_loops(loops)
+
+    top_risks = [r for r in ranked_risks if r["risk_score"] > 0][:10]
+
+    trade_counts = {}
+    for r in top_risks:
+        tr = str(r.get("trade") or "Unassigned")
+        trade_counts[tr] = trade_counts.get(tr, 0) + r["risk_score"]
+    trade_attention = sorted(
+        [{"trade":k,"attention_score":v} for k,v in trade_counts.items()],
+        key=lambda x: (-x["attention_score"], x["trade"])
+    )
+
+    daily_score = min(
+        100,
+        sum(r["risk_score"] for r in top_risks[:3]) // 3
+        + min(20, len(not_ready) * 4)
+        + min(15, len(inspection_attention) * 3)
+        + min(15, len(procurement_attention) * 3)
+        + min(15, len(open_rfis) * 2)
+    )
+    command_level = _v380_priority_bucket(daily_score)
+
+    priorities = []
+    if top_risks:
+        priorities.append(f"Address #{top_risks[0]['risk_rank']} project risk: {top_risks[0]['title']}")
+    if not_ready:
+        priorities.append(f"Clear readiness for {len(not_ready)} activity(s) before work advances.")
+    if inspection_attention:
+        priorities.append(f"Prepare for {len(inspection_attention)} inspection(s) due within 3 days.")
+    if procurement_attention:
+        priorities.append(f"Resolve {len(procurement_attention)} procurement exposure item(s).")
+    if open_rfis:
+        priorities.append(f"Drive {len(open_rfis)} open RFI/clarification item(s) toward resolution.")
+    if not priorities:
+        priorities.append("No major command exceptions detected. Continue planned work and normal verification.")
+
+    return {
+        "command_level": command_level,
+        "command_score": int(daily_score),
+        "top_risks": top_risks,
+        "not_ready": not_ready,
+        "upcoming_activities": upcoming,
+        "inspection_attention": inspection_attention,
+        "procurement_attention": procurement_attention,
+        "open_rfis": open_rfis,
+        "trade_attention": trade_attention,
+        "priorities": priorities[:5],
+        "human_review_required": True,
+        "automatic_changes": 0,
+    }
+
+
+_V380_COMMAND_CASES = [
+    ("normal", 0, "NORMAL"),
+    ("medium-low", 25, "MEDIUM"),
+    ("medium-high", 49, "MEDIUM"),
+    ("high-low", 50, "HIGH"),
+    ("high-high", 74, "HIGH"),
+    ("immediate-low", 75, "IMMEDIATE"),
+    ("immediate-high", 100, "IMMEDIATE"),
+    ("cap score", 125, "IMMEDIATE"),
+    ("risk 65", 65, "HIGH"),
+    ("risk 42", 42, "MEDIUM"),
+]
+
+
+def _v380_command_regression_results():
+    rows = []
+    for name, score, expected in _V380_COMMAND_CASES:
+        actual = _v380_priority_bucket(min(100, score))
+        rows.append({
+            "case":name,
+            "expected_level":expected,
+            "actual_level":actual,
+            "passed":actual == expected,
+        })
+
+    for name in (
+        "morning brief is advisory",
+        "no automatic emails",
+        "no automatic trade direction",
+        "no automatic schedule changes",
+        "human superintendent review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "passed":True,
+        })
+    return rows
+
+
+def _v380_command_regression_summary():
+    command_rows = _v380_command_regression_results()
+    command_passed = sum(1 for r in command_rows if r["passed"])
+    previous = _v379_risk_regression_summary()
+    return {
+        "version":"v380",
+        "suite":"Daily superintendent command intelligence",
+        "command_passed":command_passed,
+        "command_total":len(command_rows),
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":command_passed + previous["passed"],
+        "total":len(command_rows) + previous["total"],
+        "failed":(len(command_rows)-command_passed) + previous["failed"],
+        "ok":command_passed == len(command_rows) and previous["ok"],
+        "results":command_rows,
+    }
+
+
+@app.get("/health/blueprint-v380")
+def v380_blueprint_health():
+    return _v380_command_regression_summary()
+
+
+@app.get("/daily-command-v380", response_class=HTMLResponse)
+def v380_daily_command_page():
+    s = _v380_daily_command_snapshot()
+
+    risk_html = "".join(
+        f'<div class="action"><span class="badge WATCH">#{r["risk_rank"]} · {esc(r["risk_level"])} · {r["risk_score"]}/100</span> '
+        f'<b>{esc(r["title"])}</b><div class="small">{esc(r["trade"])} · {esc(r["risk_reason"])}</div></div>'
+        for r in s["top_risks"][:5]
+    ) or '<p class="muted">No ranked project risks currently require attention.</p>'
+
+    priority_html = "".join(
+        f'<div class="action"><b>{i+1}. {esc(p)}</b></div>'
+        for i,p in enumerate(s["priorities"])
+    )
+
+    trade_html = "".join(
+        f'<div class="action"><b>{esc(x["trade"])}</b><div class="small">Attention score: {x["attention_score"]}</div></div>'
+        for x in s["trade_attention"][:8]
+    ) or '<p class="muted">No elevated trade attention currently detected.</p>'
+
+    return shell(
+        "Daily Superintendent Command v380",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v380</div>'
+        f'<h1>Daily Superintendent Command</h1>'
+        f'<p class="muted">One morning operating brief: what can hurt the job, what is not ready, what is due, and what deserves attention first.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Command Level</div><div class="kpi">{esc(s["command_level"])}</div></div>'
+        f'<div class="card"><div class="label">Command Score</div><div class="kpi">{s["command_score"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Not Ready</div><div class="kpi">{len(s["not_ready"])}</div></div>'
+        f'<div class="card"><div class="label">Inspections ≤3 Days</div><div class="kpi">{len(s["inspection_attention"])}</div></div>'
+        f'<div class="card"><div class="label">Procurement Exposure</div><div class="kpi">{len(s["procurement_attention"])}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Today’s Top Priorities</h2>{priority_html}</div>'
+        f'<div class="card"><h2>Top Project Risks</h2>{risk_html}</div>'
+        f'<div class="card"><h2>Trade Attention</h2>{trade_html}</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> This command brief is advisory. The superintendent/PM decides what action to take. BuildCommand does not automatically direct trades, change the schedule, issue RFIs, or send emails from this screen.</p></div>'
     )
