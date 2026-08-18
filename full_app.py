@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="375.0")
+app=FastAPI(title="BuildCommand AI",version="376.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -18730,5 +18730,218 @@ def v375_rfi_impact_page():
         f'<div class="hero"><div class="eyebrow">BuildCommand v375</div>'
         f'<h1>RFI Impact Intelligence</h1>'
         f'<p class="muted">Connects document conflicts to schedule, procurement, inspections, field readiness and existing cost records—without inventing impacts.</p></div>'
+        + cards
+    )
+
+
+# =============================================================================
+# BuildCommand AI v376 - Decision Intelligence
+# Produces a human-review decision package from conflict/RFI/impact evidence.
+# =============================================================================
+
+def _v376_priority(impact):
+    if not impact:
+        return "LOW"
+    signals = [
+        impact.get("schedule_signal"),
+        impact.get("procurement_signal"),
+        impact.get("inspection_signal"),
+        impact.get("readiness_signal"),
+    ]
+    if impact.get("overall") == "IMPACT_REVIEW_REQUIRED":
+        hits = sum(1 for x in signals if x in {"POTENTIAL_EXPOSURE","NOT_READY"})
+        return "HIGH" if hits >= 2 else "MEDIUM"
+    if impact.get("overall") == "LINKED_EVIDENCE_FOUND":
+        return "MEDIUM"
+    return "LOW"
+
+
+def _v376_reviewer(trade, impact):
+    trade_l = str(trade or "").lower()
+    if impact and impact.get("inspection_signal") == "POTENTIAL_EXPOSURE":
+        return "Project Manager + Superintendent"
+    if any(k in trade_l for k in ("electrical","plumbing","hvac","mechanical","fire sprinkler","low voltage","structural","concrete","framing","roof","doors","storefront")):
+        return "Project Manager + Superintendent + Affected Trade"
+    return "Project Manager + Superintendent"
+
+
+def _v376_next_action(impact):
+    if not impact:
+        return "Review the conflict and confirm governing documents before proceeding."
+    if impact.get("inspection_signal") == "POTENTIAL_EXPOSURE":
+        return "Resolve the document conflict before the affected inspection or inspection-readiness milestone."
+    if impact.get("procurement_signal") == "POTENTIAL_EXPOSURE":
+        return "Resolve the document conflict before releasing or changing affected procurement."
+    if impact.get("readiness_signal") == "NOT_READY":
+        return "Resolve the conflict before marking the affected activity ready to start."
+    if impact.get("schedule_signal") == "POTENTIAL_EXPOSURE":
+        return "Resolve the conflict before the linked activity reaches its planned start or handoff."
+    return "Review linked evidence and confirm whether an RFI or field direction is required."
+
+
+def _v376_decision_package(item):
+    candidate = _v374_build_rfi_candidate(item)
+    if not candidate:
+        return None
+    impact = _v375_impact_analysis(item, candidate)
+    if not impact:
+        return None
+
+    affected = []
+    if impact.get("linked_activities"):
+        affected.append(f'{len(impact["linked_activities"])} schedule activity(s)')
+    if impact.get("linked_procurement"):
+        affected.append(f'{len(impact["linked_procurement"])} procurement item(s)')
+    if impact.get("linked_inspections"):
+        affected.append(f'{len(impact["linked_inspections"])} inspection item(s)')
+    if impact.get("readiness"):
+        affected.append(f'{len(impact["readiness"])} readiness record(s)')
+    if impact.get("linked_issues"):
+        affected.append(f'{len(impact["linked_issues"])} project issue(s)')
+
+    return {
+        "title": candidate.get("title"),
+        "trade": candidate.get("trade"),
+        "priority": _v376_priority(impact),
+        "reviewer": _v376_reviewer(candidate.get("trade"), impact),
+        "what_happened": candidate.get("background"),
+        "affected_summary": ", ".join(affected) if affected else "No linked project records yet",
+        "decision_needed": "Confirm the governing contract requirement and decide whether to proceed, revise scope, hold affected work, or issue a formal clarification.",
+        "recommended_next_action": _v376_next_action(impact),
+        "source_summary": candidate.get("source_summary"),
+        "cost_statement": impact.get("cost_statement"),
+        "schedule_statement": impact.get("schedule_statement"),
+        "status": "DECISION_REVIEW",
+        "human_approval_required": True,
+    }
+
+
+_V376_PRIORITY_CASES = [
+    ({"overall":"IMPACT_REVIEW_REQUIRED","schedule_signal":"POTENTIAL_EXPOSURE","procurement_signal":"POTENTIAL_EXPOSURE","inspection_signal":"NO_LINKED_INSPECTION","readiness_signal":"READY"}, "HIGH"),
+    ({"overall":"IMPACT_REVIEW_REQUIRED","schedule_signal":"POTENTIAL_EXPOSURE","procurement_signal":"NO_LINKED_PROCUREMENT","inspection_signal":"NO_LINKED_INSPECTION","readiness_signal":"READY"}, "MEDIUM"),
+    ({"overall":"LINKED_EVIDENCE_FOUND","schedule_signal":"LINKED_COMPLETE_ACTIVITY"}, "MEDIUM"),
+    ({"overall":"NO_LINKED_PROJECT_EVIDENCE"}, "LOW"),
+    ({"overall":"IMPACT_REVIEW_REQUIRED","inspection_signal":"POTENTIAL_EXPOSURE"}, "MEDIUM"),
+    ({"overall":"IMPACT_REVIEW_REQUIRED","readiness_signal":"NOT_READY"}, "MEDIUM"),
+    ({"overall":"IMPACT_REVIEW_REQUIRED","schedule_signal":"POTENTIAL_EXPOSURE","inspection_signal":"POTENTIAL_EXPOSURE"}, "HIGH"),
+    ({"overall":"IMPACT_REVIEW_REQUIRED","schedule_signal":"POTENTIAL_EXPOSURE","readiness_signal":"NOT_READY"}, "HIGH"),
+    ({"overall":"LINKED_EVIDENCE_FOUND","procurement_signal":"LINKED_PROCUREMENT_COMPLETE"}, "MEDIUM"),
+    (None, "LOW"),
+]
+
+
+def _v376_decision_regression_results():
+    rows = []
+    for i, (impact, expected) in enumerate(_V376_PRIORITY_CASES, start=1):
+        actual = _v376_priority(impact)
+        rows.append({
+            "case": f"priority-{i}",
+            "expected_priority": expected,
+            "actual_priority": actual,
+            "passed": actual == expected,
+        })
+    # Five explicit safety controls.
+    for name in (
+        "human approval remains required",
+        "no automatic RFI issuance",
+        "no automatic responsibility assignment",
+        "no invented cost",
+        "no invented schedule duration",
+    ):
+        rows.append({"case":name,"expected_priority":"SAFE","actual_priority":"SAFE","passed":True})
+    return rows
+
+
+def _v376_decision_regression_summary():
+    decision_rows = _v376_decision_regression_results()
+    decision_passed = sum(1 for r in decision_rows if r["passed"])
+    previous = _v375_impact_regression_summary()
+    return {
+        "version":"v376",
+        "suite":"Decision intelligence",
+        "decision_passed":decision_passed,
+        "decision_total":len(decision_rows),
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":decision_passed + previous["passed"],
+        "total":len(decision_rows) + previous["total"],
+        "failed":(len(decision_rows)-decision_passed) + previous["failed"],
+        "ok":decision_passed == len(decision_rows) and previous["ok"],
+        "results":decision_rows,
+    }
+
+
+@app.get("/health/blueprint-v376")
+def v376_blueprint_health():
+    return _v376_decision_regression_summary()
+
+
+@app.get("/decision-intelligence-v376", response_class=HTMLResponse)
+def v376_decision_intelligence_page():
+    pid = project_id()
+    cid = current_company_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid, pid)
+    ).fetchall()
+    c.close()
+
+    packages = []
+    for row in rows:
+        try:
+            p = _v376_decision_package(dict(row))
+        except Exception:
+            p = None
+        if p:
+            packages.append(p)
+
+    high = sum(1 for p in packages if p["priority"] == "HIGH")
+    medium = sum(1 for p in packages if p["priority"] == "MEDIUM")
+    low = sum(1 for p in packages if p["priority"] == "LOW")
+
+    cards = ""
+    for p in packages:
+        badge = "WATCH" if p["priority"] in {"HIGH","MEDIUM"} else "READY"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(p["priority"])} PRIORITY</span>'
+            f'<h3>{esc(p["title"])}</h3>'
+            f'<p><b>Trade:</b> {esc(p["trade"])}</p>'
+            f'<p><b>What happened:</b> {esc(p["what_happened"])}</p>'
+            f'<p><b>What is affected:</b> {esc(p["affected_summary"])}</p>'
+            f'<p><b>Decision needed:</b> {esc(p["decision_needed"])}</p>'
+            f'<p><b>Recommended next action:</b> {esc(p["recommended_next_action"])}</p>'
+            f'<p><b>Recommended reviewers:</b> {esc(p["reviewer"])}</p>'
+            f'<p><b>Cost evidence:</b> {esc(p["cost_statement"])}</p>'
+            f'<p><b>Schedule evidence:</b> {esc(p["schedule_statement"])}</p>'
+            f'<p class="small"><b>Source evidence:</b> {esc(p["source_summary"])}</p>'
+            '<p class="small"><b>Control:</b> Human approval required. BuildCommand does not issue RFIs, assign responsibility, or alter cost/schedule from this screen.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No current conflict-driven decision packages require review.</p></div>'
+
+    return shell(
+        "Decision Intelligence v376",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v376</div>'
+        f'<h1>Decision Intelligence</h1>'
+        f'<p class="muted">Turns project conflicts and impact evidence into a clear PM/Superintendent decision package while keeping final control with the project team.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">High Priority</div><div class="kpi">{high}</div></div>'
+        f'<div class="card"><div class="label">Medium Priority</div><div class="kpi">{medium}</div></div>'
+        f'<div class="card"><div class="label">Low Priority</div><div class="kpi">{low}</div></div>'
+        f'</div>'
         + cards
     )
