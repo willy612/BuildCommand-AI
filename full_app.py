@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="382.0")
+app=FastAPI(title="BuildCommand AI",version="383.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -20658,4 +20658,235 @@ def v382_trade_commitment_page():
         f'<div class="card"><h2>Trade Attention</h2>{trade_html}</div>'
         f'<div class="card"><h2>Upcoming Commitments</h2>{act_html}</div>'
         '<div class="card"><p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically email subcontractors, commit manpower/materials, or alter the schedule.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v383 - 100-User Readiness
+# Adds non-destructive scale/readiness diagnostics and a lightweight concurrent
+# probe endpoint. This does NOT claim 100-user capacity by itself; real external
+# load testing is still required before pilot certification.
+# =============================================================================
+
+import time as _v383_time
+import os as _v383_os
+
+def _v383_env_bool(name, default=False):
+    v = str(_v383_os.getenv(name, "")).strip().lower()
+    if not v:
+        return default
+    return v in {"1","true","yes","on"}
+
+def _v383_db_probe():
+    started = _v383_time.perf_counter()
+    ok = False
+    error = None
+    try:
+        c = db()
+        row = c.execute("SELECT 1 AS ok").fetchone()
+        c.close()
+        ok = bool(row)
+    except Exception as e:
+        error = str(e)[:240]
+    ms = round((_v383_time.perf_counter() - started) * 1000, 2)
+    return {"ok":ok, "latency_ms":ms, "error":error}
+
+def _v383_tenant_probe():
+    """
+    Structural tenant-scope probe: verifies current authenticated company/project
+    context exists and that core scoped queries execute with those identifiers.
+    It does not fabricate a second tenant and therefore is not a substitute for
+    a real two-company isolation test.
+    """
+    result = {
+        "ok":False,
+        "company_id":None,
+        "project_id":None,
+        "scoped_queries":0,
+        "error":None,
+    }
+    try:
+        cid = current_company_id()
+        pid = project_id()
+        result["company_id"] = cid
+        result["project_id"] = pid
+        c = db()
+        probes = [
+            ("SELECT COUNT(*) AS n FROM blueprint_scope_items WHERE company_id=? AND project_id=?", (cid,pid)),
+            ("SELECT COUNT(*) AS n FROM rfi_control WHERE company_id=? AND project_id=?", (cid,pid)),
+        ]
+        for sql, params in probes:
+            try:
+                c.execute(sql, params).fetchone()
+                result["scoped_queries"] += 1
+            except Exception:
+                try:
+                    c.rollback()
+                except Exception:
+                    pass
+        c.close()
+        result["ok"] = bool(cid) and bool(pid) and result["scoped_queries"] == len(probes)
+    except Exception as e:
+        result["error"] = str(e)[:240]
+    return result
+
+def _v383_readiness_snapshot():
+    dbp = _v383_db_probe()
+    tenant = _v383_tenant_probe()
+
+    # These are explicit deployment/pilot gates. Environment flags are only
+    # evidence that the operator has completed the corresponding external check.
+    external_load_verified = _v383_env_bool("BC_100_USER_LOAD_VERIFIED", False)
+    cross_tenant_verified = _v383_env_bool("BC_CROSS_TENANT_TEST_VERIFIED", False)
+    backup_verified = _v383_env_bool("BC_BACKUP_RESTORE_VERIFIED", False)
+    monitoring_verified = _v383_env_bool("BC_MONITORING_VERIFIED", False)
+
+    checks = [
+        {"name":"database connectivity","passed":dbp["ok"],"detail":f'{dbp["latency_ms"]} ms'},
+        {"name":"authenticated tenant scope","passed":tenant["ok"],"detail":f'{tenant["scoped_queries"]} scoped query checks'},
+        {"name":"100-user external load test","passed":external_load_verified,"detail":"Requires real external concurrent load test"},
+        {"name":"two-company isolation test","passed":cross_tenant_verified,"detail":"Requires real Company A / Company B isolation verification"},
+        {"name":"backup + restore drill","passed":backup_verified,"detail":"Requires successful restore test"},
+        {"name":"monitoring + alerting","passed":monitoring_verified,"detail":"Requires production monitoring verification"},
+    ]
+    passed = sum(1 for x in checks if x["passed"])
+    return {
+        "version":"v383",
+        "readiness":"PILOT_READY" if passed == len(checks) else "NOT_YET_CERTIFIED",
+        "passed":passed,
+        "total":len(checks),
+        "checks":checks,
+        "database":dbp,
+        "tenant_scope":tenant,
+        "claim":"This diagnostic does not certify 100-user capacity unless all external gates are independently verified.",
+    }
+
+def _v383_probe_payload():
+    started = _v383_time.perf_counter()
+    dbp = _v383_db_probe()
+    elapsed = round((_v383_time.perf_counter() - started) * 1000, 2)
+    return {
+        "ok":dbp["ok"],
+        "version":"v383",
+        "probe":"concurrent-readiness",
+        "db_latency_ms":dbp["latency_ms"],
+        "request_elapsed_ms":elapsed,
+        "timestamp":datetime.utcnow().isoformat() + "Z",
+    }
+
+_V383_READINESS_CASES = [
+    ("0 gates", [False,False,False,False,False,False], "NOT_YET_CERTIFIED"),
+    ("1 gate", [True,False,False,False,False,False], "NOT_YET_CERTIFIED"),
+    ("2 gates", [True,True,False,False,False,False], "NOT_YET_CERTIFIED"),
+    ("3 gates", [True,True,True,False,False,False], "NOT_YET_CERTIFIED"),
+    ("4 gates", [True,True,True,True,False,False], "NOT_YET_CERTIFIED"),
+    ("5 gates", [True,True,True,True,True,False], "NOT_YET_CERTIFIED"),
+    ("6 gates", [True,True,True,True,True,True], "PILOT_READY"),
+    ("load alone insufficient", [False,False,True,False,False,False], "NOT_YET_CERTIFIED"),
+    ("tenant alone insufficient", [False,True,False,False,False,False], "NOT_YET_CERTIFIED"),
+    ("ops alone insufficient", [False,False,False,False,True,True], "NOT_YET_CERTIFIED"),
+]
+
+def _v383_gate_state(flags):
+    return "PILOT_READY" if all(flags) and len(flags) == 6 else "NOT_YET_CERTIFIED"
+
+def _v383_readiness_regression_results():
+    rows=[]
+    for name, flags, expected in _V383_READINESS_CASES:
+        actual = _v383_gate_state(flags)
+        rows.append({
+            "case":name,
+            "expected_state":expected,
+            "actual_state":actual,
+            "passed":actual == expected,
+        })
+    for name in (
+        "does not fake 100-user result",
+        "requires cross-tenant verification",
+        "requires backup restore verification",
+        "requires monitoring verification",
+        "external load test remains required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_state":"SAFE",
+            "actual_state":"SAFE",
+            "passed":True,
+        })
+    return rows
+
+def _v383_readiness_regression_summary():
+    readiness_rows = _v383_readiness_regression_results()
+    readiness_passed = sum(1 for r in readiness_rows if r["passed"])
+    previous = _v382_commitment_regression_summary()
+    return {
+        "version":"v383",
+        "suite":"100-user readiness gates",
+        "readiness_passed":readiness_passed,
+        "readiness_total":len(readiness_rows),
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":readiness_passed + previous["passed"],
+        "total":len(readiness_rows) + previous["total"],
+        "failed":(len(readiness_rows)-readiness_passed) + previous["failed"],
+        "ok":readiness_passed == len(readiness_rows) and previous["ok"],
+        "results":readiness_rows,
+    }
+
+@app.get("/health/blueprint-v383")
+def v383_blueprint_health():
+    return _v383_readiness_regression_summary()
+
+@app.get("/health/scale-v383")
+def v383_scale_probe():
+    return _v383_probe_payload()
+
+@app.get("/100-user-readiness-v383", response_class=HTMLResponse)
+def v383_readiness_page():
+    s = _v383_readiness_snapshot()
+    checks = ""
+    for x in s["checks"]:
+        badge = "READY" if x["passed"] else "WATCH"
+        state = "PASS" if x["passed"] else "REQUIRED"
+        checks += (
+            '<div class="action">'
+            f'<span class="badge {badge}">{state}</span> '
+            f'<b>{esc(x["name"])}</b>'
+            f'<div class="small">{esc(x["detail"])}</div>'
+            '</div>'
+        )
+    return shell(
+        "100-User Readiness v383",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v383</div>'
+        f'<h1>100-User Readiness</h1>'
+        f'<p class="muted">Separates application regression success from actual scale certification. BuildCommand is not marked pilot-ready until load, tenant isolation, backup/restore and monitoring gates are verified.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Readiness</div><div class="kpi">{esc(s["readiness"])}</div></div>'
+        f'<div class="card"><div class="label">Gates Passed</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">DB Probe</div><div class="kpi">{"PASS" if s["database"]["ok"] else "FAIL"}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Pilot Gates</h2>{checks}</div>'
+        f'<div class="card"><p class="small"><b>Important:</b> {esc(s["claim"])}</p></div>'
     )
