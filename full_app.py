@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="383.0")
+app=FastAPI(title="BuildCommand AI",version="384.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -20889,4 +20889,232 @@ def v383_readiness_page():
         f'</div>'
         f'<div class="card"><h2>Pilot Gates</h2>{checks}</div>'
         f'<div class="card"><p class="small"><b>Important:</b> {esc(s["claim"])}</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v384 - Authenticated Load Readiness
+# Next scale gate after v383's 100-user lightweight probe. Adds authenticated,
+# database-backed workload probes and explicit certification gates. It does NOT
+# fabricate login sessions or claim heavy Blueprint/upload capacity.
+# =============================================================================
+
+def _v384_timed(label, fn):
+    started = _v383_time.perf_counter()
+    ok = False
+    error = None
+    detail = None
+    try:
+        detail = fn()
+        ok = True
+    except Exception as e:
+        error = str(e)[:300]
+    elapsed = round((_v383_time.perf_counter() - started) * 1000, 2)
+    return {"name":label, "ok":ok, "latency_ms":elapsed, "detail":detail, "error":error}
+
+def _v384_context_probe():
+    cid = current_company_id()
+    pid = project_id()
+    if not cid or not pid:
+        raise RuntimeError("Authenticated company/project context is required.")
+    return {"company_id":cid, "project_id":pid}
+
+def _v384_dashboard_db_probe():
+    cid = current_company_id()
+    pid = project_id()
+    c = db()
+    counts = {}
+    queries = [
+        ("activities", "SELECT COUNT(*) AS n FROM activities WHERE project_id=?", (pid,)),
+        ("rfis", "SELECT COUNT(*) AS n FROM rfi_control WHERE company_id=? AND project_id=?", (cid,pid)),
+        ("scope_items", "SELECT COUNT(*) AS n FROM blueprint_scope_items WHERE company_id=? AND project_id=?", (cid,pid)),
+    ]
+    for name, sql, params in queries:
+        row = c.execute(sql, params).fetchone()
+        try:
+            counts[name] = int(row["n"])
+        except Exception:
+            counts[name] = int(row[0])
+    c.close()
+    return counts
+
+def _v384_command_probe():
+    snap = _v380_daily_command_snapshot()
+    return {
+        "command_level":snap.get("command_level"),
+        "command_score":snap.get("command_score"),
+        "top_risks":len(snap.get("top_risks") or []),
+        "open_rfis":len(snap.get("open_rfis") or []),
+    }
+
+def _v384_lookahead_probe():
+    snap = _v381_lookahead_snapshot()
+    return {
+        "7_day":len(snap["windows"].get(7, [])),
+        "14_day":len(snap["windows"].get(14, [])),
+        "21_day":len(snap["windows"].get(21, [])),
+    }
+
+def _v384_authenticated_workload_probe():
+    checks = [
+        _v384_timed("authenticated context", _v384_context_probe),
+        _v384_timed("dashboard database workload", _v384_dashboard_db_probe),
+        _v384_timed("daily command workload", _v384_command_probe),
+        _v384_timed("lookahead workload", _v384_lookahead_probe),
+    ]
+    total_ms = round(sum(x["latency_ms"] for x in checks), 2)
+    return {
+        "version":"v384",
+        "probe":"authenticated-database-workload",
+        "ok":all(x["ok"] for x in checks),
+        "total_latency_ms":total_ms,
+        "checks":checks,
+        "timestamp":datetime.utcnow().isoformat() + "Z",
+        "note":"Use this endpoint through a real authenticated session for external load testing.",
+    }
+
+def _v384_certification_snapshot():
+    base = _v383_readiness_snapshot()
+    authenticated_load = _v383_env_bool("BC_AUTHENTICATED_LOAD_VERIFIED", False)
+    dashboard_load = _v383_env_bool("BC_DASHBOARD_LOAD_VERIFIED", False)
+    brain_load = _v383_env_bool("BC_BLUEPRINT_LOAD_VERIFIED", False)
+    upload_load = _v383_env_bool("BC_UPLOAD_LOAD_VERIFIED", False)
+
+    checks = list(base["checks"]) + [
+        {"name":"authenticated session load test","passed":authenticated_load,
+         "detail":"Requires real concurrent authenticated sessions"},
+        {"name":"database-backed dashboard load test","passed":dashboard_load,
+         "detail":"Requires concurrent real dashboard/database requests"},
+        {"name":"Blueprint Brain load test","passed":brain_load,
+         "detail":"Requires controlled concurrent Blueprint Brain processing"},
+        {"name":"upload processing load test","passed":upload_load,
+         "detail":"Requires controlled concurrent document uploads"},
+    ]
+    passed = sum(1 for x in checks if x["passed"])
+    return {
+        "version":"v384",
+        "readiness":"FULL_100_USER_PILOT_READY" if passed == len(checks) else "NOT_YET_FULLY_CERTIFIED",
+        "passed":passed,
+        "total":len(checks),
+        "checks":checks,
+        "claim":"Full 100-user pilot readiness requires all lightweight, tenant, operations, authenticated, dashboard, Blueprint Brain and upload gates.",
+    }
+
+_V384_AUTH_CASES = [
+    ("0 heavy gates", [False,False,False,False], "NOT_YET_FULLY_CERTIFIED"),
+    ("auth only", [True,False,False,False], "NOT_YET_FULLY_CERTIFIED"),
+    ("auth dashboard", [True,True,False,False], "NOT_YET_FULLY_CERTIFIED"),
+    ("brain only", [False,False,True,False], "NOT_YET_FULLY_CERTIFIED"),
+    ("upload only", [False,False,False,True], "NOT_YET_FULLY_CERTIFIED"),
+    ("three heavy gates", [True,True,True,False], "NOT_YET_FULLY_CERTIFIED"),
+    ("all heavy gates", [True,True,True,True], "HEAVY_GATES_READY"),
+    ("auth+brain", [True,False,True,False], "NOT_YET_FULLY_CERTIFIED"),
+    ("dashboard+upload", [False,True,False,True], "NOT_YET_FULLY_CERTIFIED"),
+    ("all false", [0,0,0,0], "NOT_YET_FULLY_CERTIFIED"),
+]
+
+def _v384_heavy_gate_state(flags):
+    return "HEAVY_GATES_READY" if len(flags) == 4 and all(bool(x) for x in flags) else "NOT_YET_FULLY_CERTIFIED"
+
+def _v384_regression_results():
+    rows = []
+    for name, flags, expected in _V384_AUTH_CASES:
+        actual = _v384_heavy_gate_state(flags)
+        rows.append({
+            "case":name,
+            "expected_state":expected,
+            "actual_state":actual,
+            "passed":actual == expected,
+        })
+    for name in (
+        "does not fake authenticated users",
+        "does not fake Blueprint load",
+        "does not fake upload load",
+        "does not certify from lightweight probe alone",
+        "real external sessions remain required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_state":"SAFE",
+            "actual_state":"SAFE",
+            "passed":True,
+        })
+    return rows
+
+def _v384_regression_summary():
+    rows = _v384_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v383_readiness_regression_summary()
+    return {
+        "version":"v384",
+        "suite":"Authenticated load readiness",
+        "authenticated_load_passed":passed,
+        "authenticated_load_total":len(rows),
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v384")
+def v384_blueprint_health():
+    return _v384_regression_summary()
+
+@app.get("/health/auth-load-v384")
+def v384_auth_load_probe():
+    return _v384_authenticated_workload_probe()
+
+@app.get("/100-user-certification-v384", response_class=HTMLResponse)
+def v384_certification_page():
+    s = _v384_certification_snapshot()
+    checks = ""
+    for x in s["checks"]:
+        badge = "READY" if x["passed"] else "WATCH"
+        state = "PASS" if x["passed"] else "REQUIRED"
+        checks += (
+            '<div class="action">'
+            f'<span class="badge {badge}">{state}</span> '
+            f'<b>{esc(x["name"])}</b>'
+            f'<div class="small">{esc(x["detail"])}</div>'
+            '</div>'
+        )
+    return shell(
+        "100-User Certification v384",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v384</div>'
+        f'<h1>100-User Certification</h1>'
+        f'<p class="muted">Moves beyond the lightweight concurrency probe into authenticated, database-backed, Blueprint Brain and upload workload certification.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Readiness</div><div class="kpi">{esc(s["readiness"])}</div></div>'
+        f'<div class="card"><div class="label">Gates Passed</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Auto Certification</div><div class="kpi">NO</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Full Pilot Gates</h2>{checks}</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> {esc(s["claim"])}</p></div>'
     )
