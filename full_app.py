@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="373.0")
+app=FastAPI(title="BuildCommand AI",version="374.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -18022,3 +18022,365 @@ def v373_blueprint_conflicts_page():
         f'<div class="card"><div class="label">Needs Cross-Check</div><div class="kpi">{cross}</div></div>'
         f'<div class="card"><div class="label">No Conflict Found</div><div class="kpi">{clear}</div></div></div>'
         f'<div class="card"><h2>Coordination Review</h2>{cards}</div>')
+
+
+# =============================================================================
+# BuildCommand AI v374 - Conflict-to-RFI Intelligence
+# Converts verified cross-document conflicts into structured DRAFT RFI candidates.
+# Nothing is issued or emailed automatically. Human approval remains mandatory.
+# =============================================================================
+
+def _v374_safe_get(row, key, default=""):
+    try:
+        if hasattr(row, "get"):
+            return row.get(key, default)
+        return row[key]
+    except Exception:
+        return default
+
+
+def _v374_source_label(field):
+    names = {
+        "sheet_text":"Drawing / Sheet",
+        "source_sheet_text":"Drawing / Sheet",
+        "detail_text":"Detail",
+        "source_detail_text":"Detail",
+        "spec_text":"Specification",
+        "source_spec_text":"Specification",
+        "note_text":"Plan Note",
+        "source_note_text":"Plan Note",
+    }
+    return names.get(str(field or ""), str(field or "").replace("_"," ").title())
+
+
+def _v374_trade_for_item(item):
+    trade = str(_v374_safe_get(item, "trade", "") or "").strip()
+    requirement = str(_v374_safe_get(item, "requirement", "") or "").strip()
+    try:
+        predicted = _v371_trade_owner(requirement)
+    except Exception:
+        predicted = ""
+    # Prefer an explicit stored trade unless it is blank/ambiguous.
+    if trade and trade.lower() not in {"unknown","tbd","other","general","unassigned"}:
+        return trade
+    return predicted or trade or "GC / Design Team"
+
+
+def _v374_source_refs(item, conflict):
+    refs = []
+    for field in conflict.get("sources", []):
+        val = str(_v374_safe_get(item, field, "") or "").strip()
+        refs.append({
+            "field": field,
+            "label": _v374_source_label(field),
+            "text": val,
+        })
+    return refs
+
+
+def _v374_build_rfi_candidate(item):
+    analysis = _v373_conflict_analysis(item)
+    if analysis["disposition"] != "RESOLVE_CONFLICT":
+        return None
+
+    req = str(_v374_safe_get(item, "requirement", "") or "").strip() or "Document coordination conflict"
+    trade = _v374_trade_for_item(item)
+    source_blocks = []
+    source_labels = []
+
+    for conflict in analysis["conflicts"]:
+        refs = _v374_source_refs(item, conflict)
+        for ref in refs:
+            if ref["label"] not in source_labels:
+                source_labels.append(ref["label"])
+            if ref["text"]:
+                source_blocks.append(f'{ref["label"]}: {ref["text"]}')
+
+    source_summary = " | ".join(source_blocks) if source_blocks else "Conflicting source references detected by BuildCommand; verify exact document references before issue."
+    conflict_summary = "; ".join(c["detail"] for c in analysis["conflicts"])
+
+    title = f"Clarification Required - {req[:120]}"
+    question = (
+        f"Please clarify the governing contract requirement for: {req}. "
+        f"BuildCommand detected conflicting document information ({conflict_summary}). "
+        "Please identify which requirement governs and provide any required revised detail, specification direction, "
+        "or drawing clarification."
+    )
+    background = (
+        f"Potential cross-document conflict identified for {trade}. "
+        f"Detected conflict: {conflict_summary}. "
+        f"Compared sources: {', '.join(source_labels) if source_labels else 'project documents'}."
+    )
+    impact = (
+        "Potential impact is not yet quantified. Clarification may affect trade coordination, procurement, installation, "
+        "inspection readiness, cost, or schedule. Human project review is required before assigning any impact."
+    )
+    return {
+        "title": title,
+        "requirement": req,
+        "trade": trade,
+        "question": question,
+        "background": background,
+        "potential_impact": impact,
+        "source_summary": source_summary,
+        "conflict_count": analysis["conflict_count"],
+        "risk": analysis["risk"],
+        "status": "DRAFT_CANDIDATE",
+        "human_approval_required": True,
+    }
+
+
+def _v374_ensure_rfi_control():
+    c = db()
+    kind = DATABASE_KIND
+    pk = "BIGSERIAL PRIMARY KEY" if kind == "postgres" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    num = "DOUBLE PRECISION" if kind == "postgres" else "REAL"
+    c.execute(
+        f"""CREATE TABLE IF NOT EXISTS rfi_control(
+            id {pk},
+            company_id BIGINT,
+            project_id BIGINT,
+            number TEXT,
+            title TEXT,
+            question TEXT,
+            responsible_party TEXT,
+            due_date TEXT,
+            status TEXT DEFAULT 'DRAFT',
+            answer TEXT,
+            cost_impact {num} DEFAULT 0,
+            schedule_days {num} DEFAULT 0,
+            source_ref TEXT,
+            created TEXT,
+            updated TEXT
+        )"""
+    )
+    try:
+        c.commit()
+    except Exception:
+        pass
+    c.close()
+
+
+def _v374_number_for_next_rfi(pid):
+    _v374_ensure_rfi_control()
+    c = db()
+    row = c.execute(
+        "SELECT COUNT(*) AS n FROM rfi_control WHERE company_id=? AND project_id=?",
+        (current_company_id(), pid)
+    ).fetchone()
+    c.close()
+    try:
+        n = int(row["n"] or 0) + 1
+    except Exception:
+        n = 1
+    return f"RFI-DRAFT-{n:03d}"
+
+
+def _v374_candidate_from_scope_id(scope_item_id):
+    pid = project_id()
+    cid = current_company_id()
+    c = db()
+    row = c.execute(
+        "SELECT * FROM blueprint_scope_items WHERE id=? AND company_id=? AND project_id=?",
+        (scope_item_id, cid, pid)
+    ).fetchone()
+    c.close()
+    if not row:
+        return None, None
+    item = dict(row)
+    return item, _v374_build_rfi_candidate(item)
+
+
+_V374_RFI_CASES = [
+    (
+        {"requirement":"WH-1 electrical service","trade":"Plumbing",
+         "sheet_text":"WH-1 277 V 8.31 kW","spec_text":"WH-1 208 V 8.31 kW"},
+        True, "Plumbing"
+    ),
+    (
+        {"requirement":"Door D102","trade":"Doors & Hardware",
+         "sheet_text":"Remove door D102","note_text":"Door D102 to remain"},
+        True, "Doors & Hardware"
+    ),
+    (
+        {"requirement":"Partition rating","trade":"Framing & Drywall",
+         "sheet_text":"Partition shall be 1 hr rated","detail_text":"Partition shall be 2 hr rated"},
+        True, "Framing & Drywall"
+    ),
+    (
+        {"requirement":"ACT ceiling","trade":"Ceilings",
+         "sheet_text":"Provide ACT ceiling","spec_text":"Provide ACT ceiling system"},
+        False, "Ceilings"
+    ),
+    (
+        {"requirement":"Existing casework","trade":"Millwork",
+         "sheet_text":"Existing casework to remain","note_text":"Retain existing casework"},
+        False, "Millwork"
+    ),
+    (
+        {"requirement":"Roof curb","trade":"Roofing",
+         "detail_text":"Install new roof curb","spec_text":"Roof curb not required"},
+        True, "Roofing"
+    ),
+    (
+        {"requirement":"HM frames","trade":"Paint",
+         "sheet_text":"Paint hollow metal frames","spec_text":"Hollow metal frames factory finish"},
+        True, "Paint"
+    ),
+    (
+        {"requirement":"Reuse light fixture","trade":"Electrical",
+         "sheet_text":"Reuse existing fixture","note_text":"Replace existing fixture"},
+        True, "Electrical"
+    ),
+    (
+        {"requirement":"Floor drain FD-1","trade":"Plumbing",
+         "sheet_text":"Provide floor drain FD-1"},
+        False, "Plumbing"
+    ),
+    (
+        {"requirement":"New restroom grab bars","trade":"Bathroom Accessories",
+         "sheet_text":"Provide new grab bars","spec_text":"Provide new grab bars"},
+        False, "Bathroom Accessories"
+    ),
+]
+
+
+def _v374_rfi_regression_results():
+    rows = []
+    for item, should_create, expected_trade in _V374_RFI_CASES:
+        candidate = _v374_build_rfi_candidate(item)
+        created = candidate is not None
+        passed = (
+            created == should_create and
+            (not candidate or candidate["trade"] == expected_trade) and
+            (not candidate or candidate["human_approval_required"] is True) and
+            (not candidate or candidate["status"] == "DRAFT_CANDIDATE")
+        )
+        rows.append({
+            "requirement": item["requirement"],
+            "expected_candidate": should_create,
+            "candidate_created": created,
+            "expected_trade": expected_trade,
+            "actual_trade": candidate["trade"] if candidate else expected_trade,
+            "human_approval_required": candidate["human_approval_required"] if candidate else True,
+            "passed": passed,
+        })
+    return rows
+
+
+def _v374_rfi_regression_summary():
+    rfi_rows = _v374_rfi_regression_results()
+    rfi_passed = sum(1 for r in rfi_rows if r["passed"])
+    previous = _v373_conflict_regression_summary()
+    return {
+        "version":"v374",
+        "suite":"Blueprint Brain conflict-to-RFI intelligence",
+        "rfi_passed":rfi_passed,
+        "rfi_total":len(rfi_rows),
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":rfi_passed + previous["passed"],
+        "total":len(rfi_rows) + previous["total"],
+        "failed":(len(rfi_rows)-rfi_passed) + previous["failed"],
+        "ok":rfi_passed == len(rfi_rows) and previous["ok"],
+        "results":rfi_rows,
+    }
+
+
+@app.get("/health/blueprint-v374")
+def v374_blueprint_health():
+    """Staging gate: trade + source + conflict + conflict-to-RFI intelligence."""
+    return _v374_rfi_regression_summary()
+
+
+@app.get("/rfi-intelligence-v374", response_class=HTMLResponse)
+def v374_rfi_intelligence_page():
+    pid = project_id()
+    cid = current_company_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid, pid)
+    ).fetchall()
+    c.close()
+
+    candidates = []
+    for r in rows:
+        item = dict(r)
+        candidate = _v374_build_rfi_candidate(item)
+        if candidate:
+            candidate["scope_item_id"] = item.get("id")
+            candidates.append(candidate)
+
+    cards = ""
+    for x in candidates:
+        cards += (
+            '<div class="card">'
+            '<span class="badge WATCH">DRAFT RFI CANDIDATE</span>'
+            f'<h3>{esc(x["title"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])}</p>'
+            f'<p><b>Background:</b> {esc(x["background"])}</p>'
+            f'<p><b>Question:</b> {esc(x["question"])}</p>'
+            f'<p><b>Potential impact:</b> {esc(x["potential_impact"])}</p>'
+            f'<p class="small"><b>Source evidence:</b> {esc(x["source_summary"])}</p>'
+            '<p class="small"><b>Safety rule:</b> Nothing is issued automatically. A person must review and save the draft.</p>'
+            f'<form method="post" action="/rfi-intelligence-v374/save-draft">'
+            f'<input type="hidden" name="scope_item_id" value="{int(x["scope_item_id"])}">'
+            '<button type="submit">Save as Draft RFI</button>'
+            '</form>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No verified cross-document conflicts currently qualify for an RFI draft.</p></div>'
+
+    return shell(
+        "RFI Intelligence v374",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v374</div>'
+        f'<h1>Conflict-to-RFI Intelligence</h1>'
+        f'<p class="muted">Turns verified document conflicts into structured RFI candidates while keeping final judgment and issuance under human control.</p></div>'
+        f'<div class="grid3"><div class="card"><div class="label">RFI Candidates</div><div class="kpi">{len(candidates)}</div></div>'
+        f'<div class="card"><div class="label">Auto-Issued</div><div class="kpi">0</div></div>'
+        f'<div class="card"><div class="label">Approval Rule</div><div class="kpi">HUMAN</div></div></div>'
+        + cards
+    )
+
+
+@app.post("/rfi-intelligence-v374/save-draft")
+def v374_save_rfi_draft(scope_item_id:int=Form(...)):
+    item, candidate = _v374_candidate_from_scope_id(scope_item_id)
+    if not item or not candidate:
+        return RedirectResponse("/rfi-intelligence-v374", status_code=303)
+
+    _v374_ensure_rfi_control()
+    pid = project_id()
+    now = datetime.utcnow().isoformat()
+    number = _v374_number_for_next_rfi(pid)
+    source_ref = json.dumps({
+        "blueprint_scope_item_id": scope_item_id,
+        "requirement": candidate["requirement"],
+        "source_summary": candidate["source_summary"],
+        "generated_by": "BuildCommand v374",
+        "human_approval_required": True,
+    })
+
+    c = db()
+    c.execute(
+        """INSERT INTO rfi_control(
+            company_id,project_id,number,title,question,responsible_party,due_date,status,
+            answer,cost_impact,schedule_days,source_ref,created,updated
+        ) VALUES(?,?,?,?,?,?,?,'DRAFT','',0,0,?,?,?)""",
+        (
+            current_company_id(), pid, number, candidate["title"], candidate["question"],
+            candidate["trade"], "", source_ref, now, now
+        )
+    )
+    c.commit()
+    c.close()
+    return RedirectResponse("/project-control/rfis", status_code=303)
