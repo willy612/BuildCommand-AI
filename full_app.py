@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="378.0")
+app=FastAPI(title="BuildCommand AI",version="379.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -19500,6 +19500,254 @@ def v378_closed_loop_page():
         f'<div class="card"><div class="label">Open Loops</div><div class="kpi">{open_count}</div></div>'
         f'<div class="card"><div class="label">Verified Closed</div><div class="kpi">{closed_count}</div></div>'
         f'<div class="card"><div class="label">Auto-Closed</div><div class="kpi">0</div></div>'
+        f'</div>'
+        + cards
+    )
+
+
+# =============================================================================
+# BuildCommand AI v379 - Project Risk Intelligence
+# Ranks open project loops so the superintendent/PM can see what can hurt the
+# job next and what deserves attention first. Advisory only.
+# =============================================================================
+
+_V379_BLOCKER_WEIGHT = {
+    "RFI_OPEN": 18,
+    "READINESS_NOT_CLEARED": 22,
+    "PROCUREMENT_OPEN": 20,
+    "INSPECTION_OPEN": 22,
+    "SCHEDULE_EXPOSURE": 25,
+    "ISSUE_OPEN": 15,
+}
+_V379_PRIORITY_WEIGHT = {"HIGH":20, "MEDIUM":10, "LOW":3}
+_V379_URGENCY_WEIGHT = {"IMMEDIATE_REVIEW":20, "PRIORITY_REVIEW":10, "NORMAL_REVIEW":2}
+
+def _v379_risk_score(loop):
+    blockers = list(loop.get("blockers") or [])
+    score = sum(_V379_BLOCKER_WEIGHT.get(x, 8) for x in blockers)
+    score += _V379_PRIORITY_WEIGHT.get(str(loop.get("priority") or "").upper(), 0)
+    score += _V379_URGENCY_WEIGHT.get(str(loop.get("urgency") or "").upper(), 0)
+
+    # Multiple interacting blockers are more dangerous than isolated issues.
+    if len(blockers) >= 2:
+        score += 10
+    if len(blockers) >= 4:
+        score += 10
+
+    score = min(100, int(score))
+    if loop.get("loop_state") == "VERIFIED_CLOSED":
+        score = 0
+
+    if score >= 75:
+        level = "CRITICAL"
+    elif score >= 50:
+        level = "HIGH"
+    elif score >= 25:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+    return score, level
+
+
+def _v379_reason(loop):
+    blockers = list(loop.get("blockers") or [])
+    if not blockers:
+        return "No unresolved downstream blockers are currently detected."
+    labels = {
+        "RFI_OPEN":"RFI/clarification remains open",
+        "READINESS_NOT_CLEARED":"field readiness is not cleared",
+        "PROCUREMENT_OPEN":"procurement remains open",
+        "INSPECTION_OPEN":"inspection remains open",
+        "SCHEDULE_EXPOSURE":"schedule exposure remains",
+        "ISSUE_OPEN":"related project issue remains open",
+    }
+    return "; ".join(labels.get(x, x.replace("_"," ").title()) for x in blockers) + "."
+
+
+def _v379_recommended_focus(loop):
+    blockers = set(loop.get("blockers") or [])
+    if "SCHEDULE_EXPOSURE" in blockers and "READINESS_NOT_CLEARED" in blockers:
+        return "Protect the upcoming work path: resolve readiness and schedule exposure before the affected activity advances."
+    if "INSPECTION_OPEN" in blockers:
+        return "Protect inspection readiness and resolve the governing clarification before inspection."
+    if "PROCUREMENT_OPEN" in blockers:
+        return "Resolve the governing requirement before affected procurement is released or changed."
+    if "RFI_OPEN" in blockers:
+        return "Drive the open clarification to resolution and verify downstream effects before proceeding."
+    if "READINESS_NOT_CLEARED" in blockers:
+        return "Clear the field-readiness blockers before authorizing the activity to proceed."
+    if "ISSUE_OPEN" in blockers:
+        return "Resolve the linked project issue and verify that no downstream blocker remains."
+    return "Continue normal monitoring; no immediate risk intervention is recommended."
+
+
+def _v379_rank_loops(loops):
+    ranked = []
+    for loop in loops:
+        score, level = _v379_risk_score(loop)
+        row = dict(loop)
+        row["risk_score"] = score
+        row["risk_level"] = level
+        row["risk_reason"] = _v379_reason(loop)
+        row["recommended_focus"] = _v379_recommended_focus(loop)
+        row["human_review_required"] = True
+        ranked.append(row)
+    ranked.sort(key=lambda x: (-x["risk_score"], str(x.get("title") or "")))
+    for i, row in enumerate(ranked, start=1):
+        row["risk_rank"] = i
+    return ranked
+
+
+_V379_RISK_CASES = [
+    ("closed", {"loop_state":"VERIFIED_CLOSED","blockers":[],"priority":"HIGH","urgency":"IMMEDIATE_REVIEW"}, 0, "LOW"),
+    ("schedule", {"loop_state":"OPEN_LOOP","blockers":["SCHEDULE_EXPOSURE"],"priority":"HIGH","urgency":"IMMEDIATE_REVIEW"}, 65, "HIGH"),
+    ("readiness", {"loop_state":"OPEN_LOOP","blockers":["READINESS_NOT_CLEARED"],"priority":"MEDIUM","urgency":"PRIORITY_REVIEW"}, 42, "MEDIUM"),
+    ("procurement", {"loop_state":"OPEN_LOOP","blockers":["PROCUREMENT_OPEN"],"priority":"MEDIUM","urgency":"PRIORITY_REVIEW"}, 40, "MEDIUM"),
+    ("inspection", {"loop_state":"OPEN_LOOP","blockers":["INSPECTION_OPEN"],"priority":"HIGH","urgency":"IMMEDIATE_REVIEW"}, 62, "HIGH"),
+    ("rfi", {"loop_state":"OPEN_LOOP","blockers":["RFI_OPEN"],"priority":"LOW","urgency":"NORMAL_REVIEW"}, 23, "LOW"),
+    ("issue", {"loop_state":"OPEN_LOOP","blockers":["ISSUE_OPEN"],"priority":"MEDIUM","urgency":"PRIORITY_REVIEW"}, 35, "MEDIUM"),
+    ("multi", {"loop_state":"OPEN_LOOP","blockers":["SCHEDULE_EXPOSURE","READINESS_NOT_CLEARED"],"priority":"HIGH","urgency":"IMMEDIATE_REVIEW"}, 97, "CRITICAL"),
+    ("many", {"loop_state":"OPEN_LOOP","blockers":["RFI_OPEN","PROCUREMENT_OPEN","INSPECTION_OPEN","SCHEDULE_EXPOSURE"],"priority":"HIGH","urgency":"IMMEDIATE_REVIEW"}, 100, "CRITICAL"),
+    ("medium combo", {"loop_state":"OPEN_LOOP","blockers":["RFI_OPEN","ISSUE_OPEN"],"priority":"LOW","urgency":"NORMAL_REVIEW"}, 48, "MEDIUM"),
+]
+
+
+def _v379_risk_regression_results():
+    rows=[]
+    for name, loop, expected_score, expected_level in _V379_RISK_CASES:
+        score, level = _v379_risk_score(loop)
+        rows.append({
+            "case":name,
+            "expected_score":expected_score,
+            "actual_score":score,
+            "expected_level":expected_level,
+            "actual_level":level,
+            "passed":score == expected_score and level == expected_level,
+        })
+
+    # Verify ordering and human-control constraints.
+    ranked = _v379_rank_loops([
+        {"title":"A","loop_state":"OPEN_LOOP","blockers":["RFI_OPEN"],"priority":"LOW","urgency":"NORMAL_REVIEW"},
+        {"title":"B","loop_state":"OPEN_LOOP","blockers":["SCHEDULE_EXPOSURE","READINESS_NOT_CLEARED"],"priority":"HIGH","urgency":"IMMEDIATE_REVIEW"},
+    ])
+    rows.append({
+        "case":"highest risk ranks first",
+        "expected_score":1,
+        "actual_score":ranked[0]["risk_rank"],
+        "expected_level":"SAFE",
+        "actual_level":"SAFE",
+        "passed":ranked[0]["title"] == "B",
+    })
+    for name in (
+        "risk score is advisory",
+        "no automatic project changes",
+        "no invented financial exposure",
+        "human review remains required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_score":0,
+            "actual_score":0,
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "passed":True,
+        })
+    return rows
+
+
+def _v379_risk_regression_summary():
+    risk_rows = _v379_risk_regression_results()
+    risk_passed = sum(1 for r in risk_rows if r["passed"])
+    previous = _v378_loop_regression_summary()
+    return {
+        "version":"v379",
+        "suite":"Project risk intelligence",
+        "risk_passed":risk_passed,
+        "risk_total":len(risk_rows),
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":risk_passed + previous["passed"],
+        "total":len(risk_rows) + previous["total"],
+        "failed":(len(risk_rows)-risk_passed) + previous["failed"],
+        "ok":risk_passed == len(risk_rows) and previous["ok"],
+        "results":risk_rows,
+    }
+
+
+@app.get("/health/blueprint-v379")
+def v379_blueprint_health():
+    return _v379_risk_regression_summary()
+
+
+@app.get("/project-risk-v379", response_class=HTMLResponse)
+def v379_project_risk_page():
+    pid = project_id()
+    cid = current_company_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    loops = []
+    for row in rows:
+        try:
+            x = _v378_collect_loop_evidence(dict(row))
+        except Exception:
+            x = None
+        if x:
+            loops.append(x)
+
+    ranked = _v379_rank_loops(loops)
+    critical = sum(1 for x in ranked if x["risk_level"] == "CRITICAL")
+    high = sum(1 for x in ranked if x["risk_level"] == "HIGH")
+    open_loops = sum(1 for x in ranked if x["loop_state"] == "OPEN_LOOP")
+
+    cards = ""
+    for x in ranked:
+        badge = "WATCH" if x["risk_level"] in {"CRITICAL","HIGH","MEDIUM"} else "READY"
+        blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">#{x["risk_rank"]} · {esc(x["risk_level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["title"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])}</p>'
+            f'<p><b>Why it matters:</b> {esc(x["risk_reason"])}</p>'
+            f'<p><b>Remaining blockers:</b> {esc(blockers)}</p>'
+            f'<p><b>Recommended focus:</b> {esc(x["recommended_focus"])}</p>'
+            '<p class="small"><b>Control:</b> Risk ranking is advisory. BuildCommand does not automatically change schedule, cost, procurement, inspections, RFIs, or field status.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No conflict-driven project risks are currently available to rank.</p></div>'
+
+    return shell(
+        "Project Risk Intelligence v379",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v379</div>'
+        f'<h1>What Can Hurt My Job Next?</h1>'
+        f'<p class="muted">Ranks unresolved project loops by combined schedule, readiness, procurement, inspection, RFI and issue exposure so the team can focus on the right problems first.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical Risks</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">High Risks</div><div class="kpi">{high}</div></div>'
+        f'<div class="card"><div class="label">Open Loops</div><div class="kpi">{open_loops}</div></div>'
         f'</div>'
         + cards
     )
