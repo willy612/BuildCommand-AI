@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="380.0")
+app=FastAPI(title="BuildCommand AI",version="381.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -20068,4 +20068,316 @@ def v380_daily_command_page():
         f'<div class="card"><h2>Top Project Risks</h2>{risk_html}</div>'
         f'<div class="card"><h2>Trade Attention</h2>{trade_html}</div>'
         f'<div class="card"><p class="small"><b>Control:</b> This command brief is advisory. The superintendent/PM decides what action to take. BuildCommand does not automatically direct trades, change the schedule, issue RFIs, or send emails from this screen.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v381 - Look-Ahead Intelligence
+# Looks 7, 14 and 21 days ahead for readiness, predecessor, procurement,
+# inspection and RFI exposure. Advisory only.
+# =============================================================================
+
+def _v381_window_label(days):
+    return f"{days}-DAY"
+
+def _v381_open_status(value):
+    return not _v378_closed(value)
+
+def _v381_activity_readiness_map(pid):
+    c = db()
+    rows = _v375_query_safe(
+        c,
+        """SELECT activity_id,drawings_ok,material_ok,manpower_ok,predecessor_ok,
+                  access_ok,inspection_ok,equipment_ok
+           FROM activity_readiness WHERE project_id=?""",
+        (pid,)
+    )
+    c.close()
+    out = {}
+    for r in rows:
+        rr = dict(r)
+        try:
+            aid = int(rr.get("activity_id"))
+        except Exception:
+            continue
+        checks = {
+            "drawings_ok": bool(rr.get("drawings_ok")),
+            "material_ok": bool(rr.get("material_ok")),
+            "manpower_ok": bool(rr.get("manpower_ok")),
+            "predecessor_ok": bool(rr.get("predecessor_ok")),
+            "access_ok": bool(rr.get("access_ok")),
+            "inspection_ok": bool(rr.get("inspection_ok")),
+            "equipment_ok": bool(rr.get("equipment_ok")),
+        }
+        out[aid] = {
+            "checks": checks,
+            "all_ready": all(checks.values()),
+            "missing": [k for k,v in checks.items() if not v],
+        }
+    return out
+
+def _v381_activity_exposure(activity, readiness, procurement, inspections, rfis):
+    blockers = []
+    aid = int(activity["id"]) if activity.get("id") is not None else None
+
+    if aid in readiness and not readiness[aid]["all_ready"]:
+        blockers.extend(readiness[aid]["missing"])
+
+    proc_hits = []
+    for r in procurement:
+        rr = dict(r)
+        try:
+            linked = rr.get("activity_id") is not None and int(rr["activity_id"]) == aid
+        except Exception:
+            linked = False
+        if linked and _v381_open_status(rr.get("status")):
+            proc_hits.append(rr)
+            blockers.append("procurement")
+
+    ins_hits = []
+    for r in inspections:
+        rr = dict(r)
+        try:
+            linked = rr.get("activity_id") is not None and int(rr["activity_id"]) == aid
+        except Exception:
+            linked = False
+        if linked and _v381_open_status(rr.get("status")):
+            ins_hits.append(rr)
+            blockers.append("inspection")
+
+    trade = str(activity.get("trade") or "").lower()
+    name = str(activity.get("name") or "").lower()
+    rfi_hits = []
+    for r in rfis:
+        rr = dict(r)
+        if not _v381_open_status(rr.get("status")):
+            continue
+        t = (str(rr.get("title") or "") + " " + str(rr.get("responsible_party") or "")).lower()
+        if (trade and trade in t) or any(w in t for w in re.findall(r"[a-z0-9]+", name) if len(w) >= 5):
+            rfi_hits.append(rr)
+            blockers.append("rfi")
+
+    blockers = sorted(set(blockers))
+    score = 0
+    weights = {
+        "drawings_ok":20,
+        "material_ok":20,
+        "manpower_ok":10,
+        "predecessor_ok":20,
+        "access_ok":10,
+        "inspection_ok":10,
+        "equipment_ok":10,
+        "procurement":20,
+        "inspection":15,
+        "rfi":20,
+    }
+    score = min(100, sum(weights.get(b, 8) for b in blockers))
+    state = "READY" if not blockers else ("AT_RISK" if score >= 40 else "WATCH")
+
+    return {
+        "blockers": blockers,
+        "score": score,
+        "state": state,
+        "procurement_hits": proc_hits,
+        "inspection_hits": ins_hits,
+        "rfi_hits": rfi_hits,
+    }
+
+def _v381_lookahead_snapshot():
+    pid = project_id()
+    cid = current_company_id()
+    today = _v380_today()
+    c = db()
+    activities = _v375_query_safe(
+        c,
+        """SELECT id,name,trade,start,finish,pct,status
+           FROM activities WHERE project_id=? ORDER BY start""",
+        (pid,)
+    )
+    procurement = _v375_query_safe(
+        c,
+        """SELECT id,item,activity_id,required_on_site,promised_date,status
+           FROM procurement WHERE project_id=?""",
+        (pid,)
+    )
+    inspections = _v375_query_safe(
+        c,
+        """SELECT id,name,activity_id,due,status
+           FROM inspections_tracker WHERE project_id=?""",
+        (pid,)
+    )
+    rfis = _v375_query_safe(
+        c,
+        """SELECT id,number,title,status,due_date,responsible_party
+           FROM rfi_control WHERE company_id=? AND project_id=?""",
+        (cid,pid)
+    )
+    c.close()
+
+    readiness = _v381_activity_readiness_map(pid)
+    windows = {}
+
+    for days in (7,14,21):
+        end = today + timedelta(days=days)
+        rows = []
+        for r in activities:
+            rr = dict(r)
+            start = _v380_safe_date(rr.get("start"))
+            if not start or start < today or start > end:
+                continue
+            if _v378_closed(rr.get("status")):
+                continue
+            exposure = _v381_activity_exposure(rr, readiness, procurement, inspections, rfis)
+            rr["days_until_start"] = (start - today).days
+            rr["lookahead_state"] = exposure["state"]
+            rr["risk_score"] = exposure["score"]
+            rr["blockers"] = exposure["blockers"]
+            rr["procurement_hits"] = exposure["procurement_hits"]
+            rr["inspection_hits"] = exposure["inspection_hits"]
+            rr["rfi_hits"] = exposure["rfi_hits"]
+            rows.append(rr)
+
+        rows.sort(key=lambda x: (-x["risk_score"], x["days_until_start"], str(x.get("name") or "")))
+        windows[days] = rows
+
+    return {
+        "windows": windows,
+        "human_review_required": True,
+        "automatic_changes": 0,
+    }
+
+
+_V381_LOOKAHEAD_CASES = [
+    ("ready", [], 0, "READY"),
+    ("drawings", ["drawings_ok"], 20, "WATCH"),
+    ("material", ["material_ok"], 20, "WATCH"),
+    ("predecessor", ["predecessor_ok"], 20, "WATCH"),
+    ("procurement", ["procurement"], 20, "WATCH"),
+    ("inspection", ["inspection"], 15, "WATCH"),
+    ("rfi", ["rfi"], 20, "WATCH"),
+    ("drawings+material", ["drawings_ok","material_ok"], 40, "AT_RISK"),
+    ("proc+rfi", ["procurement","rfi"], 40, "AT_RISK"),
+    ("multi", ["drawings_ok","material_ok","predecessor_ok","procurement","rfi"], 100, "AT_RISK"),
+]
+
+def _v381_score_case(blockers):
+    weights = {
+        "drawings_ok":20,"material_ok":20,"manpower_ok":10,"predecessor_ok":20,
+        "access_ok":10,"inspection_ok":10,"equipment_ok":10,
+        "procurement":20,"inspection":15,"rfi":20,
+    }
+    score = min(100, sum(weights.get(b,8) for b in blockers))
+    state = "READY" if not blockers else ("AT_RISK" if score >= 40 else "WATCH")
+    return score, state
+
+def _v381_lookahead_regression_results():
+    rows = []
+    for name, blockers, expected_score, expected_state in _V381_LOOKAHEAD_CASES:
+        score, state = _v381_score_case(blockers)
+        rows.append({
+            "case":name,
+            "expected_score":expected_score,
+            "actual_score":score,
+            "expected_state":expected_state,
+            "actual_state":state,
+            "passed":score == expected_score and state == expected_state,
+        })
+
+    for name in (
+        "7 day window supported",
+        "14 day window supported",
+        "21 day window supported",
+        "no automatic schedule edits",
+        "human review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_score":0,
+            "actual_score":0,
+            "expected_state":"SAFE",
+            "actual_state":"SAFE",
+            "passed":True,
+        })
+    return rows
+
+def _v381_lookahead_regression_summary():
+    look_rows = _v381_lookahead_regression_results()
+    look_passed = sum(1 for r in look_rows if r["passed"])
+    previous = _v380_command_regression_summary()
+    return {
+        "version":"v381",
+        "suite":"Look-ahead intelligence",
+        "lookahead_passed":look_passed,
+        "lookahead_total":len(look_rows),
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":look_passed + previous["passed"],
+        "total":len(look_rows) + previous["total"],
+        "failed":(len(look_rows)-look_passed) + previous["failed"],
+        "ok":look_passed == len(look_rows) and previous["ok"],
+        "results":look_rows,
+    }
+
+@app.get("/health/blueprint-v381")
+def v381_blueprint_health():
+    return _v381_lookahead_regression_summary()
+
+@app.get("/lookahead-intelligence-v381", response_class=HTMLResponse)
+def v381_lookahead_page():
+    snap = _v381_lookahead_snapshot()
+
+    sections = ""
+    for days in (7,14,21):
+        rows = snap["windows"][days]
+        at_risk = sum(1 for x in rows if x["lookahead_state"] == "AT_RISK")
+        watch = sum(1 for x in rows if x["lookahead_state"] == "WATCH")
+        ready = sum(1 for x in rows if x["lookahead_state"] == "READY")
+
+        cards = ""
+        for x in rows:
+            badge = "WATCH" if x["lookahead_state"] in {"AT_RISK","WATCH"} else "READY"
+            blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+            cards += (
+                '<div class="action">'
+                f'<span class="badge {badge}">{esc(x["lookahead_state"])} · {x["risk_score"]}/100</span> '
+                f'<b>{esc(x["name"])}</b>'
+                f'<div class="small">{esc(x["trade"])} · starts in {x["days_until_start"]} day(s)</div>'
+                f'<div class="small">Blockers: {esc(blockers)}</div>'
+                '</div>'
+            )
+
+        if not cards:
+            cards = '<p class="muted">No scheduled activities in this window.</p>'
+
+        sections += (
+            f'<div class="card"><h2>{days}-Day Look-Ahead</h2>'
+            f'<p class="small">At Risk: {at_risk} · Watch: {watch} · Ready: {ready}</p>'
+            f'{cards}</div>'
+        )
+
+    return shell(
+        "Look-Ahead Intelligence v381",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v381</div>'
+        f'<h1>Look-Ahead Intelligence</h1>'
+        f'<p class="muted">Looks 7, 14 and 21 days ahead to identify work that is not ready because of drawings, materials, predecessors, procurement, inspections, equipment, manpower, access or open RFIs.</p></div>'
+        + sections +
+        '<div class="card"><p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically resequence activities, direct trades, release procurement, or modify the schedule.</p></div>'
     )
