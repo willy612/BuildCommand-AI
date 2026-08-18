@@ -1,18 +1,6 @@
 from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, Response, FileResponse
 import sqlite3
-import time
-import threading
-import uuid
-import logging
-try:
-    import boto3
-except Exception:
-    boto3=None
-try:
-    import redis
-except Exception:
-    redis=None
 
 try:
     import openpyxl
@@ -30,10 +18,6 @@ try:
 except Exception:
     psycopg = None
     dict_row = None
-try:
-    from psycopg_pool import ConnectionPool
-except Exception:
-    ConnectionPool = None
 import os
 import io
 import csv
@@ -58,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="32.0")
+app=FastAPI(title="BuildCommand AI",version="372.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -111,55 +95,9 @@ class PgCompatConnection:
     def rollback(self): self.conn.rollback()
     def close(self): self.conn.close()
 
-class PooledPgCompatConnection(PgCompatConnection):
-    """Same compatibility API, but close() returns the physical connection to the pool."""
-    def __init__(self,conn,pool):
-        super().__init__(conn)
-        self.pool=pool
-        self._returned=False
-    def close(self):
-        if self._returned:
-            return
-        try:
-            # Never let an unfinished transaction leak into the next request.
-            self.conn.rollback()
-        except Exception:
-            pass
-        self.pool.putconn(self.conn)
-        self._returned=True
-
-_PG_POOL=None
-_PG_POOL_LOCK=threading.Lock()
-
-def _get_pg_pool():
-    global _PG_POOL
-    if _PG_POOL is not None:
-        return _PG_POOL
-    if ConnectionPool is None:
-        return None
-    with _PG_POOL_LOCK:
-        if _PG_POOL is None:
-            min_size=max(1,int(os.environ.get("DB_POOL_MIN","1")))
-            max_size=max(min_size,int(os.environ.get("DB_POOL_MAX","5")))
-            timeout=float(os.environ.get("DB_POOL_TIMEOUT","10"))
-            _PG_POOL=ConnectionPool(
-                conninfo=DATABASE_URL,
-                min_size=min_size,
-                max_size=max_size,
-                timeout=timeout,
-                kwargs={"row_factory":dict_row},
-                open=True
-            )
-    return _PG_POOL
-
 def db():
     if DATABASE_KIND=="postgres":
-        if psycopg is None:
-            raise RuntimeError("PostgreSQL DATABASE_URL is set but psycopg is not installed")
-        pool=_get_pg_pool()
-        if pool is not None:
-            return PooledPgCompatConnection(pool.getconn(),pool)
-        # Safe compatibility fallback if psycopg_pool is unavailable.
+        if psycopg is None: raise RuntimeError("PostgreSQL DATABASE_URL is set but psycopg is not installed")
         return PgCompatConnection(psycopg.connect(DATABASE_URL,row_factory=dict_row))
     conn=sqlite3.connect(DB)
     conn.row_factory=sqlite3.Row
@@ -475,27 +413,7 @@ CREATE TABLE IF NOT EXISTS quick_entries(id INTEGER PRIMARY KEY,company_id INTEG
     c.close()
 
 
-
-def _production_init():
-    """Run schema bootstrap once safely even when multiple web workers start together."""
-    if DATABASE_KIND!="postgres" or psycopg is None:
-        init()
-        return
-    lock_id=84741001
-    direct=None
-    try:
-        direct=psycopg.connect(DATABASE_URL,row_factory=dict_row,autocommit=True)
-        direct.execute("SELECT pg_advisory_lock(%s)",(lock_id,))
-        init()
-    finally:
-        if direct is not None:
-            try: direct.execute("SELECT pg_advisory_unlock(%s)",(lock_id,))
-            except Exception: pass
-            try: direct.close()
-            except Exception: pass
-
-_production_init()
-
+init()
 
 def hash_password(password):
     salt = secrets.token_bytes(16)
@@ -843,7 +761,7 @@ def esc(value):
 def categorized_nav():
     groups=[
         ("PROJECTS",[("Projects Home","/"),("Add Project","/projects/new"),("Recent Activity","/recent-activity"),("Archive Projects","/project-archive")]),
-        ("BUILD",[("Build Home","/build"),("Blueprint Markup","/blueprint-markup"),("Field Command 3.0","/field-command-3"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
+        ("BUILD",[("Build Home","/build"),("Field Command 3.0","/field-command-3"),("Analyze Project","/build/analyze-project"),("Blueprint Brain","/blueprint-brain"),("Review Project Scope","/brain"),("Preconstruction & Bid Intelligence","/preconstruction"),("Documents","/documents"),("Deep Document AI","/document-ai"),("Field Context & Assembly Intelligence","/field-context")]),
         ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction Command","/precon-command"),("Estimator Intelligence","/brain/estimator"),("Takeoff Intelligence","/brain/takeoff"),("Bid Packages","/preconstruction/packages"),("Bid Leveling","/preconstruction/leveling"),("Historical Cost Brain","/learning/costs"),("Budget & Commitments","/project-control/budget")]),
         ("MANAGE",[("Manage Home","/manage"),("PM Command","/pm-command"),("Performance Monitor","/performance"),("Project Autopilot","/autopilot"),("Daily Superintendent Command","/daily-superintendent"),("Look-Ahead Intelligence","/lookahead-intelligence"),("Trade Readiness Brain","/trade-readiness"),("Trade Coordination Engine","/trade-coordination"),("Proactive Superintendent AI","/proactive-superintendent"),("Field Command","/field-command"),("Schedule","/schedule"),("Sequence Intelligence","/sequence-intelligence"),("RFIs / Issues","/issues"),("Submittals","/submittals"),("Procurement","/procurement"),("Inspections","/inspections"),("Subcontractors","/subcontractors"),("Project Control","/project-control"),("Punch","/punch"),("Closeout","/field-command/closeout")]),
         ("INTELLIGENCE",[("Intelligence Center","/intelligence"),("Knowledge Brain 2.0","/knowledge-brain-2"),("Smart RFI & Conflict Detection","/smart-rfi"),("Long-Lead Prediction","/longlead-intelligence"),("Inspection & QC Intelligence","/quality-intelligence"),("Scope Gap & Buyout Intelligence","/scope-gap-intelligence"),("Change Order Intelligence","/change-order-intelligence"),("Event-Driven Intelligence","/event-intelligence"),("Drawing Revision & Change Intelligence","/revision-intelligence"),("Project Memory & Continuous Learning","/project-memory"),("Master Construction Reasoning","/master-reasoning"),("Real Construction Reasoning 2.0","/reasoning-2"),("Project Knowledge Graph","/knowledge-graph"),("Prediction & Decision Intelligence","/prediction-intelligence"),("Brain Quality & Self-Learning","/brain-quality"),("Constructability Intelligence","/intelligence-engine/constructability"),("Learning Intelligence","/learning"),("Field Context Intelligence","/field-context")]),
@@ -900,7 +818,7 @@ def shell(title, body):
     </div>'''
 
     _groups=[
-      ("PROJECT",[("Project Command","/"),("BuildCommand 1.0","/production-foundation"),("Phase 7 Tests","/phase7-status"),("Security Tests","/security-test-status"),("Production Gates","/production-gates"),("Tenant Security","/tenant-security-status"),("Migration Status","/migration-status"),("System Status","/system-status"),("Scale Status","/scale-status"),("Storage Status","/storage-status"),("Worker Status","/worker-status"),("Background Jobs","/jobs"),("Cache Status","/cache-status"),("Company & Agent Platform","/platform-470"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
+      ("PROJECT",[("Project Command","/"),("Execution & Control Platform","/platform-369"),("Unified Platform","/platform-269"),("Projects","/projects"),("Project Autopilot","/autopilot")]),
       ("BUILD",[("Build Home","/build"),("Blueprint Brain","/blueprint-brain"),("Daily Superintendent","/daily-superintendent"),("Look-Ahead","/lookahead-intelligence"),("Trade Readiness","/trade-readiness"),("Trade Coordination","/trade-coordination")]),
       ("ESTIMATE",[("Estimate Home","/estimate"),("Preconstruction","/preconstruction"),("Scope Gap Intelligence","/scope-gap-intelligence")]),
       ("MANAGE",[("Manage Home","/manage"),("Proactive Superintendent AI","/proactive-superintendent"),("Change Order Intelligence","/change-order-intelligence"),("Performance Monitor","/performance")]),
@@ -1095,7 +1013,7 @@ def _v37_link_card(title,desc,href,label="Open"):
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
-    """v370 lightweight BuildCommand cover page."""
+    """v372 lightweight BuildCommand cover page with Blueprint source-intelligence hardening."""
     pid=project_id()
     try:
         p=db().execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone()
@@ -1153,7 +1071,7 @@ def unified_projects_home():
           <p class="muted">Ask BuildCommand across the current project, or jump directly into the operating workspace you need.</p>
           <div class="bc370-actions"><a class="bc370-primary" style="background:#111820;color:white" href="/ask-buildcommand">Ask BuildCommand →</a><a href="/platform-369">View all intelligence</a></div>
         </div>
-        <div class="bc370-command"><div class="bc370-kicker" style="color:#111820">SYSTEM</div><h2>v370</h2><p class="muted">Lightweight cover page designed to open fast while keeping the intelligence engines behind the launch screen.</p></div>
+        <div class="bc370-command"><div class="bc370-kicker" style="color:#111820">SYSTEM</div><h2>v372</h2><p class="muted">Lightweight cover page designed to open fast while keeping the intelligence engines behind the launch screen.</p></div>
       </section>
     </div>
     """.replace("__PROJECT__",esc(project_name))
@@ -1166,7 +1084,7 @@ def unified_analyze_project_page():
     eligible=[d for d in docs if Path(d["original_name"] or "").suffix.lower() in {".pdf",".txt",".csv",".xlsx",".xlsm"}]
     checks="".join(f'<label style="display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.08)"><input type="checkbox" name="attachment_ids" value="{d["id"]}" style="width:auto"><span><b>{esc(d["original_name"])}</b><br><span class="small">{(int(d["size_bytes"] or 0)/1024/1024):.1f} MB</span></span></label>' for d in eligible) or '<div class="muted">No supported project documents are uploaded yet.</div>'
     body='<div class="hero"><div class="eyebrow">BuildCommand · Unified Project Intelligence · v38</div><h1>Analyze the project once.</h1><p class="muted">BuildCommand runs Plan Intelligence, trade scope cleanup, estimator sync, takeoff splitting and quantity review.</p></div>'
-    body+='<div class="card"><form method="post" action="/build/analyze-project/queue"><h2>Select project documents</h2>'+checks+'<label style="margin-top:16px">Optional analysis focus</label><textarea name="focus" placeholder="Example: Full bid/scope review"></textarea><button type="submit">Queue Project Analysis</button></form><p class="small">Analysis runs in a background worker so you can keep using BuildCommand. Selected files must total less than 50 MB. AI quantity proposals never overwrite estimator-entered quantities.</p></div>'
+    body+='<div class="card"><form method="post" action="/build/analyze-project"><h2>Select project documents</h2>'+checks+'<label style="margin-top:16px">Optional analysis focus</label><textarea name="focus" placeholder="Example: Full bid/scope review"></textarea><button type="submit">Analyze Project</button></form><p class="small">Selected files must total less than 50 MB. AI quantity proposals never overwrite estimator-entered quantities.</p></div>'
     return shell("Analyze Project",body)
 
 @app.post("/build/analyze-project",response_class=HTMLResponse)
@@ -5271,10 +5189,6 @@ def _v57_emit(pid,event_type,subject="",source="SYSTEM"):
     for name in affected:
         _V56_CACHE.pop((name,cid,pid),None)
 
-    try:
-        bc_shared_delete_pattern(f"dashboard:{cid}:{pid}")
-    except Exception:
-        pass
     event={
         "ts":datetime.utcnow().isoformat(),
         "company_id":cid,"project_id":pid,"event_type":event_type,
@@ -5978,10 +5892,6 @@ def v169_dashboard_command_api():
     Heavy dashboard intelligence is isolated from first paint and shares v56 caches.
     """
     pid=project_id()
-    cache_name=f"dashboard:{current_company_id()}:{pid}"
-    shared=bc_shared_json_get(cache_name)
-    if shared is not None:
-        return JSONResponse(shared,headers={"X-BuildCommand-Cache":"HIT"})
     token=_v56_perf_start("dashboard_lazy_api")
     try:
         d=_v56_dashboard_bundle(pid)
@@ -6032,14 +5942,12 @@ def v169_dashboard_command_api():
             for kind,title,detail in agenda
         ) or '<p class="muted">No current coordination agenda items.</p>'
 
-        payload={
+        return JSONResponse({
             "health":score["health"],"risk":score["risk"],"quality":score["quality"],
             "priorities_html":priorities_html,"blockers_html":blockers_html,
             "inspections_html":inspections_html,"materials_html":materials_html,
             "decisions_html":decisions_html,"agenda_html":agenda_html
-        }
-        bc_shared_json_set(cache_name,payload,ttl=int(os.environ.get("DASHBOARD_CACHE_TTL","15")))
-        return JSONResponse(payload,headers={"X-BuildCommand-Cache":"MISS"})
+        })
     finally:
         _v56_perf_end(token)
 
@@ -6382,2354 +6290,6 @@ def v369_sqc_page():
         f'<div class="small">{esc(i["scheduled_date"])} · {esc(i["authority"])}</div></div>' for i,a in holds[:30]
     ) or '<p class="muted">No open inspection hold points.</p>'
     return shell("Safety Quality Company Command",'<div class="hero"><div class="eyebrow">v369</div><h1>Safety / Quality / Company Command</h1></div><div class="grid2"><div class="card"><h2>Quality Checkpoints</h2>'+qh+'</div><div class="card"><h2>Open Hold Points</h2>'+hh+'</div></div>')
-
-
-# ============================================================
-# v371-v470 COMPANY, SUBCONTRACTOR, FORECAST & AGENT INTELLIGENCE
-# 100 capabilities in shared company/agent workspaces.
-# ============================================================
-
-_V470_CAPABILITIES=[(371, 'Portfolio Health Dashboard', 'COMPANY_INTELLIGENCE'), (372, 'Project Benchmarking Brain', 'COMPANY_INTELLIGENCE'), (373, 'Cross-Project Cost Benchmarking', 'COMPANY_INTELLIGENCE'), (374, 'Cross-Project Schedule Benchmarking', 'COMPANY_INTELLIGENCE'), (375, 'Cross-Project RFI Benchmarking', 'COMPANY_INTELLIGENCE'), (376, 'Cross-Project Submittal Benchmarking', 'COMPANY_INTELLIGENCE'), (377, 'Cross-Project Safety Benchmarking', 'COMPANY_INTELLIGENCE'), (378, 'Cross-Project Quality Benchmarking', 'COMPANY_INTELLIGENCE'), (379, 'Company Lessons Intelligence', 'COMPANY_INTELLIGENCE'), (380, 'Company Standards Governance', 'COMPANY_INTELLIGENCE'), (381, 'Recurring Scope Gap Pattern', 'COMPANY_INTELLIGENCE'), (382, 'Recurring Change Cause Pattern', 'COMPANY_INTELLIGENCE'), (383, 'Recurring Delay Cause Pattern', 'COMPANY_INTELLIGENCE'), (384, 'Recurring Procurement Risk Pattern', 'COMPANY_INTELLIGENCE'), (385, 'Recurring Inspection Failure Pattern', 'COMPANY_INTELLIGENCE'), (386, 'Project Complexity Scoring', 'COMPANY_INTELLIGENCE'), (387, 'Project Risk Ranking', 'COMPANY_INTELLIGENCE'), (388, 'Executive Portfolio Alerts', 'COMPANY_INTELLIGENCE'), (389, 'Company KPI Intelligence', 'COMPANY_INTELLIGENCE'), (390, 'Company Command Center', 'COMPANY_INTELLIGENCE'), (391, 'Subcontractor Performance Score', 'SUBCONTRACTOR_INTELLIGENCE'), (392, 'Trade Partner Reliability Score', 'SUBCONTRACTOR_INTELLIGENCE'), (393, 'Schedule Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (394, 'Quality Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (395, 'Safety Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (396, 'RFI Burden by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (397, 'Submittal Burden by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (398, 'Change Order Frequency by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (399, 'Procurement Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (400, 'Manpower Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (401, 'Production Rate Benchmark by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (402, 'Closeout Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (403, 'Bid Accuracy by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (404, 'Scope Coverage Reliability by Sub', 'SUBCONTRACTOR_INTELLIGENCE'), (405, 'Relationship History Brain', 'SUBCONTRACTOR_INTELLIGENCE'), (406, 'Trade Partner Risk Forecast', 'SUBCONTRACTOR_INTELLIGENCE'), (407, 'Preferred Partner Recommendation', 'SUBCONTRACTOR_INTELLIGENCE'), (408, 'Subcontractor Watch List', 'SUBCONTRACTOR_INTELLIGENCE'), (409, 'Trade Partner Comparison', 'SUBCONTRACTOR_INTELLIGENCE'), (410, 'Subcontractor Command Center', 'SUBCONTRACTOR_INTELLIGENCE'), (411, 'Project Completion Forecast', 'FORECASTING'), (412, 'Milestone Completion Forecast', 'FORECASTING'), (413, 'Cost Forecast 2.0', 'FORECASTING'), (414, 'Change Exposure Forecast', 'FORECASTING'), (415, 'Procurement Delay Forecast', 'FORECASTING'), (416, 'RFI Aging Forecast', 'FORECASTING'), (417, 'Submittal Aging Forecast', 'FORECASTING'), (418, 'Inspection Failure Forecast', 'FORECASTING'), (419, 'Field Productivity Forecast', 'FORECASTING'), (420, 'Manpower Demand Forecast', 'FORECASTING'), (421, 'Trade Mobilization Forecast 2.0', 'FORECASTING'), (422, 'Area Turnover Forecast', 'FORECASTING'), (423, 'Closeout Completion Forecast', 'FORECASTING'), (424, 'Cash Exposure Forecast', 'FORECASTING'), (425, 'Contingency Burn Forecast', 'FORECASTING'), (426, 'Executive Risk Forecast', 'FORECASTING'), (427, 'Forecast Confidence Calibration', 'FORECASTING'), (428, 'Forecast Backtesting', 'FORECASTING'), (429, 'Scenario Forecasting', 'FORECASTING'), (430, 'Forecast Command Center', 'FORECASTING'), (431, 'Blueprint Agent', 'AGENT_NETWORK'), (432, 'Estimator Agent', 'AGENT_NETWORK'), (433, 'Superintendent Agent', 'AGENT_NETWORK'), (434, 'Project Manager Agent', 'AGENT_NETWORK'), (435, 'Scheduler Agent', 'AGENT_NETWORK'), (436, 'Procurement Agent', 'AGENT_NETWORK'), (437, 'Quality Agent', 'AGENT_NETWORK'), (438, 'Safety Agent', 'AGENT_NETWORK'), (439, 'Cost Agent', 'AGENT_NETWORK'), (440, 'Change Agent', 'AGENT_NETWORK'), (441, 'RFI Agent', 'AGENT_NETWORK'), (442, 'Submittal Agent', 'AGENT_NETWORK'), (443, 'Closeout Agent', 'AGENT_NETWORK'), (444, 'Portfolio Agent', 'AGENT_NETWORK'), (445, 'Subcontractor Agent', 'AGENT_NETWORK'), (446, 'Agent Message Bus', 'AGENT_NETWORK'), (447, 'Agent Shared Context', 'AGENT_NETWORK'), (448, 'Agent Conflict Resolver', 'AGENT_NETWORK'), (449, 'Agent Confidence Voting', 'AGENT_NETWORK'), (450, 'Agent Network Command', 'AGENT_NETWORK'), (451, 'Daily Project Brief Workflow', 'AUTONOMOUS_WORKFLOWS'), (452, 'Weekly Look-Ahead Workflow', 'AUTONOMOUS_WORKFLOWS'), (453, 'RFI Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (454, 'Submittal Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (455, 'Procurement Escalation Workflow', 'AUTONOMOUS_WORKFLOWS'), (456, 'Inspection Readiness Workflow', 'AUTONOMOUS_WORKFLOWS'), (457, 'Trade Readiness Workflow', 'AUTONOMOUS_WORKFLOWS'), (458, 'Change Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (459, 'Cost Forecast Workflow', 'AUTONOMOUS_WORKFLOWS'), (460, 'Schedule Recovery Workflow', 'AUTONOMOUS_WORKFLOWS'), (461, 'Closeout Readiness Workflow', 'AUTONOMOUS_WORKFLOWS'), (462, 'Executive Portfolio Brief Workflow', 'AUTONOMOUS_WORKFLOWS'), (463, 'Subcontractor Performance Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (464, 'Lessons Learned Workflow', 'AUTONOMOUS_WORKFLOWS'), (465, 'Revision Impact Workflow', 'AUTONOMOUS_WORKFLOWS'), (466, 'Meeting Preparation Workflow', 'AUTONOMOUS_WORKFLOWS'), (467, 'Decision Escalation Workflow', 'AUTONOMOUS_WORKFLOWS'), (468, 'Project Health Review Workflow', 'AUTONOMOUS_WORKFLOWS'), (469, 'Autonomous Workflow Audit', 'AUTONOMOUS_WORKFLOWS'), (470, 'Construction Operations Command 5.0', 'AUTONOMOUS_WORKFLOWS')]
-
-def _v470_projects():
-    try:
-        c=db()
-        rows=c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY id DESC",(current_company_id(),)).fetchall()
-        c.close()
-        return rows
-    except Exception:
-        return []
-
-def _v470_project_snapshot(pid):
-    try:
-        snap=_v56_cached("snapshot",pid,lambda:_v37_snapshot(pid))
-    except Exception:
-        snap={}
-    try:
-        score=_v50_score(pid)
-    except Exception:
-        score={"health":100,"risk":0,"quality":100}
-    return {"snap":snap,"score":score}
-
-def _v470_portfolio():
-    out=[]
-    for p in _v470_projects():
-        s=_v470_project_snapshot(p["id"])
-        out.append({"project":p,"health":s["score"].get("health",100),"risk":s["score"].get("risk",0),"quality":s["score"].get("quality",100)})
-    out.sort(key=lambda x:(-x["risk"],x["health"]))
-    return out
-
-def _v470_subs():
-    try:
-        c=db()
-        rows=c.execute("SELECT * FROM subcontractors WHERE company_id=? ORDER BY name",(current_company_id(),)).fetchall()
-        c.close()
-        return rows
-    except Exception:
-        return []
-
-def _v470_sub_score(sub):
-    # Transparent placeholder score from available saved fields; no invented performance data.
-    score=70
-    blob=" ".join(str(sub[k] or "") for k in sub.keys() if k in sub.keys()).lower()
-    if "preferred" in blob: score+=10
-    if "inactive" in blob: score-=20
-    return max(0,min(100,score))
-
-def _v470_forecast(pid):
-    try:
-        seq=_v56_sequence(pid)
-    except Exception:
-        seq=[]
-    high=sum(1 for x in seq if x.get("risk") in {"CRITICAL","HIGH"})
-    try:
-        changes=_v39_changes(pid)
-        known=sum(float(r["estimated_cost"] or 0) for r in changes)
-    except Exception:
-        known=0
-    try:
-        look=_v59_lookahead(pid,6)
-        notready=sum(1 for x in look if x[1]!="READY")
-    except Exception:
-        notready=0
-    confidence="HIGH" if seq else "LOW"
-    return {"high_sequence":high,"known_change":known,"not_ready":notready,"confidence":confidence}
-
-def _v470_agents(pid):
-    return [
-      {"name":"Blueprint Agent","status":"ACTIVE","focus":"Drawings, specs, scope and coordination"},
-      {"name":"Estimator Agent","status":"ACTIVE","focus":"Scope coverage, quantity and cost reasoning"},
-      {"name":"Superintendent Agent","status":"ACTIVE","focus":"Field readiness, priorities and handoffs"},
-      {"name":"Project Manager Agent","status":"ACTIVE","focus":"RFIs, submittals, decisions and changes"},
-      {"name":"Scheduler Agent","status":"ACTIVE","focus":"Sequence, look-ahead and schedule exposure"},
-      {"name":"Procurement Agent","status":"ACTIVE","focus":"Long-lead and material readiness"},
-      {"name":"Quality Agent","status":"ACTIVE","focus":"QC checkpoints and inspections"},
-      {"name":"Safety Agent","status":"LEARNING","focus":"Activity safety readiness"},
-      {"name":"Cost Agent","status":"ACTIVE","focus":"Known exposure and commercial risk"},
-      {"name":"Closeout Agent","status":"ACTIVE","focus":"Turnover readiness and closeout risk"}
-    ]
-
-def _v470_workflows(pid):
-    return [
-      ("Daily Project Brief","Superintendent + PM + schedule + procurement context","READY"),
-      ("Weekly Look-Ahead","Upcoming activities + trade readiness + materials + inspections","READY"),
-      ("RFI Review","Conflict candidates + open decisions + schedule/cost exposure","READY"),
-      ("Procurement Escalation","Late material + install dates + affected activities","READY"),
-      ("Inspection Readiness","Hold points + activity readiness + QC checkpoints","READY"),
-      ("Change Review","Revision intelligence + known cost + downstream controls","READY"),
-      ("Closeout Readiness","Open closeout + inspections + commissioning","READY"),
-      ("Executive Portfolio Brief","Portfolio health + risk ranking + project exceptions","READY")
-    ]
-
-def _v470_status(pid,cap):
-    _,_,group=cap
-    if group=="COMPANY_INTELLIGENCE":
-        return "ACTIVE" if _v470_projects() else "WAITING FOR PROJECT DATA"
-    if group=="SUBCONTRACTOR_INTELLIGENCE":
-        return "ACTIVE" if _v470_subs() else "WAITING FOR SUBCONTRACTOR DATA"
-    if group=="FORECASTING":
-        return "ACTIVE" if _v470_forecast(pid)["confidence"]=="HIGH" else "LEARNING"
-    if group=="AGENT_NETWORK":
-        return "ACTIVE"
-    if group=="AUTONOMOUS_WORKFLOWS":
-        return "READY"
-    return "LEARNING"
-
-@app.get("/platform-470",response_class=HTMLResponse)
-def v470_platform():
-    pid=project_id()
-    active=sum(1 for x in _V470_CAPABILITIES if _v470_status(pid,x) in {"ACTIVE","READY"})
-    body=f'<div class="hero"><div class="eyebrow">BuildCommand v470</div><h1>Company & Agent Intelligence Platform</h1><p class="muted">{active} / 100 new capabilities active/ready.</p></div><div class="grid3">'
-    cards=[
-      ("Company Command","Portfolio health, benchmarks and recurring project patterns.","/company-command"),
-      ("Subcontractor Command","Trade partner performance and risk intelligence.","/subcontractor-command"),
-      ("Forecast Command","Completion, cost, schedule and readiness forecasting.","/forecast-command"),
-      ("Agent Network","Specialized construction agents sharing project context.","/agent-network"),
-      ("Workflow Command","Reusable construction operating workflows.","/workflow-command"),
-      ("Capability Map","See v371-v470 capabilities.","/platform-470/capabilities"),
-      ("Execution & Control v369","Previous operating platform.","/platform-369"),
-      ("Project Autopilot","Current-project command.","/autopilot"),
-      ("Knowledge Brain","Construction knowledge foundation.","/knowledge-brain-2"),
-    ]
-    for n,d,h in cards: body+=_v37_link_card(n,d,h,"Open")
-    body+='</div>'
-    return shell("Company & Agent Intelligence",body)
-
-@app.get("/platform-470/capabilities",response_class=HTMLResponse)
-def v470_caps():
-    pid=project_id()
-    h="".join(
-      f'<div class="action"><span class="badge">{esc(_v470_status(pid,x))}</span> <b>v{x[0]} - {esc(x[1])}</b><div class="small">{esc(x[2].replace("_"," "))}</div></div>'
-      for x in _V470_CAPABILITIES
-    )
-    return shell("v371-v470 Capability Map",'<div class="hero"><h1>Next 100 Capability Map</h1><p class="muted">Company, subcontractor, forecasting, agent and workflow intelligence.</p></div><div class="card">'+h+'</div>')
-
-@app.get("/company-command",response_class=HTMLResponse)
-def v470_company():
-    rows=_v470_portfolio()
-    h="".join(
-      f'<div class="action"><span class="badge WATCH">RISK {x["risk"]}</span> <b>{esc(x["project"]["number"])} - {esc(x["project"]["name"])}</b>'
-      f'<div class="small">Health {x["health"]} · Intelligence quality {x["quality"]}</div></div>' for x in rows
-    ) or '<p class="muted">No projects available.</p>'
-    return shell("Company Command",'<div class="hero"><div class="eyebrow">Company Intelligence</div><h1>Portfolio Command</h1><p class="muted">Rank projects by current risk and health.</p></div><div class="card">'+h+'</div>')
-
-@app.get("/subcontractor-command",response_class=HTMLResponse)
-def v470_subcommand():
-    rows=_v470_subs()
-    h="".join(
-      f'<div class="action"><span class="badge">{_v470_sub_score(r)}</span> <b>{esc(r["name"])}</b><div class="small">Transparent current-data score only; future versions can add verified schedule/quality/safety history.</div></div>'
-      for r in rows
-    ) or '<p class="muted">No subcontractor records available.</p>'
-    return shell("Subcontractor Command",'<div class="hero"><div class="eyebrow">Trade Partner Intelligence</div><h1>Subcontractor Command</h1></div><div class="card">'+h+'</div>')
-
-@app.get("/forecast-command",response_class=HTMLResponse)
-def v470_forecast_page():
-    f=_v470_forecast(project_id())
-    return shell("Forecast Command",f'<div class="hero"><div class="eyebrow">Forecast Intelligence</div><h1>Forward Project Risk</h1><p class="muted">Forecast confidence {f["confidence"]}.</p></div><div class="grid3"><div class="card"><div class="label">High Sequence Risks</div><div class="kpi">{f["high_sequence"]}</div></div><div class="card"><div class="label">6-Week Not Ready</div><div class="kpi">{f["not_ready"]}</div></div><div class="card"><div class="label">Known Change Exposure</div><div class="kpi">${f["known_change"]:,.0f}</div></div></div>')
-
-@app.get("/agent-network",response_class=HTMLResponse)
-def v470_agents_page():
-    rows=_v470_agents(project_id())
-    h="".join(
-      f'<div class="action"><span class="badge">{esc(a["status"])}</span> <b>{esc(a["name"])}</b><div class="small">{esc(a["focus"])}</div></div>' for a in rows
-    )
-    return shell("Agent Network",'<div class="hero"><div class="eyebrow">Construction Agent Network</div><h1>Specialized agents. Shared project context.</h1><p class="muted">Agents remain decision-support components; human project teams retain authority.</p></div><div class="card">'+h+'</div>')
-
-@app.get("/workflow-command",response_class=HTMLResponse)
-def v470_workflows_page():
-    rows=_v470_workflows(project_id())
-    h="".join(
-      f'<div class="action"><span class="badge READY">{esc(status)}</span> <b>{esc(name)}</b><div class="small">{esc(scope)}</div></div>' for name,scope,status in rows
-    )
-    return shell("Workflow Command",'<div class="hero"><div class="eyebrow">Autonomous Workflow Framework</div><h1>Repeatable construction operating workflows</h1><p class="muted">Ready for controlled, human-reviewed execution.</p></div><div class="card">'+h+'</div>')
-
-
-# ============================================================
-# v471 BLUEPRINT MARKUP & COLLABORATION WORKSPACE
-# ============================================================
-
-def _v471_ensure_tables():
-    c=db()
-    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
-    stmts=[
-      f"""CREATE TABLE IF NOT EXISTS blueprint_markup_layers(
-        id {pk},company_id BIGINT,project_id BIGINT,attachment_id BIGINT,
-        name TEXT,trade TEXT,color_label TEXT,status TEXT DEFAULT 'ACTIVE',
-        created_by TEXT,created TEXT,updated TEXT)""",
-      f"""CREATE TABLE IF NOT EXISTS blueprint_markups(
-        id {pk},company_id BIGINT,project_id BIGINT,attachment_id BIGINT,
-        layer_id BIGINT,page_number INTEGER DEFAULT 1,markup_type TEXT,
-        x REAL,y REAL,w REAL,h REAL,text_value TEXT,stroke_label TEXT,
-        linked_type TEXT,linked_id TEXT,status TEXT DEFAULT 'OPEN',
-        created_by TEXT,created TEXT,updated TEXT)"""
-    ]
-    for s in stmts:
-        c.execute(s)
-    c.commit()
-    c.close()
-
-def _v471_docs(pid):
-    try:
-        return _v39_rows(
-            "SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",
-            (current_company_id(),pid)
-        )
-    except Exception:
-        return []
-
-def _v471_layers(pid,attachment_id):
-    _v471_ensure_tables()
-    return _v39_rows(
-        "SELECT * FROM blueprint_markup_layers WHERE company_id=? AND project_id=? AND attachment_id=? ORDER BY id DESC",
-        (current_company_id(),pid,attachment_id)
-    )
-
-def _v471_markups(pid,attachment_id):
-    _v471_ensure_tables()
-    return _v39_rows(
-        "SELECT * FROM blueprint_markups WHERE company_id=? AND project_id=? AND attachment_id=? ORDER BY id ASC",
-        (current_company_id(),pid,attachment_id)
-    )
-
-@app.get("/blueprint-markup",response_class=HTMLResponse)
-def v471_home():
-    pid=project_id()
-    docs=_v471_docs(pid)
-    cards=""
-    for d in docs[:60]:
-        title=esc(d["original_name"] or f'Document {d["id"]}')
-        cards+=_v37_link_card(
-            title,
-            "Open this project document in the markup workspace.",
-            f'/blueprint-markup/workspace?attachment_id={d["id"]}',
-            "Open"
-        )
-    body=(
-      '<div class="hero"><div class="eyebrow">BuildCommand v471</div>'
-      '<h1>Blueprint Markup & Collaboration Workspace</h1>'
-      '<p class="muted">Open a drawing, add field markups, organize layers, and connect notes to project issues and RFIs.</p></div>'
-      '<div class="grid3">'+(cards or '<div class="card"><p class="muted">No project documents found.</p></div>')+'</div>'
-    )
-    return shell("Blueprint Markup",body)
-
-@app.get("/blueprint-markup/workspace",response_class=HTMLResponse)
-def v471_workspace(attachment_id:int):
-    pid=project_id()
-    docs=_v471_docs(pid)
-    doc=next((d for d in docs if int(d["id"])==int(attachment_id)),None)
-    if not doc:
-        return shell("Blueprint Markup",'<div class="card"><p class="muted">Document not found.</p></div>')
-
-    layers=_v471_layers(pid,attachment_id)
-    markups=_v471_markups(pid,attachment_id)
-
-    if not layers:
-        c=db(); now=datetime.utcnow().isoformat()
-        c.execute("""INSERT INTO blueprint_markup_layers(
-            company_id,project_id,attachment_id,name,trade,color_label,status,created_by,created,updated
-        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-        (current_company_id(),pid,attachment_id,"General Markup","General","default","ACTIVE","USER",now,now))
-        c.commit(); c.close()
-        layers=_v471_layers(pid,attachment_id)
-
-    layer_options="".join(
-        f'<option value="{r["id"]}">{esc(r["name"])}</option>' for r in layers
-    )
-
-    layer_list="".join(
-        f'<div class="bm-layer"><b>{esc(r["name"])}</b><div>{esc(r["trade"] or "General")}</div></div>'
-        for r in layers
-    )
-
-    markup_js=[]
-    for r in markups:
-        markup_js.append({
-            "id":r["id"],"type":r["markup_type"],"x":r["x"],"y":r["y"],
-            "w":r["w"],"h":r["h"],"text":r["text_value"] or "","layer_id":r["layer_id"]
-        })
-
-    html = """
-    <style>
-    .bm-wrap{display:grid;grid-template-columns:220px 1fr 260px;gap:12px;min-height:72vh}
-    .bm-panel{background:#fff;border:1px solid #e2e7ec;border-radius:14px;padding:14px}
-    .bm-stage{position:relative;background:#eef2f5;border:1px solid #dfe5ea;border-radius:14px;overflow:auto;min-height:70vh}
-    .bm-canvas{position:relative;width:1200px;height:850px;background:white;margin:20px auto;box-shadow:0 4px 18px rgba(0,0,0,.1)}
-    .bm-sheet{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#6f7d88;font-weight:800;background:repeating-linear-gradient(0deg,#fff,#fff 24px,#f8fafb 25px)}
-    .bm-overlay{position:absolute;inset:0}
-    .bm-toolbar button{width:100%;margin:4px 0;padding:9px;border:1px solid #dce3e8;border-radius:8px;background:#fff;cursor:pointer;text-align:left}
-    .bm-toolbar button.active{background:#111820;color:#fff}
-    .bm-layer{padding:8px;border-bottom:1px solid #edf0f2;font-size:12px}
-    .bm-note{position:absolute;border:2px solid #111820;background:rgba(255,255,255,.8);padding:4px;font-size:12px;min-width:60px;min-height:28px}
-    .bm-pin{position:absolute;width:24px;height:24px;border-radius:50%;background:#111820;color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
-    @media(max-width:1000px){.bm-wrap{grid-template-columns:1fr}}
-    </style>
-
-    <div class="hero">
-      <div class="eyebrow">BLUEPRINT MARKUP</div>
-      <h1>__DOCNAME__</h1>
-      <p class="muted">Markup tools are collaborative project notes. Final contract interpretation still requires project-team review.</p>
-    </div>
-
-    <div class="bm-wrap">
-      <div class="bm-panel bm-toolbar">
-        <h3>Markup Tools</h3>
-        <button type="button" onclick="bmTool(this,'select')">Pointer / Select</button>
-        <button type="button" onclick="bmTool(this,'cloud')">Cloud / Box</button>
-        <button type="button" onclick="bmTool(this,'arrow')">Arrow</button>
-        <button type="button" onclick="bmTool(this,'text')">Text Note</button>
-        <button type="button" onclick="bmTool(this,'highlight')">Highlight</button>
-        <button type="button" onclick="bmTool(this,'freehand')">Freehand</button>
-        <button type="button" onclick="bmTool(this,'measure')">Measure</button>
-        <button type="button" onclick="bmTool(this,'issue')">Issue Pin</button>
-        <button type="button" onclick="bmTool(this,'rfi')">RFI Pin</button>
-        <hr>
-        <label>Layer</label>
-        <select id="bm-layer" style="width:100%">__LAYER_OPTIONS__</select>
-
-        <form method="post" action="/blueprint-markup/layers/new" style="margin-top:10px">
-          <input type="hidden" name="attachment_id" value="__ATTACHMENT_ID__">
-          <input name="name" placeholder="New layer name" style="width:100%;box-sizing:border-box">
-          <input name="trade" placeholder="Trade (optional)" style="width:100%;box-sizing:border-box;margin-top:6px">
-          <button type="submit">+ Add Layer</button>
-        </form>
-      </div>
-
-      <div class="bm-stage">
-        <div class="bm-canvas">
-          <div class="bm-sheet">PLAN SHEET PREVIEW / MARKUP SURFACE<br><small>__DOCNAME__</small></div>
-          <div class="bm-overlay" id="bm-overlay"></div>
-        </div>
-      </div>
-
-      <div class="bm-panel">
-        <h3>Layers</h3>
-        __LAYER_LIST__
-        <hr>
-        <h3>Quick Links</h3>
-        <a href="/issues">Issues</a><br>
-        <a href="/smart-rfi">Smart RFI</a><br>
-        <a href="/blueprint-brain">Blueprint Brain</a><br>
-        <a href="/revision-intelligence">Revision Intelligence</a><br><a href="/blueprint-markup/pro?attachment_id=__ATTACHMENT_ID__">Markup Pro</a><br><a href="/blueprint-markup/pdf?attachment_id=__ATTACHMENT_ID__">Live PDF Markup</a>
-      </div>
-    </div>
-
-    <script>
-    let bmCurrentTool="select";
-    const bmInitial=__MARKUPS__;
-
-    function bmTool(btn,t){
-      bmCurrentTool=t;
-      document.querySelectorAll(".bm-toolbar button").forEach(b=>b.classList.remove("active"));
-      btn.classList.add("active");
-    }
-
-    function bmRender(m){
-      const ov=document.getElementById("bm-overlay");
-      const el=document.createElement("div");
-      if(m.type==="issue"||m.type==="rfi"){
-        el.className="bm-pin";
-        el.textContent=m.type==="rfi"?"R":"I";
-      }else{
-        el.className="bm-note";
-        el.textContent=m.text||m.type.toUpperCase();
-      }
-      el.style.left=(m.x||0)+"px";
-      el.style.top=(m.y||0)+"px";
-      if(m.w)el.style.width=m.w+"px";
-      if(m.h)el.style.height=m.h+"px";
-      ov.appendChild(el);
-    }
-
-    bmInitial.forEach(bmRender);
-
-    document.getElementById("bm-overlay").addEventListener("click",function(e){
-      if(bmCurrentTool==="select")return;
-      const rect=this.getBoundingClientRect();
-      const x=Math.round(e.clientX-rect.left);
-      const y=Math.round(e.clientY-rect.top);
-      let text="";
-      if(["text","cloud","arrow","highlight","freehand","measure"].includes(bmCurrentTool)){
-        text=prompt("Markup note (optional):","")||"";
-      }
-      const layer=document.getElementById("bm-layer").value;
-      if(!layer){alert("Create or select a markup layer first.");return;}
-
-      const data=new URLSearchParams();
-      data.set("attachment_id","__ATTACHMENT_ID__");
-      data.set("layer_id",layer);
-      data.set("markup_type",bmCurrentTool);
-      data.set("x",x);
-      data.set("y",y);
-      data.set("w",bmCurrentTool==="cloud"?140:0);
-      data.set("h",bmCurrentTool==="cloud"?70:0);
-      data.set("text_value",text);
-
-      fetch("/blueprint-markup/markups/new",{
-        method:"POST",
-        headers:{"Content-Type":"application/x-www-form-urlencoded"},
-        body:data.toString()
-      }).then(r=>r.json()).then(m=>bmRender(m));
-    });
-    </script>
-    """
-
-    html=html.replace("__DOCNAME__",esc(doc["original_name"] or "Drawing"))
-    html=html.replace("__LAYER_OPTIONS__",layer_options)
-    html=html.replace("__LAYER_LIST__",layer_list)
-    html=html.replace("__ATTACHMENT_ID__",str(attachment_id))
-    html=html.replace("__MARKUPS__",repr(markup_js))
-    return shell("Blueprint Markup Workspace",html)
-
-@app.post("/blueprint-markup/layers/new")
-def v471_new_layer(
-    attachment_id:int=Form(...),
-    name:str=Form(...),
-    trade:str=Form("")
-):
-    _v471_ensure_tables()
-    c=db(); now=datetime.utcnow().isoformat()
-    c.execute("""INSERT INTO blueprint_markup_layers(
-        company_id,project_id,attachment_id,name,trade,color_label,status,created_by,created,updated
-    ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-    (current_company_id(),project_id(),attachment_id,name,trade,"default","ACTIVE","USER",now,now))
-    c.commit(); c.close()
-    return RedirectResponse(f"/blueprint-markup/workspace?attachment_id={attachment_id}",status_code=303)
-
-@app.post("/blueprint-markup/markups/new")
-def v471_new_markup(
-    attachment_id:int=Form(...),
-    layer_id:int=Form(...),
-    markup_type:str=Form(...),
-    x:float=Form(0),
-    y:float=Form(0),
-    w:float=Form(0),
-    h:float=Form(0),
-    text_value:str=Form("")
-):
-    _v471_ensure_tables()
-    c=db(); now=datetime.utcnow().isoformat()
-    c.execute("""INSERT INTO blueprint_markups(
-        company_id,project_id,attachment_id,layer_id,page_number,markup_type,
-        x,y,w,h,text_value,stroke_label,linked_type,linked_id,status,created_by,created,updated
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-    (current_company_id(),project_id(),attachment_id,layer_id,1,markup_type,
-     x,y,w,h,text_value,"default","","","OPEN","USER",now,now))
-    c.commit(); c.close()
-    return JSONResponse({
-        "type":markup_type,"x":x,"y":y,"w":w,"h":h,
-        "text":text_value,"layer_id":layer_id
-    })
-
-
-# ============================================================
-# v472 BLUEPRINT MARKUP PRO
-# Adds saved edit/delete, visibility controls, zoom/pan controls,
-# calibration + measurement records, and markup-to-project links.
-# ============================================================
-
-def _v472_ensure_tables():
-    _v471_ensure_tables()
-    c=db()
-    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
-    c.execute(f"""CREATE TABLE IF NOT EXISTS blueprint_measurement_calibrations(
-      id {pk},company_id BIGINT,project_id BIGINT,attachment_id BIGINT,page_number INTEGER DEFAULT 1,
-      pixel_distance REAL,real_distance REAL,unit TEXT,created TEXT,updated TEXT)""")
-    c.commit(); c.close()
-
-def _v472_markup(pid,mid):
-    rows=_v39_rows("SELECT * FROM blueprint_markups WHERE company_id=? AND project_id=? AND id=?",
-                   (current_company_id(),pid,mid))
-    return rows[0] if rows else None
-
-@app.get("/blueprint-markup/pro",response_class=HTMLResponse)
-def v472_pro(attachment_id:int):
-    pid=project_id(); _v472_ensure_tables()
-    docs=_v471_docs(pid)
-    doc=next((d for d in docs if int(d["id"])==int(attachment_id)),None)
-    if not doc:
-        return shell("Blueprint Markup Pro",'<div class="card"><p class="muted">Document not found.</p></div>')
-    layers=_v471_layers(pid,attachment_id)
-    markups=_v471_markups(pid,attachment_id)
-    layer_html="".join(
-      f'<label class="v472-layer"><input type="checkbox" checked onchange="v472Layer({r["id"]},this.checked)"> '
-      f'<b>{esc(r["name"])}</b><span>{esc(r["trade"] or "General")}</span></label>' for r in layers
-    )
-    items=[]
-    for r in markups:
-        items.append({
-          "id":r["id"],"type":r["markup_type"],"x":r["x"],"y":r["y"],"w":r["w"],"h":r["h"],
-          "text":r["text_value"] or "","layer":r["layer_id"],"status":r["status"] or "OPEN"
-        })
-
-    html="""<style>
-    .v472-app{display:grid;grid-template-columns:220px minmax(0,1fr) 260px;gap:10px}
-    .v472-panel{background:#fff;border:1px solid #e1e7ec;border-radius:13px;padding:12px}
-    .v472-stage{height:72vh;overflow:auto;background:#dfe5e9;border-radius:13px;position:relative}
-    .v472-sheet{width:1200px;height:850px;position:relative;background:#fff;margin:24px auto;transform-origin:0 0;box-shadow:0 5px 20px rgba(0,0,0,.15)}
-    .v472-paper{position:absolute;inset:0;background:repeating-linear-gradient(0deg,#fff,#fff 23px,#f5f7f8 24px);display:flex;align-items:center;justify-content:center;color:#7a8791;font-weight:800}
-    .v472-overlay{position:absolute;inset:0}
-    .v472-mark{position:absolute;border:2px solid #111820;background:rgba(255,255,255,.82);padding:4px;min-width:24px;min-height:20px;font-size:11px;cursor:pointer}
-    .v472-mark.pin{border-radius:50%;width:24px;height:24px;min-width:24px;min-height:24px;padding:0;background:#111820;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800}
-    .v472-mark.selected{outline:3px solid rgba(17,24,32,.25)}
-    .v472-tools button{display:block;width:100%;margin:4px 0;padding:8px;text-align:left;border:1px solid #dce3e8;border-radius:8px;background:#fff}
-    .v472-layer{display:block;padding:7px 0;border-bottom:1px solid #edf1f3;font-size:12px}.v472-layer span{display:block;margin-left:20px;opacity:.6}
-    .v472-top{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}.v472-top button{padding:8px 11px;border:1px solid #dce3e8;background:#fff;border-radius:8px}
-    @media(max-width:1000px){.v472-app{grid-template-columns:1fr}.v472-stage{height:60vh}}
-    </style>
-    <div class="hero"><div class="eyebrow">BuildCommand v472</div><h1>Blueprint Markup Pro</h1><p class="muted">Zoom, layer visibility, saved annotations, measurement calibration, and project-linked markup controls.</p></div>
-    <div class="v472-top">
-      <button onclick="v472Zoom(.15)">Zoom +</button><button onclick="v472Zoom(-.15)">Zoom −</button><button onclick="v472Reset()">Fit / Reset</button>
-      <button onclick="v472Calibrate()">Calibrate Measurement</button>
-      <a class="button" href="/blueprint-markup/workspace?attachment_id=__AID__">Basic Workspace</a>
-    </div>
-    <div class="v472-app">
-      <div class="v472-panel v472-tools">
-        <h3>Tools</h3>
-        <button onclick="v472Tool='select'">Select / Inspect</button>
-        <button onclick="v472Tool='cloud'">Cloud / Box</button>
-        <button onclick="v472Tool='text'">Text Note</button>
-        <button onclick="v472Tool='issue'">Issue Pin</button>
-        <button onclick="v472Tool='rfi'">RFI Pin</button>
-        <button onclick="v472Tool='measure'">Measure</button>
-        <hr><h3>Layers</h3>__LAYERS__
-      </div>
-      <div class="v472-stage" id="v472-stage">
-        <div class="v472-sheet" id="v472-sheet">
-          <div class="v472-paper">DRAWING MARKUP SURFACE<br><small>__DOC__</small></div>
-          <div class="v472-overlay" id="v472-overlay"></div>
-        </div>
-      </div>
-      <div class="v472-panel">
-        <h3>Selected Markup</h3>
-        <div id="v472-inspector"><p class="muted">Select a markup.</p></div>
-        <hr>
-        <h3>Project Connections</h3>
-        <p class="small">Selected markups can be tagged as an Issue, RFI, trade coordination item, or field note.</p>
-        <button onclick="v472Link('ISSUE')">Tag as Issue</button>
-        <button onclick="v472Link('RFI')">Tag as RFI</button>
-        <button onclick="v472Link('COORDINATION')">Tag as Coordination</button>
-      </div>
-    </div>
-    <script>
-    let v472Tool="select",v472Scale=1,v472Selected=null;
-    const v472Data=__DATA__;
-    const hiddenLayers=new Set();
-
-    function v472Render(){
-      const ov=document.getElementById("v472-overlay");ov.innerHTML="";
-      v472Data.forEach(m=>{
-        if(hiddenLayers.has(String(m.layer)))return;
-        const el=document.createElement("div");
-        el.className="v472-mark"+((m.type==="issue"||m.type==="rfi")?" pin":"")+(v472Selected===m.id?" selected":"");
-        el.style.left=(m.x||0)+"px";el.style.top=(m.y||0)+"px";
-        if(m.w)el.style.width=m.w+"px";if(m.h)el.style.height=m.h+"px";
-        el.textContent=(m.type==="issue"?"I":m.type==="rfi"?"R":m.text||m.type.toUpperCase());
-        el.onclick=(e)=>{e.stopPropagation();v472Select(m.id)};ov.appendChild(el);
-      });
-    }
-    function v472Select(id){
-      v472Selected=id;const m=v472Data.find(x=>x.id===id);v472Render();
-      document.getElementById("v472-inspector").innerHTML=
-       '<p><b>'+m.type.toUpperCase()+'</b></p><textarea id="v472-text" style="width:100%">'+(m.text||'')+'</textarea>'+
-       '<p class="small">X '+m.x+' · Y '+m.y+' · '+m.status+'</p>'+
-       '<button onclick="v472Save()">Save Note</button> <button onclick="v472Delete()">Delete</button>';
-    }
-    function v472Zoom(d){v472Scale=Math.max(.35,Math.min(3,v472Scale+d));document.getElementById("v472-sheet").style.transform="scale("+v472Scale+")"}
-    function v472Reset(){v472Scale=1;document.getElementById("v472-sheet").style.transform="scale(1)"}
-    function v472Layer(id,on){if(on)hiddenLayers.delete(String(id));else hiddenLayers.add(String(id));v472Render()}
-    function v472Save(){
-      if(!v472Selected)return;const data=new URLSearchParams();data.set("text_value",document.getElementById("v472-text").value);
-      fetch("/blueprint-markup/markups/"+v472Selected+"/update",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:data})
-      .then(r=>r.json()).then(x=>{let m=v472Data.find(z=>z.id===v472Selected);m.text=x.text;v472Select(v472Selected)})
-    }
-    function v472Delete(){
-      if(!v472Selected||!confirm("Delete this markup?"))return;
-      fetch("/blueprint-markup/markups/"+v472Selected+"/delete",{method:"POST"}).then(()=>{
-        const i=v472Data.findIndex(x=>x.id===v472Selected);if(i>=0)v472Data.splice(i,1);v472Selected=null;v472Render();document.getElementById("v472-inspector").innerHTML="<p class='muted'>Select a markup.</p>";
-      })
-    }
-    function v472Link(kind){
-      if(!v472Selected){alert("Select a markup first.");return}
-      const title=prompt(kind+" title / reference:","")||"";
-      const data=new URLSearchParams();data.set("linked_type",kind);data.set("linked_id",title);
-      fetch("/blueprint-markup/markups/"+v472Selected+"/link",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:data})
-      .then(()=>alert("Markup tagged as "+kind+"."));
-    }
-    function v472Calibrate(){
-      const px=prompt("Known pixel/reference distance:","100");if(!px)return;
-      const real=prompt("Real drawing distance:","10");if(!real)return;
-      const unit=prompt("Unit (ft, in, m):","ft")||"ft";
-      const data=new URLSearchParams();data.set("attachment_id","__AID__");data.set("pixel_distance",px);data.set("real_distance",real);data.set("unit",unit);
-      fetch("/blueprint-markup/calibration",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:data}).then(()=>alert("Measurement scale saved."));
-    }
-    document.getElementById("v472-overlay").onclick=function(e){
-      if(v472Tool==="select")return;
-      const rect=this.getBoundingClientRect();const x=Math.round((e.clientX-rect.left)/v472Scale),y=Math.round((e.clientY-rect.top)/v472Scale);
-      const layer=document.querySelector(".v472-layer input:checked");if(!layer){alert("Turn on/select a layer first.");return}
-      const layerId=layer.closest(".v472-layer").getAttribute("data-id")||layer.value;
-      let text=["text","cloud","measure"].includes(v472Tool)?(prompt("Markup note:","")||""):"";
-      const data=new URLSearchParams();data.set("attachment_id","__AID__");data.set("layer_id",layer.value);data.set("markup_type",v472Tool);data.set("x",x);data.set("y",y);data.set("w",v472Tool==="cloud"?140:0);data.set("h",v472Tool==="cloud"?70:0);data.set("text_value",text);
-      fetch("/blueprint-markup/markups/new",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:data})
-      .then(r=>r.json()).then(m=>{m.id=Date.now();v472Data.push(m);v472Render()});
-    };
-    v472Render();
-    </script>"""
-    # checkbox values for creation
-    layer_html2="".join(
-      f'<label class="v472-layer" data-id="{r["id"]}"><input type="checkbox" value="{r["id"]}" checked onchange="v472Layer({r["id"]},this.checked)"> <b>{esc(r["name"])}</b><span>{esc(r["trade"] or "General")}</span></label>'
-      for r in layers
-    )
-    html=html.replace("__AID__",str(attachment_id)).replace("__DOC__",esc(doc["original_name"] or "Drawing"))
-    html=html.replace("__LAYERS__",layer_html2).replace("__DATA__",repr(items))
-    return shell("Blueprint Markup Pro",html)
-
-@app.post("/blueprint-markup/markups/{markup_id}/update")
-def v472_update_markup(markup_id:int,text_value:str=Form("")):
-    m=_v472_markup(project_id(),markup_id)
-    if not m:return JSONResponse({"error":"not found"},status_code=404)
-    c=db();c.execute("UPDATE blueprint_markups SET text_value=?,updated=? WHERE id=? AND company_id=? AND project_id=?",
-                     (text_value,datetime.utcnow().isoformat(),markup_id,current_company_id(),project_id()))
-    c.commit();c.close()
-    return JSONResponse({"ok":True,"text":text_value})
-
-@app.post("/blueprint-markup/markups/{markup_id}/delete")
-def v472_delete_markup(markup_id:int):
-    c=db();c.execute("DELETE FROM blueprint_markups WHERE id=? AND company_id=? AND project_id=?",
-                     (markup_id,current_company_id(),project_id()));c.commit();c.close()
-    return JSONResponse({"ok":True})
-
-@app.post("/blueprint-markup/markups/{markup_id}/link")
-def v472_link_markup(markup_id:int,linked_type:str=Form(...),linked_id:str=Form("")):
-    c=db();c.execute("UPDATE blueprint_markups SET linked_type=?,linked_id=?,updated=? WHERE id=? AND company_id=? AND project_id=?",
-                     (linked_type,linked_id,datetime.utcnow().isoformat(),markup_id,current_company_id(),project_id()))
-    c.commit();c.close()
-    return JSONResponse({"ok":True})
-
-@app.post("/blueprint-markup/calibration")
-def v472_calibration(attachment_id:int=Form(...),pixel_distance:float=Form(...),real_distance:float=Form(...),unit:str=Form("ft")):
-    _v472_ensure_tables();c=db();now=datetime.utcnow().isoformat()
-    c.execute("""INSERT INTO blueprint_measurement_calibrations(company_id,project_id,attachment_id,page_number,pixel_distance,real_distance,unit,created,updated)
-                 VALUES(?,?,?,?,?,?,?,?,?)""",(current_company_id(),project_id(),attachment_id,1,pixel_distance,real_distance,unit,now,now))
-    c.commit();c.close()
-    return JSONResponse({"ok":True})
-
-
-# ============================================================
-# v473 REAL PDF BLUEPRINT MARKUP
-# Actual uploaded PDF rendered beneath the markup canvas.
-# ============================================================
-
-@app.get("/documents/{attachment_id}/inline")
-def v473_document_inline(attachment_id:int):
-    c=db()
-    row=c.execute(
-        "SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?",
-        (attachment_id,current_company_id(),project_id())
-    ).fetchone()
-    c.close()
-    if not row:
-        return HTMLResponse("File not found.",status_code=404)
-    return bc_storage_stream_response(row,inline=True)
-
-
-def _v473_page_markups(pid,attachment_id,page_number):
-    _v471_ensure_tables()
-    return _v39_rows(
-        """SELECT * FROM blueprint_markups
-           WHERE company_id=? AND project_id=? AND attachment_id=? AND page_number=?
-           ORDER BY id ASC""",
-        (current_company_id(),pid,attachment_id,page_number)
-    )
-
-@app.get("/blueprint-markup/pdf",response_class=HTMLResponse)
-def v473_pdf_workspace(attachment_id:int,page:int=1):
-    pid=project_id()
-    docs=_v471_docs(pid)
-    doc=next((d for d in docs if int(d["id"])==int(attachment_id)),None)
-    if not doc:
-        return shell("PDF Blueprint Markup",'<div class="card"><p class="muted">Document not found.</p></div>')
-
-    name=str(doc["original_name"] or "")
-    mime=str(doc["mime_type"] or "").lower()
-    if not (name.lower().endswith(".pdf") or "pdf" in mime):
-        return shell(
-            "PDF Blueprint Markup",
-            f'<div class="hero"><h1>{esc(name)}</h1></div><div class="card">'
-            f'<p>This document is not a PDF. Open it in the standard markup workspace.</p>'
-            f'<a href="/blueprint-markup/workspace?attachment_id={attachment_id}">Open Standard Markup</a></div>'
-        )
-
-    layers=_v471_layers(pid,attachment_id)
-    if not layers:
-        c=db(); now=datetime.utcnow().isoformat()
-        c.execute("""INSERT INTO blueprint_markup_layers(
-            company_id,project_id,attachment_id,name,trade,color_label,status,created_by,created,updated
-        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-        (current_company_id(),pid,attachment_id,"General Markup","General","default","ACTIVE","USER",now,now))
-        c.commit(); c.close()
-        layers=_v471_layers(pid,attachment_id)
-
-    layer_options="".join(
-        f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["trade"] or "General")}</option>'
-        for r in layers
-    )
-    layer_checks="".join(
-        f'<label class="v473-layer"><input type="checkbox" checked value="{r["id"]}" '
-        f'onchange="v473ToggleLayer({r["id"]},this.checked)"> <b>{esc(r["name"])}</b>'
-        f'<small>{esc(r["trade"] or "General")}</small></label>'
-        for r in layers
-    )
-
-    html = """
-    <style>
-    .v473-shell{display:grid;grid-template-columns:220px minmax(0,1fr) 270px;gap:10px}
-    .v473-panel{background:#fff;border:1px solid #dfe6eb;border-radius:14px;padding:12px}
-    .v473-stage{height:76vh;overflow:auto;background:#cfd7dd;border-radius:14px;position:relative}
-    .v473-page{position:relative;margin:24px auto;background:white;box-shadow:0 5px 22px rgba(0,0,0,.2);transform-origin:top left}
-    #v473-pdf{display:block}
-    #v473-overlay{position:absolute;inset:0;z-index:3;cursor:crosshair}
-    .v473-toolbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
-    .v473-toolbar button,.v473-toolbar a{border:1px solid #dbe2e7;background:#fff;border-radius:8px;padding:8px 11px;text-decoration:none;cursor:pointer}
-    .v473-tools button{display:block;width:100%;text-align:left;margin:4px 0;padding:8px;border:1px solid #dbe2e7;background:#fff;border-radius:8px}
-    .v473-tools button.active{background:#111820;color:#fff}
-    .v473-layer{display:block;padding:7px 0;border-bottom:1px solid #edf1f3;font-size:12px}.v473-layer small{display:block;margin-left:20px;opacity:.55}
-    .v473-mark{position:absolute;border:2px solid #e33;background:rgba(255,255,255,.72);padding:3px;font-size:11px;min-width:24px;min-height:18px;box-sizing:border-box;cursor:pointer}
-    .v473-mark.highlight{background:rgba(255,235,59,.35);border-color:rgba(255,193,7,.8)}
-    .v473-mark.pin{width:25px;height:25px;min-width:25px;min-height:25px;border-radius:50%;padding:0;background:#e33;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900}
-    .v473-mark.selected{outline:3px solid rgba(17,24,32,.25)}
-    .v473-pageinfo{font-size:12px;font-weight:800;padding:8px 4px}
-    @media(max-width:1050px){.v473-shell{grid-template-columns:1fr}.v473-stage{height:65vh}}
-    </style>
-
-    <div class="hero">
-      <div class="eyebrow">BuildCommand v473 · LIVE DRAWING MARKUP</div>
-      <h1>__DOC__</h1>
-      <p class="muted">The actual uploaded PDF is rendered beneath the project markup layer.</p>
-    </div>
-
-    <div class="v473-toolbar">
-      <button onclick="v473Prev()">← Previous Page</button>
-      <button onclick="v473Next()">Next Page →</button>
-      <button onclick="v473Zoom(.15)">Zoom +</button>
-      <button onclick="v473Zoom(-.15)">Zoom −</button>
-      <button onclick="v473Fit()">Fit</button>
-      <a href="/documents/__AID__/download">Download Original</a>
-      <a href="/blueprint-markup/pro?attachment_id=__AID__">Markup Pro</a><a href="/blueprint-markup/interactive?attachment_id=__AID__">Interactive Markup</a>
-      <span class="v473-pageinfo" id="v473-pageinfo">Loading PDF…</span>
-    </div>
-
-    <div class="v473-shell">
-      <div class="v473-panel v473-tools">
-        <h3>Markup</h3>
-        <button onclick="v473Tool(this,'select')">Pointer / Select</button>
-        <button onclick="v473Tool(this,'cloud')">Cloud / Box</button>
-        <button onclick="v473Tool(this,'text')">Text Note</button>
-        <button onclick="v473Tool(this,'highlight')">Highlight</button>
-        <button onclick="v473Tool(this,'issue')">Issue Pin</button>
-        <button onclick="v473Tool(this,'rfi')">RFI Pin</button>
-        <button onclick="v473Tool(this,'measure')">Measure Note</button>
-        <hr>
-        <label>Active Layer</label>
-        <select id="v473-layer" style="width:100%">__LAYER_OPTIONS__</select>
-        <hr><h3>Visible Layers</h3>__LAYER_CHECKS__
-      </div>
-
-      <div class="v473-stage" id="v473-stage">
-        <div class="v473-page" id="v473-page">
-          <canvas id="v473-pdf"></canvas>
-          <div id="v473-overlay"></div>
-        </div>
-      </div>
-
-      <div class="v473-panel">
-        <h3>Selected Markup</h3>
-        <div id="v473-inspector"><p class="muted">Select a markup to edit it.</p></div>
-        <hr>
-        <h3>Drawing Intelligence</h3>
-        <a href="/blueprint-brain">Ask Blueprint Brain</a><br>
-        <a href="/smart-rfi">Smart RFI</a><br>
-        <a href="/revision-intelligence">Revision Intelligence</a><br>
-        <a href="/issues">Project Issues</a>
-        <hr>
-        <p class="small">Markups are stored by PDF page and layer. Zoom changes the view, not the saved drawing coordinates.</p>
-      </div>
-    </div>
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs" type="module"></script>
-    <script type="module">
-    import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
-    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
-
-    const pdfUrl="/documents/__AID__/inline";
-    let pdfDoc=null,pageNum=__PAGE__,baseScale=1.35,viewScale=1,currentTool="select",selected=null;
-    let data=[],hiddenLayers=new Set();
-
-    async function loadMarkups(){
-      const r=await fetch("/blueprint-markup/pdf/markups?attachment_id=__AID__&page_number="+pageNum);
-      data=await r.json(); renderMarkups();
-    }
-
-    async function renderPage(){
-      const page=await pdfDoc.getPage(pageNum);
-      const viewport=page.getViewport({scale:baseScale});
-      const canvas=document.getElementById("v473-pdf");
-      const ctx=canvas.getContext("2d");
-      canvas.width=viewport.width;canvas.height=viewport.height;
-      const pageEl=document.getElementById("v473-page");
-      pageEl.style.width=viewport.width+"px";pageEl.style.height=viewport.height+"px";
-      await page.render({canvasContext:ctx,viewport:viewport}).promise;
-      document.getElementById("v473-pageinfo").textContent="Page "+pageNum+" of "+pdfDoc.numPages;
-      viewScale=1;pageEl.style.transform="scale(1)";
-      await loadMarkups();
-    }
-
-    function renderMarkups(){
-      const ov=document.getElementById("v473-overlay");ov.innerHTML="";
-      data.forEach(m=>{
-        if(hiddenLayers.has(String(m.layer_id)))return;
-        const el=document.createElement("div");
-        let cls="v473-mark";
-        if(m.type==="issue"||m.type==="rfi")cls+=" pin";
-        if(m.type==="highlight")cls+=" highlight";
-        if(selected===m.id)cls+=" selected";
-        el.className=cls;
-        el.style.left=(m.x||0)+"px";el.style.top=(m.y||0)+"px";
-        if(m.w)el.style.width=m.w+"px";if(m.h)el.style.height=m.h+"px";
-        el.textContent=m.type==="issue"?"I":m.type==="rfi"?"R":(m.text||m.type.toUpperCase());
-        el.onclick=(e)=>{e.stopPropagation();selectMarkup(m.id)};
-        ov.appendChild(el);
-      });
-    }
-
-    function selectMarkup(id){
-      selected=id;renderMarkups();
-      const m=data.find(x=>x.id===id);
-      document.getElementById("v473-inspector").innerHTML=
-        '<b>'+m.type.toUpperCase()+'</b><br><textarea id="v473-text" style="width:100%;margin:8px 0">'+(m.text||'')+'</textarea>'+
-        '<div class="small">Page '+pageNum+' · X '+Math.round(m.x)+' · Y '+Math.round(m.y)+'</div>'+
-        '<button onclick="window.v473Save()">Save</button> <button onclick="window.v473Delete()">Delete</button>';
-    }
-
-    window.v473Tool=(btn,t)=>{currentTool=t;document.querySelectorAll(".v473-tools button").forEach(b=>b.classList.remove("active"));btn.classList.add("active")};
-    window.v473Prev=async()=>{if(pageNum>1){pageNum--;selected=null;await renderPage()}};
-    window.v473Next=async()=>{if(pageNum<pdfDoc.numPages){pageNum++;selected=null;await renderPage()}};
-    window.v473Zoom=(d)=>{viewScale=Math.max(.4,Math.min(2.5,viewScale+d));document.getElementById("v473-page").style.transform="scale("+viewScale+")"};
-    window.v473Fit=()=>{const st=document.getElementById("v473-stage"),pg=document.getElementById("v473-page");viewScale=Math.min(1,(st.clientWidth-40)/pg.offsetWidth);pg.style.transform="scale("+viewScale+")"};
-    window.v473ToggleLayer=(id,on)=>{if(on)hiddenLayers.delete(String(id));else hiddenLayers.add(String(id));renderMarkups()};
-
-    window.v473Save=async()=>{
-      if(!selected)return;
-      const fd=new URLSearchParams();fd.set("text_value",document.getElementById("v473-text").value);
-      await fetch("/blueprint-markup/markups/"+selected+"/update",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
-      await loadMarkups();selectMarkup(selected);
-    };
-
-    window.v473Delete=async()=>{
-      if(!selected||!confirm("Delete this markup?"))return;
-      await fetch("/blueprint-markup/markups/"+selected+"/delete",{method:"POST"});
-      selected=null;await loadMarkups();
-      document.getElementById("v473-inspector").innerHTML='<p class="muted">Select a markup to edit it.</p>';
-    };
-
-    document.getElementById("v473-overlay").onclick=async function(e){
-      if(currentTool==="select")return;
-      const rect=this.getBoundingClientRect();
-      const x=(e.clientX-rect.left)/viewScale,y=(e.clientY-rect.top)/viewScale;
-      const layer=document.getElementById("v473-layer").value;if(!layer)return;
-      let text="";
-      if(["text","cloud","highlight","measure"].includes(currentTool))text=prompt("Markup note:","")||"";
-      const fd=new URLSearchParams();
-      fd.set("attachment_id","__AID__");fd.set("layer_id",layer);fd.set("page_number",pageNum);
-      fd.set("markup_type",currentTool);fd.set("x",x);fd.set("y",y);
-      fd.set("w",currentTool==="cloud"||currentTool==="highlight"?150:0);
-      fd.set("h",currentTool==="cloud"||currentTool==="highlight"?65:0);
-      fd.set("text_value",text);
-      await fetch("/blueprint-markup/pdf/markups/new",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
-      await loadMarkups();
-    };
-
-    pdfDoc=await pdfjsLib.getDocument(pdfUrl).promise;
-    pageNum=Math.max(1,Math.min(pageNum,pdfDoc.numPages));
-    await renderPage();
-    </script>
-    """
-
-    html=html.replace("__AID__",str(attachment_id))
-    html=html.replace("__DOC__",esc(name))
-    html=html.replace("__PAGE__",str(max(1,page)))
-    html=html.replace("__LAYER_OPTIONS__",layer_options)
-    html=html.replace("__LAYER_CHECKS__",layer_checks)
-    return shell("Live PDF Blueprint Markup",html)
-
-@app.get("/blueprint-markup/pdf/markups")
-def v473_get_markups(attachment_id:int,page_number:int=1):
-    rows=_v473_page_markups(project_id(),attachment_id,page_number)
-    return JSONResponse([
-      {
-        "id":r["id"],"type":r["markup_type"],"x":r["x"],"y":r["y"],
-        "w":r["w"],"h":r["h"],"text":r["text_value"] or "",
-        "layer_id":r["layer_id"],"status":r["status"] or "OPEN"
-      } for r in rows
-    ])
-
-@app.post("/blueprint-markup/pdf/markups/new")
-def v473_new_page_markup(
-    attachment_id:int=Form(...),layer_id:int=Form(...),page_number:int=Form(1),
-    markup_type:str=Form(...),x:float=Form(0),y:float=Form(0),
-    w:float=Form(0),h:float=Form(0),text_value:str=Form("")
-):
-    _v471_ensure_tables()
-    c=db();now=datetime.utcnow().isoformat()
-    c.execute("""INSERT INTO blueprint_markups(
-      company_id,project_id,attachment_id,layer_id,page_number,markup_type,
-      x,y,w,h,text_value,stroke_label,linked_type,linked_id,status,created_by,created,updated
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-    (current_company_id(),project_id(),attachment_id,layer_id,page_number,markup_type,
-     x,y,w,h,text_value,"default","","","OPEN","USER",now,now))
-    c.commit();c.close()
-    return JSONResponse({"ok":True})
-
-
-# ============================================================
-# v474 INTERACTIVE BLUEPRINT MARKUP TOOLS
-# True drag drawing, move/resize, freehand paths, arrows,
-# calibrated distance/area measurements, and project item links.
-# ============================================================
-
-def _v474_ensure_tables():
-    _v472_ensure_tables()
-    c=db()
-    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
-    c.execute(f"""CREATE TABLE IF NOT EXISTS blueprint_markup_geometry(
-      id {pk},company_id BIGINT,project_id BIGINT,markup_id BIGINT,
-      geometry_json TEXT,measurement_value REAL,measurement_unit TEXT,
-      created TEXT,updated TEXT)""")
-    c.commit();c.close()
-
-def _v474_geometry(markup_id):
-    try:
-        rows=_v39_rows(
-            "SELECT * FROM blueprint_markup_geometry WHERE company_id=? AND project_id=? AND markup_id=? ORDER BY id DESC LIMIT 1",
-            (current_company_id(),project_id(),markup_id)
-        )
-        return rows[0] if rows else None
-    except Exception:
-        return None
-
-def _v474_calibration(attachment_id,page_number):
-    try:
-        rows=_v39_rows(
-          """SELECT * FROM blueprint_measurement_calibrations
-             WHERE company_id=? AND project_id=? AND attachment_id=? AND page_number=?
-             ORDER BY id DESC LIMIT 1""",
-          (current_company_id(),project_id(),attachment_id,page_number)
-        )
-        return rows[0] if rows else None
-    except Exception:
-        return None
-
-@app.get("/blueprint-markup/interactive",response_class=HTMLResponse)
-def v474_interactive(attachment_id:int,page:int=1):
-    pid=project_id();_v474_ensure_tables()
-    docs=_v471_docs(pid)
-    doc=next((d for d in docs if int(d["id"])==int(attachment_id)),None)
-    if not doc:
-        return shell("Interactive Blueprint Markup",'<div class="card"><p class="muted">Document not found.</p></div>')
-
-    name=str(doc["original_name"] or "")
-    mime=str(doc["mime_type"] or "").lower()
-    if not (name.lower().endswith(".pdf") or "pdf" in mime):
-        return shell("Interactive Blueprint Markup",f'<div class="card"><p>{esc(name)} is not a PDF.</p></div>')
-
-    layers=_v471_layers(pid,attachment_id)
-    if not layers:
-        c=db();now=datetime.utcnow().isoformat()
-        c.execute("""INSERT INTO blueprint_markup_layers(
-          company_id,project_id,attachment_id,name,trade,color_label,status,created_by,created,updated
-        ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
-        (current_company_id(),pid,attachment_id,"General Markup","General","default","ACTIVE","USER",now,now))
-        c.commit();c.close()
-        layers=_v471_layers(pid,attachment_id)
-
-    layer_options="".join(f'<option value="{r["id"]}">{esc(r["name"])} · {esc(r["trade"] or "General")}</option>' for r in layers)
-
-    html="""
-    <style>
-    .v474-shell{display:grid;grid-template-columns:220px minmax(0,1fr) 290px;gap:10px}
-    .v474-panel{background:#fff;border:1px solid #dfe6eb;border-radius:14px;padding:12px}
-    .v474-stage{height:78vh;overflow:auto;background:#cfd7dd;border-radius:14px;position:relative}
-    .v474-page{position:relative;margin:24px auto;background:white;box-shadow:0 5px 22px rgba(0,0,0,.2);transform-origin:top left}
-    #v474-pdf{display:block}
-    #v474-overlay{position:absolute;inset:0;z-index:4;touch-action:none}
-    .v474-toolbar{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
-    .v474-toolbar button,.v474-toolbar a{border:1px solid #dbe2e7;background:#fff;border-radius:8px;padding:8px 11px;text-decoration:none;cursor:pointer}
-    .v474-tools button{display:block;width:100%;text-align:left;margin:4px 0;padding:8px;border:1px solid #dbe2e7;background:#fff;border-radius:8px}
-    .v474-tools button.active{background:#111820;color:#fff}
-    .v474-shape{position:absolute;border:2px solid #e33;box-sizing:border-box;background:rgba(255,255,255,.15);cursor:move}
-    .v474-highlight{background:rgba(255,235,59,.38);border-color:#ffb300}
-    .v474-text{background:rgba(255,255,255,.85);padding:4px;font-size:11px;min-width:50px;min-height:20px}
-    .v474-pin{width:25px;height:25px;border-radius:50%;background:#e33;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900}
-    .v474-selected{outline:3px solid rgba(17,24,32,.32)}
-    .v474-handle{position:absolute;width:10px;height:10px;right:-6px;bottom:-6px;background:#111820;border:2px solid #fff;border-radius:2px;cursor:nwse-resize}
-    .v474-arrow{position:absolute;height:2px;background:#e33;transform-origin:left center;cursor:move}
-    .v474-arrow:after{content:"";position:absolute;right:-1px;top:-5px;border-left:10px solid #e33;border-top:6px solid transparent;border-bottom:6px solid transparent}
-    .v474-path{position:absolute;inset:0;pointer-events:none}
-    .v474-measure-label{position:absolute;background:#111820;color:#fff;padding:3px 6px;border-radius:6px;font-size:10px;pointer-events:none}
-    .v474-info{font-size:12px;line-height:1.5}
-    @media(max-width:1050px){.v474-shell{grid-template-columns:1fr}.v474-stage{height:65vh}}
-    </style>
-
-    <div class="hero">
-      <div class="eyebrow">BuildCommand v474 · INTERACTIVE DRAWING TOOLS</div>
-      <h1>__DOC__</h1>
-      <p class="muted">Click-and-drag markups, movable/resizable objects, real arrows/freehand paths, and calibrated measurements.</p>
-    </div>
-
-    <div class="v474-toolbar">
-      <button onclick="v474Prev()">← Previous</button>
-      <button onclick="v474Next()">Next →</button>
-      <button onclick="v474Zoom(.15)">Zoom +</button>
-      <button onclick="v474Zoom(-.15)">Zoom −</button>
-      <button onclick="v474Fit()">Fit</button>
-      <a href="/blueprint-markup/pdf?attachment_id=__AID__">Live PDF Markup</a>
-      <span id="v474-pageinfo" class="v474-info">Loading…</span>
-    </div>
-
-    <div class="v474-shell">
-      <div class="v474-panel v474-tools">
-        <h3>Tools</h3>
-        <button onclick="v474SetTool(this,'select')">Pointer / Move</button>
-        <button onclick="v474SetTool(this,'cloud')">Cloud / Box</button>
-        <button onclick="v474SetTool(this,'highlight')">Highlight</button>
-        <button onclick="v474SetTool(this,'arrow')">Arrow</button>
-        <button onclick="v474SetTool(this,'freehand')">Freehand</button>
-        <button onclick="v474SetTool(this,'text')">Text Note</button>
-        <button onclick="v474SetTool(this,'issue')">Issue Pin</button>
-        <button onclick="v474SetTool(this,'rfi')">RFI Pin</button>
-        <button onclick="v474SetTool(this,'measure')">Distance Measure</button>
-        <button onclick="v474SetTool(this,'area')">Area Measure</button>
-        <hr>
-        <label>Active Layer</label>
-        <select id="v474-layer" style="width:100%">__LAYERS__</select>
-        <button onclick="v474Calibrate()">Calibrate Scale</button>
-      </div>
-
-      <div class="v474-stage" id="v474-stage">
-        <div class="v474-page" id="v474-page">
-          <canvas id="v474-pdf"></canvas>
-          <svg id="v474-svg" class="v474-path"></svg>
-          <div id="v474-overlay"></div>
-        </div>
-      </div>
-
-      <div class="v474-panel">
-        <h3>Selected Markup</h3>
-        <div id="v474-inspector"><p class="muted">Select a markup.</p></div>
-        <hr>
-        <h3>Create Project Item</h3>
-        <button onclick="v474CreateLinked('ISSUE')">Create Issue From Markup</button>
-        <button onclick="v474CreateLinked('RFI')">Create RFI From Markup</button>
-        <button onclick="v474CreateLinked('PUNCH')">Create Punch Item</button>
-        <hr>
-        <h3>Measurement</h3>
-        <div id="v474-calibration" class="v474-info">No scale loaded yet.</div>
-      </div>
-    </div>
-
-    <script type="module">
-    import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs";
-    pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs";
-
-    const aid=__AID__;
-    let pdfDoc=null,pageNum=__PAGE__,baseScale=1.35,viewScale=1,tool="select";
-    let data=[],selected=null,drawing=false,startX=0,startY=0,temp=null,pathPoints=[],calibration=null;
-
-    function pointFromEvent(e){
-      const rect=document.getElementById("v474-overlay").getBoundingClientRect();
-      return {x:(e.clientX-rect.left)/viewScale,y:(e.clientY-rect.top)/viewScale};
-    }
-
-    async function loadPage(){
-      const page=await pdfDoc.getPage(pageNum);
-      const vp=page.getViewport({scale:baseScale});
-      const c=document.getElementById("v474-pdf"),ctx=c.getContext("2d");
-      c.width=vp.width;c.height=vp.height;
-      const pg=document.getElementById("v474-page");
-      pg.style.width=vp.width+"px";pg.style.height=vp.height+"px";
-      const svg=document.getElementById("v474-svg");
-      svg.setAttribute("width",vp.width);svg.setAttribute("height",vp.height);
-      await page.render({canvasContext:ctx,viewport:vp}).promise;
-      document.getElementById("v474-pageinfo").textContent="Page "+pageNum+" of "+pdfDoc.numPages;
-      await loadData();await loadCalibration();v474Fit();
-    }
-
-    async function loadData(){
-      const r=await fetch("/blueprint-markup/interactive/data?attachment_id="+aid+"&page_number="+pageNum);
-      data=await r.json();renderAll();
-    }
-
-    async function loadCalibration(){
-      const r=await fetch("/blueprint-markup/interactive/calibration?attachment_id="+aid+"&page_number="+pageNum);
-      calibration=await r.json();
-      const el=document.getElementById("v474-calibration");
-      el.textContent=calibration && calibration.real_distance ? 
-        "Scale: "+calibration.real_distance+" "+calibration.unit+" = "+calibration.pixel_distance+" drawing px" :
-        "No calibrated scale for this page.";
-    }
-
-    function renderAll(){
-      const ov=document.getElementById("v474-overlay"),svg=document.getElementById("v474-svg");
-      ov.innerHTML="";svg.innerHTML="";
-      data.forEach(m=>{
-        const g=m.geometry||{};
-        if(m.type==="freehand"){
-          const pl=document.createElementNS("http://www.w3.org/2000/svg","polyline");
-          const pts=(g.points||[]).map(p=>p[0]+","+p[1]).join(" ");
-          pl.setAttribute("points",pts);pl.setAttribute("fill","none");pl.setAttribute("stroke","#e33");pl.setAttribute("stroke-width","2");
-          svg.appendChild(pl);return;
-        }
-        if(m.type==="arrow"||m.type==="measure"){
-          const dx=(g.x2??m.x)-m.x,dy=(g.y2??m.y)-m.y;
-          const len=Math.sqrt(dx*dx+dy*dy),ang=Math.atan2(dy,dx)*180/Math.PI;
-          const el=document.createElement("div");
-          el.className="v474-arrow"+(selected===m.id?" v474-selected":"");
-          el.style.left=m.x+"px";el.style.top=m.y+"px";el.style.width=len+"px";el.style.transform="rotate("+ang+"deg)";
-          el.onclick=(e)=>{e.stopPropagation();selectOne(m.id)};ov.appendChild(el);
-          if(m.measurement){
-            const lab=document.createElement("div");lab.className="v474-measure-label";lab.textContent=m.measurement;
-            lab.style.left=((m.x+(g.x2??m.x))/2)+"px";lab.style.top=((m.y+(g.y2??m.y))/2)+"px";ov.appendChild(lab);
-          }
-          return;
-        }
-        const el=document.createElement("div");
-        let cls="v474-shape";
-        if(m.type==="highlight")cls+=" v474-highlight";
-        if(m.type==="text")cls+=" v474-text";
-        if(m.type==="issue"||m.type==="rfi")cls+=" v474-pin";
-        if(selected===m.id)cls+=" v474-selected";
-        el.className=cls;el.style.left=m.x+"px";el.style.top=m.y+"px";
-        if(m.w)el.style.width=m.w+"px";if(m.h)el.style.height=m.h+"px";
-        el.textContent=m.type==="issue"?"I":m.type==="rfi"?"R":(m.text||"");
-        el.onclick=(e)=>{e.stopPropagation();selectOne(m.id)};
-        if(selected===m.id && !["issue","rfi"].includes(m.type)){
-          const h=document.createElement("span");h.className="v474-handle";h.onpointerdown=(e)=>startResize(e,m);el.appendChild(h);
-        }
-        if(tool==="select")el.onpointerdown=(e)=>startMove(e,m);
-        ov.appendChild(el);
-      });
-    }
-
-    function selectOne(id){
-      selected=id;renderAll();
-      const m=data.find(x=>x.id===id),g=m.geometry||{};
-      document.getElementById("v474-inspector").innerHTML=
-        '<b>'+m.type.toUpperCase()+'</b><br><textarea id="v474-text" style="width:100%;margin:8px 0">'+(m.text||'')+'</textarea>'+
-        '<div class="v474-info">X '+Math.round(m.x)+' · Y '+Math.round(m.y)+(m.measurement?'<br>Measurement: '+m.measurement:'')+'</div>'+
-        '<button onclick="window.v474SaveText()">Save Note</button> <button onclick="window.v474Delete()">Delete</button>';
-    }
-
-    window.v474SetTool=(btn,t)=>{tool=t;document.querySelectorAll(".v474-tools button").forEach(b=>b.classList.remove("active"));btn.classList.add("active")};
-    window.v474Prev=async()=>{if(pageNum>1){pageNum--;selected=null;await loadPage()}};
-    window.v474Next=async()=>{if(pageNum<pdfDoc.numPages){pageNum++;selected=null;await loadPage()}};
-    window.v474Zoom=(d)=>{viewScale=Math.max(.4,Math.min(3,viewScale+d));document.getElementById("v474-page").style.transform="scale("+viewScale+")"};
-    window.v474Fit=()=>{const st=document.getElementById("v474-stage"),pg=document.getElementById("v474-page");viewScale=Math.min(1,(st.clientWidth-40)/pg.offsetWidth);pg.style.transform="scale("+viewScale+")"};
-
-    async function saveNew(payload){
-      const fd=new URLSearchParams();
-      Object.entries(payload).forEach(([k,v])=>fd.set(k,typeof v==="object"?JSON.stringify(v):v));
-      await fetch("/blueprint-markup/interactive/new",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
-      await loadData();
-    }
-
-    const overlay=document.getElementById("v474-overlay");
-    overlay.onpointerdown=(e)=>{
-      if(tool==="select")return;
-      const p=pointFromEvent(e);drawing=true;startX=p.x;startY=p.y;pathPoints=[[p.x,p.y]];
-      if(["text","issue","rfi"].includes(tool)){
-        drawing=false;
-        let text=tool==="text"?(prompt("Text note:","")||""):"";
-        saveNew({attachment_id:aid,layer_id:document.getElementById("v474-layer").value,page_number:pageNum,markup_type:tool,x:p.x,y:p.y,w:tool==="text"?120:25,h:tool==="text"?40:25,text_value:text,geometry_json:"{}"});
-      }
-    };
-    overlay.onpointermove=(e)=>{
-      if(!drawing)return;
-      const p=pointFromEvent(e);
-      if(tool==="freehand")pathPoints.push([p.x,p.y]);
-    };
-    overlay.onpointerup=async(e)=>{
-      if(!drawing)return;drawing=false;const p=pointFromEvent(e);
-      const layer=document.getElementById("v474-layer").value;
-      if(tool==="cloud"||tool==="highlight"||tool==="area"){
-        const x=Math.min(startX,p.x),y=Math.min(startY,p.y),w=Math.abs(p.x-startX),h=Math.abs(p.y-startY);
-        let measurement="";
-        if(tool==="area"&&calibration&&calibration.pixel_distance){
-          const ratio=calibration.real_distance/calibration.pixel_distance;
-          const area=w*h*ratio*ratio;measurement=area.toFixed(2)+" sq "+calibration.unit;
-        }
-        await saveNew({attachment_id:aid,layer_id:layer,page_number:pageNum,markup_type:tool,x,y,w,h,text_value:measurement,geometry_json:JSON.stringify({x2:p.x,y2:p.y})});
-      }else if(tool==="arrow"||tool==="measure"){
-        let measurement="";
-        if(tool==="measure"&&calibration&&calibration.pixel_distance){
-          const px=Math.hypot(p.x-startX,p.y-startY),ratio=calibration.real_distance/calibration.pixel_distance;
-          measurement=(px*ratio).toFixed(2)+" "+calibration.unit;
-        }
-        await saveNew({attachment_id:aid,layer_id:layer,page_number:pageNum,markup_type:tool,x:startX,y:startY,w:0,h:0,text_value:measurement,geometry_json:JSON.stringify({x2:p.x,y2:p.y})});
-      }else if(tool==="freehand"){
-        await saveNew({attachment_id:aid,layer_id:layer,page_number:pageNum,markup_type:tool,x:startX,y:startY,w:0,h:0,text_value:"",geometry_json:JSON.stringify({points:pathPoints})});
-      }
-    };
-
-    let moveState=null;
-    function startMove(e,m){
-      if(tool!=="select")return;e.stopPropagation();selectOne(m.id);
-      const p=pointFromEvent(e);moveState={m,startX:p.x,startY:p.y,origX:m.x,origY:m.y};
-      window.onpointermove=(ev)=>{if(!moveState)return;const q=pointFromEvent(ev);m.x=moveState.origX+q.x-moveState.startX;m.y=moveState.origY+q.y-moveState.startY;renderAll()};
-      window.onpointerup=async()=>{if(!moveState)return;await updateGeom(m);moveState=null;window.onpointermove=null;window.onpointerup=null};
-    }
-    function startResize(e,m){
-      e.stopPropagation();const p=pointFromEvent(e);const ow=m.w||0,oh=m.h||0;
-      window.onpointermove=(ev)=>{const q=pointFromEvent(ev);m.w=Math.max(10,ow+q.x-p.x);m.h=Math.max(10,oh+q.y-p.y);renderAll()};
-      window.onpointerup=async()=>{await updateGeom(m);window.onpointermove=null;window.onpointerup=null};
-    }
-    async function updateGeom(m){
-      const fd=new URLSearchParams();fd.set("x",m.x);fd.set("y",m.y);fd.set("w",m.w||0);fd.set("h",m.h||0);
-      await fetch("/blueprint-markup/interactive/"+m.id+"/geometry",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
-    }
-
-    window.v474SaveText=async()=>{
-      if(!selected)return;const fd=new URLSearchParams();fd.set("text_value",document.getElementById("v474-text").value);
-      await fetch("/blueprint-markup/markups/"+selected+"/update",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});await loadData();selectOne(selected);
-    };
-    window.v474Delete=async()=>{if(!selected||!confirm("Delete this markup?"))return;await fetch("/blueprint-markup/markups/"+selected+"/delete",{method:"POST"});selected=null;await loadData();document.getElementById("v474-inspector").innerHTML="<p class='muted'>Select a markup.</p>"};
-
-    window.v474Calibrate=async()=>{
-      const px=prompt("Drawing pixel/reference distance:","100");if(!px)return;
-      const real=prompt("Real distance:","10");if(!real)return;
-      const unit=prompt("Unit (ft, in, m):","ft")||"ft";
-      const fd=new URLSearchParams();fd.set("attachment_id",aid);fd.set("page_number",pageNum);fd.set("pixel_distance",px);fd.set("real_distance",real);fd.set("unit",unit);
-      await fetch("/blueprint-markup/interactive/calibrate",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});await loadCalibration();
-    };
-
-    window.v474CreateLinked=async(kind)=>{
-      if(!selected){alert("Select a markup first.");return}
-      const title=prompt(kind+" title:","")||"";if(!title)return;
-      const fd=new URLSearchParams();fd.set("kind",kind);fd.set("title",title);
-      const r=await fetch("/blueprint-markup/interactive/"+selected+"/create-linked",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:fd});
-      const j=await r.json();alert(j.message||"Created.");
-    };
-
-    pdfDoc=await pdfjsLib.getDocument("/documents/"+aid+"/inline").promise;
-    pageNum=Math.max(1,Math.min(pageNum,pdfDoc.numPages));await loadPage();
-    </script>
-    """
-
-    html=html.replace("__AID__",str(attachment_id)).replace("__PAGE__",str(max(1,page)))
-    html=html.replace("__DOC__",esc(name)).replace("__LAYERS__",layer_options)
-    return shell("Interactive Blueprint Markup",html)
-
-@app.get("/blueprint-markup/interactive/data")
-def v474_data(attachment_id:int,page_number:int=1):
-    rows=_v473_page_markups(project_id(),attachment_id,page_number)
-    out=[]
-    for r in rows:
-        g=_v474_geometry(r["id"])
-        geom={}
-        measurement=""
-        if g:
-            try: geom=json.loads(g["geometry_json"] or "{}")
-            except Exception: geom={}
-            if g["measurement_value"] is not None:
-                measurement=f'{float(g["measurement_value"]):.2f} {g["measurement_unit"] or ""}'.strip()
-        if not measurement and r["markup_type"] in {"measure","area"}:
-            measurement=str(r["text_value"] or "")
-        out.append({
-          "id":r["id"],"type":r["markup_type"],"x":r["x"],"y":r["y"],"w":r["w"],"h":r["h"],
-          "text":r["text_value"] or "","layer_id":r["layer_id"],"geometry":geom,"measurement":measurement
-        })
-    return JSONResponse(out)
-
-@app.get("/blueprint-markup/interactive/calibration")
-def v474_get_calibration(attachment_id:int,page_number:int=1):
-    r=_v474_calibration(attachment_id,page_number)
-    if not r:return JSONResponse({})
-    return JSONResponse({"pixel_distance":r["pixel_distance"],"real_distance":r["real_distance"],"unit":r["unit"]})
-
-@app.post("/blueprint-markup/interactive/calibrate")
-def v474_calibrate(
-    attachment_id:int=Form(...),page_number:int=Form(1),pixel_distance:float=Form(...),
-    real_distance:float=Form(...),unit:str=Form("ft")
-):
-    _v472_ensure_tables();c=db();now=datetime.utcnow().isoformat()
-    c.execute("""INSERT INTO blueprint_measurement_calibrations(
-      company_id,project_id,attachment_id,page_number,pixel_distance,real_distance,unit,created,updated
-    ) VALUES(?,?,?,?,?,?,?,?,?)""",
-    (current_company_id(),project_id(),attachment_id,page_number,pixel_distance,real_distance,unit,now,now))
-    c.commit();c.close();return JSONResponse({"ok":True})
-
-@app.post("/blueprint-markup/interactive/new")
-def v474_new(
-    attachment_id:int=Form(...),layer_id:int=Form(...),page_number:int=Form(1),
-    markup_type:str=Form(...),x:float=Form(0),y:float=Form(0),w:float=Form(0),h:float=Form(0),
-    text_value:str=Form(""),geometry_json:str=Form("{}")
-):
-    _v474_ensure_tables();c=db();now=datetime.utcnow().isoformat()
-    c.execute("""INSERT INTO blueprint_markups(
-      company_id,project_id,attachment_id,layer_id,page_number,markup_type,x,y,w,h,text_value,
-      stroke_label,linked_type,linked_id,status,created_by,created,updated
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-    (current_company_id(),project_id(),attachment_id,layer_id,page_number,markup_type,x,y,w,h,text_value,"default","","","OPEN","USER",now,now))
-    try:
-        row=c.execute("SELECT last_insert_rowid()").fetchone();mid=row[0] if row else None
-    except Exception:
-        # PostgreSQL compatibility fallback.
-        try:
-            row=c.execute("SELECT MAX(id) FROM blueprint_markups WHERE company_id=? AND project_id=?",
-                          (current_company_id(),project_id())).fetchone()
-            mid=row[0] if row else None
-        except Exception: mid=None
-    if mid:
-        mv=None;mu=""
-        if markup_type in {"measure","area"} and text_value:
-            try: mv=float(str(text_value).split()[0]);mu=" ".join(str(text_value).split()[1:])
-            except Exception: pass
-        c.execute("""INSERT INTO blueprint_markup_geometry(
-          company_id,project_id,markup_id,geometry_json,measurement_value,measurement_unit,created,updated
-        ) VALUES(?,?,?,?,?,?,?,?)""",
-        (current_company_id(),project_id(),mid,geometry_json,mv,mu,now,now))
-    c.commit();c.close();return JSONResponse({"ok":True,"id":mid})
-
-@app.post("/blueprint-markup/interactive/{markup_id}/geometry")
-def v474_update_geometry(markup_id:int,x:float=Form(...),y:float=Form(...),w:float=Form(0),h:float=Form(0)):
-    c=db();c.execute("""UPDATE blueprint_markups SET x=?,y=?,w=?,h=?,updated=?
-                       WHERE id=? AND company_id=? AND project_id=?""",
-                    (x,y,w,h,datetime.utcnow().isoformat(),markup_id,current_company_id(),project_id()))
-    c.commit();c.close();return JSONResponse({"ok":True})
-
-@app.post("/blueprint-markup/interactive/{markup_id}/create-linked")
-def v474_create_linked(markup_id:int,kind:str=Form(...),title:str=Form(...)):
-    kind=kind.upper().strip()
-    c=db();now=datetime.utcnow().isoformat()
-    created_id=None
-    try:
-        if kind=="ISSUE":
-            c.execute("""INSERT INTO project_issues(project_id,title,status,created)
-                         VALUES(?,?,?,?)""",(project_id(),title,"OPEN",now))
-        elif kind=="RFI":
-            c.execute("""INSERT INTO rfis(company_id,project_id,number,title,question,status,created,updated)
-                         VALUES(?,?,?,?,?,?,?,?)""",
-                      (current_company_id(),project_id(),"AUTO",title,f"Created from blueprint markup #{markup_id}.","DRAFT",now,now))
-        elif kind=="PUNCH":
-            c.execute("""INSERT INTO punch_items(company_id,project_id,title,status,created,updated)
-                         VALUES(?,?,?,?,?,?)""",
-                      (current_company_id(),project_id(),title,"OPEN",now,now))
-        c.execute("""UPDATE blueprint_markups SET linked_type=?,linked_id=?,updated=?
-                     WHERE id=? AND company_id=? AND project_id=?""",
-                  (kind,title,now,markup_id,current_company_id(),project_id()))
-        c.commit()
-        msg=f"{kind} created/linked from markup."
-    except Exception as exc:
-        c.rollback();msg=f"Could not create {kind}: {exc}"
-    c.close();return JSONResponse({"message":msg,"id":created_id})
-
-
-# ============================================================
-# BuildCommand 1.0 - PRODUCTION FOUNDATION
-# Stabilization layer over v474.
-# ============================================================
-
-BC_RELEASE="1.0"
-BC_RELEASE_NAME="Production Foundation"
-
-def _bc10_safe_count(table,where="",args=()):
-    try:
-        c=db()
-        sql=f"SELECT COUNT(*) AS n FROM {table}"
-        if where: sql+=" WHERE "+where
-        row=c.execute(sql,args).fetchone()
-        c.close()
-        try: return int(row["n"])
-        except Exception: return int(row[0])
-    except Exception:
-        return 0
-
-def _bc10_health():
-    checks=[]
-    try:
-        c=db(); c.execute("SELECT 1").fetchone(); c.close()
-        checks.append(("Database","PASS","Connection successful"))
-    except Exception as exc:
-        checks.append(("Database","FAIL",str(exc)[:160]))
-    try:
-        os.makedirs(UPLOAD_DIR,exist_ok=True)
-        probe=os.path.join(UPLOAD_DIR,".bc_health")
-        with open(probe,"w") as f: f.write("ok")
-        os.remove(probe)
-        checks.append(("Document Storage","PASS","Writable"))
-    except Exception as exc:
-        checks.append(("Document Storage","FAIL",str(exc)[:160]))
-    for table in ["projects","attachments","subcontractors"]:
-        try:
-            c=db(); c.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone(); c.close()
-            checks.append((f"Table: {table}","PASS","Available"))
-        except Exception as exc:
-            checks.append((f"Table: {table}","WARN",str(exc)[:120]))
-    try:
-        checks.append(_bc_storage_health())
-    except Exception as exc:
-        checks.append(("Object Storage","FAIL",str(exc)[:160]))
-    try:
-        checks.append(_bc_cache_health())
-    except Exception as exc:
-        checks.append(("Shared Cache","FAIL",str(exc)[:160]))
-    return checks
-
-@app.get("/healthz")
-def bc10_healthz():
-    checks=_bc10_health()
-    ok=all(x[1]!="FAIL" for x in checks)
-    return JSONResponse({
-      "status":"ok" if ok else "degraded",
-      "product":"BuildCommand AI",
-      "release":BC_RELEASE,
-      "database":DATABASE_KIND,
-      "checks":[{"name":a,"status":b,"detail":c} for a,b,c in checks]
-    },status_code=200 if ok else 503)
-
-@app.get("/readyz")
-def bc10_readyz():
-    try:
-        c=db(); c.execute("SELECT 1").fetchone(); c.close()
-        return JSONResponse({"ready":True,"release":BC_RELEASE})
-    except Exception as exc:
-        return JSONResponse({"ready":False,"error":str(exc)[:200]},status_code=503)
-
-@app.get("/system-status",response_class=HTMLResponse)
-def bc10_system_status():
-    checks=_bc10_health()
-    rows="".join(
-      f'<div class="action"><span class="badge">{esc(status)}</span> <b>{esc(name)}</b><div class="small">{esc(detail)}</div></div>'
-      for name,status,detail in checks
-    )
-    metrics=[
-      ("Projects",_bc10_safe_count("projects","company_id=?",(current_company_id(),))),
-      ("Documents",_bc10_safe_count("attachments","company_id=?",(current_company_id(),))),
-      ("Subcontractors",_bc10_safe_count("subcontractors","company_id=?",(current_company_id(),))),
-      ("Blueprint Markups",_bc10_safe_count("blueprint_markups","company_id=?",(current_company_id(),))),
-    ]
-    cards="".join(f'<div class="card"><div class="label">{esc(k)}</div><div class="kpi">{v}</div></div>' for k,v in metrics)
-    body=(
-      '<div class="hero"><div class="eyebrow">BuildCommand 1.0</div>'
-      '<h1>Production Foundation</h1>'
-      '<p class="muted">Runtime health, data integrity visibility, and deployment readiness.</p></div>'
-      '<div class="grid3">'+cards+'</div>'
-      '<div class="card"><h2>System Checks</h2>'+rows+'</div>'
-      '<div class="card"><h2>Release Discipline</h2>'
-      '<p><b>Stable rollback:</b> v474</p>'
-      '<p><b>Current release:</b> BuildCommand 1.0 Production Foundation</p>'
-      '<p><b>Rule:</b> stabilize core workflows before another large feature batch.</p></div>'
-    )
-    return shell("System Status",body)
-
-@app.get("/production-foundation",response_class=HTMLResponse)
-def bc10_foundation():
-    cards=[
-      ("System Status","Database, storage and core-table health checks.","/system-status"),
-      ("Project Command","Current project operations.","/"),
-      ("Blueprint Markup","Live drawing and interactive markup.","/blueprint-markup"),
-      ("Company Intelligence","Portfolio and company-level intelligence.","/platform-470"),
-      ("Execution & Control","Field execution controls and operating intelligence.","/platform-369"),
-      ("Knowledge Brain","Construction knowledge foundation.","/knowledge-brain-2"),
-    ]
-    h="".join(_v37_link_card(n,d,u,"Open") for n,d,u in cards)
-    body=(
-      '<div class="hero"><div class="eyebrow">BuildCommand 1.0</div>'
-      '<h1>Production Foundation</h1>'
-      '<p class="muted">One stable launch point for the major BuildCommand systems.</p></div>'
-      '<div class="grid3">'+h+'</div>'
-      '<div class="card"><h2>1.0 Hardening Track</h2>'
-      '<p>Database integrity | performance | authentication and permissions | document storage | '
-      'mobile/tablet UX | unified navigation | automated tests | backups | error recovery | onboarding.</p></div>'
-    )
-    return shell("BuildCommand 1.0",body)
-
-
-# ============================================================
-# BuildCommand 1.0 - SCALE FOUNDATION PHASE 2
-# ============================================================
-
-BC_SCALE_RELEASE="1.0-scale-2"
-_BC_REQ_LOCK=threading.Lock()
-_BC_REQ_STATS={"count":0,"errors":0,"total_ms":0.0,"max_ms":0.0}
-_BC_SLOW=[]
-
-def _bc_scale_indexes():
-    """Idempotent indexes for common multi-tenant/project-scoped reads."""
-    statements=[
-      ("idx_users_company_email","users","company_id,email"),
-      ("idx_sessions_token","sessions","token_hash"),
-      ("idx_projects_company","projects","company_id"),
-      ("idx_attachments_company_project","attachments","company_id,project_id"),
-      ("idx_notifications_company_project_status","notifications","company_id,project_id,status"),
-      ("idx_scope_company_project_run","blueprint_scope_items","company_id,project_id,run_id"),
-      ("idx_scope_company_project_trade","blueprint_scope_items","company_id,project_id,trade"),
-      ("idx_trade_scopes_company_project_run","blueprint_trade_scopes","company_id,project_id,run_id"),
-      ("idx_document_chunks_project_attachment","document_ai_chunks","company_id,project_id,attachment_id"),
-      ("idx_markups_company_project_attachment","blueprint_markups","company_id,project_id,attachment_id"),
-      ("idx_markups_page","blueprint_markups","company_id,project_id,attachment_id,page_number"),
-      ("idx_activities_project_dates","activities","project_id,start,finish"),
-      ("idx_issues_project_status","project_issues","project_id,status"),
-      ("idx_submittals_project_status","submittals","project_id,status"),
-      ("idx_procurement_project_required","procurement","project_id,required_on_site"),
-      ("idx_inspections_project_date","inspections_tracker","project_id,scheduled_date"),
-    ]
-    c=db()
-    try:
-        for name,table,cols in statements:
-            try:
-                c.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({cols})")
-                c.commit()
-            except Exception:
-                try:c.rollback()
-                except Exception:pass
-    finally:
-        c.close()
-
-try:
-    _bc_scale_indexes()
-except Exception:
-    # Index hardening must never keep the web service from booting.
-    pass
-
-@app.middleware("http")
-async def bc10_scale_request_middleware(request,call_next):
-    started=time.perf_counter()
-    request_id=request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
-    try:
-        response=await call_next(request)
-    except Exception:
-        with _BC_REQ_LOCK:
-            _BC_REQ_STATS["errors"]+=1
-        logging.exception("BuildCommand request failure request_id=%s path=%s",request_id,request.url.path)
-        raise
-    elapsed=(time.perf_counter()-started)*1000
-    with _BC_REQ_LOCK:
-        _BC_REQ_STATS["count"]+=1
-        _BC_REQ_STATS["total_ms"]+=elapsed
-        _BC_REQ_STATS["max_ms"]=max(_BC_REQ_STATS["max_ms"],elapsed)
-        if elapsed>=float(os.environ.get("SLOW_REQUEST_MS","1500")):
-            _BC_SLOW.append({"path":request.url.path,"method":request.method,"ms":round(elapsed,1),"at":datetime.utcnow().isoformat()})
-            if len(_BC_SLOW)>100: del _BC_SLOW[:-100]
-    response.headers["X-Request-ID"]=request_id
-    response.headers["X-Response-Time-Ms"]=f"{elapsed:.1f}"
-    response.headers["X-Content-Type-Options"]="nosniff"
-    response.headers["X-Frame-Options"]="SAMEORIGIN"
-    response.headers["Referrer-Policy"]="strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"]="camera=(), microphone=(), geolocation=()"
-    return response
-
-@app.get("/metrics-lite")
-def bc10_metrics_lite():
-    with _BC_REQ_LOCK:
-        count=_BC_REQ_STATS["count"]
-        avg=(_BC_REQ_STATS["total_ms"]/count) if count else 0
-        data={
-          "release":BC_SCALE_RELEASE,
-          "requests":count,
-          "errors":_BC_REQ_STATS["errors"],
-          "average_ms":round(avg,1),
-          "max_ms":round(_BC_REQ_STATS["max_ms"],1),
-          "slow_requests":list(reversed(_BC_SLOW[-20:])),
-          "pool_enabled":bool(_PG_POOL is not None),
-          "database":DATABASE_KIND
-        }
-    return JSONResponse(data)
-
-@app.get("/scale-status",response_class=HTMLResponse)
-def bc10_scale_status():
-    with _BC_REQ_LOCK:
-        count=_BC_REQ_STATS["count"]
-        avg=(_BC_REQ_STATS["total_ms"]/count) if count else 0
-        max_ms=_BC_REQ_STATS["max_ms"]
-        errors=_BC_REQ_STATS["errors"]
-        slow=list(reversed(_BC_SLOW[-20:]))
-    slow_html="".join(
-      f'<div class="action"><b>{esc(r["method"])} {esc(r["path"])}</b><div class="small">{r["ms"]:.1f} ms · {esc(r["at"])}</div></div>'
-      for r in slow
-    ) or '<p class="muted">No slow requests recorded in this worker yet.</p>'
-    pool_state="ENABLED" if _PG_POOL is not None else ("AVAILABLE AFTER FIRST DB REQUEST" if DATABASE_KIND=="postgres" and ConnectionPool is not None else "FALLBACK")
-    body=(
-      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation</div>'
-      '<h1>Production Scale Status</h1><p class="muted">Database pooling, request timing, security headers, indexes, and multi-worker deployment readiness.</p></div>'
-      '<div class="grid3">'
-      f'<div class="card"><div class="label">Requests</div><div class="kpi">{count}</div></div>'
-      f'<div class="card"><div class="label">Average Response</div><div class="kpi">{avg:.0f} ms</div></div>'
-      f'<div class="card"><div class="label">Max Response</div><div class="kpi">{max_ms:.0f} ms</div></div>'
-      f'<div class="card"><div class="label">Errors</div><div class="kpi">{errors}</div></div>'
-      f'<div class="card"><div class="label">Postgres Pool</div><div class="kpi" style="font-size:20px">{esc(pool_state)}</div></div>'
-      f'<div class="card"><div class="label">Release</div><div class="kpi" style="font-size:20px">{BC_SCALE_RELEASE}</div></div>'
-      '</div><div class="card"><h2>Slow Requests</h2>'+slow_html+'</div>'
-      '<div class="card"><h2>Scale Rules</h2><p>Use multiple web workers, keep DB_POOL_MAX conservative per worker, move large files to object storage, and move heavy AI/document analysis to worker jobs before large customer rollout.</p></div>'
-    )
-    return shell("Scale Status",body)
-
-
-# ============================================================
-# BuildCommand 1.0 - SCALE FOUNDATION PHASE 4
-# Durable background jobs for heavy AI/document work.
-# ============================================================
-
-BC_JOB_MAX_ATTEMPTS=max(1,int(os.environ.get("JOB_MAX_ATTEMPTS","3")))
-
-def _bc_jobs_ensure():
-    c=db()
-    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
-    c.execute(f"""CREATE TABLE IF NOT EXISTS background_jobs(
-      id {pk},
-      company_id BIGINT NOT NULL,
-      project_id BIGINT,
-      created_by BIGINT,
-      job_type TEXT NOT NULL,
-      status TEXT DEFAULT 'QUEUED',
-      priority INTEGER DEFAULT 100,
-      payload_json TEXT,
-      result_json TEXT,
-      progress INTEGER DEFAULT 0,
-      progress_message TEXT,
-      attempts INTEGER DEFAULT 0,
-      max_attempts INTEGER DEFAULT 3,
-      available_at TEXT,
-      started_at TEXT,
-      finished_at TEXT,
-      worker_id TEXT,
-      error_text TEXT,
-      created TEXT,
-      updated TEXT
-    )""")
-    try:
-        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_claim ON background_jobs(status,available_at,priority,id)")
-        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_company_project ON background_jobs(company_id,project_id,id)")
-    except Exception:
-        try: c.rollback()
-        except Exception: pass
-    c.commit()
-    c.close()
-
-try:
-    _bc_jobs_ensure()
-except Exception:
-    pass
-
-def bc_enqueue_job(job_type,payload,project_id_value=None,priority=100,max_attempts=None):
-    _bc_jobs_ensure()
-    cid=current_company_id()
-    uid=current_user_id()
-    pid=project_id_value if project_id_value is not None else project_id_safe()
-    now=datetime.utcnow().isoformat()
-    c=db()
-    c.execute("""INSERT INTO background_jobs(
-      company_id,project_id,created_by,job_type,status,priority,payload_json,
-      progress,progress_message,attempts,max_attempts,available_at,created,updated
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-    (cid,pid,uid,job_type,"QUEUED",priority,json.dumps(payload or {}),
-     0,"Queued",0,max_attempts or BC_JOB_MAX_ATTEMPTS,now,now,now))
-    jid=getattr(c,"last_insert_id",None)
-    if not jid:
-        try:
-            r=c.execute("SELECT last_insert_rowid()").fetchone()
-            jid=r["id"] if isinstance(r,dict) else r[0]
-        except Exception:
-            jid=None
-    c.commit()
-    c.close()
-    return jid
-
-def bc_job_update(job_id,progress=None,message=None,status=None,result=None,error=None,worker_id=None):
-    fields=[]
-    args=[]
-    if progress is not None:
-        fields.append("progress=?")
-        args.append(int(max(0,min(100,progress))))
-    if message is not None:
-        fields.append("progress_message=?")
-        args.append(str(message)[:500])
-    if status is not None:
-        fields.append("status=?")
-        args.append(status)
-    if result is not None:
-        fields.append("result_json=?")
-        args.append(json.dumps(result))
-    if error is not None:
-        fields.append("error_text=?")
-        args.append(str(error)[:8000])
-    if worker_id is not None:
-        fields.append("worker_id=?")
-        args.append(worker_id)
-    if status=="RUNNING":
-        fields.append("started_at=?")
-        args.append(datetime.utcnow().isoformat())
-    if status in {"COMPLETED","FAILED"}:
-        fields.append("finished_at=?")
-        args.append(datetime.utcnow().isoformat())
-    fields.append("updated=?")
-    args.append(datetime.utcnow().isoformat())
-    args.append(job_id)
-    c=db()
-    c.execute("UPDATE background_jobs SET "+",".join(fields)+" WHERE id=?",tuple(args))
-    c.commit()
-    c.close()
-
-def bc_job_get(job_id):
-    rows=_v39_rows("SELECT * FROM background_jobs WHERE id=? AND company_id=?",(job_id,current_company_id()))
-    return rows[0] if rows else None
-
-def bc_job_list(pid=None,limit=100):
-    if pid:
-        return _v39_rows(
-            "SELECT * FROM background_jobs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT ?",
-            (current_company_id(),pid,limit)
-        )
-    return _v39_rows(
-        "SELECT * FROM background_jobs WHERE company_id=? ORDER BY id DESC LIMIT ?",
-        (current_company_id(),limit)
-    )
-
-def _bc_execute_job(job,progress_cb=None):
-    payload=json.loads(job["payload_json"] or "{}")
-    jtype=str(job["job_type"] or "").upper()
-    pid=int(job["project_id"] or 0)
-    progress_cb=progress_cb or (lambda p,m: None)
-
-    company_token=_current_company_id.set(int(job["company_id"]))
-    user_token=_current_user_id.set(int(job["created_by"] or 0))
-    try:
-        if jtype=="PROJECT_ANALYSIS":
-            ids=[int(x) for x in payload.get("attachment_ids",[]) if str(x).isdigit()]
-            focus=str(payload.get("focus") or "")
-            progress_cb(5,"Loading selected project documents")
-            docs=_v38_selected_docs(pid,ids)
-            if not docs:
-                raise RuntimeError("No valid project documents were selected.")
-            progress_cb(15,"Running Blueprint Brain and plan intelligence")
-            bp=_v38_run_blueprint(pid,docs,focus)
-            progress_cb(62,"Synchronizing estimator intelligence")
-            est=_seed_estimator_from_latest(pid)
-            progress_cb(76,"Splitting measurable takeoff components")
-            comp=_v38_run_component_split(pid)
-            progress_cb(88,"Reviewing automatic quantity proposals")
-            auto=_v38_run_auto_takeoff(pid)
-            progress_cb(100,"Project analysis complete")
-            return {
-                "blueprint":bp,
-                "estimator":est,
-                "components":comp,
-                "automatic_takeoff":auto
-            }
-
-        if jtype=="REVISION_ANALYSIS":
-            progress_cb(20,"Loading revision intelligence")
-            result=_v55_summary(pid)
-            progress_cb(100,"Revision intelligence complete")
-            return result
-
-        if jtype=="PROJECT_MEMORY_REFRESH":
-            progress_cb(20,"Refreshing approved project memory")
-            _v54_seed_from_existing(pid)
-            progress_cb(65,"Rebuilding cross-project patterns")
-            _v54_rebuild_patterns()
-            progress_cb(100,"Project memory refresh complete")
-            return {"status":"complete"}
-
-        raise RuntimeError(f"Unsupported background job type: {jtype}")
-    finally:
-        _current_company_id.reset(company_token)
-        _current_user_id.reset(user_token)
-
-@app.post("/build/analyze-project/queue")
-def bc_queue_project_analysis(attachment_ids:list[int] | None=Form(None),focus:str=Form("")):
-    pid=project_id()
-    ids=attachment_ids or []
-    if not ids:
-        return RedirectResponse("/build/analyze-project?error=select_documents",status_code=303)
-    jid=bc_enqueue_job("PROJECT_ANALYSIS",{"attachment_ids":ids,"focus":focus},pid,priority=50)
-    return RedirectResponse(f"/jobs/{jid}",status_code=303)
-
-@app.get("/jobs",response_class=HTMLResponse)
-def bc_jobs_page():
-    rows=bc_job_list(project_id(),100)
-    h="".join(
-        f'<div class="action"><span class="badge">{esc(r["status"])}</span> '
-        f'<a href="/jobs/{r["id"]}"><b>Job #{r["id"]} - {esc(r["job_type"])}</b></a>'
-        f'<div class="small">{int(r["progress"] or 0)}% - {esc(r["progress_message"] or "")} · attempts {int(r["attempts"] or 0)}/{int(r["max_attempts"] or 0)}</div></div>'
-        for r in rows
-    ) or '<p class="muted">No background jobs for this project yet.</p>'
-    return shell(
-        "Background Jobs",
-        '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation</div>'
-        '<h1>Background Jobs</h1><p class="muted">Heavy analysis runs outside normal web requests.</p></div>'
-        '<div class="card">'+h+'</div>'
-    )
-
-@app.get("/jobs/{job_id}",response_class=HTMLResponse)
-def bc_job_page(job_id:int):
-    r=bc_job_get(job_id)
-    if not r:
-        return HTMLResponse("Job not found.",status_code=404)
-
-    result_html=""
-    if r["result_json"]:
-        try:
-            result_html='<pre style="white-space:pre-wrap">'+esc(json.dumps(json.loads(r["result_json"]),indent=2)[:15000])+'</pre>'
-        except Exception:
-            result_html='<pre>'+esc(str(r["result_json"])[:15000])+'</pre>'
-
-    body=(
-        f'<div class="hero"><div class="eyebrow">BACKGROUND JOB #{r["id"]}</div>'
-        f'<h1>{esc(r["job_type"])}</h1><p class="muted">{esc(r["status"])} · {int(r["progress"] or 0)}%</p></div>'
-        '<div class="grid3">'
-        f'<div class="card"><div class="label">Status</div><div class="kpi" style="font-size:22px">{esc(r["status"])}</div></div>'
-        f'<div class="card"><div class="label">Progress</div><div class="kpi">{int(r["progress"] or 0)}%</div></div>'
-        f'<div class="card"><div class="label">Attempts</div><div class="kpi">{int(r["attempts"] or 0)}</div></div>'
-        '</div>'
-        f'<div class="card"><h2>Current Step</h2><p>{esc(r["progress_message"] or "")}</p></div>'
-    )
-    if r["error_text"]:
-        body += f'<div class="card"><h2>Error</h2><pre>{esc(r["error_text"])}</pre></div>'
-    if result_html:
-        body += f'<div class="card"><h2>Result</h2>{result_html}</div>'
-    if str(r["status"]) in {"QUEUED","RUNNING","RETRY"}:
-        body += '<script>setTimeout(function(){location.reload()},4000)</script>'
-    return shell(f"Job #{job_id}",body)
-
-@app.get("/jobs/{job_id}/status")
-def bc_job_status_api(job_id:int):
-    r=bc_job_get(job_id)
-    if not r:
-        return JSONResponse({"error":"not found"},status_code=404)
-    return JSONResponse({
-        "id":r["id"],
-        "type":r["job_type"],
-        "status":r["status"],
-        "progress":int(r["progress"] or 0),
-        "message":r["progress_message"] or "",
-        "attempts":int(r["attempts"] or 0),
-        "error":r["error_text"] or ""
-    })
-
-@app.get("/worker-status",response_class=HTMLResponse)
-def bc_worker_status():
-    rows=bc_job_list(None,200)
-    counts={}
-    for r in rows:
-        counts[r["status"]]=counts.get(r["status"],0)+1
-    cards="".join(
-        f'<div class="card"><div class="label">{esc(k)}</div><div class="kpi">{v}</div></div>'
-        for k,v in sorted(counts.items())
-    )
-    if not cards:
-        cards='<div class="card">No jobs yet.</div>'
-    return shell(
-        "Worker Status",
-        '<div class="hero"><div class="eyebrow">Scale Foundation Phase 4</div>'
-        '<h1>Background Worker Status</h1><p class="muted">Queue health for AI, blueprint and heavy project processing.</p></div>'
-        '<div class="grid3">'+cards+'</div><div class="card"><a href="/jobs">Open Project Jobs</a></div>'
-    )
-
-
-# ============================================================
-# BuildCommand 1.0 - SCALE FOUNDATION PHASE 5
-# Shared Redis/Valkey cache + distributed rate limiting.
-# ============================================================
-
-BC_REDIS_URL=(os.environ.get("REDIS_URL") or os.environ.get("KEY_VALUE_URL") or "").strip()
-BC_CACHE_PREFIX=os.environ.get("CACHE_PREFIX","buildcommand").strip().strip(":") or "buildcommand"
-BC_CACHE_DEFAULT_TTL=max(1,int(os.environ.get("CACHE_DEFAULT_TTL","30")))
-BC_RATE_LIMIT_ENABLED=os.environ.get("RATE_LIMIT_ENABLED","1").strip().lower() not in {"0","false","no","off"}
-
-_BC_REDIS=None
-_BC_REDIS_LOCK=threading.Lock()
-_BC_LOCAL_CACHE={}
-_BC_LOCAL_RATE={}
-_BC_LOCAL_SHARED_LOCK=threading.Lock()
-_BC_CACHE_STATS={"hits":0,"misses":0,"sets":0,"errors":0,"rate_limited":0}
-
-def _bc_redis_client():
-    global _BC_REDIS
-    if _BC_REDIS is not None:
-        return _BC_REDIS
-    if redis is None or not BC_REDIS_URL:
-        return None
-    with _BC_REDIS_LOCK:
-        if _BC_REDIS is None:
-            _BC_REDIS=redis.Redis.from_url(
-                BC_REDIS_URL,
-                decode_responses=True,
-                socket_connect_timeout=float(os.environ.get("REDIS_CONNECT_TIMEOUT","2")),
-                socket_timeout=float(os.environ.get("REDIS_SOCKET_TIMEOUT","2")),
-                health_check_interval=30,
-                retry_on_timeout=True
-            )
-    return _BC_REDIS
-
-def _bc_cache_key(name):
-    return f"{BC_CACHE_PREFIX}:cache:{name}"
-
-def _bc_rate_key(bucket,identity,window_start):
-    return f"{BC_CACHE_PREFIX}:rate:{bucket}:{identity}:{window_start}"
-
-def bc_shared_json_get(name):
-    key=_bc_cache_key(name)
-    client=_bc_redis_client()
-    if client is not None:
-        try:
-            raw=client.get(key)
-            if raw is None:
-                _BC_CACHE_STATS["misses"]+=1
-                return None
-            _BC_CACHE_STATS["hits"]+=1
-            return json.loads(raw)
-        except Exception:
-            _BC_CACHE_STATS["errors"]+=1
-    now=time.time()
-    with _BC_LOCAL_SHARED_LOCK:
-        row=_BC_LOCAL_CACHE.get(key)
-        if not row or row["expires"]<=now:
-            _BC_LOCAL_CACHE.pop(key,None)
-            _BC_CACHE_STATS["misses"]+=1
-            return None
-        _BC_CACHE_STATS["hits"]+=1
-        return row["value"]
-
-def bc_shared_json_set(name,value,ttl=None):
-    ttl=max(1,int(ttl or BC_CACHE_DEFAULT_TTL))
-    key=_bc_cache_key(name)
-    client=_bc_redis_client()
-    if client is not None:
-        try:
-            client.setex(key,ttl,json.dumps(value,separators=(",",":"),default=str))
-            _BC_CACHE_STATS["sets"]+=1
-            return True
-        except Exception:
-            _BC_CACHE_STATS["errors"]+=1
-    with _BC_LOCAL_SHARED_LOCK:
-        _BC_LOCAL_CACHE[key]={"value":value,"expires":time.time()+ttl}
-    _BC_CACHE_STATS["sets"]+=1
-    return True
-
-def bc_shared_delete_pattern(pattern):
-    """Delete matching cache keys. Redis scan is bounded to BuildCommand's namespace."""
-    full=f"{BC_CACHE_PREFIX}:cache:{pattern}"
-    client=_bc_redis_client()
-    if client is not None:
-        try:
-            keys=list(client.scan_iter(match=full,count=200))
-            if keys: client.delete(*keys)
-            return len(keys)
-        except Exception:
-            _BC_CACHE_STATS["errors"]+=1
-    deleted=0
-    with _BC_LOCAL_SHARED_LOCK:
-        for key in list(_BC_LOCAL_CACHE.keys()):
-            if pattern=="*" or key.endswith(pattern.replace("*","")):
-                _BC_LOCAL_CACHE.pop(key,None);deleted+=1
-    return deleted
-
-def _bc_rate_allow(bucket,identity,limit,window_seconds):
-    if not BC_RATE_LIMIT_ENABLED:
-        return True,0,limit
-    now=int(time.time())
-    window_start=now-(now%window_seconds)
-    key=_bc_rate_key(bucket,identity,window_start)
-    client=_bc_redis_client()
-    if client is not None:
-        try:
-            pipe=client.pipeline(transaction=True)
-            pipe.incr(key,1)
-            pipe.expire(key,window_seconds+5,nx=True)
-            count,_=pipe.execute()
-            remaining=max(0,limit-int(count))
-            return int(count)<=limit,window_start+window_seconds-now,remaining
-        except Exception:
-            _BC_CACHE_STATS["errors"]+=1
-    # Graceful single-process fallback.
-    with _BC_LOCAL_SHARED_LOCK:
-        row=_BC_LOCAL_RATE.get(key)
-        if not row or row["expires"]<=time.time():
-            row={"count":0,"expires":time.time()+window_seconds}
-            _BC_LOCAL_RATE[key]=row
-        row["count"]+=1
-        remaining=max(0,limit-row["count"])
-        return row["count"]<=limit,max(0,int(row["expires"]-time.time())),remaining
-
-def _bc_request_identity(request):
-    # Prefer a stable session-derived identity without exposing the raw session token.
-    raw=request.cookies.get("bc_session") or ""
-    if raw:
-        return "sess-"+hashlib.sha256(raw.encode()).hexdigest()[:24]
-    forwarded=request.headers.get("x-forwarded-for","").split(",")[0].strip()
-    ip=forwarded or (request.client.host if request.client else "unknown")
-    return "ip-"+hashlib.sha256(ip.encode()).hexdigest()[:24]
-
-def _bc_rate_policy(request):
-    path=request.url.path
-    method=request.method.upper()
-    # Health checks/status endpoints should remain observable.
-    if path in {"/healthz","/readyz","/metrics-lite"}:
-        return None
-    if path in {"/login","/register"} and method=="POST":
-        return ("auth",15,300)
-    if path.startswith("/ask-buildcommand") or path.startswith("/document-ai"):
-        return ("ai",30,60)
-    if path.startswith("/build/analyze-project") or path.startswith("/blueprint-brain"):
-        if method=="POST":
-            return ("heavy-ai",12,60)
-    if path.startswith("/documents") and method=="POST":
-        return ("uploads",30,60)
-    if method in {"POST","PUT","PATCH","DELETE"}:
-        return ("writes",180,60)
-    return ("reads",600,60)
-
-@app.middleware("http")
-async def bc10_distributed_rate_limit(request,call_next):
-    policy=_bc_rate_policy(request)
-    if policy:
-        bucket,limit,window=policy
-        identity=_bc_request_identity(request)
-        allowed,retry_after,remaining=_bc_rate_allow(bucket,identity,limit,window)
-        if not allowed:
-            _BC_CACHE_STATS["rate_limited"]+=1
-            return JSONResponse(
-                {"error":"rate_limit_exceeded","detail":"Too many requests. Please retry shortly."},
-                status_code=429,
-                headers={
-                    "Retry-After":str(max(1,retry_after)),
-                    "X-RateLimit-Limit":str(limit),
-                    "X-RateLimit-Remaining":"0"
-                }
-            )
-        response=await call_next(request)
-        response.headers["X-RateLimit-Limit"]=str(limit)
-        response.headers["X-RateLimit-Remaining"]=str(remaining)
-        return response
-    return await call_next(request)
-
-def _bc_cache_health():
-    client=_bc_redis_client()
-    if client is None:
-        return ("Shared Cache","WARN","Redis/Valkey not configured; local fallback is active.")
-    try:
-        pong=client.ping()
-        return ("Shared Cache","PASS","Redis/Valkey reachable.") if pong else ("Shared Cache","FAIL","Ping returned false.")
-    except Exception as exc:
-        return ("Shared Cache","FAIL",str(exc)[:180])
-
-@app.get("/cache-status",response_class=HTMLResponse)
-def bc_cache_status():
-    health=_bc_cache_health()
-    client=_bc_redis_client()
-    backend="REDIS / VALKEY" if client is not None else "LOCAL FALLBACK"
-    stats=dict(_BC_CACHE_STATS)
-    body=(
-      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation Phase 5</div>'
-      '<h1>Shared Cache & Rate Limit Status</h1>'
-      '<p class="muted">All web workers should share the same production cache and request limits.</p></div>'
-      '<div class="grid3">'
-      f'<div class="card"><div class="label">Backend</div><div class="kpi" style="font-size:20px">{esc(backend)}</div></div>'
-      f'<div class="card"><div class="label">Cache Hits</div><div class="kpi">{stats["hits"]}</div></div>'
-      f'<div class="card"><div class="label">Cache Misses</div><div class="kpi">{stats["misses"]}</div></div>'
-      f'<div class="card"><div class="label">Cache Sets</div><div class="kpi">{stats["sets"]}</div></div>'
-      f'<div class="card"><div class="label">Cache Errors</div><div class="kpi">{stats["errors"]}</div></div>'
-      f'<div class="card"><div class="label">Rate Limited</div><div class="kpi">{stats["rate_limited"]}</div></div>'
-      '</div>'
-      f'<div class="card"><h2>{esc(health[0])}: {esc(health[1])}</h2><p>{esc(health[2])}</p></div>'
-      '<div class="card"><h2>Production Rule</h2>'
-      '<p>Configure REDIS_URL from a same-region Render Key Value instance before scaling to multiple web instances. '
-      'Local fallback protects availability but does not coordinate cache/rate state across machines.</p></div>'
-    )
-    return shell("Cache Status",body)
-
-@app.post("/cache/clear-project")
-def bc_clear_shared_project_cache():
-    cid=current_company_id()
-    pid=project_id()
-    bc_shared_delete_pattern(f"dashboard:{cid}:{pid}")
-    try:_v56_clear_project_cache(pid)
-    except Exception:pass
-    return RedirectResponse("/cache-status",status_code=303)
-
-
-# ============================================================
-# BuildCommand 1.0 - SCALE FOUNDATION PHASE 6
-# Migration discipline + tenant isolation auditing.
-# ============================================================
-
-BC_SCHEMA_TARGET="2026.08.17.006"
-
-def _bc_migrations_table():
-    c=db()
-    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
-    c.execute(f"""CREATE TABLE IF NOT EXISTS schema_migrations(
-      id {pk},
-      version TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      checksum TEXT,
-      applied_at TEXT NOT NULL
-    )""")
-    c.commit();c.close()
-
-def bc_schema_version():
-    try:
-        _bc_migrations_table()
-        c=db()
-        row=c.execute("SELECT version FROM schema_migrations ORDER BY id DESC LIMIT 1").fetchone()
-        c.close()
-        return str(row["version"]) if row else "bootstrap"
-    except Exception:
-        return "unknown"
-
-def _bc_tenant_audit():
-    """
-    Audit key multi-tenant/project relationships without exposing customer data.
-    A non-zero orphan/cross-company count is a production blocker.
-    """
-    checks=[]
-    c=db()
-    try:
-        sql_checks=[
-          ("Attachments cross-company project mismatch",
-           """SELECT COUNT(*) AS n FROM attachments a
-              JOIN projects p ON p.id=a.project_id
-              WHERE a.project_id IS NOT NULL AND a.company_id<>p.company_id"""),
-          ("Blueprint runs cross-company project mismatch",
-           """SELECT COUNT(*) AS n FROM blueprint_runs b
-              JOIN projects p ON p.id=b.project_id
-              WHERE b.company_id<>p.company_id"""),
-          ("Blueprint scope cross-company project mismatch",
-           """SELECT COUNT(*) AS n FROM blueprint_scope_items b
-              JOIN projects p ON p.id=b.project_id
-              WHERE b.company_id<>p.company_id"""),
-          ("Background jobs cross-company project mismatch",
-           """SELECT COUNT(*) AS n FROM background_jobs j
-              JOIN projects p ON p.id=j.project_id
-              WHERE j.project_id IS NOT NULL AND j.company_id<>p.company_id"""),
-          ("Blueprint markups cross-company project mismatch",
-           """SELECT COUNT(*) AS n FROM blueprint_markups m
-              JOIN projects p ON p.id=m.project_id
-              WHERE m.company_id<>p.company_id"""),
-          ("User state references another company project",
-           """SELECT COUNT(*) AS n FROM user_state s
-              JOIN users u ON u.id=s.user_id
-              JOIN projects p ON p.id=s.selected_project_id
-              WHERE s.selected_project_id IS NOT NULL AND u.company_id<>p.company_id""")
-        ]
-        for name,sql in sql_checks:
-            try:
-                row=c.execute(sql).fetchone()
-                n=int(row["n"] if row else 0)
-                checks.append((name,"PASS" if n==0 else "FAIL",n))
-            except Exception as exc:
-                try:c.rollback()
-                except Exception:pass
-                checks.append((name,"WARN",str(exc)[:120]))
-    finally:
-        c.close()
-    return checks
-
-def bc_require_project_company(pid,company_id=None):
-    cid=company_id if company_id is not None else current_company_id()
-    if not pid or not cid:
-        return False
-    c=db()
-    row=c.execute("SELECT id FROM projects WHERE id=? AND company_id=?",(pid,cid)).fetchone()
-    c.close()
-    return bool(row)
-
-@app.get("/tenant-security-status",response_class=HTMLResponse)
-def bc_tenant_security_status():
-    rows=_bc_tenant_audit()
-    fail=sum(1 for x in rows if x[1]=="FAIL")
-    warn=sum(1 for x in rows if x[1]=="WARN")
-    h="".join(
-      f'<div class="action"><span class="badge">{esc(status)}</span> <b>{esc(name)}</b>'
-      f'<div class="small">{esc(value)}</div></div>'
-      for name,status,value in rows
-    )
-    state="PASS" if fail==0 else "BLOCKED"
-    body=(
-      '<div class="hero"><div class="eyebrow">Scale Foundation Phase 6</div>'
-      '<h1>Tenant Isolation Audit</h1>'
-      '<p class="muted">One company must never be able to reference another company’s project data.</p></div>'
-      '<div class="grid3">'
-      f'<div class="card"><div class="label">Overall</div><div class="kpi" style="font-size:22px">{state}</div></div>'
-      f'<div class="card"><div class="label">Failures</div><div class="kpi">{fail}</div></div>'
-      f'<div class="card"><div class="label">Warnings</div><div class="kpi">{warn}</div></div>'
-      '</div><div class="card">'+h+'</div>'
-      '<div class="card"><h2>Production Gate</h2>'
-      '<p>Any cross-company mismatch is a release blocker. Run this audit after migrations and before production promotion.</p></div>'
-    )
-    return shell("Tenant Security Status",body)
-
-@app.get("/migration-status",response_class=HTMLResponse)
-def bc_migration_status():
-    _bc_migrations_table()
-    c=db()
-    rows=c.execute("SELECT * FROM schema_migrations ORDER BY id DESC LIMIT 50").fetchall()
-    c.close()
-    current=bc_schema_version()
-    h="".join(
-      f'<div class="action"><b>{esc(r["version"])} - {esc(r["name"])}</b>'
-      f'<div class="small">{esc(r["applied_at"])} · {esc(r["checksum"] or "")}</div></div>'
-      for r in rows
-    ) or '<p class="muted">No managed migrations recorded yet. Existing schema is operating in bootstrap compatibility mode.</p>'
-    return shell(
-      "Migration Status",
-      f'<div class="hero"><div class="eyebrow">BuildCommand 1.0</div><h1>Database Migration Status</h1>'
-      f'<p class="muted">Current: {esc(current)} · Target: {esc(BC_SCHEMA_TARGET)}</p></div>'
-      '<div class="card">'+h+'</div>'
-      '<div class="card"><h2>Production Rule</h2><p>Schema changes should be applied by the migration command before web/worker promotion, not improvised by customer traffic.</p></div>'
-    )
-
-@app.get("/production-gates",response_class=HTMLResponse)
-def bc_production_gates():
-    tenant=_bc_tenant_audit()
-    tenant_ok=all(x[1]!="FAIL" for x in tenant)
-    cache=_bc_cache_health()
-    storage=_bc_storage_health()
-    health=_bc10_health()
-    database_ok=all(not (x[0]=="Database" and x[1]=="FAIL") for x in health)
-    gates=[
-      ("Database",database_ok,"Database connection and health"),
-      ("Tenant Isolation",tenant_ok,"No detected cross-company project references"),
-      ("Shared Cache",cache[1]=="PASS","Redis/Valkey distributed coordination"),
-      ("Shared Storage",storage[1]=="PASS","Object storage shared across instances"),
-      ("Background Jobs",_bc10_safe_count("background_jobs")>=0,"Durable job queue schema available"),
-      ("Schema Migrations",bc_schema_version()!="unknown","Migration tracking available")
-    ]
-    ready=all(g[1] for g in gates)
-    h="".join(
-      f'<div class="action"><span class="badge">{"PASS" if ok else "BLOCKED"}</span> <b>{esc(name)}</b>'
-      f'<div class="small">{esc(detail)}</div></div>'
-      for name,ok,detail in gates
-    )
-    return shell(
-      "Production Gates",
-      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Production Gates</div>'
-      f'<h1>{"Scale foundation healthy" if ready else "Production gates still open"}</h1>'
-      '<p class="muted">These gates must pass before calling BuildCommand ready for high-volume production.</p></div>'
-      '<div class="card">'+h+'</div>'
-    )
-
-
-# ============================================================
-# BuildCommand 1.0 - SCALE FOUNDATION PHASE 7
-# Load-test observability + security verification gates.
-# ============================================================
-
-BC_PHASE7="1.0-scale-7"
-
-def _bc_security_headers_audit():
-    return [
-      ("X-Content-Type-Options","nosniff"),
-      ("X-Frame-Options","SAMEORIGIN"),
-      ("Referrer-Policy","strict-origin-when-cross-origin"),
-      ("Permissions-Policy","camera=(), microphone=(), geolocation=()"),
-    ]
-
-def _bc_phase7_metrics():
-    with _BC_REQ_LOCK:
-        count=int(_BC_REQ_STATS["count"])
-        errors=int(_BC_REQ_STATS["errors"])
-        avg=(_BC_REQ_STATS["total_ms"]/count) if count else 0.0
-        mx=float(_BC_REQ_STATS["max_ms"])
-        slow=len(_BC_SLOW)
-    jobs={}
-    try:
-        rows=_v39_rows("SELECT status,COUNT(*) AS n FROM background_jobs GROUP BY status")
-        for r in rows: jobs[str(r["status"])]=int(r["n"])
-    except Exception: pass
-    return {
-      "release":BC_PHASE7,
-      "requests":count,
-      "errors":errors,
-      "error_rate_pct":round((errors/count*100.0) if count else 0.0,3),
-      "average_ms":round(avg,1),
-      "max_ms":round(mx,1),
-      "slow_request_count":slow,
-      "jobs":jobs,
-      "cache":dict(_BC_CACHE_STATS),
-      "schema_version":bc_schema_version()
-    }
-
-@app.get("/scale-test-metrics")
-def bc_scale_test_metrics():
-    return JSONResponse(_bc_phase7_metrics())
-
-@app.get("/phase7-status",response_class=HTMLResponse)
-def bc_phase7_status():
-    m=_bc_phase7_metrics()
-    tenant=_bc_tenant_audit()
-    tenant_fail=sum(1 for x in tenant if x[1]=="FAIL")
-    cache=_bc_cache_health()
-    storage=_bc_storage_health()
-    cards=[
-      ("Requests",m["requests"]),
-      ("Errors",m["errors"]),
-      ("Error Rate",f'{m["error_rate_pct"]}%'),
-      ("Average",f'{m["average_ms"]} ms'),
-      ("Max",f'{m["max_ms"]} ms'),
-      ("Tenant Failures",tenant_fail),
-    ]
-    h="".join(f'<div class="card"><div class="label">{esc(k)}</div><div class="kpi">{esc(v)}</div></div>' for k,v in cards)
-    gates=[
-      ("Tenant isolation",tenant_fail==0),
-      ("Shared cache",cache[1]=="PASS"),
-      ("Shared storage",storage[1]=="PASS"),
-      ("Migration tracking",m["schema_version"] not in {"unknown","bootstrap"}),
-      ("Observed error rate under 1%",m["error_rate_pct"]<1.0),
-    ]
-    gh="".join(f'<div class="action"><span class="badge">{"PASS" if ok else "OPEN"}</span> <b>{esc(name)}</b></div>' for name,ok in gates)
-    return shell("Phase 7 Status",
-      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation Phase 7</div>'
-      '<h1>Load & Security Test Center</h1><p class="muted">Measure the platform instead of guessing about scale.</p></div>'
-      '<div class="grid3">'+h+'</div><div class="card"><h2>Production Gates</h2>'+gh+'</div>'
-      '<div class="card"><h2>Test progression</h2><p>10 → 50 → 100 → 250 → 500 → 1,000 concurrent users. '
-      'Do not advance a stage until the prior stage meets the agreed response-time, error-rate, tenant-isolation, database, cache, storage and worker-queue gates.</p></div>'
-    )
-
-@app.get("/security-test-status",response_class=HTMLResponse)
-def bc_security_test_status():
-    tenant=_bc_tenant_audit()
-    rows="".join(
-      f'<div class="action"><span class="badge">{esc(s)}</span> <b>{esc(n)}</b><div class="small">{esc(v)}</div></div>'
-      for n,s,v in tenant
-    )
-    headers="".join(f'<div class="action"><b>{esc(k)}</b><div class="small">{esc(v)}</div></div>' for k,v in _bc_security_headers_audit())
-    return shell("Security Test Status",
-      '<div class="hero"><div class="eyebrow">Phase 7 Security Verification</div><h1>Security Test Center</h1>'
-      '<p class="muted">Tenant boundaries, request protection and browser security controls.</p></div>'
-      '<div class="card"><h2>Tenant Integrity</h2>'+rows+'</div>'
-      '<div class="card"><h2>Required Response Headers</h2>'+headers+'</div>'
-      '<div class="card"><h2>Automated probes</h2><p>Run <b>python security_regression_tests.py</b> against a staging deployment before production promotion.</p></div>'
-    )
 
 @app.get("/build",response_class=HTMLResponse)
 def unified_build():
@@ -16690,153 +14250,6 @@ def notifications_page():
     return shell("Notifications",f'<div class="hero"><div class="eyebrow">Notifications</div><h1>What needs your attention?</h1></div><div class="card"><form method="post" action="/notifications/email-digest"><button type="submit">Email My Alert Digest</button></form><div class="small">Requires SMTP settings in Render.</div></div><div class="grid2">{cards}</div>')
 
 
-
-# ============================================================
-# BuildCommand 1.0 - SCALE FOUNDATION PHASE 3
-# Shared object storage abstraction for blueprints/documents.
-# ============================================================
-
-BC_STORAGE_BACKEND=os.environ.get("STORAGE_BACKEND","local").strip().lower()
-BC_S3_BUCKET=os.environ.get("S3_BUCKET","").strip()
-BC_S3_REGION=os.environ.get("S3_REGION","").strip() or None
-BC_S3_ENDPOINT=os.environ.get("S3_ENDPOINT_URL","").strip() or None
-BC_S3_PREFIX=os.environ.get("S3_PREFIX","buildcommand").strip().strip("/")
-
-def _bc_storage_key(stored_name,company_id=None,project_id=None):
-    company_id=company_id or current_company_id()
-    project_id=project_id or project_id_safe()
-    parts=[BC_S3_PREFIX,str(company_id),str(project_id),str(stored_name)]
-    return "/".join(p.strip("/") for p in parts if str(p).strip("/"))
-
-def project_id_safe():
-    try:
-        return project_id()
-    except Exception:
-        return 0
-
-_BC_S3_CLIENT=None
-_BC_S3_LOCK=threading.Lock()
-
-def _bc_s3_client():
-    global _BC_S3_CLIENT
-    if _BC_S3_CLIENT is not None:
-        return _BC_S3_CLIENT
-    if boto3 is None:
-        raise RuntimeError("boto3 is not installed")
-    if not BC_S3_BUCKET:
-        raise RuntimeError("S3_BUCKET is not configured")
-    with _BC_S3_LOCK:
-        if _BC_S3_CLIENT is None:
-            kwargs={}
-            if BC_S3_REGION: kwargs["region_name"]=BC_S3_REGION
-            if BC_S3_ENDPOINT: kwargs["endpoint_url"]=BC_S3_ENDPOINT
-            access=os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("S3_ACCESS_KEY_ID")
-            secret=os.environ.get("AWS_SECRET_ACCESS_KEY") or os.environ.get("S3_SECRET_ACCESS_KEY")
-            if access: kwargs["aws_access_key_id"]=access
-            if secret: kwargs["aws_secret_access_key"]=secret
-            _BC_S3_CLIENT=boto3.client("s3",**kwargs)
-    return _BC_S3_CLIENT
-
-def bc_storage_put_bytes(stored_name,data,content_type="application/octet-stream",company_id=None,project_id_value=None):
-    """
-    Persist bytes to configured shared storage.
-    Returns storage locator metadata.
-    """
-    if BC_STORAGE_BACKEND=="s3":
-        key=_bc_storage_key(stored_name,company_id,project_id_value)
-        _bc_s3_client().put_object(
-            Bucket=BC_S3_BUCKET,Key=key,Body=data,
-            ContentType=content_type or "application/octet-stream"
-        )
-        return {"backend":"s3","key":key}
-    os.makedirs(UPLOAD_DIR,exist_ok=True)
-    path=os.path.join(UPLOAD_DIR,stored_name)
-    with open(path,"wb") as f:
-        f.write(data)
-    return {"backend":"local","path":path}
-
-def bc_storage_exists(stored_name,company_id=None,project_id_value=None):
-    if BC_STORAGE_BACKEND=="s3":
-        try:
-            key=_bc_storage_key(stored_name,company_id,project_id_value)
-            _bc_s3_client().head_object(Bucket=BC_S3_BUCKET,Key=key)
-            return True
-        except Exception:
-            return False
-    return os.path.isfile(os.path.join(UPLOAD_DIR,stored_name))
-
-def bc_storage_get_bytes(stored_name,company_id=None,project_id_value=None):
-    if BC_STORAGE_BACKEND=="s3":
-        key=_bc_storage_key(stored_name,company_id,project_id_value)
-        obj=_bc_s3_client().get_object(Bucket=BC_S3_BUCKET,Key=key)
-        return obj["Body"].read()
-    path=os.path.join(UPLOAD_DIR,stored_name)
-    with open(path,"rb") as f:
-        return f.read()
-
-def bc_storage_stream_response(row,inline=False):
-    stored_name=row["stored_name"]
-    mime=row["mime_type"] or mimetypes.guess_type(row["original_name"] or "")[0] or "application/octet-stream"
-    filename=row["original_name"] or stored_name
-    if BC_STORAGE_BACKEND=="s3":
-        key=_bc_storage_key(stored_name,row["company_id"],row["project_id"])
-        obj=_bc_s3_client().get_object(Bucket=BC_S3_BUCKET,Key=key)
-        data=obj["Body"].read()
-        headers={"Content-Disposition":f'{"inline" if inline else "attachment"}; filename="{filename}"'}
-        return Response(content=data,media_type=mime,headers=headers)
-    path=os.path.join(UPLOAD_DIR,stored_name)
-    if not os.path.isfile(path):
-        return HTMLResponse("Stored file is unavailable.",status_code=404)
-    try:
-        return FileResponse(
-            path,media_type=mime,filename=filename,
-            content_disposition_type="inline" if inline else "attachment"
-        )
-    except TypeError:
-        response=FileResponse(path,media_type=mime,filename=filename)
-        response.headers["Content-Disposition"]=f'{"inline" if inline else "attachment"}; filename="{filename}"'
-        return response
-
-def bc_storage_delete(stored_name,company_id=None,project_id_value=None):
-    if BC_STORAGE_BACKEND=="s3":
-        key=_bc_storage_key(stored_name,company_id,project_id_value)
-        _bc_s3_client().delete_object(Bucket=BC_S3_BUCKET,Key=key)
-        return True
-    path=os.path.join(UPLOAD_DIR,stored_name)
-    if os.path.isfile(path):
-        os.remove(path)
-    return True
-
-def _bc_storage_health():
-    if BC_STORAGE_BACKEND=="s3":
-        try:
-            _bc_s3_client().head_bucket(Bucket=BC_S3_BUCKET)
-            return ("Object Storage","PASS",f"S3 bucket {BC_S3_BUCKET} reachable")
-        except Exception as exc:
-            return ("Object Storage","FAIL",str(exc)[:160])
-    try:
-        os.makedirs(UPLOAD_DIR,exist_ok=True)
-        return ("Object Storage","WARN",f"Local fallback active: {UPLOAD_DIR}")
-    except Exception as exc:
-        return ("Object Storage","FAIL",str(exc)[:160])
-
-@app.get("/storage-status",response_class=HTMLResponse)
-def bc_storage_status():
-    check=_bc_storage_health()
-    count=_bc10_safe_count("attachments","company_id=?",(current_company_id(),))
-    body=(
-      '<div class="hero"><div class="eyebrow">BuildCommand 1.0 Scale Foundation</div>'
-      '<h1>Shared Storage Status</h1><p class="muted">Blueprints and documents must remain available across multiple web workers and instances.</p></div>'
-      '<div class="grid3">'
-      f'<div class="card"><div class="label">Backend</div><div class="kpi" style="font-size:22px">{esc(BC_STORAGE_BACKEND.upper())}</div></div>'
-      f'<div class="card"><div class="label">Documents</div><div class="kpi">{count}</div></div>'
-      f'<div class="card"><div class="label">Storage Health</div><div class="kpi" style="font-size:20px">{esc(check[1])}</div></div>'
-      '</div>'
-      f'<div class="card"><h2>{esc(check[0])}</h2><p>{esc(check[2])}</p></div>'
-      '<div class="card"><h2>Production Rule</h2><p>Use S3-compatible shared object storage before horizontally scaling web instances. Local disk remains a development/rollback fallback only.</p></div>'
-    )
-    return shell("Storage Status",body)
-
 @app.get("/documents",response_class=HTMLResponse)
 def documents_page():
     pid=project_id(); c=db(); rows=c.execute("SELECT a.*,u.display_name FROM attachments a LEFT JOIN users u ON u.id=a.created_by WHERE a.company_id=? AND a.project_id=? ORDER BY a.id DESC",(current_company_id(),pid)).fetchall(); c.close()
@@ -16859,15 +14272,12 @@ async def documents_upload(category:str=Form("OTHER"),title:str=Form(""),file:Up
 
 @app.get("/documents/{attachment_id}/download")
 def document_download(attachment_id:int):
-    c=db()
-    row=c.execute(
-        "SELECT * FROM attachments WHERE id=? AND company_id=?",
-        (attachment_id,current_company_id())
-    ).fetchone()
-    c.close()
-    if not row:
-        return HTMLResponse("File not found.",status_code=404)
-    return bc_storage_stream_response(row,inline=False)
+    c=db(); row=c.execute("SELECT * FROM attachments WHERE id=? AND company_id=?",(attachment_id,current_company_id())).fetchone(); c.close()
+    if not row: return HTMLResponse("File not found.",status_code=404)
+    path=os.path.join(UPLOAD_DIR,row["stored_name"])
+    if not os.path.isfile(path): return HTMLResponse("Stored file is unavailable. Configure persistent storage.",status_code=404)
+    return FileResponse(path,media_type=row["mime_type"] or "application/octet-stream",filename=row["original_name"])
+
 
 @app.get("/morning-brief",response_class=HTMLResponse)
 def morning_brief_page():
@@ -20136,3 +17546,258 @@ def audit_log_page():
     c=db(); rows=c.execute('SELECT l.*,u.display_name FROM admin_audit_log l LEFT JOIN users u ON u.id=l.user_id WHERE l.company_id=? ORDER BY l.id DESC LIMIT 100',(current_company_id(),)).fetchall(); c.close()
     html=''.join(f'<div class="action"><b>{esc(r["action"])}</b> - {esc(r["display_name"] or "System")}<div>{esc(r["detail"])}</div><div class="small">{esc(r["created"])}</div></div>' for r in rows) or '<div class="muted">No v31 audit events yet.</div>'
     return shell('Audit Log',f'<div class="hero"><div class="eyebrow">Admin Audit Log</div><h1>Track important workspace changes.</h1></div><div class="card">{html}</div>')
+
+
+# =============================================================================
+# BuildCommand AI v371 - Blueprint Brain Reliability & Trade Accuracy
+# Safe hardening layer built on the verified v370 staging baseline.
+# =============================================================================
+
+_V371_TRADE_REGRESSION_CASES = [
+    ("Patch concrete and floor surfaces disturbed by electrical or plumbing work", "Concrete"),
+    ("Prime and refinish all wall, ceiling, and other surfaces patched after demolition or MEP installation", "Painting"),
+    ("Provide new suspended acoustical tile ceiling grid and tile", "Ceilings"),
+    ("Coordinate ceiling grid openings with lights, diffusers, sprinkler heads and smoke detectors", "Ceilings"),
+    ("Provide sprinkler heads and sprinkler drops at new ceiling", "Fire Sprinkler"),
+    ("Provide duct smoke detectors for rooftop air-conditioning units", "HVAC / Mechanical"),
+    ("Provide EF-1 roof-mounted exhaust fan", "HVAC / Mechanical"),
+    ("Patch roof membrane at mechanical penetrations", "Roofing"),
+    ("Provide electrical connection and disconnect for EF-1 exhaust fan", "Electrical"),
+    ("Provide instantaneous electric water heater IWH-1", "Plumbing"),
+    ("Provide water closets, urinals, lavatories, floor drains and drinking fountain", "Plumbing"),
+    ("Sawcut slab, trench and restore concrete for below-grade plumbing", "Concrete"),
+    ("Provide stainless-steel grab bars and toilet room accessories", "Toilet / Bath Accessories"),
+    ("Provide toilet partitions and urinal screens", "Toilet / Bath Accessories"),
+    ("Provide concealed wood blocking and backing for wall-mounted accessories", "Framing / Drywall"),
+    ("Construct restroom Wall Type B gypsum board assemblies and resilient-channel gypsum ceilings", "Framing / Drywall"),
+    ("Provide interior hollow-metal doors, frames and hardware", "Doors / Frames / Hardware"),
+    ("Provide aluminum storefront system and exterior storefront doors", "Storefront / Glazing"),
+    ("Provide rubber base, LVT flooring and tile backsplash", "Flooring / Tile"),
+    ("Provide electronic accessible door operator with activation touch pads", "Low Voltage"),
+    ("Provide card access, electronic strikes, cameras and door contacts", "Low Voltage"),
+    ("Provide fire extinguisher cabinets", "Specialties"),
+    ("Paint hollow-metal doors and frames", "Painting"),
+    ("Remove existing architectural partitions, doors, ceilings and millwork", "Demolition"),
+    ("Remove existing lavatories, urinals, water closets, floor drains and water heater", "Demolition"),
+]
+
+def _v371_trade_regression_results():
+    results=[]
+    for requirement, expected in _V371_TRADE_REGRESSION_CASES:
+        actual=_v441_primary_trade(requirement, "Unassigned")
+        results.append({
+            "requirement": requirement,
+            "expected": expected,
+            "actual": actual,
+            "passed": actual == expected,
+        })
+    return results
+
+
+def _v371_trade_regression_summary():
+    rows=_v371_trade_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    return {
+        "version":"v371",
+        "suite":"Blueprint Brain trade ownership",
+        "passed":passed,
+        "total":len(rows),
+        "failed":len(rows)-passed,
+        "ok":passed==len(rows),
+        "results":rows,
+    }
+
+@app.get('/health/blueprint-v371')
+def v371_blueprint_health():
+    """Deterministic staging smoke test for core Blueprint Brain trade ownership rules."""
+    return _v371_trade_regression_summary()
+
+@app.get('/blueprint-reliability-v371', response_class=HTMLResponse)
+def v371_blueprint_reliability_page():
+    summary=_v371_trade_regression_summary()
+    rows=''.join(
+        f'<div class="action"><span class="badge {"READY" if r["passed"] else "WATCH"}">'
+        f'{"PASS" if r["passed"] else "FAIL"}</span> <b>{esc(r["expected"])}</b>'
+        f'<div>{esc(r["requirement"])}</div>'
+        f'<div class="small">Classifier returned: {esc(r["actual"])}</div></div>'
+        for r in summary['results']
+    )
+    status='READY' if summary['ok'] else 'WATCH'
+    return shell('Blueprint Reliability v371',
+        f'<div class="hero"><div class="eyebrow">BuildCommand v371</div>'
+        f'<h1>Blueprint Brain Reliability Center</h1>'
+        f'<p class="muted">Deterministic trade-ownership regression checks before production promotion.</p>'
+        f'<p><span class="badge {status}">{summary["passed"]}/{summary["total"]} PASSED</span></p></div>'
+        f'<div class="card">{rows}</div>')
+
+
+# =============================================================================
+# BuildCommand AI v372 - Blueprint Brain Source Intelligence
+# Cross-checks sheet/detail/spec/note evidence before trusting extracted scope.
+# =============================================================================
+
+_V372_SOURCE_WEIGHTS = {
+    "source_spec": 4,
+    "source_detail": 3,
+    "source_sheet": 2,
+    "source_note": 2,
+}
+
+
+def _v372_clean_source(value):
+    v=str(value or "").strip()
+    if not v or v.lower() in {"none","null","n/a","na","unknown","-"}:
+        return ""
+    return v
+
+
+def _v372_source_evidence(item):
+    """Return deterministic source-strength metadata for one Blueprint Brain item."""
+    evidence=[]
+    weighted=0
+    for field,weight in _V372_SOURCE_WEIGHTS.items():
+        value=_v372_clean_source(item.get(field) if hasattr(item,'get') else item[field])
+        if value:
+            evidence.append({"field":field,"value":value,"weight":weight})
+            weighted += weight
+    count=len(evidence)
+    # Reward corroboration across source types, not repeated text from one field.
+    corroboration=max(0,count-1)*2
+    score=min(100, weighted*10 + corroboration*5)
+    if count >= 3 or score >= 80:
+        level="STRONG"
+    elif count >= 2 or score >= 45:
+        level="SUPPORTED"
+    elif count == 1:
+        level="SINGLE_SOURCE"
+    else:
+        level="UNSOURCED"
+    return {"count":count,"weighted":weighted,"score":score,"level":level,"evidence":evidence}
+
+
+def _v372_trade_check(requirement, stored_trade):
+    predicted=_v441_primary_trade(str(requirement or ''), str(stored_trade or 'Unassigned'))
+    stored=str(stored_trade or 'Unassigned')
+    return {
+        "stored":stored,
+        "predicted":predicted,
+        "agrees":predicted == stored,
+    }
+
+
+def _v372_item_intelligence(item):
+    requirement=str(item.get('requirement','') if hasattr(item,'get') else item['requirement'])
+    trade=str(item.get('trade','') if hasattr(item,'get') else item['trade'])
+    ev=_v372_source_evidence(item)
+    tc=_v372_trade_check(requirement,trade)
+    base=ev['score']
+    if tc['agrees']:
+        base=min(100,base+10)
+    else:
+        base=max(0,base-20)
+    if ev['level']=='UNSOURCED':
+        disposition='VERIFY_SOURCE'
+    elif not tc['agrees']:
+        disposition='REVIEW_TRADE'
+    elif ev['level']=='SINGLE_SOURCE':
+        disposition='VERIFY_CROSS_REFERENCE'
+    else:
+        disposition='READY'
+    return {
+        "requirement":requirement,
+        "trade":trade,
+        "source":ev,
+        "trade_check":tc,
+        "confidence_score":base,
+        "disposition":disposition,
+    }
+
+
+_V372_SOURCE_REGRESSION_CASES = [
+    ({"requirement":"Provide EF-1 roof-mounted exhaust fan","trade":"HVAC / Mechanical","source_sheet":"M2.1","source_detail":"3/M5.1","source_spec":"23 34 00","source_note":"Mechanical note 8"},"STRONG","READY"),
+    ({"requirement":"Provide suspended acoustical ceiling grid","trade":"Ceilings","source_sheet":"A6.1","source_detail":"","source_spec":"09 51 00","source_note":""},"SUPPORTED","READY"),
+    ({"requirement":"Provide card access and electronic strikes","trade":"Low Voltage","source_sheet":"E7.1","source_detail":"","source_spec":"","source_note":""},"SINGLE_SOURCE","VERIFY_CROSS_REFERENCE"),
+    ({"requirement":"Paint hollow-metal doors and frames","trade":"Doors / Frames / Hardware","source_sheet":"A8.1","source_detail":"","source_spec":"09 91 00","source_note":""},"SUPPORTED","REVIEW_TRADE"),
+    ({"requirement":"Patch roof membrane at mechanical penetrations","trade":"Roofing","source_sheet":"A5.1","source_detail":"7/A5.2","source_spec":"07 54 00","source_note":"Roof note 4"},"STRONG","READY"),
+    ({"requirement":"Provide water closets and lavatories","trade":"Plumbing","source_sheet":"","source_detail":"","source_spec":"","source_note":""},"UNSOURCED","VERIFY_SOURCE"),
+    ({"requirement":"Sawcut slab and restore concrete for plumbing trench","trade":"Concrete","source_sheet":"P1.1","source_detail":"2/P4.1","source_spec":"03 30 00","source_note":""},"STRONG","READY"),
+    ({"requirement":"Provide grab bars and toilet accessories","trade":"Toilet / Bath Accessories","source_sheet":"A9.1","source_detail":"5/A9.2","source_spec":"10 28 00","source_note":""},"STRONG","READY"),
+    ({"requirement":"Provide rubber base and LVT flooring","trade":"Flooring / Tile","source_sheet":"A10.1","source_detail":"","source_spec":"09 65 00","source_note":"Finish schedule"},"STRONG","READY"),
+    ({"requirement":"Remove existing partitions doors ceilings and millwork","trade":"Demolition","source_sheet":"AD1.1","source_detail":"","source_spec":"02 41 19","source_note":"Demo note 2"},"STRONG","READY"),
+]
+
+
+def _v372_source_regression_results():
+    rows=[]
+    for item,expected_level,expected_disposition in _V372_SOURCE_REGRESSION_CASES:
+        result=_v372_item_intelligence(item)
+        passed=(result['source']['level']==expected_level and result['disposition']==expected_disposition)
+        rows.append({
+            "requirement":item['requirement'],
+            "expected_level":expected_level,
+            "actual_level":result['source']['level'],
+            "expected_disposition":expected_disposition,
+            "actual_disposition":result['disposition'],
+            "score":result['confidence_score'],
+            "passed":passed,
+        })
+    return rows
+
+
+def _v372_source_regression_summary():
+    rows=_v372_source_regression_results()
+    passed=sum(1 for r in rows if r['passed'])
+    trade=_v371_trade_regression_summary()
+    return {
+        "version":"v372",
+        "suite":"Blueprint Brain source intelligence",
+        "source_passed":passed,
+        "source_total":len(rows),
+        "trade_passed":trade['passed'],
+        "trade_total":trade['total'],
+        "passed":passed+trade['passed'],
+        "total":len(rows)+trade['total'],
+        "failed":(len(rows)-passed)+trade['failed'],
+        "ok":passed==len(rows) and trade['ok'],
+        "results":rows,
+    }
+
+
+@app.get('/health/blueprint-v372')
+def v372_blueprint_health():
+    """Staging gate: v371 trade ownership plus v372 source-intelligence regression checks."""
+    return _v372_source_regression_summary()
+
+
+@app.get('/blueprint-source-intelligence-v372', response_class=HTMLResponse)
+def v372_blueprint_source_intelligence_page():
+    pid=project_id(); cid=current_company_id()
+    c=db()
+    rows=c.execute("""
+        SELECT * FROM blueprint_scope_items
+        WHERE company_id=? AND project_id=?
+        ORDER BY id DESC LIMIT 250
+    """,(cid,pid)).fetchall()
+    c.close()
+    analyzed=[]
+    for r in rows:
+        try:
+            analyzed.append(_v372_item_intelligence(dict(r)))
+        except Exception:
+            continue
+    ready=sum(1 for x in analyzed if x['disposition']=='READY')
+    review=sum(1 for x in analyzed if x['disposition']=='REVIEW_TRADE')
+    verify=sum(1 for x in analyzed if x['disposition'] in {'VERIFY_SOURCE','VERIFY_CROSS_REFERENCE'})
+    cards=''.join(
+        f'<div class="action"><span class="badge {"READY" if x["disposition"]=="READY" else "WATCH"}">{esc(x["disposition"])}</span> '
+        f'<b>{esc(x["trade"])}</b><div>{esc(x["requirement"])}</div>'
+        f'<div class="small">Source strength: {esc(x["source"]["level"])} · Evidence types: {x["source"]["count"]} · Score: {x["confidence_score"]}/100 · Classifier: {esc(x["trade_check"]["predicted"])}</div></div>'
+        for x in analyzed
+    ) or '<p class="muted">No Blueprint Brain scope items yet. Analyze project documents first.</p>'
+    return shell('Blueprint Source Intelligence v372',
+        f'<div class="hero"><div class="eyebrow">BuildCommand v372</div><h1>Blueprint Source Intelligence</h1>'
+        f'<p class="muted">Cross-check sheet, detail, specification and note evidence before scope intelligence is trusted downstream.</p></div>'
+        f'<div class="grid3"><div class="card"><div class="label">Ready</div><div class="kpi">{ready}</div></div>'
+        f'<div class="card"><div class="label">Trade Review</div><div class="kpi">{review}</div></div>'
+        f'<div class="card"><div class="label">Source Verification</div><div class="kpi">{verify}</div></div></div>'
+        f'<div class="card"><h2>Source-backed Scope Review</h2>{cards}</div>')
