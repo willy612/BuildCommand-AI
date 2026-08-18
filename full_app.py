@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="371.0")
+app=FastAPI(title="BuildCommand AI",version="372.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -1013,7 +1013,7 @@ def _v37_link_card(title,desc,href,label="Open"):
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
-    """v371 lightweight BuildCommand cover page with Blueprint reliability hardening."""
+    """v372 lightweight BuildCommand cover page with Blueprint source-intelligence hardening."""
     pid=project_id()
     try:
         p=db().execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone()
@@ -1071,7 +1071,7 @@ def unified_projects_home():
           <p class="muted">Ask BuildCommand across the current project, or jump directly into the operating workspace you need.</p>
           <div class="bc370-actions"><a class="bc370-primary" style="background:#111820;color:white" href="/ask-buildcommand">Ask BuildCommand →</a><a href="/platform-369">View all intelligence</a></div>
         </div>
-        <div class="bc370-command"><div class="bc370-kicker" style="color:#111820">SYSTEM</div><h2>v371</h2><p class="muted">Lightweight cover page designed to open fast while keeping the intelligence engines behind the launch screen.</p></div>
+        <div class="bc370-command"><div class="bc370-kicker" style="color:#111820">SYSTEM</div><h2>v372</h2><p class="muted">Lightweight cover page designed to open fast while keeping the intelligence engines behind the launch screen.</p></div>
       </section>
     </div>
     """.replace("__PROJECT__",esc(project_name))
@@ -17629,3 +17629,175 @@ def v371_blueprint_reliability_page():
         f'<p class="muted">Deterministic trade-ownership regression checks before production promotion.</p>'
         f'<p><span class="badge {status}">{summary["passed"]}/{summary["total"]} PASSED</span></p></div>'
         f'<div class="card">{rows}</div>')
+
+
+# =============================================================================
+# BuildCommand AI v372 - Blueprint Brain Source Intelligence
+# Cross-checks sheet/detail/spec/note evidence before trusting extracted scope.
+# =============================================================================
+
+_V372_SOURCE_WEIGHTS = {
+    "source_spec": 4,
+    "source_detail": 3,
+    "source_sheet": 2,
+    "source_note": 2,
+}
+
+
+def _v372_clean_source(value):
+    v=str(value or "").strip()
+    if not v or v.lower() in {"none","null","n/a","na","unknown","-"}:
+        return ""
+    return v
+
+
+def _v372_source_evidence(item):
+    """Return deterministic source-strength metadata for one Blueprint Brain item."""
+    evidence=[]
+    weighted=0
+    for field,weight in _V372_SOURCE_WEIGHTS.items():
+        value=_v372_clean_source(item.get(field) if hasattr(item,'get') else item[field])
+        if value:
+            evidence.append({"field":field,"value":value,"weight":weight})
+            weighted += weight
+    count=len(evidence)
+    # Reward corroboration across source types, not repeated text from one field.
+    corroboration=max(0,count-1)*2
+    score=min(100, weighted*10 + corroboration*5)
+    if count >= 3 or score >= 80:
+        level="STRONG"
+    elif count >= 2 or score >= 45:
+        level="SUPPORTED"
+    elif count == 1:
+        level="SINGLE_SOURCE"
+    else:
+        level="UNSOURCED"
+    return {"count":count,"weighted":weighted,"score":score,"level":level,"evidence":evidence}
+
+
+def _v372_trade_check(requirement, stored_trade):
+    predicted=_v441_primary_trade(str(requirement or ''), str(stored_trade or 'Unassigned'))
+    stored=str(stored_trade or 'Unassigned')
+    return {
+        "stored":stored,
+        "predicted":predicted,
+        "agrees":predicted == stored,
+    }
+
+
+def _v372_item_intelligence(item):
+    requirement=str(item.get('requirement','') if hasattr(item,'get') else item['requirement'])
+    trade=str(item.get('trade','') if hasattr(item,'get') else item['trade'])
+    ev=_v372_source_evidence(item)
+    tc=_v372_trade_check(requirement,trade)
+    base=ev['score']
+    if tc['agrees']:
+        base=min(100,base+10)
+    else:
+        base=max(0,base-20)
+    if ev['level']=='UNSOURCED':
+        disposition='VERIFY_SOURCE'
+    elif not tc['agrees']:
+        disposition='REVIEW_TRADE'
+    elif ev['level']=='SINGLE_SOURCE':
+        disposition='VERIFY_CROSS_REFERENCE'
+    else:
+        disposition='READY'
+    return {
+        "requirement":requirement,
+        "trade":trade,
+        "source":ev,
+        "trade_check":tc,
+        "confidence_score":base,
+        "disposition":disposition,
+    }
+
+
+_V372_SOURCE_REGRESSION_CASES = [
+    ({"requirement":"Provide EF-1 roof-mounted exhaust fan","trade":"HVAC / Mechanical","source_sheet":"M2.1","source_detail":"3/M5.1","source_spec":"23 34 00","source_note":"Mechanical note 8"},"STRONG","READY"),
+    ({"requirement":"Provide suspended acoustical ceiling grid","trade":"Ceilings","source_sheet":"A6.1","source_detail":"","source_spec":"09 51 00","source_note":""},"SUPPORTED","READY"),
+    ({"requirement":"Provide card access and electronic strikes","trade":"Low Voltage","source_sheet":"E7.1","source_detail":"","source_spec":"","source_note":""},"SINGLE_SOURCE","VERIFY_CROSS_REFERENCE"),
+    ({"requirement":"Paint hollow-metal doors and frames","trade":"Doors / Frames / Hardware","source_sheet":"A8.1","source_detail":"","source_spec":"09 91 00","source_note":""},"SUPPORTED","REVIEW_TRADE"),
+    ({"requirement":"Patch roof membrane at mechanical penetrations","trade":"Roofing","source_sheet":"A5.1","source_detail":"7/A5.2","source_spec":"07 54 00","source_note":"Roof note 4"},"STRONG","READY"),
+    ({"requirement":"Provide water closets and lavatories","trade":"Plumbing","source_sheet":"","source_detail":"","source_spec":"","source_note":""},"UNSOURCED","VERIFY_SOURCE"),
+    ({"requirement":"Sawcut slab and restore concrete for plumbing trench","trade":"Concrete","source_sheet":"P1.1","source_detail":"2/P4.1","source_spec":"03 30 00","source_note":""},"STRONG","READY"),
+    ({"requirement":"Provide grab bars and toilet accessories","trade":"Toilet / Bath Accessories","source_sheet":"A9.1","source_detail":"5/A9.2","source_spec":"10 28 00","source_note":""},"STRONG","READY"),
+    ({"requirement":"Provide rubber base and LVT flooring","trade":"Flooring / Tile","source_sheet":"A10.1","source_detail":"","source_spec":"09 65 00","source_note":"Finish schedule"},"STRONG","READY"),
+    ({"requirement":"Remove existing partitions doors ceilings and millwork","trade":"Demolition","source_sheet":"AD1.1","source_detail":"","source_spec":"02 41 19","source_note":"Demo note 2"},"STRONG","READY"),
+]
+
+
+def _v372_source_regression_results():
+    rows=[]
+    for item,expected_level,expected_disposition in _V372_SOURCE_REGRESSION_CASES:
+        result=_v372_item_intelligence(item)
+        passed=(result['source']['level']==expected_level and result['disposition']==expected_disposition)
+        rows.append({
+            "requirement":item['requirement'],
+            "expected_level":expected_level,
+            "actual_level":result['source']['level'],
+            "expected_disposition":expected_disposition,
+            "actual_disposition":result['disposition'],
+            "score":result['confidence_score'],
+            "passed":passed,
+        })
+    return rows
+
+
+def _v372_source_regression_summary():
+    rows=_v372_source_regression_results()
+    passed=sum(1 for r in rows if r['passed'])
+    trade=_v371_trade_regression_summary()
+    return {
+        "version":"v372",
+        "suite":"Blueprint Brain source intelligence",
+        "source_passed":passed,
+        "source_total":len(rows),
+        "trade_passed":trade['passed'],
+        "trade_total":trade['total'],
+        "passed":passed+trade['passed'],
+        "total":len(rows)+trade['total'],
+        "failed":(len(rows)-passed)+trade['failed'],
+        "ok":passed==len(rows) and trade['ok'],
+        "results":rows,
+    }
+
+
+@app.get('/health/blueprint-v372')
+def v372_blueprint_health():
+    """Staging gate: v371 trade ownership plus v372 source-intelligence regression checks."""
+    return _v372_source_regression_summary()
+
+
+@app.get('/blueprint-source-intelligence-v372', response_class=HTMLResponse)
+def v372_blueprint_source_intelligence_page():
+    pid=project_id(); cid=current_company_id()
+    c=db()
+    rows=c.execute("""
+        SELECT * FROM blueprint_scope_items
+        WHERE company_id=? AND project_id=?
+        ORDER BY id DESC LIMIT 250
+    """,(cid,pid)).fetchall()
+    c.close()
+    analyzed=[]
+    for r in rows:
+        try:
+            analyzed.append(_v372_item_intelligence(dict(r)))
+        except Exception:
+            continue
+    ready=sum(1 for x in analyzed if x['disposition']=='READY')
+    review=sum(1 for x in analyzed if x['disposition']=='REVIEW_TRADE')
+    verify=sum(1 for x in analyzed if x['disposition'] in {'VERIFY_SOURCE','VERIFY_CROSS_REFERENCE'})
+    cards=''.join(
+        f'<div class="action"><span class="badge {"READY" if x["disposition"]=="READY" else "WATCH"}">{esc(x["disposition"])}</span> '
+        f'<b>{esc(x["trade"])}</b><div>{esc(x["requirement"])}</div>'
+        f'<div class="small">Source strength: {esc(x["source"]["level"])} · Evidence types: {x["source"]["count"]} · Score: {x["confidence_score"]}/100 · Classifier: {esc(x["trade_check"]["predicted"])}</div></div>'
+        for x in analyzed
+    ) or '<p class="muted">No Blueprint Brain scope items yet. Analyze project documents first.</p>'
+    return shell('Blueprint Source Intelligence v372',
+        f'<div class="hero"><div class="eyebrow">BuildCommand v372</div><h1>Blueprint Source Intelligence</h1>'
+        f'<p class="muted">Cross-check sheet, detail, specification and note evidence before scope intelligence is trusted downstream.</p></div>'
+        f'<div class="grid3"><div class="card"><div class="label">Ready</div><div class="kpi">{ready}</div></div>'
+        f'<div class="card"><div class="label">Trade Review</div><div class="kpi">{review}</div></div>'
+        f'<div class="card"><div class="label">Source Verification</div><div class="kpi">{verify}</div></div></div>'
+        f'<div class="card"><h2>Source-backed Scope Review</h2>{cards}</div>')
