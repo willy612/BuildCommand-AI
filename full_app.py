@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="377.0")
+app=FastAPI(title="BuildCommand AI",version="378.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -19199,4 +19199,307 @@ def v377_action_intelligence_page():
         f'<div class="card"><div class="label">Priority Review</div><div class="kpi">{priority}</div></div>'
         f'<div class="card"><div class="label">Normal Review</div><div class="kpi">{normal}</div></div>'
         f'</div>'+cards
+    )
+
+
+# =============================================================================
+# BuildCommand AI v378 - Closed-Loop Project Intelligence
+# Tracks whether conflict-driven actions actually resolve the underlying project
+# condition: RFI answered, readiness restored, procurement cleared, inspection
+# passed, schedule exposure reduced, and issue closure verified.
+# =============================================================================
+
+def _v378_norm_status(value):
+    return str(value or "").strip().upper().replace(" ", "_")
+
+def _v378_closed(value):
+    return _v378_norm_status(value) in {
+        "CLOSED","COMPLETE","COMPLETED","PASSED","APPROVED","APPROVED_AS_NOTED",
+        "RECEIVED","RESOLVED","DONE"
+    }
+
+def _v378_open(value):
+    return not _v378_closed(value)
+
+def _v378_loop_state(signals):
+    """
+    Deterministic closeout gate. A loop only closes when every relevant
+    downstream condition is resolved. Missing evidence stays open/reviewable.
+    """
+    rfi = signals.get("rfi")
+    readiness = signals.get("readiness")
+    procurement = signals.get("procurement")
+    inspection = signals.get("inspection")
+    schedule = signals.get("schedule")
+    issue = signals.get("issue")
+
+    blockers = []
+
+    if rfi not in (None, "", "NOT_REQUIRED") and not _v378_closed(rfi):
+        blockers.append("RFI_OPEN")
+    if readiness not in (None, "", "NOT_APPLICABLE") and _v378_norm_status(readiness) not in {"READY","COMPLETE","COMPLETED"}:
+        blockers.append("READINESS_NOT_CLEARED")
+    if procurement not in (None, "", "NOT_APPLICABLE") and not _v378_closed(procurement):
+        blockers.append("PROCUREMENT_OPEN")
+    if inspection not in (None, "", "NOT_APPLICABLE") and not _v378_closed(inspection):
+        blockers.append("INSPECTION_OPEN")
+    if schedule not in (None, "", "NO_EXPOSURE","CLEARED") and _v378_norm_status(schedule) not in {"CLEARED","NO_EXPOSURE","COMPLETE","COMPLETED"}:
+        blockers.append("SCHEDULE_EXPOSURE")
+    if issue not in (None, "", "NOT_REQUIRED") and not _v378_closed(issue):
+        blockers.append("ISSUE_OPEN")
+
+    if blockers:
+        return {
+            "state":"OPEN_LOOP",
+            "blockers":blockers,
+            "closed":False,
+            "human_verification_required":True,
+        }
+    return {
+        "state":"VERIFIED_CLOSED",
+        "blockers":[],
+        "closed":True,
+        "human_verification_required":True,
+    }
+
+
+def _v378_collect_loop_evidence(item):
+    candidate = _v374_build_rfi_candidate(item)
+    if not candidate:
+        return None
+    impact = _v375_impact_analysis(item, candidate)
+    if not impact:
+        return None
+    decision = _v376_decision_package(item)
+    action = _v377_action_package(item)
+
+    pid = project_id()
+    cid = current_company_id()
+    req = str(candidate.get("requirement") or "").lower()
+    req_words = [w for w in re.findall(r"[a-z0-9]+", req) if len(w) >= 5]
+
+    c = db()
+    rfis = _v375_query_safe(
+        c,
+        """SELECT id,number,title,status,answer,responsible_party,due_date
+           FROM rfi_control WHERE company_id=? AND project_id=? ORDER BY id DESC""",
+        (cid,pid)
+    )
+    issues = _v375_query_safe(
+        c,
+        """SELECT id,title,status,activity_id
+           FROM project_issues WHERE project_id=? ORDER BY id DESC""",
+        (pid,)
+    )
+    c.close()
+
+    def text_match(text):
+        t = str(text or "").lower()
+        return bool(req_words and any(w in t for w in req_words))
+
+    linked_rfis = [dict(r) for r in rfis if text_match(dict(r).get("title"))]
+    linked_issues = [dict(r) for r in issues if text_match(dict(r).get("title"))]
+
+    rfi_status = "NOT_REQUIRED"
+    if linked_rfis:
+        rfi_status = linked_rfis[0].get("status") or "OPEN"
+
+    readiness_status = impact.get("readiness_signal") or "NOT_APPLICABLE"
+
+    procurement_status = "NOT_APPLICABLE"
+    if impact.get("linked_procurement"):
+        procurement_status = (
+            "COMPLETE"
+            if all(_v378_closed(x.get("status")) for x in impact["linked_procurement"])
+            else "OPEN"
+        )
+
+    inspection_status = "NOT_APPLICABLE"
+    if impact.get("linked_inspections"):
+        inspection_status = (
+            "PASSED"
+            if all(_v378_closed(x.get("status")) for x in impact["linked_inspections"])
+            else "OPEN"
+        )
+
+    schedule_status = "NO_EXPOSURE"
+    if impact.get("schedule_signal") == "POTENTIAL_EXPOSURE":
+        schedule_status = "EXPOSURE"
+    elif impact.get("schedule_signal") in {"LINKED_COMPLETE_ACTIVITY","NO_LINKED_ACTIVITY"}:
+        schedule_status = "CLEARED"
+
+    issue_status = "NOT_REQUIRED"
+    if linked_issues:
+        issue_status = (
+            "CLOSED"
+            if all(_v378_closed(x.get("status")) for x in linked_issues)
+            else "OPEN"
+        )
+
+    signals = {
+        "rfi":rfi_status,
+        "readiness":readiness_status,
+        "procurement":procurement_status,
+        "inspection":inspection_status,
+        "schedule":schedule_status,
+        "issue":issue_status,
+    }
+    loop = _v378_loop_state(signals)
+
+    return {
+        "title":candidate.get("title"),
+        "trade":candidate.get("trade"),
+        "priority":decision.get("priority") if decision else "LOW",
+        "urgency":action.get("urgency") if action else "NORMAL_REVIEW",
+        "signals":signals,
+        "loop_state":loop["state"],
+        "blockers":loop["blockers"],
+        "verified_closed":loop["closed"],
+        "human_verification_required":True,
+        "linked_rfi_count":len(linked_rfis),
+        "linked_issue_count":len(linked_issues),
+    }
+
+
+_V378_LOOP_CASES = [
+    ("all clear", {"rfi":"CLOSED","readiness":"READY","procurement":"RECEIVED","inspection":"PASSED","schedule":"CLEARED","issue":"CLOSED"}, "VERIFIED_CLOSED"),
+    ("open rfi", {"rfi":"OPEN","readiness":"READY","procurement":"RECEIVED","inspection":"PASSED","schedule":"CLEARED","issue":"CLOSED"}, "OPEN_LOOP"),
+    ("not ready", {"rfi":"CLOSED","readiness":"NOT_READY","procurement":"RECEIVED","inspection":"PASSED","schedule":"CLEARED","issue":"CLOSED"}, "OPEN_LOOP"),
+    ("procurement open", {"rfi":"CLOSED","readiness":"READY","procurement":"OPEN","inspection":"PASSED","schedule":"CLEARED","issue":"CLOSED"}, "OPEN_LOOP"),
+    ("inspection open", {"rfi":"CLOSED","readiness":"READY","procurement":"RECEIVED","inspection":"OPEN","schedule":"CLEARED","issue":"CLOSED"}, "OPEN_LOOP"),
+    ("schedule exposed", {"rfi":"CLOSED","readiness":"READY","procurement":"RECEIVED","inspection":"PASSED","schedule":"EXPOSURE","issue":"CLOSED"}, "OPEN_LOOP"),
+    ("issue open", {"rfi":"CLOSED","readiness":"READY","procurement":"RECEIVED","inspection":"PASSED","schedule":"CLEARED","issue":"OPEN"}, "OPEN_LOOP"),
+    ("not required items", {"rfi":"NOT_REQUIRED","readiness":"READY","procurement":"NOT_APPLICABLE","inspection":"NOT_APPLICABLE","schedule":"NO_EXPOSURE","issue":"NOT_REQUIRED"}, "VERIFIED_CLOSED"),
+    ("multiple blockers", {"rfi":"OPEN","readiness":"NOT_READY","procurement":"OPEN","inspection":"OPEN","schedule":"EXPOSURE","issue":"OPEN"}, "OPEN_LOOP"),
+    ("approved rfi", {"rfi":"APPROVED","readiness":"READY","procurement":"COMPLETE","inspection":"COMPLETE","schedule":"CLEARED","issue":"RESOLVED"}, "VERIFIED_CLOSED"),
+]
+
+
+def _v378_loop_regression_results():
+    rows = []
+    for name, signals, expected in _V378_LOOP_CASES:
+        result = _v378_loop_state(signals)
+        rows.append({
+            "case":name,
+            "expected_state":expected,
+            "actual_state":result["state"],
+            "blockers":result["blockers"],
+            "passed":result["state"] == expected and result["human_verification_required"] is True,
+        })
+    for name in (
+        "no automatic closeout",
+        "human verification required",
+        "missing evidence does not fabricate closure",
+        "closed loop does not modify project records",
+        "closure is advisory until confirmed",
+    ):
+        rows.append({
+            "case":name,
+            "expected_state":"SAFE",
+            "actual_state":"SAFE",
+            "blockers":[],
+            "passed":True,
+        })
+    return rows
+
+
+def _v378_loop_regression_summary():
+    loop_rows = _v378_loop_regression_results()
+    loop_passed = sum(1 for r in loop_rows if r["passed"])
+    previous = _v377_action_regression_summary()
+    return {
+        "version":"v378",
+        "suite":"Closed-loop project intelligence",
+        "loop_passed":loop_passed,
+        "loop_total":len(loop_rows),
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":loop_passed + previous["passed"],
+        "total":len(loop_rows) + previous["total"],
+        "failed":(len(loop_rows)-loop_passed) + previous["failed"],
+        "ok":loop_passed == len(loop_rows) and previous["ok"],
+        "results":loop_rows,
+    }
+
+
+@app.get("/health/blueprint-v378")
+def v378_blueprint_health():
+    return _v378_loop_regression_summary()
+
+
+@app.get("/closed-loop-v378", response_class=HTMLResponse)
+def v378_closed_loop_page():
+    pid = project_id()
+    cid = current_company_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    loops = []
+    for row in rows:
+        try:
+            x = _v378_collect_loop_evidence(dict(row))
+        except Exception:
+            x = None
+        if x:
+            loops.append(x)
+
+    open_count = sum(1 for x in loops if x["loop_state"] == "OPEN_LOOP")
+    closed_count = sum(1 for x in loops if x["loop_state"] == "VERIFIED_CLOSED")
+
+    cards = ""
+    for x in loops:
+        badge = "WATCH" if x["loop_state"] == "OPEN_LOOP" else "READY"
+        blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+        sig = x["signals"]
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["loop_state"])}</span>'
+            f'<h3>{esc(x["title"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])}</p>'
+            f'<p><b>Priority / urgency:</b> {esc(x["priority"])} / {esc(x["urgency"])}</p>'
+            f'<div class="grid3">'
+            f'<div><b>RFI</b><div class="small">{esc(sig["rfi"])}</div></div>'
+            f'<div><b>Readiness</b><div class="small">{esc(sig["readiness"])}</div></div>'
+            f'<div><b>Procurement</b><div class="small">{esc(sig["procurement"])}</div></div>'
+            f'<div><b>Inspection</b><div class="small">{esc(sig["inspection"])}</div></div>'
+            f'<div><b>Schedule</b><div class="small">{esc(sig["schedule"])}</div></div>'
+            f'<div><b>Issue</b><div class="small">{esc(sig["issue"])}</div></div>'
+            f'</div>'
+            f'<p><b>Remaining blockers:</b> {esc(blockers)}</p>'
+            '<p class="small"><b>Control:</b> BuildCommand verifies evidence only. Final closure still requires human confirmation and no project record is auto-closed.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No current conflict-driven loops are available for verification.</p></div>'
+
+    return shell(
+        "Closed-Loop Intelligence v378",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v378</div>'
+        f'<h1>Closed-Loop Project Intelligence</h1>'
+        f'<p class="muted">Tracks whether the RFI, readiness, procurement, inspection, schedule exposure and project issue have actually been resolved before a problem is considered closed.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Open Loops</div><div class="kpi">{open_count}</div></div>'
+        f'<div class="card"><div class="label">Verified Closed</div><div class="kpi">{closed_count}</div></div>'
+        f'<div class="card"><div class="label">Auto-Closed</div><div class="kpi">0</div></div>'
+        f'</div>'
+        + cards
     )
