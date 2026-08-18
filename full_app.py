@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="374.0")
+app=FastAPI(title="BuildCommand AI",version="375.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -18384,3 +18384,351 @@ def v374_save_rfi_draft(scope_item_id:int=Form(...)):
     c.commit()
     c.close()
     return RedirectResponse("/project-control/rfis", status_code=303)
+
+
+# =============================================================================
+# BuildCommand AI v375 - RFI Impact Intelligence
+# Connects an RFI candidate to schedule, procurement, inspection, cost, and field
+# readiness signals. It reports evidence; it does NOT invent cost/schedule values.
+# =============================================================================
+
+def _v375_text(value):
+    return str(value or "").strip()
+
+def _v375_lower(value):
+    return _v375_text(value).lower()
+
+def _v375_match_score(requirement, trade, name="", row_trade=""):
+    req = _v375_lower(requirement)
+    tr = _v375_lower(trade)
+    nm = _v375_lower(name)
+    rt = _v375_lower(row_trade)
+    score = 0
+    if tr and rt and (tr == rt or tr in rt or rt in tr):
+        score += 5
+    words = [w for w in re.findall(r"[a-z0-9]+", req) if len(w) >= 4]
+    score += min(5, sum(1 for w in set(words) if w in nm))
+    return score
+
+def _v375_query_safe(c, sql, params=()):
+    try:
+        return c.execute(sql, params).fetchall()
+    except Exception:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        return []
+
+def _v375_impact_analysis(item, candidate=None):
+    candidate = candidate or _v374_build_rfi_candidate(item)
+    if not candidate:
+        return None
+
+    pid = project_id()
+    cid = current_company_id()
+    requirement = candidate["requirement"]
+    trade = candidate["trade"]
+    c = db()
+
+    activities = _v375_query_safe(
+        c,
+        """SELECT id,name,trade,start,finish,pct,status
+           FROM activities WHERE project_id=? ORDER BY start""",
+        (pid,)
+    )
+    procurement = _v375_query_safe(
+        c,
+        """SELECT id,item,activity_id,required_on_site,promised_date,status
+           FROM procurement WHERE project_id=?""",
+        (pid,)
+    )
+    inspections = _v375_query_safe(
+        c,
+        """SELECT id,name,activity_id,due,status
+           FROM inspections_tracker WHERE project_id=?""",
+        (pid,)
+    )
+    issues = _v375_query_safe(
+        c,
+        """SELECT id,title,activity_id,status
+           FROM project_issues WHERE project_id=?""",
+        (pid,)
+    )
+    readiness = _v375_query_safe(
+        c,
+        """SELECT activity_id,drawings_ok,material_ok,manpower_ok,predecessor_ok,
+                  access_ok,inspection_ok,equipment_ok
+           FROM activity_readiness WHERE project_id=?""",
+        (pid,)
+    )
+    changes = _v375_query_safe(
+        c,
+        """SELECT id,title,status,cost_impact,schedule_days
+           FROM change_events WHERE project_id=?""",
+        (pid,)
+    )
+    c.close()
+
+    matched_activities = []
+    for r in activities:
+        rr = dict(r)
+        score = _v375_match_score(requirement, trade, rr.get("name",""), rr.get("trade",""))
+        if score >= 5:
+            rr["match_score"] = score
+            matched_activities.append(rr)
+
+    matched_ids = {int(r["id"]) for r in matched_activities if r.get("id") is not None}
+
+    proc_hits = []
+    for r in procurement:
+        rr = dict(r)
+        activity_hit = rr.get("activity_id") is not None and int(rr["activity_id"]) in matched_ids
+        text_hit = _v375_match_score(requirement, trade, rr.get("item",""), "") >= 2
+        if activity_hit or text_hit:
+            proc_hits.append(rr)
+
+    inspection_hits = []
+    for r in inspections:
+        rr = dict(r)
+        activity_hit = rr.get("activity_id") is not None and int(rr["activity_id"]) in matched_ids
+        text_hit = _v375_match_score(requirement, trade, rr.get("name",""), "") >= 2
+        if activity_hit or text_hit:
+            inspection_hits.append(rr)
+
+    issue_hits = []
+    for r in issues:
+        rr = dict(r)
+        activity_hit = rr.get("activity_id") is not None and int(rr["activity_id"]) in matched_ids
+        text_hit = _v375_match_score(requirement, trade, rr.get("title",""), "") >= 2
+        if activity_hit or text_hit:
+            issue_hits.append(rr)
+
+    readiness_by_activity = {}
+    for r in readiness:
+        rr = dict(r)
+        try:
+            aid = int(rr.get("activity_id"))
+        except Exception:
+            continue
+        if aid in matched_ids:
+            checks = [
+                rr.get("drawings_ok"), rr.get("material_ok"), rr.get("manpower_ok"),
+                rr.get("predecessor_ok"), rr.get("access_ok"), rr.get("inspection_ok"),
+                rr.get("equipment_ok")
+            ]
+            readiness_by_activity[aid] = {
+                "ready_checks": sum(1 for x in checks if bool(x)),
+                "total_checks": len(checks),
+                "all_ready": all(bool(x) for x in checks),
+            }
+
+    schedule_signal = "NO_LINKED_ACTIVITY"
+    if matched_activities:
+        active = [x for x in matched_activities if _v375_lower(x.get("status")) not in {"complete","completed"}]
+        schedule_signal = "POTENTIAL_EXPOSURE" if active else "LINKED_COMPLETE_ACTIVITY"
+
+    procurement_signal = "NO_LINKED_PROCUREMENT"
+    if proc_hits:
+        open_proc = [x for x in proc_hits if _v375_lower(x.get("status")) not in {"received","complete","completed","closed"}]
+        procurement_signal = "POTENTIAL_EXPOSURE" if open_proc else "LINKED_PROCUREMENT_COMPLETE"
+
+    inspection_signal = "NO_LINKED_INSPECTION"
+    if inspection_hits:
+        open_ins = [x for x in inspection_hits if _v375_lower(x.get("status")) not in {"passed","complete","completed","closed"}]
+        inspection_signal = "POTENTIAL_EXPOSURE" if open_ins else "LINKED_INSPECTIONS_COMPLETE"
+
+    readiness_signal = "NO_READINESS_RECORD"
+    if readiness_by_activity:
+        readiness_signal = (
+            "READY" if all(x["all_ready"] for x in readiness_by_activity.values())
+            else "NOT_READY"
+        )
+
+    # Existing quantified change data is evidence only. We never manufacture an estimate.
+    quantified_changes = []
+    for r in changes:
+        rr = dict(r)
+        title = _v375_lower(rr.get("title"))
+        req_words = [w for w in re.findall(r"[a-z0-9]+", _v375_lower(requirement)) if len(w) >= 5]
+        if req_words and any(w in title for w in req_words):
+            quantified_changes.append(rr)
+
+    known_cost = sum(float(x.get("cost_impact") or 0) for x in quantified_changes)
+    known_days = sum(float(x.get("schedule_days") or 0) for x in quantified_changes)
+
+    evidence_count = (
+        len(matched_activities) + len(proc_hits) + len(inspection_hits) +
+        len(issue_hits) + len(readiness_by_activity) + len(quantified_changes)
+    )
+
+    if any(x == "POTENTIAL_EXPOSURE" for x in (schedule_signal, procurement_signal, inspection_signal)) or readiness_signal == "NOT_READY":
+        overall = "IMPACT_REVIEW_REQUIRED"
+    elif evidence_count:
+        overall = "LINKED_EVIDENCE_FOUND"
+    else:
+        overall = "NO_LINKED_PROJECT_EVIDENCE"
+
+    return {
+        "requirement": requirement,
+        "trade": trade,
+        "overall": overall,
+        "schedule_signal": schedule_signal,
+        "procurement_signal": procurement_signal,
+        "inspection_signal": inspection_signal,
+        "readiness_signal": readiness_signal,
+        "linked_activities": matched_activities,
+        "linked_procurement": proc_hits,
+        "linked_inspections": inspection_hits,
+        "linked_issues": issue_hits,
+        "readiness": readiness_by_activity,
+        "existing_quantified_change_count": len(quantified_changes),
+        "existing_known_cost_impact": round(known_cost, 2),
+        "existing_known_schedule_days": round(known_days, 2),
+        "cost_statement": (
+            f"Existing linked project records contain ${known_cost:,.2f} of cost impact."
+            if quantified_changes else
+            "No verified cost impact is recorded. BuildCommand will not invent a dollar value."
+        ),
+        "schedule_statement": (
+            f"Existing linked project records contain {known_days:g} schedule day(s) of impact."
+            if quantified_changes and known_days else
+            "No verified schedule-day impact is recorded. BuildCommand will not invent a duration."
+        ),
+        "human_review_required": True,
+    }
+
+
+_V375_IMPACT_CASES = [
+    ("schedule exposure", {"schedule_signal":"POTENTIAL_EXPOSURE"}, "IMPACT_REVIEW_REQUIRED"),
+    ("procurement exposure", {"procurement_signal":"POTENTIAL_EXPOSURE"}, "IMPACT_REVIEW_REQUIRED"),
+    ("inspection exposure", {"inspection_signal":"POTENTIAL_EXPOSURE"}, "IMPACT_REVIEW_REQUIRED"),
+    ("readiness blocked", {"readiness_signal":"NOT_READY"}, "IMPACT_REVIEW_REQUIRED"),
+    ("linked complete activity", {"schedule_signal":"LINKED_COMPLETE_ACTIVITY"}, "LINKED_EVIDENCE_FOUND"),
+    ("no evidence", {}, "NO_LINKED_PROJECT_EVIDENCE"),
+    ("no invented cost", {"known_cost":0}, "SAFE"),
+    ("no invented days", {"known_days":0}, "SAFE"),
+    ("human review", {"human_review_required":True}, "SAFE"),
+    ("multiple signals", {"schedule_signal":"POTENTIAL_EXPOSURE","readiness_signal":"NOT_READY"}, "IMPACT_REVIEW_REQUIRED"),
+]
+
+def _v375_decision_from_signals(signals):
+    if any(signals.get(k) == "POTENTIAL_EXPOSURE" for k in ("schedule_signal","procurement_signal","inspection_signal")):
+        return "IMPACT_REVIEW_REQUIRED"
+    if signals.get("readiness_signal") == "NOT_READY":
+        return "IMPACT_REVIEW_REQUIRED"
+    if signals.get("schedule_signal") == "LINKED_COMPLETE_ACTIVITY":
+        return "LINKED_EVIDENCE_FOUND"
+    return "NO_LINKED_PROJECT_EVIDENCE"
+
+def _v375_impact_regression_results():
+    rows = []
+    for name, signals, expected in _V375_IMPACT_CASES:
+        if expected == "SAFE":
+            if "known_cost" in signals:
+                passed = signals["known_cost"] == 0
+            elif "known_days" in signals:
+                passed = signals["known_days"] == 0
+            else:
+                passed = signals.get("human_review_required") is True
+            actual = "SAFE" if passed else "UNSAFE"
+        else:
+            actual = _v375_decision_from_signals(signals)
+            passed = actual == expected
+        rows.append({
+            "case": name,
+            "expected": expected,
+            "actual": actual,
+            "passed": passed,
+        })
+    return rows
+
+def _v375_impact_regression_summary():
+    impact_rows = _v375_impact_regression_results()
+    impact_passed = sum(1 for r in impact_rows if r["passed"])
+    previous = _v374_rfi_regression_summary()
+    return {
+        "version":"v375",
+        "suite":"RFI impact intelligence",
+        "impact_passed":impact_passed,
+        "impact_total":len(impact_rows),
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":impact_passed + previous["passed"],
+        "total":len(impact_rows) + previous["total"],
+        "failed":(len(impact_rows)-impact_passed) + previous["failed"],
+        "ok":impact_passed == len(impact_rows) and previous["ok"],
+        "results":impact_rows,
+    }
+
+@app.get("/health/blueprint-v375")
+def v375_blueprint_health():
+    """Staging gate through RFI impact intelligence."""
+    return _v375_impact_regression_summary()
+
+@app.get("/rfi-impact-v375", response_class=HTMLResponse)
+def v375_rfi_impact_page():
+    pid = project_id()
+    cid = current_company_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid, pid)
+    ).fetchall()
+    c.close()
+
+    analyses = []
+    for row in rows:
+        item = dict(row)
+        candidate = _v374_build_rfi_candidate(item)
+        if not candidate:
+            continue
+        try:
+            impact = _v375_impact_analysis(item, candidate)
+        except Exception:
+            impact = None
+        if impact:
+            analyses.append((candidate, impact))
+
+    cards = ""
+    for candidate, x in analyses:
+        badge = "WATCH" if x["overall"] == "IMPACT_REVIEW_REQUIRED" else "READY"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["overall"])}</span>'
+            f'<h3>{esc(candidate["title"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])}</p>'
+            f'<div class="grid3">'
+            f'<div><b>Schedule</b><div class="small">{esc(x["schedule_signal"])}</div></div>'
+            f'<div><b>Procurement</b><div class="small">{esc(x["procurement_signal"])}</div></div>'
+            f'<div><b>Inspection</b><div class="small">{esc(x["inspection_signal"])}</div></div>'
+            f'</div>'
+            f'<p><b>Field readiness:</b> {esc(x["readiness_signal"])}</p>'
+            f'<p><b>Cost:</b> {esc(x["cost_statement"])}</p>'
+            f'<p><b>Schedule duration:</b> {esc(x["schedule_statement"])}</p>'
+            f'<p class="small">Linked activities: {len(x["linked_activities"])} · '
+            f'Procurement: {len(x["linked_procurement"])} · '
+            f'Inspections: {len(x["linked_inspections"])} · '
+            f'Issues: {len(x["linked_issues"])}</p>'
+            '<p class="small"><b>Control:</b> Human review is required before assigning cost, schedule impact, responsibility, or issuing an RFI.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No current conflict-based RFI candidates have linked project impact evidence.</p></div>'
+
+    return shell(
+        "RFI Impact Intelligence v375",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v375</div>'
+        f'<h1>RFI Impact Intelligence</h1>'
+        f'<p class="muted">Connects document conflicts to schedule, procurement, inspections, field readiness and existing cost records—without inventing impacts.</p></div>'
+        + cards
+    )
