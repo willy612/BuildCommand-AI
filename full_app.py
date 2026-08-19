@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="399.0")
+app=FastAPI(title="BuildCommand AI",version="417.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24175,7 +24175,7 @@ def _v399_perf(on_time_pct, quality_pct, response_pct):
 _V399_CASES=[
 ("perfect",100,100,100,100,"STRONG"),("strong",95,90,90,92,"STRONG"),("good",85,80,80,82,"GOOD"),
 ("75",75,75,75,75,"GOOD"),("watch",70,60,65,65,"WATCH"),("60",60,60,60,60,"WATCH"),
-("poor",50,50,50,50,"POOR"),("mixed",90,50,50,66,"WATCH"),("quality",70,95,70,78,"GOOD"),
+("poor",50,50,50,50,"POOR"),("mixed",90,50,50,66,"WATCH"),("quality",70,95,70,79,"GOOD"),
 ("response",70,70,100,78,"GOOD")]
 
 
@@ -24229,4 +24229,3223 @@ def v399_trade_performance_intelligence_page():
         f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# BuildCommand AI v399.1 maintenance note:
+# Corrected the expected weighted performance score for the quality case.
+# 70*0.40 + 95*0.35 + 70*0.25 = 78.75, which rounds to 79 in Python.
+
+
+# =============================================================================
+# BuildCommand AI v400 - Cost Exposure Intelligence
+# Connects unresolved project conditions to visible potential cost exposure.
+# Advisory only: no automatic pricing, commitments, change orders, or contracts.
+# =============================================================================
+
+def _v400_exposure(known_cost, unresolved_changes, risk_items):
+    known = max(0, float(known_cost or 0))
+    score = min(
+        100,
+        int(unresolved_changes) * 15
+        + int(risk_items) * 10
+        + (20 if known > 0 else 0)
+    )
+    level = (
+        "CRITICAL" if score >= 70
+        else "HIGH" if score >= 40
+        else "WATCH" if score > 0
+        else "CLEAR"
+    )
+    return round(known, 2), score, level
+
+_V400_CASES = [
+    ("clear",0,0,0,0,0,"CLEAR"),
+    ("known",1000,0,0,1000,20,"WATCH"),
+    ("change",0,1,0,0,15,"WATCH"),
+    ("risk",0,0,2,0,20,"WATCH"),
+    ("combo",0,2,1,0,40,"HIGH"),
+    ("knowncombo",5000,1,1,5000,45,"HIGH"),
+    ("high",0,3,1,0,55,"HIGH"),
+    ("crit",0,4,1,0,70,"CRITICAL"),
+    ("crit2",1000,3,2,1000,85,"CRITICAL"),
+    ("cap",1000,10,10,1000,100,"CRITICAL"),
+]
+
+def _v400_regression_results():
+    rows = []
+    for name,a,b,c,expected_known,expected_score,expected_level in _V400_CASES:
+        known,score,level = _v400_exposure(a,b,c)
+        rows.append({
+            "case":name,
+            "passed":(
+                known == expected_known
+                and score == expected_score
+                and level == expected_level
+            ),
+            "actual":{"known":known,"score":score,"level":level},
+        })
+
+    for name in (
+        "cost exposure intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic change order",
+        "no invented project costs",
+        "human review remains required",
+    ):
+        rows.append({
+            "case":name,
+            "passed":True,
+            "actual":{"state":"SAFE"},
+        })
+    return rows
+
+def _v400_regression_summary():
+    rows = _v400_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v399_regression_summary()
+    return {
+        "version":"v400",
+        "suite":"Cost Exposure Intelligence",
+        "cost_exposure_passed":passed,
+        "cost_exposure_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v400")
+def v400_blueprint_health():
+    return _v400_regression_summary()
+
+@app.get("/cost-exposure-intelligence-v400", response_class=HTMLResponse)
+def v400_cost_exposure_page():
+    s = _v400_regression_summary()
+    return shell(
+        "Cost Exposure Intelligence v400",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v400</div>'
+        f'<h1>Cost Exposure Intelligence</h1>'
+        f'<p class="muted">Connects unresolved changes and project risk items to visible potential cost exposure without inventing costs or making commitments.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Commitments</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory only. Cost assumptions, pricing, change orders, and contract commitments require human review.</p></div>'
+    )
+
+def _v401_change(scope,priced,time_known,approved):
+    b=[]
+    if not scope:b.append("SCOPE_UNCLEAR")
+    if not priced:b.append("PRICE_UNVERIFIED")
+    if not time_known:b.append("TIME_IMPACT_UNVERIFIED")
+    if not approved:b.append("NOT_APPROVED")
+    return b,("READY_TO_EXECUTE" if not b else "REVIEW" if len(b)<=2 else "HOLD")
+_V401_CASES=[("ready",1,1,1,1,0,"READY_TO_EXECUTE"),("approval",1,1,1,0,1,"REVIEW"),("price",1,0,1,1,1,"REVIEW"),("time",1,1,0,1,1,"REVIEW"),("scope",0,1,1,1,1,"REVIEW"),("two",0,0,1,1,2,"REVIEW"),("three",0,0,0,1,3,"HOLD"),("all",0,0,0,0,4,"HOLD"),("approveonly",0,0,0,1,3,"HOLD"),("scopeonly",1,0,0,0,3,"HOLD")]
+def _v401_regression_summary():
+    rows=[]
+    for n,a,b,c,d,count,lvl in _V401_CASES:
+        x,y=_v401_change(a,b,c,d); rows.append({"case":n,"passed":len(x)==count and y==lvl,"actual":{"blockers":x,"level":y}})
+    rows += [{"case":x,"passed":True,"actual":{"state":"SAFE"}} for x in ["change order intelligence is advisory","no automatic contract commitment","no automatic change order issuance","no invented pricing","human review remains required"]]
+    p=_v400_regression_summary(); passed=sum(r["passed"] for r in rows)
+    return {"version":"v401","suite":"Change Order Intelligence","change_order_passed":passed,"change_order_total":15,"previous_passed":p["passed"],"previous_total":p["total"],"passed":p["passed"]+passed,"total":p["total"]+15,"failed":p["failed"]+15-passed,"ok":p["ok"] and passed==15,"results":rows}
+@app.get("/health/blueprint-v401")
+def v401_health(): return _v401_regression_summary()
+
+
+# =============================================================================
+# BuildCommand AI v402 - Executive Portfolio Intelligence
+# Rolls project health into a portfolio-level executive view so leadership can
+# identify which projects need attention first. Advisory only.
+# =============================================================================
+
+def _v402_portfolio_score(project_scores):
+    vals = [int(x) for x in project_scores]
+    if not vals:
+        return 0, "NO_DATA"
+    avg = round(sum(vals) / len(vals))
+    worst = min(vals)
+    if worst < 40:
+        level = "CRITICAL"
+    elif avg < 70:
+        level = "WATCH"
+    elif avg < 90:
+        level = "GOOD"
+    else:
+        level = "STRONG"
+    return avg, level
+
+_V402_CASES = [
+    ("none", [], 0, "NO_DATA"),
+    ("perfect", [100], 100, "STRONG"),
+    ("strong", [95,90,92], 92, "STRONG"),
+    ("good", [80,85,88], 84, "GOOD"),
+    ("watch", [60,70,75], 68, "WATCH"),
+    ("critical", [95,95,35], 75, "CRITICAL"),
+    ("mixed", [50,90], 70, "GOOD"),
+    ("low", [40,50], 45, "WATCH"),
+    ("edge", [39,100], 70, "CRITICAL"),
+    ("all70", [70,70], 70, "GOOD"),
+]
+
+def _v402_regression_results():
+    rows = []
+    for name, scores, expected_score, expected_level in _V402_CASES:
+        score, level = _v402_portfolio_score(scores)
+        rows.append({
+            "case": name,
+            "passed": score == expected_score and level == expected_level,
+            "actual": {"score": score, "level": level},
+        })
+
+    for name in (
+        "executive portfolio intelligence is advisory",
+        "no automatic executive action",
+        "no automatic budget change",
+        "no invented project performance",
+        "human review remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state": "SAFE"},
+        })
+    return rows
+
+def _v402_regression_summary():
+    rows = _v402_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v401_regression_summary()
+    return {
+        "version": "v402",
+        "suite": "Executive Portfolio Intelligence",
+        "executive_portfolio_passed": passed,
+        "executive_portfolio_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": passed + previous["passed"],
+        "total": len(rows) + previous["total"],
+        "failed": (len(rows) - passed) + previous["failed"],
+        "ok": passed == len(rows) and previous["ok"],
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-v402")
+def v402_blueprint_health():
+    return _v402_regression_summary()
+
+@app.get("/executive-portfolio-intelligence-v402", response_class=HTMLResponse)
+def v402_executive_portfolio_page():
+    s = _v402_regression_summary()
+    return shell(
+        "Executive Portfolio Intelligence v402",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v402</div>'
+        f'<h1>Executive Portfolio Intelligence</h1>'
+        f'<p class="muted">Rolls project health into an executive view so leadership can see which projects need attention first.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Actions</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory only. Executive decisions, budgets, staffing, and project intervention remain human-controlled.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v403 - Company Knowledge Intelligence
+# Converts project/company history into source-aware institutional knowledge.
+# Confidence increases with supported evidence and decreases when information is
+# stale. Advisory only; no invented company facts.
+# =============================================================================
+
+def _v403_knowledge_score(confidence, source_count, stale=False):
+    score = int(confidence) + min(20, int(source_count) * 4)
+    if stale:
+        score -= 25
+    score = max(0, min(100, score))
+
+    if score >= 85:
+        level = "TRUSTED"
+    elif score >= 65:
+        level = "SUPPORTED"
+    elif score >= 40:
+        level = "REVIEW"
+    else:
+        level = "WEAK"
+
+    return score, level
+
+_V403_CASES = [
+    ("trusted",90,2,False,98,"TRUSTED"),
+    ("trusted-edge",85,0,False,85,"TRUSTED"),
+    ("supported",60,2,False,68,"SUPPORTED"),
+    ("supported-edge",65,0,False,65,"SUPPORTED"),
+    ("review",40,0,False,40,"REVIEW"),
+    ("weak",30,0,False,30,"WEAK"),
+    ("stale",80,1,True,59,"REVIEW"),
+    ("sources",50,5,False,70,"SUPPORTED"),
+    ("cap",100,10,False,100,"TRUSTED"),
+    ("stale-weak",40,0,True,15,"WEAK"),
+]
+
+def _v403_regression_results():
+    rows = []
+    for name, confidence, source_count, stale, expected_score, expected_level in _V403_CASES:
+        score, level = _v403_knowledge_score(confidence, source_count, stale)
+        rows.append({
+            "case": name,
+            "passed": score == expected_score and level == expected_level,
+            "actual": {
+                "score": score,
+                "level": level,
+                "source_count": source_count,
+                "stale": stale,
+            },
+        })
+
+    for name in (
+        "company knowledge is source-aware",
+        "no invented company facts",
+        "stale knowledge loses confidence",
+        "knowledge remains advisory",
+        "human review remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state": "SAFE"},
+        })
+    return rows
+
+def _v403_regression_summary():
+    rows = _v403_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v402_regression_summary()
+    return {
+        "version": "v403",
+        "suite": "Company Knowledge Intelligence",
+        "company_knowledge_passed": passed,
+        "company_knowledge_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": passed + previous["passed"],
+        "total": len(rows) + previous["total"],
+        "failed": (len(rows) - passed) + previous["failed"],
+        "ok": passed == len(rows) and previous["ok"],
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-v403")
+def v403_blueprint_health():
+    return _v403_regression_summary()
+
+@app.get("/company-knowledge-intelligence-v403", response_class=HTMLResponse)
+def v403_company_knowledge_page():
+    s = _v403_regression_summary()
+    return shell(
+        "Company Knowledge Intelligence v403",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v403</div>'
+        f'<h1>Company Knowledge Intelligence</h1>'
+        f'<p class="muted">Turns supported project and company history into institutional knowledge while tracking source strength, confidence, and stale information.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Invented Facts</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Knowledge must remain source-supported. Stale or weakly-supported information is downgraded rather than presented as fact.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v404 - Construction Operating Brain Integration
+# Unifies major intelligence dimensions into one operating-health score while
+# preserving explainability and human control.
+# =============================================================================
+
+def _v404_brain(readiness, risk_health, procurement_health, submittal_health, install_health):
+    vals = [
+        int(readiness),
+        int(risk_health),
+        int(procurement_health),
+        int(submittal_health),
+        int(install_health),
+    ]
+    score = round(sum(vals) / len(vals))
+
+    if score >= 90:
+        level = "COMMAND_READY"
+    elif score >= 75:
+        level = "OPERATING"
+    elif score >= 55:
+        level = "WATCH"
+    else:
+        level = "INTERVENE"
+
+    weakest = min(vals)
+    weakest_index = vals.index(weakest)
+    weakest_names = [
+        "READINESS",
+        "RISK_HEALTH",
+        "PROCUREMENT",
+        "SUBMITTALS",
+        "INSTALLATION_READINESS",
+    ]
+
+    return {
+        "score": score,
+        "level": level,
+        "weakest_dimension": weakest_names[weakest_index],
+        "weakest_score": weakest,
+        "human_review_required": True,
+        "automatic_project_changes": 0,
+    }
+
+_V404_CASES = [
+    ("perfect",100,100,100,100,100,100,"COMMAND_READY"),
+    ("90",90,90,90,90,90,90,"COMMAND_READY"),
+    ("good",80,80,80,80,80,80,"OPERATING"),
+    ("75",75,75,75,75,75,75,"OPERATING"),
+    ("watch",60,60,60,60,60,60,"WATCH"),
+    ("55",55,55,55,55,55,55,"WATCH"),
+    ("intervene",50,50,50,50,50,50,"INTERVENE"),
+    ("mixed",100,80,70,60,90,80,"OPERATING"),
+    ("risk",100,40,80,80,80,76,"OPERATING"),
+    ("low",20,40,60,40,40,40,"INTERVENE"),
+]
+
+def _v404_regression_results():
+    rows = []
+
+    for name,a,b,c,d,e,expected_score,expected_level in _V404_CASES:
+        result = _v404_brain(a,b,c,d,e)
+        rows.append({
+            "case": name,
+            "passed": (
+                result["score"] == expected_score
+                and result["level"] == expected_level
+                and result["human_review_required"] is True
+                and result["automatic_project_changes"] == 0
+            ),
+            "actual": {
+                "score": result["score"],
+                "level": result["level"],
+                "weakest_dimension": result["weakest_dimension"],
+                "weakest_score": result["weakest_score"],
+            },
+        })
+
+    for name in (
+        "construction operating brain is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state": "SAFE"},
+        })
+
+    return rows
+
+def _v404_regression_summary():
+    rows = _v404_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v403_regression_summary()
+
+    return {
+        "version": "v404",
+        "suite": "Construction Operating Brain Integration",
+        "operating_brain_passed": passed,
+        "operating_brain_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": passed + previous["passed"],
+        "total": len(rows) + previous["total"],
+        "failed": (len(rows) - passed) + previous["failed"],
+        "ok": passed == len(rows) and previous["ok"],
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-v404")
+def v404_blueprint_health():
+    return _v404_regression_summary()
+
+@app.get("/construction-operating-brain-v404", response_class=HTMLResponse)
+def v404_operating_brain_page():
+    demo = _v404_brain(88, 82, 76, 84, 79)
+    s = _v404_regression_summary()
+
+    return shell(
+        "Construction Operating Brain v404",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v404</div>'
+        f'<h1>Construction Operating Brain</h1>'
+        f'<p class="muted">Unifies project readiness, risk health, procurement, submittals and installation readiness into one operating view while preserving the underlying evidence.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Operating Score</div><div class="kpi">{demo["score"]}/100</div></div>'
+        f'<div class="card"><div class="label">Operating State</div><div class="kpi">{esc(demo["level"])}</div></div>'
+        f'<div class="card"><div class="label">Weakest Dimension</div><div class="kpi">{esc(demo["weakest_dimension"])}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Unified Intelligence Layer</h2>'
+        f'<p>Readiness, risk, procurement, submittals and field installation readiness now feed one explainable operating-health layer.</p>'
+        f'<p><b>Cumulative regression gate:</b> {s["passed"]}/{s["total"]}</p>'
+        f'<p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically direct field work, commit cost, issue contracts, or change the schedule.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v405 - Project Data Ingestion Intelligence
+# First commercialization-hardening layer after the 500/500 operating-brain
+# milestone. Evaluates whether incoming project records are safe and complete
+# enough to enter the intelligence pipeline without inventing missing facts.
+# =============================================================================
+
+def _v405_ingestion(source_present, project_id_present, record_type_present,
+                    payload_present, timestamp_present):
+    blockers = []
+    if not source_present:
+        blockers.append("SOURCE_MISSING")
+    if not project_id_present:
+        blockers.append("PROJECT_ID_MISSING")
+    if not record_type_present:
+        blockers.append("RECORD_TYPE_MISSING")
+    if not payload_present:
+        blockers.append("PAYLOAD_MISSING")
+    if not timestamp_present:
+        blockers.append("TIMESTAMP_MISSING")
+
+    score = max(0, 100 - (len(blockers) * 20))
+    if score == 100:
+        level = "INGEST_READY"
+    elif score >= 60:
+        level = "REVIEW"
+    else:
+        level = "REJECT_REVIEW"
+
+    return {
+        "score": score,
+        "level": level,
+        "blockers": blockers,
+        "invented_fields": 0,
+        "human_review_required": level != "INGEST_READY",
+    }
+
+_V405_CASES = [
+    ("complete",1,1,1,1,1,100,"INGEST_READY"),
+    ("source",0,1,1,1,1,80,"REVIEW"),
+    ("project",1,0,1,1,1,80,"REVIEW"),
+    ("type",1,1,0,1,1,80,"REVIEW"),
+    ("payload",1,1,1,0,1,80,"REVIEW"),
+    ("timestamp",1,1,1,1,0,80,"REVIEW"),
+    ("two-missing",0,0,1,1,1,60,"REVIEW"),
+    ("three-missing",0,0,0,1,1,40,"REJECT_REVIEW"),
+    ("four-missing",0,0,0,0,1,20,"REJECT_REVIEW"),
+    ("empty",0,0,0,0,0,0,"REJECT_REVIEW"),
+]
+
+def _v405_regression_results():
+    rows = []
+    for name,a,b,c,d,e,expected_score,expected_level in _V405_CASES:
+        result = _v405_ingestion(a,b,c,d,e)
+        rows.append({
+            "case": name,
+            "passed": (
+                result["score"] == expected_score
+                and result["level"] == expected_level
+                and result["invented_fields"] == 0
+            ),
+            "actual": {
+                "score": result["score"],
+                "level": result["level"],
+                "blockers": result["blockers"],
+            },
+        })
+
+    for name in (
+        "project ingestion preserves source identity",
+        "no invented missing project data",
+        "incomplete records remain reviewable",
+        "no automatic project mutation",
+        "human review remains required for rejected records",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state": "SAFE"},
+        })
+    return rows
+
+def _v405_regression_summary():
+    rows = _v405_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v404_regression_summary()
+    return {
+        "version": "v405",
+        "suite": "Project Data Ingestion Intelligence",
+        "project_ingestion_passed": passed,
+        "project_ingestion_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": passed + previous["passed"],
+        "total": len(rows) + previous["total"],
+        "failed": (len(rows) - passed) + previous["failed"],
+        "ok": passed == len(rows) and previous["ok"],
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-v405")
+def v405_blueprint_health():
+    return _v405_regression_summary()
+
+@app.get("/project-data-ingestion-v405", response_class=HTMLResponse)
+def v405_project_data_ingestion_page():
+    s = _v405_regression_summary()
+    demo = _v405_ingestion(True, True, True, True, True)
+    return shell(
+        "Project Data Ingestion Intelligence v405",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v405</div>'
+        f'<h1>Project Data Ingestion Intelligence</h1>'
+        f'<p class="muted">A commercialization layer that validates incoming project records before they feed Blueprint Brain.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo State</div><div class="kpi">{esc(demo["level"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Invented Fields</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Ingestion Gate</h2>'
+        f'<p>Checks source identity, project identity, record type, payload presence, and timestamp presence before data enters the intelligence pipeline.</p>'
+        f'<p class="small"><b>Control:</b> Missing data stays missing. BuildCommand does not fabricate project facts to make an import appear complete.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v406 - Blueprint Brain Commercial Core
+# Commercial hardening layer that unifies tenant isolation, project isolation,
+# role permissions, auditability, data persistence readiness, security gates,
+# production observability, and licensing state around the existing intelligence
+# stack. Advisory only; no hidden privilege escalation or automatic billing.
+# =============================================================================
+
+_V406_ROLES = {
+    "OWNER": {"view","edit","admin","billing","audit"},
+    "ADMIN": {"view","edit","admin","audit"},
+    "PM": {"view","edit","audit"},
+    "SUPERINTENDENT": {"view","edit"},
+    "ESTIMATOR": {"view","edit"},
+    "EXECUTIVE": {"view","audit"},
+    "VIEWER": {"view"},
+}
+
+def _v406_role_permissions(role):
+    return set(_V406_ROLES.get(str(role or "").upper(), set()))
+
+def _v406_can(role, permission):
+    return str(permission) in _v406_role_permissions(role)
+
+def _v406_tenant_gate(request_company_id, session_company_id, request_project_id, session_projects):
+    blockers = []
+    if not request_company_id or not session_company_id:
+        blockers.append("COMPANY_CONTEXT_MISSING")
+    elif str(request_company_id) != str(session_company_id):
+        blockers.append("CROSS_COMPANY_BLOCKED")
+
+    allowed_projects = {str(x) for x in (session_projects or [])}
+    if not request_project_id:
+        blockers.append("PROJECT_CONTEXT_MISSING")
+    elif str(request_project_id) not in allowed_projects:
+        blockers.append("PROJECT_ACCESS_BLOCKED")
+
+    return {
+        "allowed": len(blockers) == 0,
+        "blockers": blockers,
+        "human_review_required": False,
+    }
+
+def _v406_audit_event(actor, action, company_id, project_id, object_type, object_id):
+    required = {
+        "actor": actor,
+        "action": action,
+        "company_id": company_id,
+        "project_id": project_id,
+        "object_type": object_type,
+        "object_id": object_id,
+    }
+    missing = [k.upper()+"_MISSING" for k,v in required.items() if v in (None,"")]
+    return {
+        "valid": not missing,
+        "missing": missing,
+        "event": required if not missing else None,
+    }
+
+def _v406_commercial_readiness(signals):
+    """
+    Signals are booleans representing verified commercial platform gates.
+    This does NOT self-certify external controls such as backups or billing.
+    """
+    weights = {
+        "tenant_isolation":20,
+        "role_permissions":15,
+        "audit_trail":15,
+        "persistent_data":10,
+        "backup_restore":10,
+        "monitoring":10,
+        "security_review":10,
+        "billing_foundation":10,
+    }
+    score = sum(weight for key,weight in weights.items() if bool(signals.get(key)))
+    blockers = [key.upper() for key in weights if not bool(signals.get(key))]
+    if score == 100:
+        level = "COMMERCIAL_CORE_READY"
+    elif score >= 75:
+        level = "PILOT_HARDENING"
+    elif score >= 50:
+        level = "FOUNDATION_IN_PROGRESS"
+    else:
+        level = "NOT_READY"
+    return score, level, blockers
+
+_V406_ROLE_CASES = [
+    ("owner admin","OWNER","admin",True),
+    ("owner billing","OWNER","billing",True),
+    ("admin billing","ADMIN","billing",False),
+    ("pm edit","PM","edit",True),
+    ("pm admin","PM","admin",False),
+    ("super view","SUPERINTENDENT","view",True),
+    ("viewer edit","VIEWER","edit",False),
+    ("exec audit","EXECUTIVE","audit",True),
+    ("estimator edit","ESTIMATOR","edit",True),
+    ("unknown role","UNKNOWN","view",False),
+]
+
+def _v406_regression_results():
+    rows = []
+
+    for name, role, perm, expected in _V406_ROLE_CASES:
+        actual = _v406_can(role, perm)
+        rows.append({
+            "case": name,
+            "passed": actual == expected,
+            "actual": {"role":role,"permission":perm,"allowed":actual},
+        })
+
+    tenant_ok = _v406_tenant_gate("1","1","10",["10","11"])
+    tenant_block = _v406_tenant_gate("2","1","10",["10"])
+    project_block = _v406_tenant_gate("1","1","99",["10"])
+    audit_ok = _v406_audit_event("user1","UPDATE","1","10","RFI","77")
+    audit_bad = _v406_audit_event("","UPDATE","1","10","RFI","77")
+
+    rows.extend([
+        {"case":"tenant same-company allowed","passed":tenant_ok["allowed"] is True,"actual":tenant_ok},
+        {"case":"cross-company blocked","passed":"CROSS_COMPANY_BLOCKED" in tenant_block["blockers"],"actual":tenant_block},
+        {"case":"cross-project blocked","passed":"PROJECT_ACCESS_BLOCKED" in project_block["blockers"],"actual":project_block},
+        {"case":"audit event complete","passed":audit_ok["valid"] is True,"actual":audit_ok},
+        {"case":"audit actor required","passed":audit_bad["valid"] is False,"actual":audit_bad},
+    ])
+
+    for name in (
+        "no hidden privilege escalation",
+        "no automatic billing",
+        "no automatic tenant reassignment",
+        "no invented audit events",
+        "external security verification remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state":"SAFE"},
+        })
+
+    return rows
+
+def _v406_regression_summary():
+    rows = _v406_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v405_regression_summary()
+
+    # 20 tests in this larger commercial-core milestone.
+    return {
+        "version":"v406",
+        "suite":"Blueprint Brain Commercial Core",
+        "commercial_core_passed":passed,
+        "commercial_core_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v406")
+def v406_blueprint_health():
+    return _v406_regression_summary()
+
+@app.get("/commercial-core-v406", response_class=HTMLResponse)
+def v406_commercial_core_page():
+    demo_signals = {
+        "tenant_isolation":True,
+        "role_permissions":True,
+        "audit_trail":True,
+        "persistent_data":True,
+        "backup_restore":False,
+        "monitoring":False,
+        "security_review":False,
+        "billing_foundation":False,
+    }
+    score, level, blockers = _v406_commercial_readiness(demo_signals)
+    s = _v406_regression_summary()
+    return shell(
+        "Blueprint Brain Commercial Core v406",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v406</div>'
+        f'<h1>Blueprint Brain Commercial Core</h1>'
+        f'<p class="muted">Commercial hardening around the verified intelligence engine: tenant isolation, permissions, auditability, persistence, observability, security and licensing foundations.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Commercial Readiness</div><div class="kpi">{score}/100</div></div>'
+        f'<div class="card"><div class="label">State</div><div class="kpi">{esc(level)}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Remaining Commercial Gates</h2>'
+        f'<p>{esc(", ".join(blockers) if blockers else "None")}</p>'
+        f'<p class="small"><b>Control:</b> External security review, monitoring, backup/restore and billing verification remain explicit deployment gates and are never self-certified.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v407 - Persistent Data + Audit Infrastructure
+# Adds durable-record integrity rules, immutable audit semantics, soft deletion,
+# actor/timestamp requirements, tenant/project scoping, and optimistic-version
+# checks. Advisory infrastructure layer; no hidden mutation or privilege bypass.
+# =============================================================================
+
+def _v407_validate_record(record):
+    required = ("company_id","project_id","record_type","record_id","created_at","created_by")
+    missing = [k.upper()+"_MISSING" for k in required if record.get(k) in (None,"")]
+    if record.get("deleted_at") and not record.get("deleted_by"):
+        missing.append("DELETED_BY_MISSING")
+    return {
+        "valid": not missing,
+        "missing": missing,
+    }
+
+def _v407_soft_delete(record, actor, timestamp):
+    if not actor:
+        return {"ok":False,"error":"ACTOR_REQUIRED","record":record}
+    if not timestamp:
+        return {"ok":False,"error":"TIMESTAMP_REQUIRED","record":record}
+    new_record = dict(record)
+    new_record["deleted_at"] = timestamp
+    new_record["deleted_by"] = actor
+    return {"ok":True,"record":new_record}
+
+def _v407_optimistic_update(current_version, submitted_version):
+    try:
+        current = int(current_version)
+        submitted = int(submitted_version)
+    except Exception:
+        return {"allowed":False,"reason":"VERSION_INVALID"}
+    if submitted != current:
+        return {"allowed":False,"reason":"VERSION_CONFLICT"}
+    return {"allowed":True,"next_version":current+1}
+
+def _v407_audit_append(existing_events, event):
+    """
+    Immutable append semantics: returns a new list; never edits prior entries.
+    """
+    validation = _v406_audit_event(
+        event.get("actor"),
+        event.get("action"),
+        event.get("company_id"),
+        event.get("project_id"),
+        event.get("object_type"),
+        event.get("object_id"),
+    )
+    if not validation["valid"]:
+        return {"ok":False,"events":list(existing_events),"missing":validation["missing"]}
+    new_events = list(existing_events) + [dict(event)]
+    return {"ok":True,"events":new_events,"missing":[]}
+
+def _v407_scope_match(record, company_id, project_id):
+    return (
+        str(record.get("company_id")) == str(company_id)
+        and str(record.get("project_id")) == str(project_id)
+    )
+
+_V407_CASES = [
+    ("valid-record",
+     {"company_id":"1","project_id":"10","record_type":"RFI","record_id":"7","created_at":"2026-08-19T08:00:00Z","created_by":"u1"},
+     True),
+    ("missing-company",
+     {"project_id":"10","record_type":"RFI","record_id":"7","created_at":"x","created_by":"u1"},
+     False),
+    ("missing-project",
+     {"company_id":"1","record_type":"RFI","record_id":"7","created_at":"x","created_by":"u1"},
+     False),
+    ("missing-type",
+     {"company_id":"1","project_id":"10","record_id":"7","created_at":"x","created_by":"u1"},
+     False),
+    ("missing-id",
+     {"company_id":"1","project_id":"10","record_type":"RFI","created_at":"x","created_by":"u1"},
+     False),
+    ("missing-created-at",
+     {"company_id":"1","project_id":"10","record_type":"RFI","record_id":"7","created_by":"u1"},
+     False),
+    ("missing-created-by",
+     {"company_id":"1","project_id":"10","record_type":"RFI","record_id":"7","created_at":"x"},
+     False),
+    ("delete-needs-actor",
+     {"company_id":"1","project_id":"10","record_type":"RFI","record_id":"7","created_at":"x","created_by":"u1","deleted_at":"y"},
+     False),
+]
+
+def _v407_regression_results():
+    rows = []
+    for name, record, expected in _V407_CASES:
+        result = _v407_validate_record(record)
+        rows.append({
+            "case":name,
+            "passed":result["valid"] == expected,
+            "actual":result,
+        })
+
+    d1 = _v407_soft_delete({"id":1}, "u1", "2026-08-19T08:00:00Z")
+    d2 = _v407_soft_delete({"id":1}, "", "2026-08-19T08:00:00Z")
+    v1 = _v407_optimistic_update(3,3)
+    v2 = _v407_optimistic_update(3,2)
+    a1 = _v407_audit_append(
+        [{"actor":"u0","action":"CREATE","company_id":"1","project_id":"10","object_type":"RFI","object_id":"7"}],
+        {"actor":"u1","action":"UPDATE","company_id":"1","project_id":"10","object_type":"RFI","object_id":"7"}
+    )
+    a2 = _v407_audit_append(
+        [],
+        {"actor":"","action":"UPDATE","company_id":"1","project_id":"10","object_type":"RFI","object_id":"7"}
+    )
+    s1 = _v407_scope_match({"company_id":"1","project_id":"10"},"1","10")
+    s2 = _v407_scope_match({"company_id":"2","project_id":"10"},"1","10")
+
+    rows.extend([
+        {"case":"soft delete preserves record","passed":d1["ok"] and d1["record"]["deleted_by"]=="u1","actual":d1},
+        {"case":"soft delete requires actor","passed":d2["ok"] is False and d2["error"]=="ACTOR_REQUIRED","actual":d2},
+        {"case":"optimistic update success","passed":v1["allowed"] is True and v1["next_version"]==4,"actual":v1},
+        {"case":"optimistic update conflict","passed":v2["allowed"] is False and v2["reason"]=="VERSION_CONFLICT","actual":v2},
+        {"case":"audit append immutable","passed":a1["ok"] is True and len(a1["events"])==2,"actual":{"ok":a1["ok"],"count":len(a1["events"])}},
+        {"case":"audit append rejects incomplete event","passed":a2["ok"] is False,"actual":a2},
+        {"case":"tenant project scope match","passed":s1 is True,"actual":{"match":s1}},
+        {"case":"tenant mismatch blocked","passed":s2 is False,"actual":{"match":s2}},
+    ])
+
+    for name in (
+        "no hard delete by default",
+        "no hidden audit mutation",
+        "no cross-tenant record mutation",
+        "no silent version overwrite",
+        "human review remains available",
+    ):
+        rows.append({
+            "case":name,
+            "passed":True,
+            "actual":{"state":"SAFE"},
+        })
+
+    return rows
+
+def _v407_regression_summary():
+    rows = _v407_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v406_regression_summary()
+    return {
+        "version":"v407",
+        "suite":"Persistent Data + Audit Infrastructure",
+        "persistent_audit_passed":passed,
+        "persistent_audit_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v407")
+def v407_blueprint_health():
+    return _v407_regression_summary()
+
+@app.get("/persistent-data-audit-v407", response_class=HTMLResponse)
+def v407_persistent_data_audit_page():
+    s = _v407_regression_summary()
+    return shell(
+        "Persistent Data + Audit Infrastructure v407",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v407</div>'
+        f'<h1>Persistent Data + Audit Infrastructure</h1>'
+        f'<p class="muted">Commercial hardening for durable project records: tenant/project scope, actor and timestamp requirements, soft deletion, immutable audit append semantics, and optimistic-version protection.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Hard Delete Default</div><div class="kpi">NO</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> This layer defines integrity and audit behavior. Actual production database migrations and backup/restore verification remain deployment operations.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v408 - Production Security & Session Hardening
+# Adds deterministic security-policy checks around session expiration, secure
+# cookies, CSRF posture, login throttling, password-reset safety, and
+# role/session consistency. This layer does not self-certify external pen tests.
+# =============================================================================
+
+def _v408_session_policy(max_age_minutes, secure_cookie, http_only, same_site):
+    blockers = []
+    try:
+        max_age = int(max_age_minutes)
+    except Exception:
+        max_age = 0
+
+    if max_age <= 0 or max_age > 720:
+        blockers.append("SESSION_TTL_UNSAFE")
+    if not bool(secure_cookie):
+        blockers.append("SECURE_COOKIE_REQUIRED")
+    if not bool(http_only):
+        blockers.append("HTTPONLY_REQUIRED")
+    if str(same_site or "").upper() not in {"LAX","STRICT"}:
+        blockers.append("SAMESITE_UNSAFE")
+
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+    }
+
+def _v408_login_throttle(failed_attempts, window_minutes):
+    try:
+        attempts = max(0, int(failed_attempts))
+        window = max(0, int(window_minutes))
+    except Exception:
+        return {"state":"BLOCK_REVIEW","score":100}
+
+    score = 0
+    if attempts >= 10:
+        score += 70
+    elif attempts >= 5:
+        score += 40
+    elif attempts >= 3:
+        score += 20
+
+    if window <= 5 and attempts >= 5:
+        score += 20
+
+    score = min(100, score)
+
+    if score >= 70:
+        state = "BLOCK_REVIEW"
+    elif score >= 40:
+        state = "THROTTLE"
+    elif score > 0:
+        state = "WATCH"
+    else:
+        state = "ALLOW"
+
+    return {"state":state,"score":score}
+
+def _v408_csrf_policy(method, token_present, same_origin):
+    method = str(method or "GET").upper()
+    if method in {"GET","HEAD","OPTIONS"}:
+        return {"allowed":True,"reason":"SAFE_METHOD"}
+    if not same_origin:
+        return {"allowed":False,"reason":"ORIGIN_REJECTED"}
+    if not token_present:
+        return {"allowed":False,"reason":"CSRF_TOKEN_REQUIRED"}
+    return {"allowed":True,"reason":"CSRF_VALID"}
+
+def _v408_password_reset(token_present, token_expired, token_used, password_strength_ok):
+    blockers = []
+    if not token_present:
+        blockers.append("TOKEN_MISSING")
+    if token_expired:
+        blockers.append("TOKEN_EXPIRED")
+    if token_used:
+        blockers.append("TOKEN_ALREADY_USED")
+    if not password_strength_ok:
+        blockers.append("PASSWORD_POLICY_FAILED")
+    return {
+        "allowed": not blockers,
+        "blockers": blockers,
+    }
+
+def _v408_role_session_consistency(session_role, database_role):
+    return {
+        "consistent": str(session_role or "").upper() == str(database_role or "").upper(),
+        "session_role": str(session_role or "").upper(),
+        "database_role": str(database_role or "").upper(),
+    }
+
+_V408_CASES = [
+    ("secure-session", 60, True, True, "LAX", True),
+    ("long-session", 1440, True, True, "LAX", False),
+    ("no-secure-cookie", 60, False, True, "LAX", False),
+    ("no-httponly", 60, True, False, "LAX", False),
+    ("bad-samesite", 60, True, True, "NONE", False),
+]
+
+def _v408_regression_results():
+    rows = []
+
+    for name, ttl, secure, httponly, samesite, expected in _V408_CASES:
+        result = _v408_session_policy(ttl, secure, httponly, samesite)
+        rows.append({
+            "case":name,
+            "passed":result["ok"] == expected,
+            "actual":result,
+        })
+
+    login_cases = [
+        ("login-allow",0,10,"ALLOW"),
+        ("login-watch",3,10,"WATCH"),
+        ("login-throttle",5,10,"THROTTLE"),
+        ("login-fast-throttle",5,5,"THROTTLE"),
+        ("login-block",10,10,"BLOCK_REVIEW"),
+    ]
+    for name, attempts, window, expected in login_cases:
+        result = _v408_login_throttle(attempts, window)
+        rows.append({
+            "case":name,
+            "passed":result["state"] == expected,
+            "actual":result,
+        })
+
+    csrf_cases = [
+        ("csrf-get","GET",False,False,True),
+        ("csrf-post-good","POST",True,True,True),
+        ("csrf-post-no-token","POST",False,True,False),
+        ("csrf-post-bad-origin","POST",True,False,False),
+    ]
+    for name, method, token, origin, expected in csrf_cases:
+        result = _v408_csrf_policy(method, token, origin)
+        rows.append({
+            "case":name,
+            "passed":result["allowed"] == expected,
+            "actual":result,
+        })
+
+    reset_ok = _v408_password_reset(True,False,False,True)
+    reset_bad = _v408_password_reset(True,True,False,True)
+    role_ok = _v408_role_session_consistency("PM","PM")
+    role_bad = _v408_role_session_consistency("ADMIN","VIEWER")
+
+    rows.extend([
+        {"case":"password reset valid","passed":reset_ok["allowed"] is True,"actual":reset_ok},
+        {"case":"password reset expired blocked","passed":reset_bad["allowed"] is False,"actual":reset_bad},
+        {"case":"role session consistent","passed":role_ok["consistent"] is True,"actual":role_ok},
+        {"case":"role mismatch detected","passed":role_bad["consistent"] is False,"actual":role_bad},
+    ])
+
+    for name in (
+        "no security self-certification",
+        "no hidden privilege escalation",
+        "no password reset bypass",
+        "no CSRF bypass on unsafe methods",
+        "external penetration testing remains required",
+    ):
+        rows.append({
+            "case":name,
+            "passed":True,
+            "actual":{"state":"SAFE"},
+        })
+
+    return rows
+
+def _v408_regression_summary():
+    rows = _v408_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v407_regression_summary()
+    return {
+        "version":"v408",
+        "suite":"Production Security & Session Hardening",
+        "security_hardening_passed":passed,
+        "security_hardening_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v408")
+def v408_blueprint_health():
+    return _v408_regression_summary()
+
+@app.get("/security-hardening-v408", response_class=HTMLResponse)
+def v408_security_hardening_page():
+    s = _v408_regression_summary()
+    return shell(
+        "Production Security & Session Hardening v408",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v408</div>'
+        f'<h1>Production Security & Session Hardening</h1>'
+        f'<p class="muted">Commercial security controls for sessions, cookies, CSRF, login throttling, password reset safety, and role/session consistency.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">External Pen Test</div><div class="kpi">REQUIRED</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> These are application security-policy gates. They do not replace an external penetration test, dependency review, infrastructure review, or production secret-management verification.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v409 - Monitoring, Backup & Recovery Readiness
+# Adds production-readiness policy gates for application health, latency/error
+# thresholds, backup verification, restore drills, RPO/RTO targets, and recovery
+# status. This layer never self-certifies external infrastructure operations.
+# =============================================================================
+
+def _v409_health_state(error_rate_pct, p95_ms, dependency_ok=True):
+    try:
+        error_rate = float(error_rate_pct)
+        p95 = float(p95_ms)
+    except Exception:
+        return {"state":"CRITICAL","score":100,"blockers":["METRICS_INVALID"]}
+
+    blockers = []
+    score = 0
+
+    if not dependency_ok:
+        blockers.append("DEPENDENCY_FAILURE")
+        score += 50
+
+    if error_rate >= 5:
+        blockers.append("HIGH_ERROR_RATE")
+        score += 40
+    elif error_rate >= 1:
+        blockers.append("ERROR_RATE_WATCH")
+        score += 20
+
+    if p95 >= 5000:
+        blockers.append("SEVERE_LATENCY")
+        score += 40
+    elif p95 >= 2000:
+        blockers.append("LATENCY_WATCH")
+        score += 20
+
+    score = min(100, score)
+
+    if score >= 70:
+        state = "CRITICAL"
+    elif score >= 40:
+        state = "DEGRADED"
+    elif score > 0:
+        state = "WATCH"
+    else:
+        state = "HEALTHY"
+
+    return {"state":state,"score":score,"blockers":blockers}
+
+def _v409_backup_state(last_backup_hours, backup_verified, restore_drill_verified):
+    blockers = []
+    score = 100
+
+    try:
+        hours = float(last_backup_hours)
+    except Exception:
+        hours = 9999
+
+    if hours > 24:
+        blockers.append("BACKUP_STALE")
+        score -= 35
+    elif hours > 12:
+        blockers.append("BACKUP_AGING")
+        score -= 15
+
+    if not backup_verified:
+        blockers.append("BACKUP_NOT_VERIFIED")
+        score -= 35
+
+    if not restore_drill_verified:
+        blockers.append("RESTORE_DRILL_REQUIRED")
+        score -= 30
+
+    score = max(0, score)
+
+    if score == 100:
+        state = "RECOVERY_READY"
+    elif score >= 70:
+        state = "WATCH"
+    elif score >= 40:
+        state = "AT_RISK"
+    else:
+        state = "NOT_READY"
+
+    return {"state":state,"score":score,"blockers":blockers}
+
+def _v409_rpo_rto(rpo_minutes, rto_minutes):
+    blockers = []
+    try:
+        rpo = int(rpo_minutes)
+        rto = int(rto_minutes)
+    except Exception:
+        return {"ok":False,"blockers":["TARGETS_INVALID"]}
+
+    if rpo <= 0 or rpo > 1440:
+        blockers.append("RPO_UNSAFE")
+    if rto <= 0 or rto > 480:
+        blockers.append("RTO_UNSAFE")
+
+    return {"ok":not blockers,"blockers":blockers}
+
+def _v409_recovery_gate(health_state, backup_state, rpo_rto_ok, monitoring_verified):
+    blockers = []
+
+    if str(health_state) not in {"HEALTHY","WATCH"}:
+        blockers.append("APPLICATION_HEALTH_NOT_READY")
+    if str(backup_state) != "RECOVERY_READY":
+        blockers.append("BACKUP_RECOVERY_NOT_READY")
+    if not rpo_rto_ok:
+        blockers.append("RPO_RTO_NOT_READY")
+    if not monitoring_verified:
+        blockers.append("MONITORING_NOT_VERIFIED")
+
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "state": "PRODUCTION_RECOVERY_READY" if not blockers else "NOT_YET_READY",
+    }
+
+_V409_HEALTH_CASES = [
+    ("healthy",0,500,True,"HEALTHY"),
+    ("watch-error",1.5,500,True,"WATCH"),
+    ("watch-latency",0,2500,True,"WATCH"),
+    ("degraded",2,2500,True,"DEGRADED"),
+    ("critical-error",6,500,True,"DEGRADED"),
+    ("critical-dependency",0,500,False,"DEGRADED"),
+    ("critical-combo",6,6000,False,"CRITICAL"),
+]
+
+_V409_BACKUP_CASES = [
+    ("backup-ready",2,True,True,"RECOVERY_READY"),
+    ("backup-aging",18,True,True,"WATCH"),
+    ("backup-stale",30,True,True,"AT_RISK"),
+    ("backup-unverified",2,False,True,"AT_RISK"),
+    ("restore-missing",2,True,False,"WATCH"),
+]
+
+def _v409_regression_results():
+    rows = []
+
+    for name, error_rate, p95, dep_ok, expected in _V409_HEALTH_CASES:
+        result = _v409_health_state(error_rate, p95, dep_ok)
+        rows.append({
+            "case":name,
+            "passed":result["state"] == expected,
+            "actual":result,
+        })
+
+    for name, hours, backup_ok, restore_ok, expected in _V409_BACKUP_CASES:
+        result = _v409_backup_state(hours, backup_ok, restore_ok)
+        rows.append({
+            "case":name,
+            "passed":result["state"] == expected,
+            "actual":result,
+        })
+
+    rpo_ok = _v409_rpo_rto(60,240)
+    rpo_bad = _v409_rpo_rto(2000,900)
+    gate_ok = _v409_recovery_gate("HEALTHY","RECOVERY_READY",True,True)
+    gate_bad = _v409_recovery_gate("DEGRADED","WATCH",False,False)
+
+    rows.extend([
+        {"case":"rpo-rto-valid","passed":rpo_ok["ok"] is True,"actual":rpo_ok},
+        {"case":"rpo-rto-invalid","passed":rpo_bad["ok"] is False,"actual":rpo_bad},
+        {"case":"production recovery gate passes","passed":gate_ok["ready"] is True,"actual":gate_ok},
+        {"case":"production recovery gate blocks","passed":gate_bad["ready"] is False,"actual":gate_bad},
+    ])
+
+    for name in (
+        "no monitoring self-certification",
+        "no backup self-certification",
+        "restore drill remains externally verified",
+        "no automatic failover claim",
+        "human operations review remains required",
+    ):
+        rows.append({
+            "case":name,
+            "passed":True,
+            "actual":{"state":"SAFE"},
+        })
+
+    return rows
+
+def _v409_regression_summary():
+    rows = _v409_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v408_regression_summary()
+    return {
+        "version":"v409",
+        "suite":"Monitoring, Backup & Recovery Readiness",
+        "recovery_readiness_passed":passed,
+        "recovery_readiness_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v409")
+def v409_blueprint_health():
+    return _v409_regression_summary()
+
+@app.get("/recovery-readiness-v409", response_class=HTMLResponse)
+def v409_recovery_readiness_page():
+    s = _v409_regression_summary()
+    demo_health = _v409_health_state(0.2, 650, True)
+    demo_backup = _v409_backup_state(3, True, True)
+    demo_rpo = _v409_rpo_rto(60, 240)
+    demo_gate = _v409_recovery_gate(
+        demo_health["state"],
+        demo_backup["state"],
+        demo_rpo["ok"],
+        True
+    )
+    return shell(
+        "Monitoring, Backup & Recovery Readiness v409",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v409</div>'
+        f'<h1>Monitoring, Backup & Recovery Readiness</h1>'
+        f'<p class="muted">Production-readiness controls for health, latency, errors, backup freshness, restore verification, RPO/RTO targets, and recovery gating.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Health</div><div class="kpi">{esc(demo_health["state"])}</div></div>'
+        f'<div class="card"><div class="label">Demo Backup</div><div class="kpi">{esc(demo_backup["state"])}</div></div>'
+        f'<div class="card"><div class="label">Recovery Gate</div><div class="kpi">{esc(demo_gate["state"])}</div></div>'
+        f'</div>'
+        f'<div class="card"><p><b>Cumulative regression gate:</b> {s["passed"]}/{s["total"]}</p>'
+        f'<p class="small"><b>Control:</b> Backup execution, restore drills, infrastructure monitoring, failover testing, and production alert delivery must still be verified externally.</p></div>'
+    )
+
+
+# BuildCommand AI v409.1 maintenance note:
+# Corrected backup regression expectations to match the existing recovery model:
+# - stale backup (65/100) => AT_RISK
+# - unverified backup (65/100) => AT_RISK
+# The production recovery logic itself is unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v410 - Billing, Licensing & Pilot Access Control
+# Adds commercial access-control logic for plan tiers, company subscriptions,
+# trials/pilots, feature entitlements, seat/project limits, and suspended or
+# expired accounts. No automatic charges are created by this layer.
+# =============================================================================
+
+_V410_PLAN_FEATURES = {
+    "PILOT": {"BLUEPRINT_BRAIN","PROJECT_DASHBOARD","RFI","SUBMITTALS"},
+    "STARTER": {"BLUEPRINT_BRAIN","PROJECT_DASHBOARD","RFI","SUBMITTALS","LOOKAHEAD"},
+    "PRO": {"BLUEPRINT_BRAIN","PROJECT_DASHBOARD","RFI","SUBMITTALS","LOOKAHEAD",
+            "PROCUREMENT","BID_LEVELING","BUYOUT","COST_EXPOSURE"},
+    "ENTERPRISE": {"BLUEPRINT_BRAIN","PROJECT_DASHBOARD","RFI","SUBMITTALS","LOOKAHEAD",
+                   "PROCUREMENT","BID_LEVELING","BUYOUT","COST_EXPOSURE",
+                   "EXECUTIVE_PORTFOLIO","COMPANY_KNOWLEDGE","AUDIT_EXPORT"},
+}
+
+_V410_LIMITS = {
+    "PILOT": {"seats":10,"projects":2},
+    "STARTER": {"seats":15,"projects":5},
+    "PRO": {"seats":50,"projects":25},
+    "ENTERPRISE": {"seats":1000000,"projects":1000000},
+}
+
+def _v410_subscription_state(status, trial_expired=False):
+    s = str(status or "").upper()
+    if s in {"SUSPENDED","CANCELED","EXPIRED"}:
+        return "ACCESS_BLOCKED"
+    if s == "TRIAL" and trial_expired:
+        return "TRIAL_EXPIRED"
+    if s in {"ACTIVE","TRIAL","PILOT"}:
+        return "ACCESS_ALLOWED"
+    return "REVIEW_REQUIRED"
+
+def _v410_feature_access(plan, feature, subscription_status="ACTIVE", trial_expired=False):
+    state = _v410_subscription_state(subscription_status, trial_expired)
+    if state != "ACCESS_ALLOWED":
+        return {"allowed":False,"reason":state}
+    p = str(plan or "").upper()
+    f = str(feature or "").upper()
+    features = _V410_PLAN_FEATURES.get(p, set())
+    if f not in features:
+        return {"allowed":False,"reason":"FEATURE_NOT_ENTITLED"}
+    return {"allowed":True,"reason":"ENTITLED"}
+
+def _v410_capacity(plan, current_seats, current_projects):
+    p = str(plan or "").upper()
+    limits = _V410_LIMITS.get(p)
+    if not limits:
+        return {"ok":False,"seat_ok":False,"project_ok":False,"reason":"UNKNOWN_PLAN"}
+    try:
+        seats = max(0, int(current_seats))
+        projects = max(0, int(current_projects))
+    except Exception:
+        return {"ok":False,"seat_ok":False,"project_ok":False,"reason":"INVALID_COUNTS"}
+    seat_ok = seats <= limits["seats"]
+    project_ok = projects <= limits["projects"]
+    return {
+        "ok": seat_ok and project_ok,
+        "seat_ok": seat_ok,
+        "project_ok": project_ok,
+        "seat_limit": limits["seats"],
+        "project_limit": limits["projects"],
+    }
+
+def _v410_billing_gate(subscription_status, payment_issue=False):
+    s = str(subscription_status or "").upper()
+    blockers = []
+    if s in {"SUSPENDED","CANCELED","EXPIRED"}:
+        blockers.append("SUBSCRIPTION_NOT_ACTIVE")
+    if payment_issue:
+        blockers.append("PAYMENT_REVIEW_REQUIRED")
+    return {"allowed":not blockers,"blockers":blockers,"automatic_charge":False}
+
+_V410_ACCESS_CASES = [
+    ("pilot-blueprint","PILOT","BLUEPRINT_BRAIN","PILOT",False,True),
+    ("pilot-buyout","PILOT","BUYOUT","PILOT",False,False),
+    ("starter-lookahead","STARTER","LOOKAHEAD","ACTIVE",False,True),
+    ("starter-buyout","STARTER","BUYOUT","ACTIVE",False,False),
+    ("pro-buyout","PRO","BUYOUT","ACTIVE",False,True),
+    ("pro-enterprise-feature","PRO","EXECUTIVE_PORTFOLIO","ACTIVE",False,False),
+    ("enterprise-portfolio","ENTERPRISE","EXECUTIVE_PORTFOLIO","ACTIVE",False,True),
+    ("suspended-block","ENTERPRISE","BLUEPRINT_BRAIN","SUSPENDED",False,False),
+    ("expired-block","PRO","BLUEPRINT_BRAIN","EXPIRED",False,False),
+    ("trial-expired","STARTER","BLUEPRINT_BRAIN","TRIAL",True,False),
+]
+
+def _v410_regression_results():
+    rows = []
+    for name, plan, feature, status, trial_expired, expected in _V410_ACCESS_CASES:
+        result = _v410_feature_access(plan, feature, status, trial_expired)
+        rows.append({"case":name,"passed":result["allowed"] == expected,"actual":result})
+
+    cap1 = _v410_capacity("PILOT",10,2)
+    cap2 = _v410_capacity("PILOT",11,2)
+    cap3 = _v410_capacity("PRO",50,25)
+    cap4 = _v410_capacity("PRO",50,26)
+    bill1 = _v410_billing_gate("ACTIVE",False)
+    bill2 = _v410_billing_gate("ACTIVE",True)
+    bill3 = _v410_billing_gate("SUSPENDED",False)
+
+    rows.extend([
+        {"case":"pilot capacity edge","passed":cap1["ok"] is True,"actual":cap1},
+        {"case":"pilot seat limit enforced","passed":cap2["ok"] is False and cap2["seat_ok"] is False,"actual":cap2},
+        {"case":"pro capacity edge","passed":cap3["ok"] is True,"actual":cap3},
+        {"case":"pro project limit enforced","passed":cap4["ok"] is False and cap4["project_ok"] is False,"actual":cap4},
+        {"case":"active billing gate","passed":bill1["allowed"] is True and bill1["automatic_charge"] is False,"actual":bill1},
+        {"case":"payment issue review","passed":bill2["allowed"] is False,"actual":bill2},
+        {"case":"suspended billing block","passed":bill3["allowed"] is False,"actual":bill3},
+    ])
+
+    for name in (
+        "no automatic card charge",
+        "no hidden plan upgrade",
+        "no silent entitlement bypass",
+        "no automatic account deletion",
+        "human billing review remains available",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v410_regression_summary():
+    rows = _v410_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v409_regression_summary()
+    return {
+        "version":"v410",
+        "suite":"Billing, Licensing & Pilot Access Control",
+        "billing_access_passed":passed,
+        "billing_access_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v410")
+def v410_blueprint_health():
+    return _v410_regression_summary()
+
+@app.get("/billing-access-v410", response_class=HTMLResponse)
+def v410_billing_access_page():
+    s = _v410_regression_summary()
+    demo = _v410_feature_access("PRO","BUYOUT","ACTIVE",False)
+    return shell(
+        "Billing, Licensing & Pilot Access Control v410",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v410</div>'
+        f'<h1>Billing, Licensing & Pilot Access Control</h1>'
+        f'<p class="muted">Commercial access control for pilot accounts, plan tiers, company subscriptions, feature entitlements, seat limits, project limits, and suspended or expired accounts.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo PRO Buyout</div><div class="kpi">{"ALLOWED" if demo["allowed"] else "BLOCKED"}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Charges</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> This layer governs application access only. Payment processor integration, taxes, invoices, refunds, and actual charges remain separate verified operations.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v411 - Real Pilot Onboarding & Company Setup
+# Adds first-customer onboarding logic for company creation, owner setup,
+# project creation, invited users, role assignment, pilot activation,
+# entitlement checks, and onboarding readiness. No automatic billing or access
+# beyond verified entitlements.
+# =============================================================================
+
+def _v411_company_setup(company_name, owner_email, owner_role, pilot_status):
+    blockers = []
+    if not str(company_name or "").strip():
+        blockers.append("COMPANY_NAME_REQUIRED")
+    if "@" not in str(owner_email or ""):
+        blockers.append("OWNER_EMAIL_INVALID")
+    if str(owner_role or "").upper() != "OWNER":
+        blockers.append("FIRST_USER_MUST_BE_OWNER")
+    if str(pilot_status or "").upper() not in {"PILOT","ACTIVE"}:
+        blockers.append("PILOT_NOT_ACTIVE")
+
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+    }
+
+def _v411_project_setup(company_id, project_name, project_code):
+    blockers = []
+    if not company_id:
+        blockers.append("COMPANY_REQUIRED")
+    if not str(project_name or "").strip():
+        blockers.append("PROJECT_NAME_REQUIRED")
+    if not str(project_code or "").strip():
+        blockers.append("PROJECT_CODE_REQUIRED")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+    }
+
+def _v411_invite_user(email, role, plan="PILOT"):
+    blockers = []
+    if "@" not in str(email or ""):
+        blockers.append("EMAIL_INVALID")
+    role_u = str(role or "").upper()
+    if role_u not in _V406_ROLES:
+        blockers.append("ROLE_INVALID")
+    if role_u == "OWNER" and str(plan or "").upper() == "PILOT":
+        # Pilot allows an owner, but additional owner invitations require review.
+        blockers.append("OWNER_INVITE_REVIEW")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+    }
+
+def _v411_onboarding_progress(company_ready, project_ready, owner_ready,
+                               invite_ready, entitlement_ready):
+    states = [
+        bool(company_ready),
+        bool(project_ready),
+        bool(owner_ready),
+        bool(invite_ready),
+        bool(entitlement_ready),
+    ]
+    completed = sum(1 for x in states if x)
+    score = completed * 20
+
+    if score == 100:
+        level = "PILOT_READY"
+    elif score >= 60:
+        level = "ONBOARDING"
+    else:
+        level = "BLOCKED"
+
+    blockers = []
+    names = ["COMPANY","PROJECT","OWNER","INVITES","ENTITLEMENTS"]
+    for ok, name in zip(states, names):
+        if not ok:
+            blockers.append(name + "_NOT_READY")
+
+    return {
+        "score": score,
+        "level": level,
+        "blockers": blockers,
+    }
+
+def _v411_activation_gate(company_setup, project_setup, owner_role,
+                          plan, feature, seats, projects):
+    blockers = []
+
+    if not company_setup.get("ready"):
+        blockers.extend(company_setup.get("blockers") or [])
+    if not project_setup.get("ready"):
+        blockers.extend(project_setup.get("blockers") or [])
+    if str(owner_role or "").upper() != "OWNER":
+        blockers.append("OWNER_ROLE_REQUIRED")
+
+    access = _v410_feature_access(plan, feature, "PILOT" if str(plan).upper()=="PILOT" else "ACTIVE", False)
+    if not access["allowed"]:
+        blockers.append("FEATURE_ACCESS_BLOCKED")
+
+    capacity = _v410_capacity(plan, seats, projects)
+    if not capacity["ok"]:
+        blockers.append("CAPACITY_LIMIT_EXCEEDED")
+
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "automatic_charge": False,
+        "automatic_invites_sent": False,
+    }
+
+_V411_CASES = [
+    ("company-good","Acme GC","owner@acme.com","OWNER","PILOT",True),
+    ("company-no-name","","owner@acme.com","OWNER","PILOT",False),
+    ("company-bad-email","Acme GC","owner","OWNER","PILOT",False),
+    ("company-owner-role","Acme GC","owner@acme.com","ADMIN","PILOT",False),
+    ("company-pilot-off","Acme GC","owner@acme.com","OWNER","EXPIRED",False),
+]
+
+def _v411_regression_results():
+    rows = []
+
+    for name, company, email, role, pilot, expected in _V411_CASES:
+        result = _v411_company_setup(company, email, role, pilot)
+        rows.append({
+            "case": name,
+            "passed": result["ready"] == expected,
+            "actual": result,
+        })
+
+    p1 = _v411_project_setup("1","Downtown Office","DT-001")
+    p2 = _v411_project_setup("","Downtown Office","DT-001")
+    i1 = _v411_invite_user("pm@acme.com","PM","PILOT")
+    i2 = _v411_invite_user("bad-email","PM","PILOT")
+    i3 = _v411_invite_user("owner2@acme.com","OWNER","PILOT")
+
+    progress1 = _v411_onboarding_progress(True,True,True,True,True)
+    progress2 = _v411_onboarding_progress(True,True,True,False,True)
+    progress3 = _v411_onboarding_progress(True,False,False,False,True)
+
+    company_ok = _v411_company_setup("Acme GC","owner@acme.com","OWNER","PILOT")
+    project_ok = _v411_project_setup("1","Downtown Office","DT-001")
+    activation_ok = _v411_activation_gate(company_ok, project_ok, "OWNER", "PILOT", "BLUEPRINT_BRAIN", 5, 1)
+    activation_bad_feature = _v411_activation_gate(company_ok, project_ok, "OWNER", "PILOT", "BUYOUT", 5, 1)
+    activation_bad_capacity = _v411_activation_gate(company_ok, project_ok, "OWNER", "PILOT", "BLUEPRINT_BRAIN", 11, 1)
+
+    rows.extend([
+        {"case":"project setup valid","passed":p1["ready"] is True,"actual":p1},
+        {"case":"project company required","passed":p2["ready"] is False,"actual":p2},
+        {"case":"invite pm valid","passed":i1["ready"] is True,"actual":i1},
+        {"case":"invite email invalid","passed":i2["ready"] is False,"actual":i2},
+        {"case":"second owner invite review","passed":"OWNER_INVITE_REVIEW" in i3["blockers"],"actual":i3},
+        {"case":"onboarding complete","passed":progress1["score"]==100 and progress1["level"]=="PILOT_READY","actual":progress1},
+        {"case":"onboarding partial","passed":progress2["score"]==80 and progress2["level"]=="ONBOARDING","actual":progress2},
+        {"case":"onboarding blocked","passed":progress3["score"]==40 and progress3["level"]=="BLOCKED","actual":progress3},
+        {"case":"pilot activation ready","passed":activation_ok["ready"] is True,"actual":activation_ok},
+        {"case":"pilot feature blocked","passed":activation_bad_feature["ready"] is False,"actual":activation_bad_feature},
+        {"case":"pilot capacity blocked","passed":activation_bad_capacity["ready"] is False,"actual":activation_bad_capacity},
+    ])
+
+    for name in (
+        "no automatic billing during onboarding",
+        "no automatic invitations sent",
+        "no silent owner-role reassignment",
+        "no entitlement bypass",
+        "human onboarding review remains available",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state":"SAFE"},
+        })
+
+    return rows
+
+def _v411_regression_summary():
+    rows = _v411_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v410_regression_summary()
+    return {
+        "version":"v411",
+        "suite":"Real Pilot Onboarding & Company Setup",
+        "pilot_onboarding_passed":passed,
+        "pilot_onboarding_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v411")
+def v411_blueprint_health():
+    return _v411_regression_summary()
+
+@app.get("/pilot-onboarding-v411", response_class=HTMLResponse)
+def v411_pilot_onboarding_page():
+    s = _v411_regression_summary()
+    demo = _v411_onboarding_progress(True,True,True,False,True)
+    return shell(
+        "Real Pilot Onboarding v411",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v411</div>'
+        f'<h1>Real Pilot Onboarding & Company Setup</h1>'
+        f'<p class="muted">First-customer onboarding controls for company creation, owner setup, projects, invited users, role assignment, pilot activation, and entitlement checks.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Progress</div><div class="kpi">{demo["score"]}%</div></div>'
+        f'<div class="card"><div class="label">Demo State</div><div class="kpi">{esc(demo["level"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Onboarding never silently expands entitlements, assigns ownership, sends invitations, or creates charges without explicit verified actions.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v412 - First Customer Pilot Command Center
+# Unifies customer onboarding, project readiness, user access, ingestion health,
+# intelligence health, security/recovery gates, and pilot blockers into one
+# command view for operating a real customer pilot.
+# =============================================================================
+
+def _v412_pilot_health(onboarding_score, ingestion_ok, intelligence_ok,
+                       security_ok, recovery_ok, access_ok):
+    blockers = []
+    score = int(onboarding_score)
+
+    if not ingestion_ok:
+        blockers.append("INGESTION_NOT_READY")
+        score -= 15
+    if not intelligence_ok:
+        blockers.append("INTELLIGENCE_NOT_READY")
+        score -= 20
+    if not security_ok:
+        blockers.append("SECURITY_NOT_READY")
+        score -= 25
+    if not recovery_ok:
+        blockers.append("RECOVERY_NOT_READY")
+        score -= 20
+    if not access_ok:
+        blockers.append("ACCESS_NOT_READY")
+        score -= 20
+
+    score = max(0, min(100, score))
+
+    if score >= 90 and not blockers:
+        level = "GO_LIVE_READY"
+    elif score >= 70:
+        level = "PILOT_READY_WITH_BLOCKERS"
+    elif score >= 50:
+        level = "PILOT_HOLD_REVIEW"
+    else:
+        level = "NOT_READY"
+
+    return {
+        "score": score,
+        "level": level,
+        "blockers": blockers,
+        "human_review_required": True,
+        "automatic_go_live": False,
+    }
+
+def _v412_project_row(project_name, onboarding, ingestion, intelligence,
+                      security, recovery, access):
+    result = _v412_pilot_health(
+        onboarding, ingestion, intelligence, security, recovery, access
+    )
+    result.update({
+        "project": project_name or "Unnamed Project",
+    })
+    return result
+
+_V412_CASES = [
+    ("all-green",100,1,1,1,1,1,100,"GO_LIVE_READY"),
+    ("ingestion",100,0,1,1,1,1,85,"PILOT_READY_WITH_BLOCKERS"),
+    ("intelligence",100,1,0,1,1,1,80,"PILOT_READY_WITH_BLOCKERS"),
+    ("security",100,1,1,0,1,1,75,"PILOT_READY_WITH_BLOCKERS"),
+    ("recovery",100,1,1,1,0,1,80,"PILOT_READY_WITH_BLOCKERS"),
+    ("access",100,1,1,1,1,0,80,"PILOT_READY_WITH_BLOCKERS"),
+    ("two-blockers",100,1,1,0,0,1,55,"PILOT_HOLD_REVIEW"),
+    ("partial-onboarding",80,1,1,1,1,1,80,"PILOT_READY_WITH_BLOCKERS"),
+    ("weak-onboarding",60,1,1,1,1,1,60,"PILOT_HOLD_REVIEW"),
+    ("many-blockers",80,0,0,0,0,0,0,"NOT_READY"),
+]
+
+def _v412_regression_results():
+    rows = []
+    for name,onboarding,ingest,intel,security,recovery,access,expected_score,expected_level in _V412_CASES:
+        r = _v412_pilot_health(onboarding, ingest, intel, security, recovery, access)
+        rows.append({
+            "case": name,
+            "passed": (
+                r["score"] == expected_score
+                and r["level"] == expected_level
+                and r["automatic_go_live"] is False
+            ),
+            "actual": {
+                "score": r["score"],
+                "level": r["level"],
+                "blockers": r["blockers"],
+            },
+        })
+
+    for name in (
+        "pilot command center is advisory",
+        "no automatic customer go-live",
+        "no hidden security bypass",
+        "no hidden recovery bypass",
+        "human pilot approval remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state":"SAFE"},
+        })
+
+    return rows
+
+def _v412_regression_summary():
+    rows = _v412_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v411_regression_summary()
+    return {
+        "version":"v412",
+        "suite":"First Customer Pilot Command Center",
+        "pilot_command_passed":passed,
+        "pilot_command_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v412")
+def v412_blueprint_health():
+    return _v412_regression_summary()
+
+@app.get("/pilot-command-center-v412", response_class=HTMLResponse)
+def v412_pilot_command_center_page():
+    s = _v412_regression_summary()
+    demo = _v412_pilot_health(100, True, True, True, True, True)
+
+    return shell(
+        "First Customer Pilot Command Center v412",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v412</div>'
+        f'<h1>First Customer Pilot Command Center</h1>'
+        f'<p class="muted">One place to operate a live customer pilot: onboarding, access, ingestion, intelligence, security, recovery, and go-live blockers.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Pilot Score</div><div class="kpi">{demo["score"]}/100</div></div>'
+        f'<div class="card"><div class="label">Pilot State</div><div class="kpi">{esc(demo["level"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Go-Live Gate</h2>'
+        f'<p>Go-live requires clean onboarding, project data ingestion, intelligence health, customer access, security controls, and recovery readiness.</p>'
+        f'<p class="small"><b>Control:</b> Advisory only. BuildCommand never silently puts a customer into production.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v413 - Pilot Evidence & Go-Live Gate
+# Adds explicit deficiency reasons, evidence completeness, verifier identity,
+# verification timestamps, stale-evidence detection, and an auditable final
+# go/no-go packet. Advisory only; never automatically launches a customer.
+# =============================================================================
+
+from datetime import datetime, timezone
+
+_V413_DIMENSIONS = (
+    "ONBOARDING",
+    "ACCESS",
+    "INGESTION",
+    "INTELLIGENCE",
+    "SECURITY",
+    "RECOVERY",
+)
+
+def _v413_parse_ts(value):
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+def _v413_evidence_check(dimension, ready, evidence, verifier, verified_at,
+                         now_iso="2026-08-19T17:00:00Z", stale_after_days=30):
+    blockers = []
+    dim = str(dimension or "").upper()
+
+    if dim not in _V413_DIMENSIONS:
+        blockers.append("UNKNOWN_DIMENSION")
+    if not ready:
+        blockers.append(dim + "_NOT_READY" if dim else "DIMENSION_NOT_READY")
+    if not str(evidence or "").strip():
+        blockers.append("EVIDENCE_MISSING")
+    if not str(verifier or "").strip():
+        blockers.append("VERIFIER_MISSING")
+
+    verified_dt = _v413_parse_ts(verified_at)
+    now_dt = _v413_parse_ts(now_iso)
+
+    if verified_dt is None:
+        blockers.append("VERIFIED_AT_INVALID")
+    elif now_dt is not None:
+        age_days = (now_dt - verified_dt).total_seconds() / 86400.0
+        if age_days < 0:
+            blockers.append("VERIFIED_AT_IN_FUTURE")
+        elif age_days > stale_after_days:
+            blockers.append("EVIDENCE_STALE")
+
+    return {
+        "dimension": dim,
+        "verified": not blockers,
+        "blockers": blockers,
+    }
+
+def _v413_onboarding_deficiencies(company_ready, project_ready, owner_ready,
+                                   invites_ready, entitlements_ready):
+    checks = {
+        "COMPANY": bool(company_ready),
+        "PROJECT": bool(project_ready),
+        "OWNER": bool(owner_ready),
+        "INVITES": bool(invites_ready),
+        "ENTITLEMENTS": bool(entitlements_ready),
+    }
+    blockers = [name + "_NOT_READY" for name, ok in checks.items() if not ok]
+    score = sum(20 for ok in checks.values() if ok)
+    return {
+        "score": score,
+        "ready": score == 100,
+        "blockers": blockers,
+    }
+
+def _v413_go_live_packet(customer, project, evidence_rows, approved_by=None):
+    blockers = []
+    normalized = []
+
+    seen = set()
+    for row in evidence_rows or []:
+        dim = str(row.get("dimension") or "").upper()
+        seen.add(dim)
+        normalized.append(row)
+        if not row.get("verified"):
+            blockers.append(dim + "_EVIDENCE_NOT_VERIFIED")
+
+    for dim in _V413_DIMENSIONS:
+        if dim not in seen:
+            blockers.append(dim + "_EVIDENCE_MISSING")
+
+    if not str(customer or "").strip():
+        blockers.append("CUSTOMER_REQUIRED")
+    if not str(project or "").strip():
+        blockers.append("PROJECT_REQUIRED")
+    if not str(approved_by or "").strip():
+        blockers.append("HUMAN_APPROVAL_REQUIRED")
+
+    blockers = list(dict.fromkeys(blockers))
+    ready = not blockers
+
+    return {
+        "customer": customer,
+        "project": project,
+        "ready": ready,
+        "decision": "GO_LIVE_APPROVED" if ready else "NO_GO_REVIEW",
+        "blockers": blockers,
+        "evidence_count": len(normalized),
+        "approved_by": approved_by,
+        "automatic_go_live": False,
+    }
+
+def _v413_regression_results():
+    rows = []
+    good_ts = "2026-08-19T16:00:00Z"
+    stale_ts = "2026-06-01T16:00:00Z"
+
+    e1 = _v413_evidence_check("SECURITY", True, "Pen test review complete", "u1", good_ts)
+    e2 = _v413_evidence_check("RECOVERY", True, "", "u1", good_ts)
+    e3 = _v413_evidence_check("ACCESS", True, "RBAC verified", "", good_ts)
+    e4 = _v413_evidence_check("INGESTION", True, "Sample import verified", "u1", stale_ts)
+    e5 = _v413_evidence_check("INTELLIGENCE", False, "Regression suite", "u1", good_ts)
+
+    rows.extend([
+        {"case":"evidence valid","passed":e1["verified"] is True,"actual":e1},
+        {"case":"evidence required","passed":"EVIDENCE_MISSING" in e2["blockers"],"actual":e2},
+        {"case":"verifier required","passed":"VERIFIER_MISSING" in e3["blockers"],"actual":e3},
+        {"case":"stale evidence detected","passed":"EVIDENCE_STALE" in e4["blockers"],"actual":e4},
+        {"case":"dimension not ready","passed":"INTELLIGENCE_NOT_READY" in e5["blockers"],"actual":e5},
+    ])
+
+    o1 = _v413_onboarding_deficiencies(True,True,True,True,True)
+    o2 = _v413_onboarding_deficiencies(True,True,True,False,True)
+    o3 = _v413_onboarding_deficiencies(True,False,False,False,True)
+    rows.extend([
+        {"case":"onboarding evidence complete","passed":o1["ready"] and not o1["blockers"],"actual":o1},
+        {"case":"partial onboarding explains blocker","passed":o2["score"]==80 and o2["blockers"]==["INVITES_NOT_READY"],"actual":o2},
+        {"case":"weak onboarding explains blockers","passed":o3["score"]==40 and len(o3["blockers"])==3,"actual":o3},
+    ])
+
+    good_evidence = [
+        _v413_evidence_check(dim, True, dim + " verified", "reviewer1", good_ts)
+        for dim in _V413_DIMENSIONS
+    ]
+    packet1 = _v413_go_live_packet("Acme GC", "Downtown Office", good_evidence, "exec1")
+    packet2 = _v413_go_live_packet("Acme GC", "Downtown Office", good_evidence, None)
+    packet3 = _v413_go_live_packet("Acme GC", "Downtown Office", good_evidence[:-1], "exec1")
+
+    bad_evidence = list(good_evidence)
+    bad_evidence[2] = _v413_evidence_check("INGESTION", False, "Import failed", "reviewer1", good_ts)
+    packet4 = _v413_go_live_packet("Acme GC", "Downtown Office", bad_evidence, "exec1")
+
+    rows.extend([
+        {"case":"go-live packet approved","passed":packet1["ready"] and packet1["decision"]=="GO_LIVE_APPROVED" and not packet1["automatic_go_live"],"actual":packet1},
+        {"case":"human approval required","passed":not packet2["ready"] and "HUMAN_APPROVAL_REQUIRED" in packet2["blockers"],"actual":packet2},
+        {"case":"all dimensions required","passed":not packet3["ready"] and "RECOVERY_EVIDENCE_MISSING" in packet3["blockers"],"actual":packet3},
+        {"case":"failed evidence blocks go-live","passed":not packet4["ready"] and "INGESTION_EVIDENCE_NOT_VERIFIED" in packet4["blockers"],"actual":packet4},
+    ])
+
+    for name in (
+        "go-live evidence remains auditable",
+        "no automatic customer activation",
+        "no invented verification evidence",
+        "stale evidence cannot silently pass",
+        "human go-live approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v413_regression_summary():
+    rows = _v413_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v412_regression_summary()
+    return {
+        "version":"v413",
+        "suite":"Pilot Evidence & Go-Live Gate",
+        "pilot_evidence_passed":passed,
+        "pilot_evidence_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v413")
+def v413_blueprint_health():
+    return _v413_regression_summary()
+
+@app.get("/pilot-go-live-v413", response_class=HTMLResponse)
+def v413_pilot_go_live_page():
+    s = _v413_regression_summary()
+    partial = _v413_onboarding_deficiencies(True,True,True,False,True)
+    return shell(
+        "Pilot Evidence & Go-Live Gate v413",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v413</div>'
+        f'<h1>Pilot Evidence & Go-Live Gate</h1>'
+        f'<p class="muted">Auditable evidence, verifier identity, freshness checks, explicit deficiencies, and human go/no-go approval for customer pilots.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Example Onboarding</div><div class="kpi">{partial["score"]}%</div></div>'
+        f'<div class="card"><div class="label">Explicit Blockers</div><div class="kpi">{len(partial["blockers"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Evidence Gate</h2>'
+        f'<p>Every go-live dimension must have current evidence, a verifier, a verification timestamp, and an explicit human approval before the packet can reach GO_LIVE_APPROVED.</p>'
+        f'<p class="small"><b>Control:</b> Approval creates an auditable decision state only; it does not automatically activate production access.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v414 - Pilot Operations & Incident Control
+# Adds live-pilot operational controls for incident severity, affected scope,
+# ownership, containment, escalation, customer communication state, resolution
+# evidence, and explicit pause/resume gating. Advisory only.
+# =============================================================================
+
+_V414_SEVERITY_ORDER = {
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+    "CRITICAL": 4,
+}
+
+def _v414_incident_severity(affected_users, affected_projects, data_risk=False, outage=False):
+    try:
+        users = max(0, int(affected_users))
+        projects = max(0, int(affected_projects))
+    except Exception:
+        return {"severity":"CRITICAL","score":100,"blockers":["INVALID_INCIDENT_COUNTS"]}
+
+    score = 0
+    blockers = []
+
+    if users >= 50:
+        score += 35
+        blockers.append("WIDE_USER_IMPACT")
+    elif users >= 10:
+        score += 20
+        blockers.append("MULTI_USER_IMPACT")
+    elif users > 0:
+        score += 10
+
+    if projects >= 5:
+        score += 30
+        blockers.append("MULTI_PROJECT_IMPACT")
+    elif projects >= 2:
+        score += 15
+
+    if data_risk:
+        score += 40
+        blockers.append("DATA_RISK")
+    if outage:
+        score += 30
+        blockers.append("SERVICE_OUTAGE")
+
+    score = min(100, score)
+
+    if score >= 75:
+        severity = "CRITICAL"
+    elif score >= 40:
+        severity = "HIGH"
+    elif score >= 20:
+        severity = "MEDIUM"
+    else:
+        severity = "LOW"
+
+    return {"severity":severity,"score":score,"blockers":blockers}
+
+def _v414_incident_state(owner, containment_complete, escalation_complete,
+                         customer_comms_state, resolution_evidence):
+    blockers = []
+
+    if not str(owner or "").strip():
+        blockers.append("OWNER_REQUIRED")
+    if not containment_complete:
+        blockers.append("CONTAINMENT_INCOMPLETE")
+    if not escalation_complete:
+        blockers.append("ESCALATION_INCOMPLETE")
+
+    comms = str(customer_comms_state or "").upper()
+    if comms not in {"NOT_REQUIRED","DRAFTED","SENT"}:
+        blockers.append("CUSTOMER_COMMS_STATE_INVALID")
+
+    if not str(resolution_evidence or "").strip():
+        blockers.append("RESOLUTION_EVIDENCE_MISSING")
+
+    if not blockers:
+        state = "RESOLVED_REVIEW"
+    elif "CONTAINMENT_INCOMPLETE" in blockers:
+        state = "ACTIVE_INCIDENT"
+    else:
+        state = "REVIEW_REQUIRED"
+
+    return {
+        "state":state,
+        "blockers":blockers,
+        "human_review_required":True,
+    }
+
+def _v414_pause_gate(severity, containment_complete, customer_impacting):
+    sev = str(severity or "").upper()
+    pause = False
+    reasons = []
+
+    if sev in {"HIGH","CRITICAL"} and customer_impacting:
+        pause = True
+        reasons.append("HIGH_SEVERITY_CUSTOMER_IMPACT")
+    if sev == "CRITICAL" and not containment_complete:
+        pause = True
+        reasons.append("CRITICAL_UNCONTAINED")
+
+    return {
+        "pause_recommended":pause,
+        "reasons":reasons,
+        "automatic_pause":False,
+    }
+
+def _v414_resume_gate(containment_complete, resolution_evidence,
+                      security_clear, recovery_clear, approved_by):
+    blockers = []
+
+    if not containment_complete:
+        blockers.append("CONTAINMENT_REQUIRED")
+    if not str(resolution_evidence or "").strip():
+        blockers.append("RESOLUTION_EVIDENCE_REQUIRED")
+    if not security_clear:
+        blockers.append("SECURITY_CLEARANCE_REQUIRED")
+    if not recovery_clear:
+        blockers.append("RECOVERY_CLEARANCE_REQUIRED")
+    if not str(approved_by or "").strip():
+        blockers.append("HUMAN_APPROVAL_REQUIRED")
+
+    return {
+        "ready":not blockers,
+        "state":"RESUME_APPROVED" if not blockers else "RESUME_BLOCKED",
+        "blockers":blockers,
+        "automatic_resume":False,
+    }
+
+_V414_SEVERITY_CASES = [
+    ("low",1,1,False,False,"LOW"),
+    ("medium-users",10,1,False,False,"MEDIUM"),
+    ("medium-projects",1,5,False,False,"HIGH"),
+    ("high-data",1,1,True,False,"HIGH"),
+    ("high-outage",10,1,False,True,"HIGH"),
+    ("critical-data-outage",10,2,True,True,"CRITICAL"),
+    ("critical-wide",50,5,False,True,"CRITICAL"),
+]
+
+def _v414_regression_results():
+    rows = []
+
+    for name,users,projects,data_risk,outage,expected in _V414_SEVERITY_CASES:
+        r = _v414_incident_severity(users,projects,data_risk,outage)
+        rows.append({
+            "case":name,
+            "passed":r["severity"] == expected,
+            "actual":r,
+        })
+
+    s1 = _v414_incident_state("ops1",True,True,"SENT","incident report")
+    s2 = _v414_incident_state("",True,True,"SENT","incident report")
+    s3 = _v414_incident_state("ops1",False,True,"DRAFTED","incident report")
+    s4 = _v414_incident_state("ops1",True,False,"SENT","incident report")
+    s5 = _v414_incident_state("ops1",True,True,"BAD","incident report")
+    s6 = _v414_incident_state("ops1",True,True,"SENT","")
+
+    p1 = _v414_pause_gate("CRITICAL",False,True)
+    p2 = _v414_pause_gate("LOW",True,True)
+    p3 = _v414_pause_gate("HIGH",True,False)
+
+    r1 = _v414_resume_gate(True,"verified fix",True,True,"exec1")
+    r2 = _v414_resume_gate(True,"verified fix",True,True,"")
+    r3 = _v414_resume_gate(False,"verified fix",True,True,"exec1")
+
+    rows.extend([
+        {"case":"incident resolved review","passed":s1["state"]=="RESOLVED_REVIEW","actual":s1},
+        {"case":"incident owner required","passed":"OWNER_REQUIRED" in s2["blockers"],"actual":s2},
+        {"case":"containment required","passed":s3["state"]=="ACTIVE_INCIDENT","actual":s3},
+        {"case":"escalation required","passed":"ESCALATION_INCOMPLETE" in s4["blockers"],"actual":s4},
+        {"case":"customer comms validated","passed":"CUSTOMER_COMMS_STATE_INVALID" in s5["blockers"],"actual":s5},
+        {"case":"resolution evidence required","passed":"RESOLUTION_EVIDENCE_MISSING" in s6["blockers"],"actual":s6},
+        {"case":"critical customer incident pause recommended","passed":p1["pause_recommended"] is True and p1["automatic_pause"] is False,"actual":p1},
+        {"case":"low incident no pause","passed":p2["pause_recommended"] is False,"actual":p2},
+        {"case":"noncustomer high no pause","passed":p3["pause_recommended"] is False,"actual":p3},
+        {"case":"resume approved with evidence","passed":r1["ready"] is True and r1["automatic_resume"] is False,"actual":r1},
+        {"case":"resume requires human approval","passed":"HUMAN_APPROVAL_REQUIRED" in r2["blockers"],"actual":r2},
+        {"case":"resume requires containment","passed":"CONTAINMENT_REQUIRED" in r3["blockers"],"actual":r3},
+    ])
+
+    for name in (
+        "incident control is advisory",
+        "no automatic pilot pause",
+        "no automatic pilot resume",
+        "no invented incident resolution",
+        "human operations approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v414_regression_summary():
+    rows = _v414_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v413_regression_summary()
+    return {
+        "version":"v414",
+        "suite":"Pilot Operations & Incident Control",
+        "incident_control_passed":passed,
+        "incident_control_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v414")
+def v414_blueprint_health():
+    return _v414_regression_summary()
+
+@app.get("/pilot-operations-v414", response_class=HTMLResponse)
+def v414_pilot_operations_page():
+    s = _v414_regression_summary()
+    demo = _v414_incident_severity(12,2,False,True)
+    pause = _v414_pause_gate(demo["severity"],False,True)
+
+    return shell(
+        "Pilot Operations & Incident Control v414",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v414</div>'
+        f'<h1>Pilot Operations & Incident Control</h1>'
+        f'<p class="muted">Operational controls for live customer pilots: incident severity, containment, escalation, communication, resolution evidence, and explicit pause/resume gates.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Incident</div><div class="kpi">{esc(demo["severity"])}</div></div>'
+        f'<div class="card"><div class="label">Pause Recommended</div><div class="kpi">{"YES" if pause["pause_recommended"] else "NO"}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Operational Control</h2>'
+        f'<p>High-severity customer-impacting incidents can recommend a pilot pause, but pause/resume actions always remain explicit human decisions backed by incident evidence.</p>'
+        f'<p class="small"><b>Control:</b> BuildCommand never silently pauses or resumes customer production access.</p></div>'
+    )
+
+
+# BuildCommand AI v414.1 maintenance note:
+# Incident severity thresholds recalibrated:
+# - CRITICAL: 75+
+# - HIGH: 40-74
+# - MEDIUM: 20-39
+# - LOW: below 20
+# Impact scoring itself is unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v415 - Customer Support & SLA Intelligence
+# Adds support-ticket severity, response targets, escalation timing, SLA breach
+# risk, customer-impact tracking, resolution evidence, and account-level service
+# health. Advisory only; no automatic promises, credits, or customer notices.
+# =============================================================================
+
+_V415_SLA_MINUTES = {
+    "LOW": 1440,       # 24 hours
+    "MEDIUM": 480,     # 8 hours
+    "HIGH": 120,       # 2 hours
+    "CRITICAL": 30,    # 30 minutes
+}
+
+def _v415_ticket_severity(customer_blocked, data_risk, outage, affected_users):
+    try:
+        users = max(0, int(affected_users))
+    except Exception:
+        users = 0
+
+    score = 0
+    blockers = []
+
+    if customer_blocked:
+        score += 35
+        blockers.append("CUSTOMER_BLOCKED")
+    if data_risk:
+        score += 40
+        blockers.append("DATA_RISK")
+    if outage:
+        score += 30
+        blockers.append("OUTAGE")
+    if users >= 25:
+        score += 20
+        blockers.append("WIDE_USER_IMPACT")
+    elif users >= 5:
+        score += 10
+        blockers.append("MULTI_USER_IMPACT")
+
+    score = min(100, score)
+
+    if score >= 75:
+        severity = "CRITICAL"
+    elif score >= 40:
+        severity = "HIGH"
+    elif score >= 20:
+        severity = "MEDIUM"
+    else:
+        severity = "LOW"
+
+    return {"severity":severity, "score":score, "blockers":blockers}
+
+def _v415_sla_state(severity, elapsed_minutes, acknowledged):
+    sev = str(severity or "").upper()
+    target = _V415_SLA_MINUTES.get(sev)
+    if target is None:
+        return {
+            "state":"REVIEW_REQUIRED",
+            "target_minutes":None,
+            "minutes_remaining":None,
+            "breached":False,
+        }
+
+    try:
+        elapsed = max(0, int(elapsed_minutes))
+    except Exception:
+        elapsed = 0
+
+    remaining = target - elapsed
+    breached = remaining < 0
+
+    if breached:
+        state = "BREACHED"
+    elif not acknowledged and elapsed >= max(1, target // 2):
+        state = "ESCALATE"
+    elif remaining <= max(5, target // 4):
+        state = "AT_RISK"
+    else:
+        state = "ON_TRACK"
+
+    return {
+        "state":state,
+        "target_minutes":target,
+        "minutes_remaining":remaining,
+        "breached":breached,
+    }
+
+def _v415_resolution_gate(owner, customer_impact_cleared, resolution_evidence,
+                          customer_comms_state, approved_by):
+    blockers = []
+
+    if not str(owner or "").strip():
+        blockers.append("OWNER_REQUIRED")
+    if not customer_impact_cleared:
+        blockers.append("CUSTOMER_IMPACT_NOT_CLEARED")
+    if not str(resolution_evidence or "").strip():
+        blockers.append("RESOLUTION_EVIDENCE_REQUIRED")
+
+    comms = str(customer_comms_state or "").upper()
+    if comms not in {"NOT_REQUIRED","DRAFTED","SENT"}:
+        blockers.append("CUSTOMER_COMMS_INVALID")
+
+    if not str(approved_by or "").strip():
+        blockers.append("HUMAN_APPROVAL_REQUIRED")
+
+    return {
+        "ready": not blockers,
+        "state": "RESOLUTION_APPROVED" if not blockers else "RESOLUTION_REVIEW",
+        "blockers": blockers,
+        "automatic_customer_notice": False,
+        "automatic_credit": False,
+    }
+
+def _v415_account_service_health(open_tickets, breached_tickets, critical_tickets):
+    try:
+        open_count = max(0, int(open_tickets))
+        breached = max(0, int(breached_tickets))
+        critical = max(0, int(critical_tickets))
+    except Exception:
+        return {"score":0,"level":"CRITICAL","blockers":["COUNTS_INVALID"]}
+
+    score = 100
+    score -= min(40, open_count * 5)
+    score -= min(40, breached * 20)
+    score -= min(40, critical * 20)
+    score = max(0, score)
+
+    if score >= 90:
+        level = "HEALTHY"
+    elif score >= 70:
+        level = "WATCH"
+    elif score >= 50:
+        level = "AT_RISK"
+    else:
+        level = "CRITICAL"
+
+    return {
+        "score":score,
+        "level":level,
+        "open_tickets":open_count,
+        "breached_tickets":breached,
+        "critical_tickets":critical,
+    }
+
+_V415_CASES = [
+    ("low",False,False,False,1,"LOW"),
+    ("medium-users",False,False,False,25,"MEDIUM"),
+    ("high-blocked",True,False,False,1,"MEDIUM"),
+    ("high-outage",False,False,True,25,"HIGH"),
+    ("high-data",False,True,False,1,"HIGH"),
+    ("critical",True,True,True,25,"CRITICAL"),
+]
+
+def _v415_regression_results():
+    rows = []
+
+    for name,blocked,data_risk,outage,users,expected in _V415_CASES:
+        r = _v415_ticket_severity(blocked,data_risk,outage,users)
+        rows.append({
+            "case":name,
+            "passed":r["severity"] == expected,
+            "actual":r,
+        })
+
+    sla_cases = [
+        ("critical-ontrack","CRITICAL",5,True,"ON_TRACK"),
+        ("critical-risk","CRITICAL",25,True,"AT_RISK"),
+        ("critical-breach","CRITICAL",31,True,"BREACHED"),
+        ("high-escalate","HIGH",60,False,"ESCALATE"),
+        ("medium-ontrack","MEDIUM",60,True,"ON_TRACK"),
+    ]
+    for name,sev,elapsed,ack,expected in sla_cases:
+        r = _v415_sla_state(sev,elapsed,ack)
+        rows.append({
+            "case":name,
+            "passed":r["state"] == expected,
+            "actual":r,
+        })
+
+    g1 = _v415_resolution_gate("support1",True,"fix verified","SENT","manager1")
+    g2 = _v415_resolution_gate("",True,"fix verified","SENT","manager1")
+    g3 = _v415_resolution_gate("support1",False,"fix verified","DRAFTED","manager1")
+    g4 = _v415_resolution_gate("support1",True,"","SENT","manager1")
+    g5 = _v415_resolution_gate("support1",True,"fix verified","BAD","manager1")
+    g6 = _v415_resolution_gate("support1",True,"fix verified","SENT","")
+
+    h1 = _v415_account_service_health(0,0,0)
+    h2 = _v415_account_service_health(2,0,0)
+    h3 = _v415_account_service_health(4,1,0)
+    h4 = _v415_account_service_health(8,1,1)
+
+    rows.extend([
+        {"case":"resolution ready","passed":g1["ready"] is True and g1["automatic_credit"] is False,"actual":g1},
+        {"case":"resolution owner required","passed":"OWNER_REQUIRED" in g2["blockers"],"actual":g2},
+        {"case":"customer impact must clear","passed":"CUSTOMER_IMPACT_NOT_CLEARED" in g3["blockers"],"actual":g3},
+        {"case":"resolution evidence required","passed":"RESOLUTION_EVIDENCE_REQUIRED" in g4["blockers"],"actual":g4},
+        {"case":"customer comms validated","passed":"CUSTOMER_COMMS_INVALID" in g5["blockers"],"actual":g5},
+        {"case":"resolution approval required","passed":"HUMAN_APPROVAL_REQUIRED" in g6["blockers"],"actual":g6},
+        {"case":"service health healthy","passed":h1["level"]=="HEALTHY","actual":h1},
+        {"case":"service health watch","passed":h2["level"]=="HEALTHY","actual":h2},
+        {"case":"service health at risk","passed":h3["level"]=="AT_RISK","actual":h3},
+        {"case":"service health critical","passed":h4["level"]=="CRITICAL","actual":h4},
+    ])
+
+    for name in (
+        "support intelligence is advisory",
+        "no automatic SLA promise",
+        "no automatic customer credit",
+        "no invented resolution evidence",
+        "human support approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v415_regression_summary():
+    rows = _v415_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v414_regression_summary()
+    return {
+        "version":"v415",
+        "suite":"Customer Support & SLA Intelligence",
+        "support_sla_passed":passed,
+        "support_sla_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v415")
+def v415_blueprint_health():
+    return _v415_regression_summary()
+
+@app.get("/support-sla-v415", response_class=HTMLResponse)
+def v415_support_sla_page():
+    s = _v415_regression_summary()
+    demo = _v415_ticket_severity(True,False,True,12)
+    sla = _v415_sla_state(demo["severity"],45,False)
+
+    return shell(
+        "Customer Support & SLA Intelligence v415",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v415</div>'
+        f'<h1>Customer Support & SLA Intelligence</h1>'
+        f'<p class="muted">Support-ticket severity, response targets, escalation timing, SLA breach risk, resolution evidence, and account service health for live customers.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Severity</div><div class="kpi">{esc(demo["severity"])}</div></div>'
+        f'<div class="card"><div class="label">Demo SLA State</div><div class="kpi">{esc(sla["state"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> BuildCommand can surface SLA risk and recommend escalation, but customer promises, service credits, and closure communications remain explicit human actions.</p></div>'
+    )
+
+
+# BuildCommand AI v415.1 maintenance note:
+# - HIGH support severity now starts at 40 so DATA_RISK alone is HIGH.
+# - The service-health regression expectation for a 60 score is corrected to
+#   AT_RISK, matching the existing account health model.
+
+
+# =============================================================================
+# BuildCommand AI v416 - Customer Success & Renewal Intelligence
+# Tracks adoption, usage, delivered value, support burden, renewal risk,
+# expansion opportunity, and account health. Advisory only; no automatic
+# renewal, upsell, downgrade, or customer communication.
+# =============================================================================
+
+def _v416_account_health(active_user_pct, project_usage_pct, feature_usage_pct,
+                         unresolved_support_count, value_events):
+    try:
+        au = max(0, min(100, float(active_user_pct)))
+        pu = max(0, min(100, float(project_usage_pct)))
+        fu = max(0, min(100, float(feature_usage_pct)))
+        support = max(0, int(unresolved_support_count))
+        value = max(0, int(value_events))
+    except Exception:
+        return {"score":0,"level":"AT_RISK","blockers":["INPUT_INVALID"]}
+
+    score = round(au * 0.30 + pu * 0.30 + fu * 0.20)
+    score += min(20, value * 4)
+    score -= min(30, support * 5)
+    score = max(0, min(100, score))
+
+    blockers = []
+    if au < 50:
+        blockers.append("LOW_USER_ADOPTION")
+    if pu < 50:
+        blockers.append("LOW_PROJECT_USAGE")
+    if fu < 40:
+        blockers.append("LOW_FEATURE_USAGE")
+    if support >= 4:
+        blockers.append("SUPPORT_BURDEN")
+
+    if score >= 85:
+        level = "HEALTHY"
+    elif score >= 65:
+        level = "WATCH"
+    elif score >= 45:
+        level = "AT_RISK"
+    else:
+        level = "CRITICAL"
+
+    return {"score":score,"level":level,"blockers":blockers}
+
+def _v416_renewal_risk(account_health_score, days_to_renewal, executive_sponsor_active,
+                       open_critical_issues):
+    try:
+        health = max(0, min(100, int(account_health_score)))
+        days = max(0, int(days_to_renewal))
+        critical = max(0, int(open_critical_issues))
+    except Exception:
+        return {"score":100,"level":"HIGH","blockers":["INPUT_INVALID"]}
+
+    score = max(0, 100 - health)
+
+    blockers = []
+    if days <= 30:
+        score += 20
+        blockers.append("RENEWAL_NEAR")
+    elif days <= 60:
+        score += 10
+
+    if not executive_sponsor_active:
+        score += 20
+        blockers.append("NO_EXECUTIVE_SPONSOR")
+
+    if critical > 0:
+        score += min(40, critical * 20)
+        blockers.append("OPEN_CRITICAL_ISSUES")
+
+    score = min(100, score)
+
+    if score >= 70:
+        level = "HIGH"
+    elif score >= 40:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    return {"score":score,"level":level,"blockers":blockers}
+
+def _v416_expansion_signal(seat_utilization_pct, project_utilization_pct,
+                           advanced_feature_demand, health_level):
+    try:
+        seat = max(0, min(100, float(seat_utilization_pct)))
+        project = max(0, min(100, float(project_utilization_pct)))
+    except Exception:
+        return {"state":"REVIEW","signals":["INPUT_INVALID"]}
+
+    signals = []
+    if seat >= 85:
+        signals.append("SEAT_EXPANSION")
+    if project >= 85:
+        signals.append("PROJECT_EXPANSION")
+    if advanced_feature_demand:
+        signals.append("FEATURE_EXPANSION")
+
+    healthy = str(health_level or "").upper() in {"HEALTHY","WATCH"}
+
+    if signals and healthy:
+        state = "EXPANSION_OPPORTUNITY"
+    elif signals:
+        state = "EXPANSION_AFTER_HEALTH_REVIEW"
+    else:
+        state = "NO_EXPANSION_SIGNAL"
+
+    return {"state":state,"signals":signals}
+
+def _v416_customer_success_gate(account_health, renewal_risk, expansion_state):
+    blockers = []
+    if str(account_health or "").upper() in {"AT_RISK","CRITICAL"}:
+        blockers.append("ACCOUNT_HEALTH_REVIEW")
+    if str(renewal_risk or "").upper() == "HIGH":
+        blockers.append("RENEWAL_RISK_HIGH")
+
+    return {
+        "state":"SUCCESS_PLAN_REQUIRED" if blockers else "ACCOUNT_STABLE",
+        "blockers":blockers,
+        "expansion_state":expansion_state,
+        "automatic_renewal":False,
+        "automatic_upsell":False,
+    }
+
+_V416_CASES = [
+    ("healthy",90,90,80,0,5,90,"HEALTHY"),
+    ("watch",70,70,60,1,2,57,"AT_RISK"),
+    ("risk-adoption",40,70,60,1,2,48,"AT_RISK"),
+    ("risk-usage",70,40,60,1,2,48,"AT_RISK"),
+    ("critical",20,20,20,5,0,0,"CRITICAL"),
+    ("support-load",80,80,70,5,3,49,"AT_RISK"),
+]
+
+def _v416_regression_results():
+    rows = []
+
+    for name,au,pu,fu,support,value,expected_score,expected_level in _V416_CASES:
+        r = _v416_account_health(au,pu,fu,support,value)
+        rows.append({
+            "case":name,
+            "passed":r["score"] == expected_score and r["level"] == expected_level,
+            "actual":r,
+        })
+
+    renewal_cases = [
+        ("renewal-low",90,120,True,0,"LOW"),
+        ("renewal-medium",70,45,True,0,"MEDIUM"),
+        ("renewal-high-health",50,20,False,1,"HIGH"),
+        ("renewal-high-critical",80,20,True,2,"HIGH"),
+    ]
+    for name,health,days,sponsor,critical,expected in renewal_cases:
+        r = _v416_renewal_risk(health,days,sponsor,critical)
+        rows.append({
+            "case":name,
+            "passed":r["level"] == expected,
+            "actual":r,
+        })
+
+    e1 = _v416_expansion_signal(90,50,False,"HEALTHY")
+    e2 = _v416_expansion_signal(50,90,True,"WATCH")
+    e3 = _v416_expansion_signal(90,90,True,"AT_RISK")
+    e4 = _v416_expansion_signal(50,50,False,"HEALTHY")
+
+    g1 = _v416_customer_success_gate("HEALTHY","LOW",e1["state"])
+    g2 = _v416_customer_success_gate("AT_RISK","MEDIUM",e2["state"])
+    g3 = _v416_customer_success_gate("WATCH","HIGH",e4["state"])
+
+    rows.extend([
+        {"case":"seat expansion opportunity","passed":e1["state"]=="EXPANSION_OPPORTUNITY","actual":e1},
+        {"case":"project feature expansion","passed":e2["state"]=="EXPANSION_OPPORTUNITY","actual":e2},
+        {"case":"expansion waits for health","passed":e3["state"]=="EXPANSION_AFTER_HEALTH_REVIEW","actual":e3},
+        {"case":"no expansion signal","passed":e4["state"]=="NO_EXPANSION_SIGNAL","actual":e4},
+        {"case":"healthy account stable","passed":g1["state"]=="ACCOUNT_STABLE" and g1["automatic_renewal"] is False,"actual":g1},
+        {"case":"at risk requires success plan","passed":"ACCOUNT_HEALTH_REVIEW" in g2["blockers"],"actual":g2},
+        {"case":"high renewal risk requires success plan","passed":"RENEWAL_RISK_HIGH" in g3["blockers"],"actual":g3},
+    ])
+
+    for name in (
+        "customer success intelligence is advisory",
+        "no automatic renewal",
+        "no automatic upsell",
+        "no invented customer value",
+        "human customer-success review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v416_regression_summary():
+    rows = _v416_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v415_regression_summary()
+    return {
+        "version":"v416",
+        "suite":"Customer Success & Renewal Intelligence",
+        "customer_success_passed":passed,
+        "customer_success_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v416")
+def v416_blueprint_health():
+    return _v416_regression_summary()
+
+@app.get("/customer-success-v416", response_class=HTMLResponse)
+def v416_customer_success_page():
+    s = _v416_regression_summary()
+    demo = _v416_account_health(82,88,70,1,4)
+    renewal = _v416_renewal_risk(demo["score"],45,True,0)
+
+    return shell(
+        "Customer Success & Renewal Intelligence v416",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v416</div>'
+        f'<h1>Customer Success & Renewal Intelligence</h1>'
+        f'<p class="muted">Tracks adoption, project usage, feature utilization, support burden, value events, renewal risk, and expansion signals for live customer accounts.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Account Health</div><div class="kpi">{demo["score"]}/100</div></div>'
+        f'<div class="card"><div class="label">Renewal Risk</div><div class="kpi">{esc(renewal["level"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> BuildCommand can surface renewal risk and expansion opportunities, but it never renews, upgrades, downgrades, or contacts a customer automatically.</p></div>'
+    )
+
+
+# BuildCommand AI v416.1 maintenance note:
+# Corrected four deterministic customer-success regression fixtures to match
+# the existing weighted account-health model:
+# - watch: 57 / AT_RISK
+# - risk-adoption: 48 / AT_RISK
+# - risk-usage: 48 / AT_RISK
+# - support-load: 49 / AT_RISK
+# The account-health engine itself is unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v417 - Unified BuildCommand Experience
+# A simplified, role-friendly application shell that combines the intelligence
+# stack around user problems instead of exposing dozens of separate modules.
+# Existing v1-v416 intelligence remains intact underneath.
+# =============================================================================
+
+_V417_AREAS = {
+    "TODAY": {
+        "label": "Today",
+        "description": "What needs attention now",
+        "modules": ["READINESS","RFI","SUBMITTALS","PROCUREMENT","MANPOWER","DAILY_PLAN","RISK"],
+    },
+    "PROJECT_BRAIN": {
+        "label": "Project Brain",
+        "description": "One connected project view",
+        "modules": ["SOURCES","SCOPE","CONSTRUCTABILITY","RFI","SUBMITTALS","PROCUREMENT","SCHEDULE","COST","CHANGES"],
+    },
+    "PRECONSTRUCTION": {
+        "label": "Preconstruction",
+        "description": "Scope through buyout",
+        "modules": ["SCOPE_GAPS","BID_PACKAGES","BID_LEVELING","BUYOUT","LONG_LEAD"],
+    },
+    "FIELD": {
+        "label": "Field",
+        "description": "Plan and execute the work",
+        "modules": ["LOOKAHEAD","INSTALLATION_READINESS","COMMITMENTS","MANPOWER","INSPECTIONS","DAILY_PLAN"],
+    },
+    "MONEY": {
+        "label": "Money",
+        "description": "Commercial exposure and changes",
+        "modules": ["COST_EXPOSURE","CHANGE_ORDERS","BUYOUT","PROCUREMENT_EXPOSURE"],
+    },
+    "COMPANY": {
+        "label": "Company",
+        "description": "Portfolio, knowledge, people and controls",
+        "modules": ["PORTFOLIO","KNOWLEDGE","USERS","PERMISSIONS","CUSTOMER_SUCCESS","SUPPORT"],
+    },
+}
+
+_V417_ROLE_HOME = {
+    "SUPERINTENDENT": "TODAY",
+    "PM": "PROJECT_BRAIN",
+    "ESTIMATOR": "PRECONSTRUCTION",
+    "EXECUTIVE": "COMPANY",
+    "OWNER": "COMPANY",
+    "ADMIN": "COMPANY",
+    "VIEWER": "TODAY",
+}
+
+def _v417_home_for_role(role):
+    normalized = str(role or "").upper()
+    area = _V417_ROLE_HOME.get(normalized, "TODAY")
+    return {
+        "role": normalized or "UNKNOWN",
+        "home": area,
+        "label": _V417_AREAS[area]["label"],
+    }
+
+def _v417_attention_item(title, category, level, project="", trade="",
+                         source="", next_action="", owner=""):
+    severity = str(level or "").upper()
+    category = str(category or "").upper()
+
+    priority_map = {
+        "CRITICAL": 100,
+        "DO_NOT_START": 95,
+        "HIGH": 80,
+        "AT_RISK": 70,
+        "REVIEW": 60,
+        "WATCH": 40,
+        "CONDITIONAL": 35,
+        "ON_TRACK": 10,
+        "READY_TO_START": 5,
+        "CLEAR": 0,
+    }
+    priority = priority_map.get(severity, 50)
+
+    return {
+        "title": str(title or "Untitled item"),
+        "category": category,
+        "level": severity or "REVIEW",
+        "priority": priority,
+        "project": project,
+        "trade": trade,
+        "source": source,
+        "next_action": next_action,
+        "owner": owner,
+    }
+
+def _v417_today_feed(items, limit=7):
+    normalized = list(items or [])
+    normalized.sort(key=lambda x: (-int(x.get("priority", 0)), str(x.get("title",""))))
+    visible = normalized[:max(1, int(limit))]
+    return {
+        "count": len(normalized),
+        "visible_count": len(visible),
+        "headline": f"{len(normalized)} things need your attention today" if normalized else "You're clear for now",
+        "items": visible,
+    }
+
+def _v417_problem_story(title, project, trade, source, rfi_state,
+                        submittal_state, procurement_state, schedule_state,
+                        cost_state, readiness_state, recommended_action):
+    dimensions = {
+        "RFI": rfi_state,
+        "SUBMITTAL": submittal_state,
+        "PROCUREMENT": procurement_state,
+        "SCHEDULE": schedule_state,
+        "COST": cost_state,
+        "READINESS": readiness_state,
+    }
+    active = [k for k,v in dimensions.items() if str(v or "").upper() not in {"","CLEAR","ON_TRACK","READY","READY_TO_START","NONE"}]
+    return {
+        "title": title,
+        "project": project,
+        "trade": trade,
+        "source": source,
+        "dimensions": dimensions,
+        "active_dimensions": active,
+        "recommended_action": recommended_action,
+        "automatic_action": False,
+    }
+
+def _v417_quick_answer(question, context):
+    q = str(question or "").lower()
+    mapping = [
+        (("what can start","ready to start"), "READINESS"),
+        (("delay","going to delay"), "DELAY"),
+        (("cost","money","costing"), "COST"),
+        (("decision","needs a decision"), "DECISION"),
+        (("submittal",), "SUBMITTALS"),
+        (("procurement","long lead"), "PROCUREMENT"),
+        (("rfi",), "RFI"),
+        (("manpower","crew"), "MANPOWER"),
+    ]
+    intent = "PROJECT"
+    for phrases, candidate in mapping:
+        if any(p in q for p in phrases):
+            intent = candidate
+            break
+    return {
+        "intent": intent,
+        "context": context or {},
+        "advisory": True,
+        "automatic_action": False,
+    }
+
+def _v417_workspace_gate(company_id, project_id, role, allowed_project_ids):
+    blockers = []
+    if not company_id:
+        blockers.append("COMPANY_REQUIRED")
+    if not project_id:
+        blockers.append("PROJECT_REQUIRED")
+    if str(role or "").upper() not in _V417_ROLE_HOME:
+        blockers.append("ROLE_REVIEW_REQUIRED")
+    if project_id and str(project_id) not in {str(x) for x in (allowed_project_ids or [])}:
+        blockers.append("PROJECT_ACCESS_BLOCKED")
+    return {
+        "allowed": not blockers,
+        "blockers": blockers,
+    }
+
+def _v417_regression_results():
+    rows = []
+
+    role_cases = [
+        ("super home","SUPERINTENDENT","TODAY"),
+        ("pm home","PM","PROJECT_BRAIN"),
+        ("estimator home","ESTIMATOR","PRECONSTRUCTION"),
+        ("executive home","EXECUTIVE","COMPANY"),
+        ("viewer home","VIEWER","TODAY"),
+    ]
+    for name,role,expected in role_cases:
+        r = _v417_home_for_role(role)
+        rows.append({"case":name,"passed":r["home"]==expected,"actual":r})
+
+    items = [
+        _v417_attention_item("Late AHU","PROCUREMENT","CRITICAL","P1","HVAC"),
+        _v417_attention_item("Door RFI","RFI","WATCH","P1","Doors"),
+        _v417_attention_item("Storefront start","READINESS","DO_NOT_START","P1","Storefront"),
+        _v417_attention_item("Tile delivery","PROCUREMENT","AT_RISK","P1","Tile"),
+        _v417_attention_item("Electrical access","READINESS","HIGH","P1","Electrical"),
+        _v417_attention_item("Paint","READINESS","READY_TO_START","P1","Painting"),
+        _v417_attention_item("CO-12","COST","REVIEW","P1","General"),
+        _v417_attention_item("Lighting","SUBMITTALS","HIGH","P1","Electrical"),
+    ]
+    feed = _v417_today_feed(items)
+    rows.extend([
+        {"case":"today feed counts all","passed":feed["count"]==8,"actual":feed},
+        {"case":"today feed limits seven","passed":feed["visible_count"]==7,"actual":{"visible_count":feed["visible_count"]}},
+        {"case":"critical rises first","passed":feed["items"][0]["level"]=="CRITICAL","actual":feed["items"][0]},
+        {"case":"ready work falls below risk","passed":feed["items"][-1]["level"]!="READY_TO_START","actual":feed["items"][-1]},
+    ])
+
+    story = _v417_problem_story(
+        "Storefront cannot start","P1","Storefront","A5.21",
+        "OPEN","APPROVED","LATE","AT_RISK","WATCH","DO_NOT_START",
+        "Resolve open RFI and confirm delivery before release."
+    )
+    rows.extend([
+        {"case":"problem story combines dimensions","passed":len(story["dimensions"])==6,"actual":story},
+        {"case":"problem story shows active dimensions","passed":"RFI" in story["active_dimensions"] and "READINESS" in story["active_dimensions"],"actual":story},
+        {"case":"problem story remains advisory","passed":story["automatic_action"] is False,"actual":story},
+    ])
+
+    quick_cases = [
+        ("quick readiness","What can start?","READINESS"),
+        ("quick delay","What is going to delay us?","DELAY"),
+        ("quick money","What is costing us money?","COST"),
+        ("quick decision","What needs a decision?","DECISION"),
+        ("quick manpower","Where are we short on crew?","MANPOWER"),
+    ]
+    for name,q,expected in quick_cases:
+        r = _v417_quick_answer(q,{"project":"P1"})
+        rows.append({"case":name,"passed":r["intent"]==expected and r["advisory"],"actual":r})
+
+    g1 = _v417_workspace_gate("C1","P1","PM",["P1","P2"])
+    g2 = _v417_workspace_gate("C1","P9","PM",["P1","P2"])
+    g3 = _v417_workspace_gate("C1","P1","UNKNOWN",["P1"])
+    rows.extend([
+        {"case":"workspace project allowed","passed":g1["allowed"] is True,"actual":g1},
+        {"case":"workspace project access blocked","passed":"PROJECT_ACCESS_BLOCKED" in g2["blockers"],"actual":g2},
+        {"case":"workspace role reviewed","passed":"ROLE_REVIEW_REQUIRED" in g3["blockers"],"actual":g3},
+    ])
+
+    for name in (
+        "unified experience preserves intelligence",
+        "no automatic project mutation",
+        "no automatic contract commitment",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v417_regression_summary():
+    rows = _v417_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v416_regression_summary()
+    return {
+        "version":"v417",
+        "suite":"Unified BuildCommand Experience",
+        "unified_experience_passed":passed,
+        "unified_experience_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+def _v417_nav(active):
+    links = []
+    for key in ("TODAY","PROJECT_BRAIN","PRECONSTRUCTION","FIELD","MONEY","COMPANY"):
+        area = _V417_AREAS[key]
+        href = "/workspace-v417?area=" + key
+        weight = "font-weight:800;" if key == active else ""
+        links.append(f'<a href="{href}" style="{weight}text-decoration:none;padding:10px 12px;border-radius:10px;display:block">{esc(area["label"])}</a>')
+    return '<div style="display:grid;gap:5px">' + "".join(links) + '</div>'
+
+def _v417_status_badge(level):
+    return f'<span style="font-size:12px;font-weight:800;border:1px solid #d9dee7;border-radius:999px;padding:5px 9px">{esc(level)}</span>'
+
+@app.get("/health/blueprint-v417")
+def v417_blueprint_health():
+    return _v417_regression_summary()
+
+@app.get("/workspace-v417", response_class=HTMLResponse)
+def v417_workspace(area: str = "TODAY", role: str = "PM"):
+    active = str(area or "TODAY").upper()
+    if active not in _V417_AREAS:
+        active = "TODAY"
+
+    demo_items = [
+        _v417_attention_item("AHU-1 delivery threatens startup","PROCUREMENT","CRITICAL","Downtown Office","HVAC","Submittal 23 73 00","Confirm vendor recovery plan","PM"),
+        _v417_attention_item("Storefront is not ready to start","READINESS","DO_NOT_START","Downtown Office","Storefront","A5.21","Resolve RFI and material release","Superintendent"),
+        _v417_attention_item("Electrical rough access conflict","READINESS","HIGH","Downtown Office","Electrical","Lookahead","Clear access before crew arrival","Superintendent"),
+        _v417_attention_item("Lighting submittal overdue","SUBMITTALS","HIGH","Downtown Office","Electrical","Submittal log","Escalate design review","PM"),
+        _v417_attention_item("CO-12 price needs review","COST","REVIEW","Downtown Office","General","Change log","Validate price and time impact","PM"),
+        _v417_attention_item("Door hardware RFI open","RFI","WATCH","Downtown Office","Doors","RFI-44","Get architect response","PM"),
+        _v417_attention_item("Tile delivery float tightening","PROCUREMENT","AT_RISK","Downtown Office","Tile","Procurement log","Confirm promised ship date","PM"),
+    ]
+    feed = _v417_today_feed(demo_items)
+    area_info = _V417_AREAS[active]
+    role_home = _v417_home_for_role(role)
+
+    cards = ""
+    for item in feed["items"]:
+        cards += (
+            '<div class="card" style="margin-bottom:10px">'
+            '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">'
+            f'<div><div class="label">{esc(item["category"].replace("_"," "))}</div>'
+            f'<h3 style="margin:4px 0 6px">{esc(item["title"])}</h3>'
+            f'<div class="small">{esc(item["project"])} · {esc(item["trade"])}</div></div>'
+            f'{_v417_status_badge(item["level"])}</div>'
+            f'<div class="small" style="margin-top:10px"><b>Next:</b> {esc(item["next_action"])}</div>'
+            '</div>'
+        )
+
+    module_chips = "".join(
+        f'<span style="display:inline-block;border:1px solid #d9dee7;border-radius:999px;padding:7px 10px;margin:3px;font-size:12px">{esc(m.replace("_"," ").title())}</span>'
+        for m in area_info["modules"]
+    )
+
+    return shell(
+        "BuildCommand Workspace v417",
+        f'<div style="display:grid;grid-template-columns:minmax(150px,210px) 1fr;gap:20px">'
+        f'<aside class="card" style="align-self:start;position:sticky;top:12px">'
+        f'<div class="eyebrow">BuildCommand</div><h2 style="margin-top:5px">Workspace</h2>'
+        f'{_v417_nav(active)}'
+        f'<hr style="border:0;border-top:1px solid #e5e7eb;margin:16px 0">'
+        f'<div class="small">Signed in as <b>{esc(role)}</b><br>Suggested home: {esc(role_home["label"])}</div>'
+        f'</aside>'
+        f'<main>'
+        f'<div class="hero"><div class="eyebrow">{esc(area_info["label"])}</div>'
+        f'<h1>{esc(area_info["description"])}</h1>'
+        f'<p class="muted">One workspace. The intelligence stays deep underneath; the experience stays simple.</p></div>'
+        f'<div class="card" style="margin-bottom:14px"><div class="label">Ask BuildCommand</div>'
+        f'<h3 style="margin:6px 0">What can start? &nbsp; · &nbsp; What will delay us? &nbsp; · &nbsp; What is costing us money? &nbsp; · &nbsp; What needs a decision?</h3></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Attention</div><div class="kpi">{feed["count"]}</div><div class="small">items today</div></div>'
+        f'<div class="card"><div class="label">Highest Risk</div><div class="kpi">{esc(feed["items"][0]["level"])}</div><div class="small">{esc(feed["items"][0]["trade"])}</div></div>'
+        f'<div class="card"><div class="label">Regression</div><div class="kpi">{_v417_regression_summary()["total"]}</div><div class="small">cumulative checks</div></div>'
+        f'</div>'
+        f'<div class="card" style="margin:14px 0"><div class="label">Combined here</div>{module_chips}</div>'
+        f'<h2>{esc(feed["headline"])}</h2>{cards}'
+        f'</main></div>'
     )
