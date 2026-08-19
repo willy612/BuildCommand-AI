@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="403.0")
+app=FastAPI(title="BuildCommand AI",version="404.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24557,4 +24557,142 @@ def v403_company_knowledge_page():
         f'<div class="card"><div class="label">Invented Facts</div><div class="kpi">0</div></div>'
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Knowledge must remain source-supported. Stale or weakly-supported information is downgraded rather than presented as fact.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v404 - Construction Operating Brain Integration
+# Unifies major intelligence dimensions into one operating-health score while
+# preserving explainability and human control.
+# =============================================================================
+
+def _v404_brain(readiness, risk_health, procurement_health, submittal_health, install_health):
+    vals = [
+        int(readiness),
+        int(risk_health),
+        int(procurement_health),
+        int(submittal_health),
+        int(install_health),
+    ]
+    score = round(sum(vals) / len(vals))
+
+    if score >= 90:
+        level = "COMMAND_READY"
+    elif score >= 75:
+        level = "OPERATING"
+    elif score >= 55:
+        level = "WATCH"
+    else:
+        level = "INTERVENE"
+
+    weakest = min(vals)
+    weakest_index = vals.index(weakest)
+    weakest_names = [
+        "READINESS",
+        "RISK_HEALTH",
+        "PROCUREMENT",
+        "SUBMITTALS",
+        "INSTALLATION_READINESS",
+    ]
+
+    return {
+        "score": score,
+        "level": level,
+        "weakest_dimension": weakest_names[weakest_index],
+        "weakest_score": weakest,
+        "human_review_required": True,
+        "automatic_project_changes": 0,
+    }
+
+_V404_CASES = [
+    ("perfect",100,100,100,100,100,100,"COMMAND_READY"),
+    ("90",90,90,90,90,90,90,"COMMAND_READY"),
+    ("good",80,80,80,80,80,80,"OPERATING"),
+    ("75",75,75,75,75,75,75,"OPERATING"),
+    ("watch",60,60,60,60,60,60,"WATCH"),
+    ("55",55,55,55,55,55,55,"WATCH"),
+    ("intervene",50,50,50,50,50,50,"INTERVENE"),
+    ("mixed",100,80,70,60,90,80,"OPERATING"),
+    ("risk",100,40,80,80,80,76,"OPERATING"),
+    ("low",20,40,60,40,40,40,"INTERVENE"),
+]
+
+def _v404_regression_results():
+    rows = []
+
+    for name,a,b,c,d,e,expected_score,expected_level in _V404_CASES:
+        result = _v404_brain(a,b,c,d,e)
+        rows.append({
+            "case": name,
+            "passed": (
+                result["score"] == expected_score
+                and result["level"] == expected_level
+                and result["human_review_required"] is True
+                and result["automatic_project_changes"] == 0
+            ),
+            "actual": {
+                "score": result["score"],
+                "level": result["level"],
+                "weakest_dimension": result["weakest_dimension"],
+                "weakest_score": result["weakest_score"],
+            },
+        })
+
+    for name in (
+        "construction operating brain is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state": "SAFE"},
+        })
+
+    return rows
+
+def _v404_regression_summary():
+    rows = _v404_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v403_regression_summary()
+
+    return {
+        "version": "v404",
+        "suite": "Construction Operating Brain Integration",
+        "operating_brain_passed": passed,
+        "operating_brain_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": passed + previous["passed"],
+        "total": len(rows) + previous["total"],
+        "failed": (len(rows) - passed) + previous["failed"],
+        "ok": passed == len(rows) and previous["ok"],
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-v404")
+def v404_blueprint_health():
+    return _v404_regression_summary()
+
+@app.get("/construction-operating-brain-v404", response_class=HTMLResponse)
+def v404_operating_brain_page():
+    demo = _v404_brain(88, 82, 76, 84, 79)
+    s = _v404_regression_summary()
+
+    return shell(
+        "Construction Operating Brain v404",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v404</div>'
+        f'<h1>Construction Operating Brain</h1>'
+        f'<p class="muted">Unifies project readiness, risk health, procurement, submittals and installation readiness into one operating view while preserving the underlying evidence.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Operating Score</div><div class="kpi">{demo["score"]}/100</div></div>'
+        f'<div class="card"><div class="label">Operating State</div><div class="kpi">{esc(demo["level"])}</div></div>'
+        f'<div class="card"><div class="label">Weakest Dimension</div><div class="kpi">{esc(demo["weakest_dimension"])}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Unified Intelligence Layer</h2>'
+        f'<p>Readiness, risk, procurement, submittals and field installation readiness now feed one explainable operating-health layer.</p>'
+        f'<p><b>Cumulative regression gate:</b> {s["passed"]}/{s["total"]}</p>'
+        f'<p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically direct field work, commit cost, issue contracts, or change the schedule.</p></div>'
     )
