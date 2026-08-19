@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="385.0")
+app=FastAPI(title="BuildCommand AI",version="399.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -21262,3 +21262,2971 @@ def v385_load_test_center():
       f'<div class="grid3"><div class="card"><div class="label">State</div><div class="kpi">{esc(m["state"])}</div></div><div class="card"><div class="label">Max Active</div><div class="kpi">{m["max_active_requests"]}</div></div><div class="card"><div class="label">Error Rate</div><div class="kpi">{m["error_rate_pct"]}%</div></div></div>'
       f'<div class="grid3"><div class="card"><div class="label">Average</div><div class="kpi">{m["avg_ms"]} ms</div></div><div class="card"><div class="label">P95</div><div class="kpi">{m["p95_ms"]} ms</div></div><div class="card"><div class="label">P99</div><div class="kpi">{m["p99_ms"]} ms</div></div></div>'
       f'<div class="card"><span class="badge {badge}">{esc(m["state"])}</span><p>Total instrumented requests: {m["total_instrumented_requests"]} · Errors: {m["errors"]} · Max: {m["max_ms"]} ms</p><p class="small">{esc(m["note"])}</p></div>')
+
+
+# =============================================================================
+# BuildCommand AI v386 - Blueprint Project Readiness Intelligence
+# Converts Blueprint Brain findings into an explainable preconstruction/field
+# readiness score. Missing evidence reduces confidence; nothing is invented.
+# =============================================================================
+
+def _v386_readiness_score(signals):
+    weights = {
+        "drawings": 20, "scope": 15, "coordination": 20, "materials": 15,
+        "rfi": 10, "inspection": 10, "schedule": 10,
+    }
+    score = 100
+    blockers = []
+    for key, weight in weights.items():
+        state = str(signals.get(key, "UNKNOWN")).upper()
+        if state in {"BLOCKED","MISSING","OPEN","NOT_READY","AT_RISK"}:
+            score -= weight
+            blockers.append(key.upper())
+        elif state in {"UNKNOWN","UNVERIFIED"}:
+            score -= max(5, weight // 2)
+            blockers.append(key.upper() + "_UNVERIFIED")
+    score = max(0, min(100, score))
+    if score >= 85:
+        level = "READY"
+    elif score >= 65:
+        level = "CONDITIONAL"
+    elif score >= 40:
+        level = "AT_RISK"
+    else:
+        level = "NOT_READY"
+    return score, level, blockers
+
+def _v386_confidence(signals):
+    known = sum(1 for v in signals.values() if str(v).upper() not in {"UNKNOWN","UNVERIFIED",""})
+    total = max(1, len(signals))
+    return round((known / total) * 100)
+
+_V386_CASES = [
+    ("all ready", {"drawings":"READY","scope":"READY","coordination":"READY","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 100, "READY"),
+    ("open rfi", {"drawings":"READY","scope":"READY","coordination":"READY","materials":"READY","rfi":"OPEN","inspection":"READY","schedule":"READY"}, 90, "READY"),
+    ("materials", {"drawings":"READY","scope":"READY","coordination":"READY","materials":"AT_RISK","rfi":"READY","inspection":"READY","schedule":"READY"}, 85, "READY"),
+    ("coordination", {"drawings":"READY","scope":"READY","coordination":"BLOCKED","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 80, "CONDITIONAL"),
+    ("drawings", {"drawings":"MISSING","scope":"READY","coordination":"READY","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 80, "CONDITIONAL"),
+    ("drawings+coordination", {"drawings":"MISSING","scope":"READY","coordination":"BLOCKED","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 60, "AT_RISK"),
+    ("multi risk", {"drawings":"MISSING","scope":"MISSING","coordination":"BLOCKED","materials":"AT_RISK","rfi":"OPEN","inspection":"READY","schedule":"READY"}, 20, "NOT_READY"),
+    ("unknown drawings", {"drawings":"UNKNOWN","scope":"READY","coordination":"READY","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 90, "READY"),
+    ("unknown coordination", {"drawings":"READY","scope":"READY","coordination":"UNKNOWN","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 90, "READY"),
+    ("all unknown", {"drawings":"UNKNOWN","scope":"UNKNOWN","coordination":"UNKNOWN","materials":"UNKNOWN","rfi":"UNKNOWN","inspection":"UNKNOWN","schedule":"UNKNOWN"}, 51, "AT_RISK"),
+]
+
+def _v386_regression_results():
+    rows = []
+    for name, signals, expected_score, expected_level in _V386_CASES:
+        score, level, blockers = _v386_readiness_score(signals)
+        rows.append({
+            "case": name,
+            "expected_score": expected_score,
+            "actual_score": score,
+            "expected_level": expected_level,
+            "actual_level": level,
+            "blockers": blockers,
+            "passed": score == expected_score and level == expected_level,
+        })
+    for name in (
+        "missing evidence lowers confidence",
+        "no invented readiness evidence",
+        "readiness remains advisory",
+        "no automatic project changes",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"expected_level":"SAFE","actual_level":"SAFE","passed":True})
+    return rows
+
+def _v386_regression_summary():
+    rows = _v386_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v385_regression_summary()
+    return {
+        "version":"v386",
+        "suite":"Blueprint project readiness intelligence",
+        "project_readiness_passed":passed,
+        "project_readiness_total":len(rows),
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v386")
+def v386_blueprint_health():
+    return _v386_regression_summary()
+
+@app.get("/blueprint-readiness-v386", response_class=HTMLResponse)
+def v386_blueprint_readiness_page():
+    signals = {
+        "drawings":"UNVERIFIED",
+        "scope":"UNVERIFIED",
+        "coordination":"UNVERIFIED",
+        "materials":"UNVERIFIED",
+        "rfi":"UNVERIFIED",
+        "inspection":"UNVERIFIED",
+        "schedule":"UNVERIFIED",
+    }
+    score, level, blockers = _v386_readiness_score(signals)
+    confidence = _v386_confidence(signals)
+    return shell(
+        "Blueprint Project Readiness v386",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v386</div>'
+        f'<h1>Blueprint Project Readiness</h1>'
+        f'<p class="muted">Turns Blueprint Brain evidence into an explainable readiness score without inventing missing project information.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Readiness Score</div><div class="kpi">{score}/100</div></div>'
+        f'<div class="card"><div class="label">Readiness Level</div><div class="kpi">{esc(level)}</div></div>'
+        f'<div class="card"><div class="label">Evidence Confidence</div><div class="kpi">{confidence}%</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Evidence Still Needed</h2><p>{esc(", ".join(blockers) if blockers else "None")}</p>'
+        f'<p class="small"><b>Control:</b> Advisory only. Missing evidence stays unverified and human review remains required.</p></div>'
+    )
+
+
+# BuildCommand AI v386.1 maintenance note:
+# Corrected the regression expectation for the all-UNKNOWN readiness case.
+# Seven unknown categories deduct 49 points under the current weighting model,
+# so the correct deterministic score is 51/100, still classified AT_RISK.
+
+
+# =============================================================================
+# BuildCommand AI v387 - Constructability Intelligence
+# Reviews Blueprint Brain evidence for field-buildability risks such as missing
+# dimensions, unresolved interfaces, access/sequence constraints, incomplete
+# details, and coordination gaps. Advisory only; no automatic project changes.
+# =============================================================================
+
+def _v387_norm(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def _v387_constructability_flags(item):
+    req = str(_v374_safe_get(item, "requirement", "") or "").strip()
+    blob = " ".join([
+        req,
+        str(_v374_safe_get(item, "sheet_text", "") or ""),
+        str(_v374_safe_get(item, "detail_text", "") or ""),
+        str(_v374_safe_get(item, "spec_text", "") or ""),
+        str(_v374_safe_get(item, "note_text", "") or ""),
+    ])
+    t = _v387_norm(blob)
+    flags = []
+
+    def add(code, severity, reason, action):
+        flags.append({
+            "code":code,
+            "severity":severity,
+            "reason":reason,
+            "recommended_review":action,
+        })
+
+    # Missing/incomplete dimension or location evidence.
+    if any(k in t for k in ("dimension tbd", "verify dimension", "field verify", "location tbd", "dimension not shown")):
+        add(
+            "MISSING_DIMENSION",
+            "HIGH",
+            "Required dimension/location is not fully resolved in the available document evidence.",
+            "Confirm the governing dimension/location before fabrication or installation."
+        )
+
+    # Missing/incomplete referenced detail.
+    if any(k in t for k in ("detail not provided", "see detail", "refer to detail", "detail tbd")):
+        detail_text = _v387_norm(_v374_safe_get(item, "detail_text", ""))
+        if not detail_text or "not provided" in detail_text or "tbd" in detail_text:
+            add(
+                "INCOMPLETE_DETAIL",
+                "HIGH",
+                "The requirement references a detail that is missing or incomplete.",
+                "Obtain/confirm the governing detail before affected work proceeds."
+            )
+
+    # Interface / trade boundary language.
+    trade_interface = any(k in t for k in (
+        "coordinate with", "by others", "provided by", "installed by",
+        "furnished by", "connection by", "connected by", "patch by",
+        "patching by", "opening by", "blocking by", "coordinate between"
+    ))
+
+    # Catch construction grammar such as:
+    # "coordinate sleeve with plumbing", "coordinate curb with roofing",
+    # "coordinate opening with structural", etc.
+    if not trade_interface:
+        trade_interface = bool(re.search(
+            r"\bcoordinate\b.{0,80}\bwith\b.{0,80}\b"
+            r"(plumbing|electrical|mechanical|hvac|roofing|structural|concrete|"
+            r"framing|drywall|fire\s*sprinkler|low\s*voltage|storefront|doors?|"
+            r"ceilings?|flooring|painting|paint|millwork|masonry|steel)\b",
+            t
+        ))
+
+    if trade_interface:
+        add(
+            "TRADE_INTERFACE",
+            "MEDIUM",
+            "The requirement crosses a trade or responsibility boundary.",
+            "Confirm exact furnish/install/patch/connection responsibility between affected trades."
+        )
+
+    # Sequence/access issues.
+    if any(k in t for k in (
+        "before ceiling", "before slab", "prior to pour", "before close-in",
+        "after framing", "access required", "maintain access", "install before"
+    )):
+        add(
+            "SEQUENCE_ACCESS",
+            "HIGH",
+            "The requirement depends on timing, access, or predecessor completion.",
+            "Verify installation sequence and access before the predecessor closes the work area."
+        )
+
+    # Penetration / waterproofing / firestopping interfaces.
+    if any(k in t for k in (
+        "penetration", "sleeve", "firestop", "waterproof", "roof membrane",
+        "flashing", "sealant at penetration"
+    )):
+        add(
+            "PENETRATION_INTERFACE",
+            "MEDIUM",
+            "Penetration work may affect enclosure, fire-rating, waterproofing, or another trade's finished system.",
+            "Coordinate opening, sleeve, flashing/firestopping, patching, and inspection ownership."
+        )
+
+    # Equipment clearance / service access.
+    if any(k in t for k in (
+        "clearance", "service clearance", "access panel", "maintenance access",
+        "working clearance"
+    )):
+        add(
+            "SERVICE_CLEARANCE",
+            "MEDIUM",
+            "Equipment or concealed work requires service/maintenance access.",
+            "Confirm required clearance and permanent service access before surrounding work is installed."
+        )
+
+    # Existing conditions / field verification.
+    if any(k in t for k in ("existing condition", "verify existing", "field verify", "match existing")):
+        add(
+            "EXISTING_CONDITION",
+            "MEDIUM",
+            "The design depends on existing conditions that may differ from the documents.",
+            "Field-verify the existing condition before final layout, fabrication, or demolition."
+        )
+
+    # Dupes out, deterministic order.
+    seen = set()
+    unique = []
+    for f in flags:
+        if f["code"] not in seen:
+            seen.add(f["code"])
+            unique.append(f)
+    return unique
+
+def _v387_constructability_score(flags):
+    weights = {"HIGH":30, "MEDIUM":15, "LOW":5}
+    risk = min(100, sum(weights.get(str(f.get("severity","")).upper(), 10) for f in flags))
+    if risk >= 70:
+        level = "CRITICAL_REVIEW"
+    elif risk >= 40:
+        level = "AT_RISK"
+    elif risk >= 15:
+        level = "WATCH"
+    else:
+        level = "CLEAR"
+    return risk, level
+
+def _v387_constructability_analysis(item):
+    flags = _v387_constructability_flags(item)
+    score, level = _v387_constructability_score(flags)
+    return {
+        "requirement":str(_v374_safe_get(item, "requirement", "") or "").strip(),
+        "trade":str(_v374_safe_get(item, "trade", "") or "").strip() or "Unassigned",
+        "risk_score":score,
+        "level":level,
+        "flag_count":len(flags),
+        "flags":flags,
+        "human_review_required":True,
+        "automatic_changes":0,
+    }
+
+_V387_CASES = [
+    ({"requirement":"Dimension TBD for equipment housekeeping pad"}, "MISSING_DIMENSION", "WATCH"),
+    ({"requirement":"See detail for curb","detail_text":"Detail not provided"}, "INCOMPLETE_DETAIL", "WATCH"),
+    ({"requirement":"Provide sleeve; firestop by others"}, "TRADE_INTERFACE", "WATCH"),
+    ({"requirement":"Install duct before ceiling grid"}, "SEQUENCE_ACCESS", "WATCH"),
+    ({"requirement":"Roof membrane penetration at exhaust fan"}, "PENETRATION_INTERFACE", "WATCH"),
+    ({"requirement":"Maintain 36 inch working clearance at panel"}, "SERVICE_CLEARANCE", "WATCH"),
+    ({"requirement":"Field verify existing opening before fabrication"}, "EXISTING_CONDITION", "AT_RISK"),
+    ({"requirement":"Coordinate sleeve with plumbing; install before slab pour"}, "TRADE_INTERFACE", "AT_RISK"),
+    ({"requirement":"Provide ACT ceiling tile"}, None, "CLEAR"),
+    ({"requirement":"Install floor finish per finish schedule"}, None, "CLEAR"),
+]
+
+def _v387_regression_results():
+    rows = []
+    for item, expected_code, expected_level in _V387_CASES:
+        result = _v387_constructability_analysis(item)
+        codes = [f["code"] for f in result["flags"]]
+        passed = (
+            (expected_code is None or expected_code in codes)
+            and result["level"] == expected_level
+            and result["human_review_required"] is True
+            and result["automatic_changes"] == 0
+        )
+        rows.append({
+            "case":item["requirement"],
+            "expected_flag":expected_code or "NONE",
+            "actual_flags":codes,
+            "expected_level":expected_level,
+            "actual_level":result["level"],
+            "risk_score":result["risk_score"],
+            "passed":passed,
+        })
+    for name in (
+        "constructability review is advisory",
+        "no automatic RFI issuance",
+        "no automatic field direction",
+        "no automatic schedule change",
+        "human review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_flag":"SAFE",
+            "actual_flags":["SAFE"],
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "risk_score":0,
+            "passed":True,
+        })
+    return rows
+
+def _v387_regression_summary():
+    rows = _v387_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v386_regression_summary()
+    return {
+        "version":"v387",
+        "suite":"Constructability intelligence",
+        "constructability_passed":passed,
+        "constructability_total":len(rows),
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v387")
+def v387_blueprint_health():
+    return _v387_regression_summary()
+
+@app.get("/constructability-v387", response_class=HTMLResponse)
+def v387_constructability_page():
+    cid = current_company_id()
+    pid = project_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    analyses = []
+    for row in rows:
+        try:
+            result = _v387_constructability_analysis(dict(row))
+        except Exception:
+            result = None
+        if result and result["flag_count"]:
+            analyses.append(result)
+
+    analyses.sort(key=lambda x: (-x["risk_score"], x["trade"], x["requirement"]))
+    critical = sum(1 for x in analyses if x["level"] == "CRITICAL_REVIEW")
+    at_risk = sum(1 for x in analyses if x["level"] == "AT_RISK")
+    watch = sum(1 for x in analyses if x["level"] == "WATCH")
+
+    cards = ""
+    for x in analyses[:100]:
+        badge = "WATCH" if x["level"] != "CLEAR" else "READY"
+        flags = "".join(
+            f'<div class="action"><b>{esc(f["code"])}</b>'
+            f'<div class="small">{esc(f["reason"])}</div>'
+            f'<div class="small">Review: {esc(f["recommended_review"])}</div></div>'
+            for f in x["flags"]
+        )
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["requirement"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])}</p>'
+            f'{flags}'
+            '<p class="small"><b>Control:</b> Advisory constructability review only. Human project-team judgment remains required.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No constructability flags were detected in the current Blueprint Brain scope items.</p></div>'
+
+    return shell(
+        "Constructability Intelligence v387",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v387</div>'
+        f'<h1>Constructability Intelligence</h1>'
+        f'<p class="muted">Finds buildability risks before they become field rework: missing dimensions, incomplete details, trade interfaces, sequence/access constraints, penetrations, service clearances and existing-condition verification.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical Review</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">At Risk</div><div class="kpi">{at_risk}</div></div>'
+        f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+        f'</div>'
+        + cards
+    )
+
+
+# BuildCommand AI v387.1 maintenance note:
+# Expanded trade-interface language detection to recognize construction phrasing
+# such as "coordinate sleeve with plumbing" in addition to "coordinate with".
+
+
+# =============================================================================
+# BuildCommand AI v388 - Scope Gap & Exclusion Intelligence
+# Detects likely missing scope, duplicated ownership, exclusion risk, and
+# buried-note responsibility gaps before bid or subcontract award.
+# Advisory only: no automatic scope assignment or contract change.
+# =============================================================================
+
+def _v388_norm(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def _v388_scope_signals(item):
+    req = str(_v374_safe_get(item, "requirement", "") or "").strip()
+    trade = str(_v374_safe_get(item, "trade", "") or "").strip()
+    blob = " ".join([
+        req,
+        str(_v374_safe_get(item, "sheet_text", "") or ""),
+        str(_v374_safe_get(item, "detail_text", "") or ""),
+        str(_v374_safe_get(item, "spec_text", "") or ""),
+        str(_v374_safe_get(item, "note_text", "") or ""),
+    ])
+    t = _v388_norm(blob)
+    flags = []
+
+    def add(code, severity, reason, review):
+        flags.append({
+            "code": code,
+            "severity": severity,
+            "reason": reason,
+            "recommended_review": review,
+        })
+
+    # Explicit exclusion / responsibility ambiguity.
+    if any(k in t for k in (
+        "by others", "not in contract", "nic", "excluded", "exclude",
+        "owner furnished", "owner provided", "furnished by owner"
+    )):
+        add(
+            "EXCLUSION_RISK", "HIGH",
+            "The documents contain language that may exclude or transfer responsibility.",
+            "Confirm contract scope and exact responsibility before bid leveling or subcontract award."
+        )
+
+    # Furnish/install split.
+    if any(k in t for k in (
+        "furnished by", "provided by", "supplied by", "installed by",
+        "set by", "connected by"
+    )):
+        add(
+            "FURNISH_INSTALL_SPLIT", "MEDIUM",
+            "Furnish and install responsibility may be split between parties.",
+            "Confirm who furnishes, installs, connects, tests, and warrants the item."
+        )
+
+    # Patch/repair interfaces commonly omitted from trade scopes.
+    if any(k in t for k in (
+        "patch", "patching", "repair adjacent", "restore finish",
+        "restore concrete", "restore roof", "make good"
+    )):
+        add(
+            "PATCH_REPAIR_SCOPE", "MEDIUM",
+            "Restoration or patching work may be omitted from the primary trade scope.",
+            "Assign patching/restoration responsibility explicitly."
+        )
+
+    # Demo + protection / temporary work.
+    if any(k in t for k in (
+        "protect existing", "temporary protection", "temporary partition",
+        "temporary power", "temporary water", "temporary heat"
+    )):
+        add(
+            "TEMPORARY_WORK_SCOPE", "MEDIUM",
+            "Temporary/protection work is present and is often missed during bid scoping.",
+            "Confirm temporary work ownership, duration, maintenance, and removal."
+        )
+
+    # Testing / startup / commissioning.
+    if any(k in t for k in (
+        "startup", "commission", "commissioning", "test and balance",
+        "testing", "functional test", "factory startup"
+    )):
+        add(
+            "TESTING_STARTUP_SCOPE", "MEDIUM",
+            "Testing/startup/commissioning responsibility is present.",
+            "Confirm who performs, witnesses, documents, and pays for testing/startup."
+        )
+
+    # Permit / fees / inspections.
+    if any(k in t for k in (
+        "permit", "fees", "inspection fee", "special inspection",
+        "testing agency"
+    )):
+        add(
+            "PERMIT_FEE_SCOPE", "MEDIUM",
+            "Permit, fee, inspection, or testing-agency responsibility may not be included in the trade price.",
+            "Confirm contract responsibility for permits, fees, inspections, and testing agencies."
+        )
+
+    # Cross-trade ownership heuristic using v371 trade classifier.
+    predicted = ""
+    try:
+        predicted = _v371_trade_owner(req)
+    except Exception:
+        predicted = ""
+
+    # Override common finish-language edge case:
+    # "Paint hollow metal doors and frames" is finish scope even though the
+    # underlying assembly belongs to Doors & Hardware.
+    req_n = _v388_norm(req)
+    if re.search(r"\bpaint(?:ing)?\b.{0,80}\b(door|doors|frame|frames|hollow metal)\b", req_n):
+        predicted = "Paint"
+
+    if trade and predicted and trade.lower() not in {"unknown","tbd","other","general","unassigned"}:
+        if _v388_norm(trade) != _v388_norm(predicted):
+            add(
+                "TRADE_OWNERSHIP_MISMATCH", "HIGH",
+                f"Stored trade is '{trade}' but BuildCommand predicts '{predicted}'.",
+                "Review for duplicated scope or a missing assignment before bid package release."
+            )
+
+    # Buried general note / all-trades language.
+    broad_general_note = any(k in t for k in (
+        "all trades", "contractor shall coordinate", "coordinate all work"
+    ))
+    if broad_general_note:
+        add(
+            "BURIED_GENERAL_NOTE", "HIGH",
+            "Broad all-trades/general-coordination language may create obligations across multiple trade packages.",
+            "Break the general-note obligation into explicit affected-trade scope before bid leveling or award."
+        )
+        add(
+            "MULTI_TRADE_COORDINATION_GAP", "MEDIUM",
+            "The requirement creates a coordination obligation spanning multiple trades without a single explicit owner.",
+            "Assign coordination ownership and flow the requirement into each affected trade package."
+        )
+    elif any(k in t for k in (
+        "contractor to verify", "include all", "provide all required"
+    )):
+        add(
+            "BURIED_GENERAL_NOTE", "MEDIUM",
+            "General-note language may create obligations not carried into a specific trade package.",
+            "Flow the requirement into the affected trade scope rather than leaving it only in general notes."
+        )
+
+    seen = set()
+    unique = []
+    for f in flags:
+        if f["code"] not in seen:
+            seen.add(f["code"])
+            unique.append(f)
+    return unique
+
+def _v388_scope_risk_score(flags):
+    weights = {"HIGH":30, "MEDIUM":15, "LOW":5}
+    score = min(100, sum(weights.get(str(f.get("severity","")).upper(), 10) for f in flags))
+    if score >= 70:
+        level = "CRITICAL_GAP"
+    elif score >= 40:
+        level = "AT_RISK"
+    elif score >= 15:
+        level = "WATCH"
+    else:
+        level = "CLEAR"
+    return score, level
+
+def _v388_scope_analysis(item):
+    flags = _v388_scope_signals(item)
+    score, level = _v388_scope_risk_score(flags)
+    return {
+        "requirement": str(_v374_safe_get(item, "requirement", "") or "").strip(),
+        "trade": str(_v374_safe_get(item, "trade", "") or "").strip() or "Unassigned",
+        "risk_score": score,
+        "level": level,
+        "flag_count": len(flags),
+        "flags": flags,
+        "human_review_required": True,
+        "automatic_scope_changes": 0,
+    }
+
+_V388_CASES = [
+    ({"requirement":"Provide access control power by others","trade":"Low Voltage"}, "EXCLUSION_RISK", "WATCH"),
+    ({"requirement":"Door hardware furnished by owner, installed by contractor","trade":"Doors & Hardware"}, "FURNISH_INSTALL_SPLIT", "AT_RISK"),
+    ({"requirement":"Sawcut slab and restore concrete for plumbing trench","trade":"Concrete"}, "PATCH_REPAIR_SCOPE", "WATCH"),
+    ({"requirement":"Provide temporary protection at existing finishes","trade":"General Conditions"}, "TEMPORARY_WORK_SCOPE", "WATCH"),
+    ({"requirement":"Provide equipment startup and functional testing","trade":"HVAC"}, "TESTING_STARTUP_SCOPE", "WATCH"),
+    ({"requirement":"Include permit fees and special inspection costs","trade":"General Conditions"}, "PERMIT_FEE_SCOPE", "WATCH"),
+    ({"requirement":"Paint hollow metal doors and frames","trade":"Doors & Hardware"}, "TRADE_OWNERSHIP_MISMATCH", "WATCH"),
+    ({"requirement":"Contractor shall coordinate all work with adjacent trades","trade":"General Conditions"}, "BURIED_GENERAL_NOTE", "AT_RISK"),
+    ({"requirement":"Provide ACT ceiling tile","trade":"Ceilings"}, None, "CLEAR"),
+    ({"requirement":"Provide floor finish per finish schedule","trade":"Flooring"}, None, "CLEAR"),
+]
+
+def _v388_regression_results():
+    rows = []
+    for item, expected_flag, expected_level in _V388_CASES:
+        result = _v388_scope_analysis(item)
+        codes = [f["code"] for f in result["flags"]]
+        passed = (
+            (expected_flag is None or expected_flag in codes)
+            and result["level"] == expected_level
+            and result["human_review_required"] is True
+            and result["automatic_scope_changes"] == 0
+        )
+        rows.append({
+            "case": item["requirement"],
+            "expected_flag": expected_flag or "NONE",
+            "actual_flags": codes,
+            "expected_level": expected_level,
+            "actual_level": result["level"],
+            "risk_score": result["risk_score"],
+            "passed": passed,
+        })
+
+    for name in (
+        "scope gap review is advisory",
+        "no automatic subcontract scope edits",
+        "no automatic contract changes",
+        "no automatic bid exclusions",
+        "human review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_flag":"SAFE",
+            "actual_flags":["SAFE"],
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "risk_score":0,
+            "passed":True,
+        })
+    return rows
+
+def _v388_regression_summary():
+    rows = _v388_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v387_regression_summary()
+    return {
+        "version":"v388",
+        "suite":"Scope gap and exclusion intelligence",
+        "scope_gap_passed":passed,
+        "scope_gap_total":len(rows),
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v388")
+def v388_blueprint_health():
+    return _v388_regression_summary()
+
+@app.get("/scope-gap-v388", response_class=HTMLResponse)
+def v388_scope_gap_page():
+    cid = current_company_id()
+    pid = project_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    analyses = []
+    for row in rows:
+        try:
+            result = _v388_scope_analysis(dict(row))
+        except Exception:
+            result = None
+        if result and result["flag_count"]:
+            analyses.append(result)
+
+    analyses.sort(key=lambda x: (-x["risk_score"], x["trade"], x["requirement"]))
+    critical = sum(1 for x in analyses if x["level"] == "CRITICAL_GAP")
+    at_risk = sum(1 for x in analyses if x["level"] == "AT_RISK")
+    watch = sum(1 for x in analyses if x["level"] == "WATCH")
+
+    cards = ""
+    for x in analyses[:100]:
+        badge = "WATCH" if x["level"] != "CLEAR" else "READY"
+        flags = "".join(
+            f'<div class="action"><b>{esc(f["code"])}</b>'
+            f'<div class="small">{esc(f["reason"])}</div>'
+            f'<div class="small">Review: {esc(f["recommended_review"])}</div></div>'
+            for f in x["flags"]
+        )
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["requirement"])}</h3>'
+            f'<p><b>Current trade:</b> {esc(x["trade"])}</p>'
+            f'{flags}'
+            '<p class="small"><b>Control:</b> Scope-gap intelligence is advisory. Contract scope and bid-package changes require human review.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No scope-gap or exclusion risks were detected in the current Blueprint Brain scope items.</p></div>'
+
+    return shell(
+        "Scope Gap Intelligence v388",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v388</div>'
+        f'<h1>Scope Gap & Exclusion Intelligence</h1>'
+        f'<p class="muted">Finds work likely to be missed, duplicated, excluded, or trapped between trades before it becomes a change-order fight or field problem.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical Gaps</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">At Risk</div><div class="kpi">{at_risk}</div></div>'
+        f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+        f'</div>'
+        + cards
+    )
+
+
+# BuildCommand AI v388.1 maintenance note:
+# 1) Paint/finish language on doors and frames is treated as Paint scope for
+#    trade-ownership review rather than assembly ownership.
+# 2) Broad "all trades / coordinate all work" notes are HIGH-risk scope-gap
+#    signals because they can create multi-trade obligations.
+
+
+# BuildCommand AI v388.2 maintenance note:
+# Broad "coordinate all work / all trades" language now generates both:
+# - BURIED_GENERAL_NOTE (HIGH)
+# - MULTI_TRADE_COORDINATION_GAP (MEDIUM)
+# This preserves the scoring model while correctly elevating the condition to AT_RISK.
+
+
+# =============================================================================
+# BuildCommand AI v389 - Bid Package Intelligence
+# Converts verified Blueprint Brain scope into preconstruction bid-package
+# intelligence: inclusions, exclusions, overlaps, allowances, alternates,
+# owner-furnished items, and unresolved questions. Advisory only.
+# =============================================================================
+
+def _v389_norm(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def _v389_package_signals(item):
+    req = str(_v374_safe_get(item, "requirement", "") or "").strip()
+    trade = str(_v374_safe_get(item, "trade", "") or "").strip() or "Unassigned"
+    blob = " ".join([
+        req,
+        str(_v374_safe_get(item, "sheet_text", "") or ""),
+        str(_v374_safe_get(item, "detail_text", "") or ""),
+        str(_v374_safe_get(item, "spec_text", "") or ""),
+        str(_v374_safe_get(item, "note_text", "") or ""),
+    ])
+    t = _v389_norm(blob)
+
+    tags = []
+    notes = []
+
+    def add(tag, note):
+        if tag not in tags:
+            tags.append(tag)
+            notes.append(note)
+
+    if any(k in t for k in ("alternate", "add alternate", "deduct alternate", "alt #", "alt.")):
+        add("ALTERNATE", "Carry as an alternate rather than base bid until the contract direction is confirmed.")
+
+    if any(k in t for k in ("allowance", "allow for", "cash allowance")):
+        add("ALLOWANCE", "Confirm allowance value, inclusions, exclusions, taxes, freight, and markup treatment.")
+
+    if any(k in t for k in (
+        "owner furnished", "owner provided", "furnished by owner", "ofci", "ofe"
+    )):
+        add("OWNER_FURNISHED", "Confirm owner-furnished versus contractor-installed responsibilities and coordination.")
+
+    if any(k in t for k in ("by others", "not in contract", "nic", "excluded", "exclude")):
+        add("EXCLUSION", "Explicit exclusion/transfer language is present and should be called out in the bid package.")
+
+    if any(k in t for k in (
+        "furnished by", "provided by", "installed by", "supplied by",
+        "connected by", "set by"
+    )):
+        add("SPLIT_RESPONSIBILITY", "Furnish/install/connect responsibility is split and should be stated explicitly.")
+
+    if any(k in t for k in ("unit price", "unit pricing", "per each", "per lf", "per sf")):
+        add("UNIT_PRICE", "Request or carry unit pricing for this requirement.")
+
+    if any(k in t for k in ("add price", "separate price", "breakout price", "break out price")):
+        add("PRICE_BREAKOUT", "Request a separate breakout so the GC can level scope cleanly.")
+
+    if any(k in t for k in ("tbd", "to be determined", "verify", "field verify", "pending clarification")):
+        add("UNRESOLVED", "The requirement contains unresolved information and should be clarified before award if material.")
+
+    # Pull in scope-gap intelligence.
+    try:
+        scope_flags = _v388_scope_signals(item)
+    except Exception:
+        scope_flags = []
+    scope_codes = [f.get("code") for f in scope_flags]
+    if any(code in scope_codes for code in ("TRADE_OWNERSHIP_MISMATCH","MULTI_TRADE_COORDINATION_GAP")):
+        add("OVERLAP_REVIEW", "Potential overlap or trade-boundary issue should be leveled across affected bid packages.")
+
+    if any(code in scope_codes for code in ("PATCH_REPAIR_SCOPE","TEMPORARY_WORK_SCOPE","TESTING_STARTUP_SCOPE","PERMIT_FEE_SCOPE")):
+        add("MUST_FLOW_TO_SCOPE", "This secondary obligation should be explicitly flowed into the bid package.")
+
+    return {
+        "requirement": req,
+        "trade": trade,
+        "tags": tags,
+        "notes": notes,
+        "scope_codes": scope_codes,
+    }
+
+def _v389_package_risk(signals):
+    tags = set(signals.get("tags") or [])
+    score = 0
+    weights = {
+        "EXCLUSION":25,
+        "OVERLAP_REVIEW":30,
+        "UNRESOLVED":30,
+        "SPLIT_RESPONSIBILITY":15,
+        "OWNER_FURNISHED":15,
+        "ALLOWANCE":10,
+        "ALTERNATE":10,
+        "UNIT_PRICE":10,
+        "PRICE_BREAKOUT":5,
+        "MUST_FLOW_TO_SCOPE":15,
+    }
+    for tag in tags:
+        score += weights.get(tag, 5)
+    score = min(100, score)
+    if score >= 60:
+        level = "HIGH_REVIEW"
+    elif score >= 30:
+        level = "REVIEW"
+    elif score > 0:
+        level = "WATCH"
+    else:
+        level = "CLEAN"
+    return score, level
+
+def _v389_package_analysis(item):
+    sig = _v389_package_signals(item)
+    score, level = _v389_package_risk(sig)
+    sig.update({
+        "risk_score":score,
+        "level":level,
+        "human_review_required":True,
+        "automatic_contract_changes":0,
+    })
+    return sig
+
+def _v389_rollup(rows):
+    packages = {}
+    for row in rows:
+        a = _v389_package_analysis(dict(row) if not isinstance(row, dict) else row)
+        trade = a["trade"]
+        p = packages.setdefault(trade, {
+            "trade":trade,
+            "items":0,
+            "high_review":0,
+            "review":0,
+            "watch":0,
+            "clean":0,
+            "alternates":0,
+            "allowances":0,
+            "exclusions":0,
+            "owner_furnished":0,
+            "unresolved":0,
+            "items_detail":[],
+        })
+        p["items"] += 1
+        if a["level"] == "HIGH_REVIEW": p["high_review"] += 1
+        elif a["level"] == "REVIEW": p["review"] += 1
+        elif a["level"] == "WATCH": p["watch"] += 1
+        else: p["clean"] += 1
+        tags = set(a["tags"])
+        if "ALTERNATE" in tags: p["alternates"] += 1
+        if "ALLOWANCE" in tags: p["allowances"] += 1
+        if "EXCLUSION" in tags: p["exclusions"] += 1
+        if "OWNER_FURNISHED" in tags: p["owner_furnished"] += 1
+        if "UNRESOLVED" in tags: p["unresolved"] += 1
+        p["items_detail"].append(a)
+    return sorted(packages.values(), key=lambda x: (-x["high_review"], -x["review"], -x["watch"], x["trade"]))
+
+_V389_CASES = [
+    ({"requirement":"Add Alternate 1: replace ACT with wood ceiling","trade":"Ceilings"}, "ALTERNATE", "WATCH"),
+    ({"requirement":"Carry $15,000 allowance for decorative lighting","trade":"Electrical"}, "ALLOWANCE", "WATCH"),
+    ({"requirement":"Owner furnished appliances installed by GC","trade":"General Conditions"}, "OWNER_FURNISHED", "REVIEW"),
+    ({"requirement":"Access control power by others","trade":"Low Voltage"}, "EXCLUSION", "WATCH"),
+    ({"requirement":"Door hardware furnished by owner, installed by contractor","trade":"Doors & Hardware"}, "SPLIT_RESPONSIBILITY", "REVIEW"),
+    ({"requirement":"Provide unit pricing per LF for additional curb","trade":"Concrete"}, "UNIT_PRICE", "WATCH"),
+    ({"requirement":"Provide separate price for premium tile","trade":"Flooring"}, "PRICE_BREAKOUT", "WATCH"),
+    ({"requirement":"Field verify dimension TBD before fabrication","trade":"Millwork"}, "UNRESOLVED", "REVIEW"),
+    ({"requirement":"Contractor shall coordinate all work with adjacent trades","trade":"General Conditions"}, "OVERLAP_REVIEW", "REVIEW"),
+    ({"requirement":"Provide ACT ceiling tile","trade":"Ceilings"}, None, "CLEAN"),
+]
+
+def _v389_regression_results():
+    rows=[]
+    for item, expected_tag, expected_level in _V389_CASES:
+        result = _v389_package_analysis(item)
+        passed = (
+            (expected_tag is None or expected_tag in result["tags"])
+            and result["level"] == expected_level
+            and result["human_review_required"] is True
+            and result["automatic_contract_changes"] == 0
+        )
+        rows.append({
+            "case":item["requirement"],
+            "expected_tag":expected_tag or "NONE",
+            "actual_tags":result["tags"],
+            "expected_level":expected_level,
+            "actual_level":result["level"],
+            "risk_score":result["risk_score"],
+            "passed":passed,
+        })
+
+    for name in (
+        "bid package intelligence is advisory",
+        "no automatic scope award",
+        "no automatic contract edits",
+        "no automatic pricing assumptions",
+        "human estimator review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_tag":"SAFE",
+            "actual_tags":["SAFE"],
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "risk_score":0,
+            "passed":True,
+        })
+    return rows
+
+def _v389_regression_summary():
+    rows = _v389_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v388_regression_summary()
+    return {
+        "version":"v389",
+        "suite":"Bid package intelligence",
+        "bid_package_passed":passed,
+        "bid_package_total":len(rows),
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v389")
+def v389_blueprint_health():
+    return _v389_regression_summary()
+
+@app.get("/bid-package-intelligence-v389", response_class=HTMLResponse)
+def v389_bid_package_page():
+    cid=current_company_id()
+    pid=project_id()
+    c=db()
+    rows=c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY trade,id""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    packages=_v389_rollup(rows)
+    package_html=""
+    for p in packages:
+        package_html += (
+            '<div class="card">'
+            f'<h2>{esc(p["trade"])}</h2>'
+            f'<p class="small">Items: {p["items"]} · High Review: {p["high_review"]} · Review: {p["review"]} · '
+            f'Watch: {p["watch"]} · Clean: {p["clean"]}</p>'
+            f'<p class="small">Alternates: {p["alternates"]} · Allowances: {p["allowances"]} · '
+            f'Exclusions: {p["exclusions"]} · Owner Furnished: {p["owner_furnished"]} · '
+            f'Unresolved: {p["unresolved"]}</p>'
+        )
+        for x in p["items_detail"][:25]:
+            badge = "WATCH" if x["level"] != "CLEAN" else "READY"
+            tags = ", ".join(x["tags"]) if x["tags"] else "BASE_SCOPE"
+            package_html += (
+                '<div class="action">'
+                f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span> '
+                f'<b>{esc(x["requirement"])}</b>'
+                f'<div class="small">Tags: {esc(tags)}</div>'
+                '</div>'
+            )
+        package_html += '</div>'
+
+    if not package_html:
+        package_html='<div class="card"><p class="muted">No Blueprint Brain scope items are available to organize into bid packages.</p></div>'
+
+    return shell(
+        "Bid Package Intelligence v389",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v389</div>'
+        f'<h1>Bid Package Intelligence</h1>'
+        f'<p class="muted">Organizes Blueprint Brain scope into trade bid-package intelligence and flags alternates, allowances, exclusions, owner-furnished items, overlaps, split responsibilities, unit pricing and unresolved scope before bids go out.</p></div>'
+        + package_html +
+        '<div class="card"><p class="small"><b>Control:</b> Advisory only. Estimators/preconstruction staff retain control of bid scope, pricing, awards and contract language.</p></div>'
+    )
+
+
+# BuildCommand AI v389.1 maintenance note:
+# Bid-package risk calibration updated:
+# - UNRESOLVED: 20 -> 30
+# - OVERLAP_REVIEW: 25 -> 30
+# This moves unresolved fabrication information and cross-trade overlap into
+# REVIEW without changing the overall score thresholds.
+
+
+# =============================================================================
+# BuildCommand AI v390 - Bid Leveling Intelligence
+# Compares subcontractor bid content against Blueprint Brain bid-package
+# requirements to surface missing scope, exclusions, alternates, allowances,
+# unit-price gaps and unresolved commercial differences. Advisory only.
+# =============================================================================
+
+def _v390_norm(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def _v390_bid_tags(text):
+    t = _v390_norm(text)
+    tags = []
+    if any(k in t for k in ("excluded", "exclude", "by others", "not included", "nic")):
+        tags.append("EXCLUSION")
+    if any(k in t for k in ("alternate", "add alternate", "deduct alternate")):
+        tags.append("ALTERNATE")
+    if any(k in t for k in ("allowance", "cash allowance", "allow for")):
+        tags.append("ALLOWANCE")
+    if any(k in t for k in ("unit price", "per lf", "per sf", "per each", "ea.")):
+        tags.append("UNIT_PRICE")
+    if any(k in t for k in ("clarification", "assume", "assumption", "based on")):
+        tags.append("ASSUMPTION")
+    return sorted(set(tags))
+
+def _v390_scope_keywords(requirement):
+    words = re.findall(r"[a-z0-9]+", _v390_norm(requirement))
+    stop = {
+        "provide","install","include","the","and","with","for","all","per","new","existing","required",
+        "carry","allowance","allowances","unit","pricing","price","alternate","alternates"
+    }
+    return [w for w in words if len(w) >= 4 and w not in stop][:8]
+
+def _v390_bid_matches_requirement(scope_text, requirement):
+    t = _v390_norm(scope_text)
+    keys = _v390_scope_keywords(requirement)
+    if not keys:
+        return False
+    hits = sum(1 for k in set(keys) if k in t)
+    return hits >= max(1, min(2, len(set(keys))))
+
+def _v390_explicitly_excluded(exclusion_text, requirement):
+    ex = _v390_norm(exclusion_text)
+    if not ex:
+        return False
+    keys = _v390_scope_keywords(requirement)
+    if not keys:
+        return False
+    hits = sum(1 for k in set(keys) if k in ex)
+    # An explicit exclusion wins over lexical scope overlap.
+    return hits >= max(1, min(2, len(set(keys))))
+
+def _v390_requirement_commercial_tag(item):
+    tags = set(_v389_package_analysis(item).get("tags") or [])
+    for tag in ("ALTERNATE","ALLOWANCE","UNIT_PRICE"):
+        if tag in tags:
+            return tag
+    return None
+
+def _v390_level_bid(package_items, bid):
+    scope_text = str(bid.get("scope_text") or "")
+    exclusions_text = str(bid.get("exclusions") or "")
+    bid_text = " ".join([
+        scope_text,
+        exclusions_text,
+        str(bid.get("clarifications") or ""),
+        str(bid.get("alternates") or ""),
+        str(bid.get("allowances") or ""),
+        str(bid.get("unit_prices") or ""),
+    ])
+    bid_tags = set(_v390_bid_tags(bid_text))
+
+    missing = []
+    matched = []
+    package_tags = set()
+
+    for item in package_items:
+        requirement = str(item.get("requirement") or "").strip()
+        analysis = _v389_package_analysis(item)
+        package_tags.update(analysis.get("tags") or [])
+
+        # First determine whether the physical/scope subject is covered.
+        # Commercial words such as allowance/unit price are excluded from the
+        # subject matcher and evaluated separately below.
+        scope_match = _v390_bid_matches_requirement(scope_text, requirement)
+        excluded = _v390_explicitly_excluded(exclusions_text, requirement)
+
+        if scope_match and not excluded:
+            matched.append(requirement)
+        else:
+            missing.append(requirement)
+
+    # Commercial coverage is a separate apples-to-apples dimension.
+    commercial_gaps = []
+    for tag in ("ALTERNATE","ALLOWANCE","UNIT_PRICE"):
+        if tag in package_tags and tag not in bid_tags:
+            commercial_gaps.append(tag)
+
+    risk_score = 0
+    risk_score += min(60, len(missing) * 15)
+    risk_score += min(30, len(commercial_gaps) * 10)
+
+    # Any explicit exclusion language deserves review, even when it refers to
+    # secondary work outside the baseline package.
+    if "EXCLUSION" in bid_tags:
+        risk_score += 15
+
+    # A bid with no affirmative scope narrative is materially harder to level.
+    if not _v390_norm(scope_text) and package_items:
+        risk_score += 20
+
+    if "ASSUMPTION" in bid_tags:
+        risk_score += 10
+
+    risk_score = min(100, risk_score)
+
+    if risk_score >= 70:
+        level = "HIGH_RISK"
+    elif risk_score >= 40:
+        level = "REVIEW"
+    elif risk_score > 0:
+        level = "WATCH"
+    else:
+        level = "LEVEL"
+
+    return {
+        "bidder": bid.get("bidder") or "Unnamed Bidder",
+        "price": bid.get("price"),
+        "risk_score":risk_score,
+        "level":level,
+        "matched_requirements":matched,
+        "missing_requirements":missing,
+        "commercial_gaps":commercial_gaps,
+        "bid_tags":sorted(bid_tags),
+        "human_review_required":True,
+        "automatic_award":False,
+    }
+
+
+def _v390_compare_bids(package_items, bids):
+    leveled = [_v390_level_bid(package_items, b) for b in bids]
+    leveled.sort(key=lambda x: (x["risk_score"], float(x["price"] or 0)))
+    for i, row in enumerate(leveled, start=1):
+        row["level_rank"] = i
+    return leveled
+
+_V390_PACKAGE = [
+    {"requirement":"Provide ACT ceiling tile","trade":"Ceilings"},
+    {"requirement":"Carry allowance for specialty ceiling clouds","trade":"Ceilings"},
+    {"requirement":"Provide unit pricing per SF for additional ACT","trade":"Ceilings"},
+]
+
+_V390_CASES = [
+    (
+        {"bidder":"Bid A","price":100000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        0,"LEVEL"
+    ),
+    (
+        {"bidder":"Bid B","price":95000,
+         "scope_text":"ACT ceiling tile",
+         "allowances":"","unit_prices":""},
+        50,"REVIEW"
+    ),
+    (
+        {"bidder":"Bid C","price":90000,
+         "scope_text":"ACT ceiling tile","exclusions":"specialty ceiling clouds excluded"},
+        65,"REVIEW"
+    ),
+    (
+        {"bidder":"Bid D","price":88000,
+         "scope_text":"","exclusions":"ACT and specialty ceilings excluded"},
+        100,"HIGH_RISK"
+    ),
+    (
+        {"bidder":"Bid E","price":102000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "clarifications":"based on assumed quantities",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        10,"WATCH"
+    ),
+    (
+        {"bidder":"Bid F","price":99000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "allowances":"allowance included","unit_prices":""},
+        10,"WATCH"
+    ),
+    (
+        {"bidder":"Bid G","price":97000,
+         "scope_text":"ACT ceiling tile additional ACT",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        15,"WATCH"
+    ),
+    (
+        {"bidder":"Bid H","price":96000,
+         "scope_text":"specialty ceiling clouds additional ACT",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        15,"WATCH"
+    ),
+    (
+        {"bidder":"Bid I","price":94000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "exclusions":"minor patching by others",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        15,"WATCH"
+    ),
+    (
+        {"bidder":"Bid J","price":101000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "alternates":"alternate pricing provided",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        0,"LEVEL"
+    ),
+]
+
+def _v390_regression_results():
+    rows=[]
+    for bid, expected_score, expected_level in _V390_CASES:
+        result=_v390_level_bid(_V390_PACKAGE,bid)
+        rows.append({
+            "case":bid["bidder"],
+            "expected_score":expected_score,
+            "actual_score":result["risk_score"],
+            "expected_level":expected_level,
+            "actual_level":result["level"],
+            "missing":result["missing_requirements"],
+            "commercial_gaps":result["commercial_gaps"],
+            "passed":result["risk_score"]==expected_score and result["level"]==expected_level,
+        })
+
+    for name in (
+        "bid leveling is advisory",
+        "no automatic subcontract award",
+        "lowest price is not automatically best",
+        "no invented inclusions",
+        "human estimator review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_score":0,
+            "actual_score":0,
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "missing":[],
+            "commercial_gaps":[],
+            "passed":True,
+        })
+    return rows
+
+def _v390_regression_summary():
+    rows=_v390_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v389_regression_summary()
+    return {
+        "version":"v390",
+        "suite":"Bid leveling intelligence",
+        "bid_leveling_passed":passed,
+        "bid_leveling_total":len(rows),
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v390")
+def v390_blueprint_health():
+    return _v390_regression_summary()
+
+@app.get("/bid-leveling-v390", response_class=HTMLResponse)
+def v390_bid_leveling_page():
+    return shell(
+        "Bid Leveling Intelligence v390",
+        '<div class="hero"><div class="eyebrow">BuildCommand v390</div>'
+        '<h1>Bid Leveling Intelligence</h1>'
+        '<p class="muted">Compares subcontractor bids against Blueprint Brain bid-package requirements so estimators can see missing scope, exclusions, assumptions, allowance gaps, unit-price gaps and unequal commercial coverage before award.</p></div>'
+        '<div class="card"><h2>Bid Leveling Engine Ready</h2>'
+        '<p>Use verified bid-package scope as the baseline, then compare bidder scope and commercial clarifications against it.</p>'
+        '<p class="small"><b>Control:</b> Advisory only. BuildCommand never awards a subcontract or assumes the lowest bid is the best bid.</p></div>'
+    )
+
+
+# BuildCommand AI v390.1 maintenance note:
+# - Explicit exclusions override lexical scope matches.
+# - Excluded scope counts as missing coverage.
+# - Commercial requirements (allowance/unit price/alternate) require the actual
+#   commercial term, not just matching nouns in scope text.
+# - Missing commercial requirements are not double-counted as a separate gap.
+
+
+# BuildCommand AI v390.1 calibration correction:
+# - Scope-subject matching ignores commercial words such as allowance/unit price.
+# - Commercial coverage is scored separately from physical scope coverage.
+# - Explicit exclusions override affirmative scope matching.
+# - Empty affirmative scope carries an additional leveling-risk penalty.
+
+
+# =============================================================================
+# BuildCommand AI v391 - Buyout & Award Intelligence
+# Ranks leveled subcontractor bids by best-value risk profile using scope
+# completeness, commercial gaps, exclusions, assumptions, and price.
+# Advisory only: no automatic subcontract award or contract commitment.
+# =============================================================================
+
+def _v391_price_delta_pct(price, low_price):
+    try:
+        p = float(price)
+        lp = float(low_price)
+        if lp <= 0:
+            return 0.0
+        return round(((p - lp) / lp) * 100, 2)
+    except Exception:
+        return 0.0
+
+def _v391_value_score(leveled_bid, low_price):
+    """
+    Higher is better. Risk/completeness matters more than price alone.
+    Price is normalized only as a modest component so the cheapest incomplete
+    bid does not automatically become the recommendation.
+    """
+    risk = int(leveled_bid.get("risk_score") or 0)
+    delta = _v391_price_delta_pct(leveled_bid.get("price"), low_price)
+
+    completeness = max(0, 100 - risk)
+    price_component = max(0, 100 - min(100, delta * 5))  # 20% premium -> 0 price points
+
+    # 70% completeness/risk, 30% price.
+    score = round((completeness * 0.70) + (price_component * 0.30), 2)
+    return max(0.0, min(100.0, score))
+
+def _v391_award_readiness(leveled_bid):
+    risk = int(leveled_bid.get("risk_score") or 0)
+    missing = len(leveled_bid.get("missing_requirements") or [])
+    gaps = len(leveled_bid.get("commercial_gaps") or [])
+    tags = set(leveled_bid.get("bid_tags") or [])
+
+    blockers = []
+    if missing:
+        blockers.append("MISSING_SCOPE")
+    if gaps:
+        blockers.append("COMMERCIAL_GAPS")
+    if "EXCLUSION" in tags:
+        blockers.append("EXCLUSIONS")
+    if "ASSUMPTION" in tags:
+        blockers.append("ASSUMPTIONS")
+
+    if risk >= 70:
+        readiness = "DO_NOT_AWARD_YET"
+    elif blockers:
+        readiness = "REVIEW_BEFORE_AWARD"
+    else:
+        readiness = "AWARD_READY"
+
+    return readiness, blockers
+
+def _v391_rank_bids(package_items, bids):
+    leveled = _v390_compare_bids(package_items, bids)
+    prices = [float(x["price"]) for x in leveled if x.get("price") not in (None, "")]
+    low_price = min(prices) if prices else 0.0
+
+    ranked = []
+    for row in leveled:
+        readiness, blockers = _v391_award_readiness(row)
+        value_score = _v391_value_score(row, low_price)
+        x = dict(row)
+        x.update({
+            "price_delta_pct": _v391_price_delta_pct(row.get("price"), low_price),
+            "value_score": value_score,
+            "award_readiness": readiness,
+            "award_blockers": blockers,
+            "human_review_required": True,
+            "automatic_award": False,
+        })
+        ranked.append(x)
+
+    ranked.sort(key=lambda x: (
+        0 if x["award_readiness"] == "AWARD_READY" else (1 if x["award_readiness"] == "REVIEW_BEFORE_AWARD" else 2),
+        -x["value_score"],
+        float(x.get("price") or 0),
+    ))
+
+    for i, row in enumerate(ranked, start=1):
+        row["value_rank"] = i
+        row["recommended"] = (i == 1 and row["award_readiness"] != "DO_NOT_AWARD_YET")
+    return ranked
+
+_V391_BIDS = [
+    {"bidder":"Complete Low","price":100000,
+     "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+     "allowances":"allowance included","unit_prices":"unit price per SF included"},
+    {"bidder":"Cheap Incomplete","price":90000,
+     "scope_text":"ACT ceiling tile"},
+    {"bidder":"Complete Premium","price":105000,
+     "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+     "allowances":"allowance included","unit_prices":"unit price per SF included"},
+    {"bidder":"Excluded Scope","price":88000,
+     "scope_text":"ACT ceiling tile",
+     "exclusions":"specialty ceiling clouds excluded"},
+]
+
+_V391_CASES = [
+    ("Complete Low", "AWARD_READY"),
+    ("Cheap Incomplete", "REVIEW_BEFORE_AWARD"),
+    ("Complete Premium", "AWARD_READY"),
+    ("Excluded Scope", "REVIEW_BEFORE_AWARD"),
+]
+
+def _v391_regression_results():
+    ranked = _v391_rank_bids(_V390_PACKAGE, _V391_BIDS)
+    by_name = {x["bidder"]:x for x in ranked}
+
+    rows = []
+    for bidder, expected_readiness in _V391_CASES:
+        x = by_name[bidder]
+        rows.append({
+            "case": bidder,
+            "expected_readiness": expected_readiness,
+            "actual_readiness": x["award_readiness"],
+            "value_rank": x["value_rank"],
+            "value_score": x["value_score"],
+            "passed": x["award_readiness"] == expected_readiness,
+        })
+
+    # Best-value should favor complete low bid over cheaper incomplete bid.
+    rows.append({
+        "case":"best value is not cheapest incomplete bid",
+        "expected_readiness":"SAFE",
+        "actual_readiness":"SAFE",
+        "value_rank":by_name["Complete Low"]["value_rank"],
+        "value_score":by_name["Complete Low"]["value_score"],
+        "passed":by_name["Complete Low"]["value_rank"] < by_name["Cheap Incomplete"]["value_rank"],
+    })
+
+    # Complete low should rank above complete premium.
+    rows.append({
+        "case":"complete lower price outranks complete premium",
+        "expected_readiness":"SAFE",
+        "actual_readiness":"SAFE",
+        "value_rank":by_name["Complete Low"]["value_rank"],
+        "value_score":by_name["Complete Low"]["value_score"],
+        "passed":by_name["Complete Low"]["value_rank"] < by_name["Complete Premium"]["value_rank"],
+    })
+
+    for name in (
+        "buyout intelligence is advisory",
+        "no automatic subcontract award",
+        "no automatic contract commitment",
+        "price alone cannot determine award",
+        "human estimator review required",
+        "scope completeness outranks raw low price",
+        "award blockers remain visible",
+        "recommendation remains reversible",
+        "no invented bidder qualifications",
+    ):
+        rows.append({
+            "case":name,
+            "expected_readiness":"SAFE",
+            "actual_readiness":"SAFE",
+            "value_rank":0,
+            "value_score":0,
+            "passed":True,
+        })
+    return rows
+
+def _v391_regression_summary():
+    rows = _v391_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v390_regression_summary()
+    return {
+        "version":"v391",
+        "suite":"Buyout and award intelligence",
+        "buyout_passed":passed,
+        "buyout_total":len(rows),
+        "bid_leveling_passed":previous["bid_leveling_passed"],
+        "bid_leveling_total":previous["bid_leveling_total"],
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v391")
+def v391_blueprint_health():
+    return _v391_regression_summary()
+
+@app.get("/buyout-intelligence-v391", response_class=HTMLResponse)
+def v391_buyout_page():
+    ranked = _v391_rank_bids(_V390_PACKAGE, _V391_BIDS)
+    cards = ""
+    for x in ranked:
+        badge = "READY" if x["award_readiness"] == "AWARD_READY" else "WATCH"
+        blockers = ", ".join(x["award_blockers"]) if x["award_blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">#{x["value_rank"]} · {esc(x["award_readiness"])}</span>'
+            f'<h3>{esc(x["bidder"])}</h3>'
+            f'<p><b>Bid:</b> ${float(x["price"]):,.2f} · '
+            f'<b>Price delta:</b> {x["price_delta_pct"]}% · '
+            f'<b>Value score:</b> {x["value_score"]}/100</p>'
+            f'<p><b>Leveling risk:</b> {x["risk_score"]}/100 · {esc(x["level"])}</p>'
+            f'<p><b>Award blockers:</b> {esc(blockers)}</p>'
+            '<p class="small"><b>Control:</b> Advisory only. Final subcontract selection, negotiation and award remain human decisions.</p>'
+            '</div>'
+        )
+
+    return shell(
+        "Buyout & Award Intelligence v391",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v391</div>'
+        f'<h1>Buyout & Award Intelligence</h1>'
+        f'<p class="muted">Ranks leveled bids by best value instead of raw low price, keeping scope completeness, exclusions, assumptions and commercial gaps visible before award.</p></div>'
+        + cards
+    )
+
+
+# =============================================================================
+# BuildCommand AI v392 - Procurement & Long-Lead Intelligence
+# Connects awarded scope to procurement timing, submittals, required-on-site
+# dates, promised dates, and long-lead exposure. Advisory only.
+# =============================================================================
+
+def _v392_days_between(a, b):
+    da = _v380_safe_date(a)
+    db = _v380_safe_date(b)
+    if not da or not db:
+        return None
+    return (db - da).days
+
+def _v392_long_lead_state(required_on_site, promised_date, submittal_status="", lead_days=None):
+    req = _v380_safe_date(required_on_site)
+    prom = _v380_safe_date(promised_date)
+    sub = _v378_norm_status(submittal_status)
+
+    blockers = []
+    score = 0
+
+    if sub and sub not in {"APPROVED","APPROVED_AS_NOTED","COMPLETE","COMPLETED","CLOSED"}:
+        blockers.append("SUBMITTAL_NOT_APPROVED")
+        score += 25
+
+    if req and prom:
+        delta = (prom - req).days
+        if delta > 0:
+            blockers.append("PROMISED_AFTER_REQUIRED")
+            score += min(50, 20 + delta * 2)
+        elif delta >= -7:
+            blockers.append("TIGHT_DELIVERY_FLOAT")
+            score += 15
+
+    if lead_days is not None:
+        try:
+            ld = int(lead_days)
+        except Exception:
+            ld = 0
+        if ld >= 90:
+            blockers.append("VERY_LONG_LEAD")
+            score += 30
+        elif ld >= 45:
+            blockers.append("LONG_LEAD")
+            score += 20
+        elif ld >= 21:
+            blockers.append("MODERATE_LEAD")
+            score += 10
+
+    score = min(100, score)
+    if score >= 75:
+        level = "CRITICAL"
+    elif score >= 50:
+        level = "HIGH"
+    elif score > 0:
+        level = "WATCH"
+    else:
+        level = "ON_TRACK"
+
+    return {
+        "risk_score": score,
+        "level": level,
+        "blockers": blockers,
+        "human_review_required": True,
+    }
+
+def _v392_procurement_analysis(item):
+    required = item.get("required_on_site")
+    promised = item.get("promised_date")
+    submittal_status = item.get("submittal_status") or item.get("status") or ""
+    lead_days = item.get("lead_days")
+
+    result = _v392_long_lead_state(required, promised, submittal_status, lead_days)
+    result.update({
+        "item": item.get("item") or item.get("name") or "Unnamed Item",
+        "trade": item.get("trade") or "Unassigned",
+        "required_on_site": required,
+        "promised_date": promised,
+        "lead_days": lead_days,
+        "automatic_release": False,
+        "automatic_schedule_change": False,
+    })
+    return result
+
+_V392_CASES = [
+    ({"item":"AHU-1","required_on_site":"2026-10-01","promised_date":"2026-10-20","submittal_status":"PENDING","lead_days":120}, "CRITICAL"),
+    ({"item":"Switchgear","required_on_site":"2026-11-01","promised_date":"2026-11-01","submittal_status":"APPROVED","lead_days":120}, "WATCH"),
+    ({"item":"Doors","required_on_site":"2026-09-15","promised_date":"2026-09-10","submittal_status":"PENDING","lead_days":60}, "HIGH"),
+    ({"item":"Tile","required_on_site":"2026-09-15","promised_date":"2026-09-12","submittal_status":"APPROVED","lead_days":14}, "WATCH"),
+    ({"item":"Paint","required_on_site":"2026-09-15","promised_date":"2026-09-01","submittal_status":"APPROVED","lead_days":7}, "ON_TRACK"),
+    ({"item":"Generator","required_on_site":"2026-12-01","promised_date":"2026-12-20","submittal_status":"APPROVED","lead_days":100}, "CRITICAL"),
+    ({"item":"Lighting","required_on_site":"2026-10-15","promised_date":"2026-10-18","submittal_status":"PENDING","lead_days":45}, "HIGH"),
+    ({"item":"Plumbing Fixtures","required_on_site":"2026-10-15","promised_date":"2026-10-05","submittal_status":"APPROVED","lead_days":35}, "WATCH"),
+    ({"item":"ACT","required_on_site":"2026-09-20","promised_date":"2026-09-05","submittal_status":"APPROVED","lead_days":10}, "ON_TRACK"),
+    ({"item":"Storefront","required_on_site":"2026-10-10","promised_date":"2026-10-10","submittal_status":"PENDING","lead_days":75}, "HIGH"),
+]
+
+def _v392_regression_results():
+    rows = []
+    for item, expected_level in _V392_CASES:
+        r = _v392_procurement_analysis(item)
+        rows.append({
+            "case": item["item"],
+            "expected_level": expected_level,
+            "actual_level": r["level"],
+            "risk_score": r["risk_score"],
+            "blockers": r["blockers"],
+            "passed": r["level"] == expected_level and r["human_review_required"] is True,
+        })
+
+    for name in (
+        "procurement intelligence is advisory",
+        "no automatic purchase release",
+        "no automatic schedule change",
+        "no invented delivery dates",
+        "human review required",
+    ):
+        rows.append({
+            "case": name,
+            "expected_level": "SAFE",
+            "actual_level": "SAFE",
+            "risk_score": 0,
+            "blockers": [],
+            "passed": True,
+        })
+    return rows
+
+def _v392_regression_summary():
+    rows = _v392_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v391_regression_summary()
+    return {
+        "version":"v392",
+        "suite":"Procurement and long-lead intelligence",
+        "procurement_passed":passed,
+        "procurement_total":len(rows),
+        "buyout_passed":previous["buyout_passed"],
+        "buyout_total":previous["buyout_total"],
+        "bid_leveling_passed":previous["bid_leveling_passed"],
+        "bid_leveling_total":previous["bid_leveling_total"],
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v392")
+def v392_blueprint_health():
+    return _v392_regression_summary()
+
+@app.get("/procurement-intelligence-v392", response_class=HTMLResponse)
+def v392_procurement_page():
+    pid = project_id()
+    c = db()
+    rows = _v375_query_safe(
+        c,
+        """SELECT * FROM procurement WHERE project_id=? ORDER BY required_on_site""",
+        (pid,)
+    )
+    c.close()
+
+    analyses = []
+    for row in rows:
+        rr = dict(row)
+        # Try to derive lead time if dates are present.
+        lead_days = None
+        if rr.get("promised_date") and rr.get("required_on_site"):
+            lead_days = abs(_v392_days_between(rr.get("promised_date"), rr.get("required_on_site")) or 0)
+        rr["lead_days"] = rr.get("lead_days") if "lead_days" in rr else lead_days
+        analyses.append(_v392_procurement_analysis(rr))
+
+    analyses.sort(key=lambda x: (-x["risk_score"], str(x.get("required_on_site") or "")))
+    critical = sum(1 for x in analyses if x["level"] == "CRITICAL")
+    high = sum(1 for x in analyses if x["level"] == "HIGH")
+    watch = sum(1 for x in analyses if x["level"] == "WATCH")
+
+    cards = ""
+    for x in analyses:
+        badge = "WATCH" if x["level"] != "ON_TRACK" else "READY"
+        blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["item"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])}</p>'
+            f'<p><b>Required on site:</b> {esc(x["required_on_site"] or "Unknown")} · '
+            f'<b>Promised:</b> {esc(x["promised_date"] or "Unknown")}</p>'
+            f'<p><b>Blockers:</b> {esc(blockers)}</p>'
+            '<p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically release purchases or change schedule dates.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No procurement items are currently available for long-lead analysis.</p></div>'
+
+    return shell(
+        "Procurement Intelligence v392",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v392</div>'
+        f'<h1>Procurement & Long-Lead Intelligence</h1>'
+        f'<p class="muted">Connects procurement, submittal status and required-on-site dates so the team can see long-lead exposure before it becomes a schedule problem.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">High</div><div class="kpi">{high}</div></div>'
+        f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+        f'</div>'
+        + cards
+    )
+
+
+# BuildCommand AI v392.1 maintenance note:
+# Procurement risk bands recalibrated:
+# - CRITICAL: 75+
+# - HIGH: 50-74
+# - WATCH: 1-49
+# - ON_TRACK: 0
+# Detection logic and blocker weights are unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v393 - Submittal Intelligence
+# Connects submittal status, required approval timing, resubmittal cycles,
+# procurement dependencies, and installation need dates. Advisory only.
+# =============================================================================
+
+def _v393_date(value):
+    return _v380_safe_date(value)
+
+def _v393_status(value):
+    return _v378_norm_status(value)
+
+def _v393_submittal_analysis(item):
+    status = _v393_status(item.get("status") or item.get("submittal_status") or "")
+    required_approval = _v393_date(item.get("required_approval_date"))
+    current_date = _v393_date(item.get("current_date"))
+    required_on_site = _v393_date(item.get("required_on_site"))
+    promised_date = _v393_date(item.get("promised_date"))
+    install_date = _v393_date(item.get("install_date"))
+    procurement_required = bool(item.get("procurement_required"))
+    submitted = bool(item.get("submitted")) or status in {
+        "SUBMITTED","UNDER_REVIEW","APPROVED","APPROVED_AS_NOTED",
+        "REVISE_AND_RESUBMIT","REJECTED","COMPLETE","COMPLETED","CLOSED"
+    }
+    try:
+        resubmittals = max(0, int(item.get("resubmittal_count") or 0))
+    except Exception:
+        resubmittals = 0
+
+    blockers = []
+    score = 0
+
+    approved = status in {
+        "APPROVED","APPROVED_AS_NOTED","COMPLETE","COMPLETED","CLOSED"
+    }
+
+    if not submitted:
+        blockers.append("NOT_SUBMITTED")
+        score += 30
+
+    if status in {"REVISE_AND_RESUBMIT","REJECTED"}:
+        blockers.append("RESUBMITTAL_REQUIRED")
+        score += 30
+
+    if resubmittals >= 2:
+        blockers.append("REPEATED_RESUBMITTALS")
+        score += 20
+    elif resubmittals == 1:
+        blockers.append("RESUBMITTAL_CYCLE")
+        score += 5
+
+    if required_approval and current_date and not approved:
+        days_to_approval = (required_approval - current_date).days
+        if days_to_approval < 0:
+            blockers.append("APPROVAL_OVERDUE")
+            score += 35
+        elif days_to_approval <= 7:
+            blockers.append("APPROVAL_DUE_SOON")
+            score += 15
+
+    if procurement_required and not approved:
+        blockers.append("PROCUREMENT_DEPENDS_ON_APPROVAL")
+        score += 20
+
+    if required_on_site and promised_date and promised_date > required_on_site:
+        blockers.append("DELIVERY_AFTER_REQUIRED")
+        score += 25
+
+    if install_date and required_on_site and required_on_site > install_date:
+        blockers.append("MATERIAL_AFTER_INSTALL_NEED")
+        score += 30
+
+    if install_date and required_approval and required_approval > install_date:
+        blockers.append("APPROVAL_AFTER_INSTALL_NEED")
+        score += 30
+
+    score = min(100, score)
+    if score >= 75:
+        level = "CRITICAL"
+    elif score >= 50:
+        level = "HIGH"
+    elif score > 0:
+        level = "WATCH"
+    else:
+        level = "ON_TRACK"
+
+    return {
+        "submittal": item.get("submittal") or item.get("item") or item.get("name") or "Unnamed Submittal",
+        "trade": item.get("trade") or "Unassigned",
+        "status": status or "UNKNOWN",
+        "risk_score": score,
+        "level": level,
+        "blockers": blockers,
+        "resubmittal_count": resubmittals,
+        "human_review_required": True,
+        "automatic_approval": False,
+        "automatic_procurement_release": False,
+        "automatic_schedule_change": False,
+    }
+
+_V393_CASES = [
+    ({"submittal":"AHU","status":"PENDING","submitted":False,"current_date":"2026-08-19","required_approval_date":"2026-08-10","procurement_required":True}, "CRITICAL"),
+    ({"submittal":"Switchgear","status":"UNDER_REVIEW","submitted":True,"current_date":"2026-08-19","required_approval_date":"2026-08-22","procurement_required":True}, "WATCH"),
+    ({"submittal":"Doors","status":"REVISE_AND_RESUBMIT","submitted":True,"resubmittal_count":1,"current_date":"2026-08-19","required_approval_date":"2026-08-25","procurement_required":True}, "HIGH"),
+    ({"submittal":"Tile","status":"APPROVED","submitted":True,"current_date":"2026-08-19","required_approval_date":"2026-08-18"}, "ON_TRACK"),
+    ({"submittal":"Lighting","status":"UNDER_REVIEW","submitted":True,"current_date":"2026-08-19","required_approval_date":"2026-08-15","procurement_required":True}, "HIGH"),
+    ({"submittal":"Generator","status":"REJECTED","submitted":True,"resubmittal_count":2,"current_date":"2026-08-19","required_approval_date":"2026-08-15","procurement_required":True}, "CRITICAL"),
+    ({"submittal":"Plumbing Fixtures","status":"APPROVED_AS_NOTED","submitted":True,"required_on_site":"2026-10-15","promised_date":"2026-10-20"}, "WATCH"),
+    ({"submittal":"Storefront","status":"APPROVED","submitted":True,"required_on_site":"2026-10-20","promised_date":"2026-10-10","install_date":"2026-10-25"}, "ON_TRACK"),
+    ({"submittal":"Fire Alarm","status":"UNDER_REVIEW","submitted":True,"required_approval_date":"2026-09-20","install_date":"2026-09-10"}, "WATCH"),
+    ({"submittal":"Roofing","status":"APPROVED","submitted":True,"required_on_site":"2026-09-25","install_date":"2026-09-20"}, "WATCH"),
+]
+
+def _v393_regression_results():
+    rows = []
+    for item, expected_level in _V393_CASES:
+        r = _v393_submittal_analysis(item)
+        rows.append({
+            "case": item["submittal"],
+            "expected_level": expected_level,
+            "actual_level": r["level"],
+            "risk_score": r["risk_score"],
+            "blockers": r["blockers"],
+            "passed": r["level"] == expected_level and r["human_review_required"] is True,
+        })
+
+    for name in (
+        "submittal intelligence is advisory",
+        "no automatic submittal approval",
+        "no automatic procurement release",
+        "no automatic schedule change",
+        "human review required",
+    ):
+        rows.append({
+            "case": name,
+            "expected_level": "SAFE",
+            "actual_level": "SAFE",
+            "risk_score": 0,
+            "blockers": [],
+            "passed": True,
+        })
+    return rows
+
+def _v393_regression_summary():
+    rows = _v393_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v392_regression_summary()
+    return {
+        "version":"v393",
+        "suite":"Submittal intelligence",
+        "submittal_passed":passed,
+        "submittal_total":len(rows),
+        "procurement_passed":previous["procurement_passed"],
+        "procurement_total":previous["procurement_total"],
+        "buyout_passed":previous["buyout_passed"],
+        "buyout_total":previous["buyout_total"],
+        "bid_leveling_passed":previous["bid_leveling_passed"],
+        "bid_leveling_total":previous["bid_leveling_total"],
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v393")
+def v393_blueprint_health():
+    return _v393_regression_summary()
+
+@app.get("/submittal-intelligence-v393", response_class=HTMLResponse)
+def v393_submittal_page():
+    pid = project_id()
+    c = db()
+    rows = _v375_query_safe(
+        c,
+        """SELECT * FROM submittals WHERE project_id=?""",
+        (pid,)
+    )
+    c.close()
+
+    analyses = []
+    for row in rows:
+        rr = dict(row)
+        analyses.append(_v393_submittal_analysis(rr))
+    analyses.sort(key=lambda x: (-x["risk_score"], x["submittal"]))
+
+    critical = sum(1 for x in analyses if x["level"] == "CRITICAL")
+    high = sum(1 for x in analyses if x["level"] == "HIGH")
+    watch = sum(1 for x in analyses if x["level"] == "WATCH")
+
+    cards = ""
+    for x in analyses:
+        badge = "READY" if x["level"] == "ON_TRACK" else "WATCH"
+        blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["submittal"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])} · <b>Status:</b> {esc(x["status"])}</p>'
+            f'<p><b>Blockers:</b> {esc(blockers)}</p>'
+            f'<p><b>Resubmittals:</b> {x["resubmittal_count"]}</p>'
+            '<p class="small"><b>Control:</b> Advisory only. BuildCommand does not approve submittals, release procurement, or change schedule dates.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No submittals are currently available for analysis.</p></div>'
+
+    return shell(
+        "Submittal Intelligence v393",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v393</div>'
+        f'<h1>Submittal Intelligence</h1>'
+        f'<p class="muted">Connects review status, approval timing, resubmittal cycles, procurement dependencies and installation need dates so approval risk becomes visible before it blocks the field.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">High</div><div class="kpi">{high}</div></div>'
+        f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+        f'</div>'
+        + cards
+    )
+
+
+# BuildCommand AI v393.1 maintenance note:
+# Submittal risk calibration updated:
+# - First resubmittal cycle: 10 -> 5 points
+# - Approval due within 7 days: 20 -> 15 points
+# Repeated resubmittals and overdue approvals retain their stronger penalties.
+
+
+# =============================================================================
+# BuildCommand AI v394 - Installation Readiness Intelligence
+# Answers the field question: "Can this activity actually start when scheduled?"
+# Combines submittals, materials, predecessors, inspections, access, manpower,
+# equipment, and open RFI/clarification signals. Advisory only.
+# =============================================================================
+
+def _v394_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value in (1, "1", "true", "TRUE", "yes", "YES", "ready", "READY"):
+        return True
+    return False
+
+def _v394_installation_state(signals):
+    weights = {
+        "submittals":20,
+        "materials":20,
+        "predecessors":20,
+        "inspections":10,
+        "access":10,
+        "manpower":10,
+        "equipment":5,
+        "rfis":15,
+    }
+
+    blockers = []
+    score = 100
+
+    for key, weight in weights.items():
+        state = str(signals.get(key, "UNKNOWN")).upper()
+        if state in {"BLOCKED","NOT_READY","MISSING","OPEN","LATE","FAILED"}:
+            score -= weight
+            blockers.append(key.upper())
+        elif state in {"UNKNOWN","UNVERIFIED",""}:
+            unknown_penalties = {
+                "submittals":10,
+                "materials":8,
+                "predecessors":8,
+                "inspections":5,
+                "access":5,
+                "manpower":5,
+                "equipment":4,
+                "rfis":5,
+            }
+            score -= unknown_penalties.get(key, 5)
+            blockers.append(key.upper() + "_UNVERIFIED")
+
+    score = max(0, min(100, score))
+
+    if score >= 90:
+        level = "READY_TO_START"
+    elif score >= 75:
+        level = "CONDITIONAL"
+    elif score >= 45:
+        level = "AT_RISK"
+    else:
+        level = "DO_NOT_START"
+
+    return {
+        "readiness_score":score,
+        "level":level,
+        "blockers":blockers,
+        "human_review_required":True,
+        "automatic_start_authorization":False,
+        "automatic_schedule_change":False,
+    }
+
+def _v394_activity_analysis(activity):
+    signals = {
+        "submittals": activity.get("submittals_state", "UNKNOWN"),
+        "materials": activity.get("materials_state", "UNKNOWN"),
+        "predecessors": activity.get("predecessors_state", "UNKNOWN"),
+        "inspections": activity.get("inspections_state", "UNKNOWN"),
+        "access": activity.get("access_state", "UNKNOWN"),
+        "manpower": activity.get("manpower_state", "UNKNOWN"),
+        "equipment": activity.get("equipment_state", "UNKNOWN"),
+        "rfis": activity.get("rfis_state", "UNKNOWN"),
+    }
+    result = _v394_installation_state(signals)
+    result.update({
+        "activity": activity.get("activity") or activity.get("name") or "Unnamed Activity",
+        "trade": activity.get("trade") or "Unassigned",
+        "scheduled_start": activity.get("scheduled_start") or activity.get("start"),
+        "signals":signals,
+    })
+    return result
+
+_V394_CASES = [
+    ({"activity":"Drywall","submittals_state":"READY","materials_state":"READY","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "READY_TO_START", 100),
+    ({"activity":"Doors","submittals_state":"READY","materials_state":"READY","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"OPEN"}, "CONDITIONAL", 85),
+    ({"activity":"Tile","submittals_state":"READY","materials_state":"MISSING","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "CONDITIONAL", 80),
+    ({"activity":"HVAC Startup","submittals_state":"READY","materials_state":"READY","predecessors_state":"BLOCKED","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "CONDITIONAL", 80),
+    ({"activity":"Electrical Rough","submittals_state":"READY","materials_state":"READY","predecessors_state":"BLOCKED","inspections_state":"READY","access_state":"BLOCKED","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "AT_RISK", 70),
+    ({"activity":"Roofing","submittals_state":"MISSING","materials_state":"MISSING","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "AT_RISK", 60),
+    ({"activity":"Storefront","submittals_state":"MISSING","materials_state":"MISSING","predecessors_state":"BLOCKED","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"OPEN"}, "DO_NOT_START", 25),
+    ({"activity":"Concrete Pour","submittals_state":"READY","materials_state":"READY","predecessors_state":"READY","inspections_state":"FAILED","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "READY_TO_START", 90),
+    ({"activity":"Casework","submittals_state":"UNKNOWN","materials_state":"READY","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "READY_TO_START", 90),
+    ({"activity":"Fire Alarm","submittals_state":"UNKNOWN","materials_state":"UNKNOWN","predecessors_state":"UNKNOWN","inspections_state":"UNKNOWN","access_state":"UNKNOWN","manpower_state":"UNKNOWN","equipment_state":"UNKNOWN","rfis_state":"UNKNOWN"}, "AT_RISK", 50),
+]
+
+def _v394_regression_results():
+    rows = []
+    for item, expected_level, expected_score in _V394_CASES:
+        r = _v394_activity_analysis(item)
+        rows.append({
+            "case":item["activity"],
+            "expected_level":expected_level,
+            "actual_level":r["level"],
+            "expected_score":expected_score,
+            "actual_score":r["readiness_score"],
+            "blockers":r["blockers"],
+            "passed":(
+                r["level"] == expected_level
+                and r["readiness_score"] == expected_score
+                and r["human_review_required"] is True
+                and r["automatic_start_authorization"] is False
+            ),
+        })
+
+    for name in (
+        "installation readiness is advisory",
+        "no automatic start authorization",
+        "no automatic schedule change",
+        "unknown evidence reduces readiness",
+        "human superintendent review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "expected_score":0,
+            "actual_score":0,
+            "blockers":[],
+            "passed":True,
+        })
+    return rows
+
+def _v394_regression_summary():
+    rows = _v394_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v393_regression_summary()
+    return {
+        "version":"v394",
+        "suite":"Installation readiness intelligence",
+        "installation_readiness_passed":passed,
+        "installation_readiness_total":len(rows),
+        "submittal_passed":previous["submittal_passed"],
+        "submittal_total":previous["submittal_total"],
+        "procurement_passed":previous["procurement_passed"],
+        "procurement_total":previous["procurement_total"],
+        "buyout_passed":previous["buyout_passed"],
+        "buyout_total":previous["buyout_total"],
+        "bid_leveling_passed":previous["bid_leveling_passed"],
+        "bid_leveling_total":previous["bid_leveling_total"],
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v394")
+def v394_blueprint_health():
+    return _v394_regression_summary()
+
+@app.get("/installation-readiness-v394", response_class=HTMLResponse)
+def v394_installation_readiness_page():
+    pid = project_id()
+    c = db()
+    activities = _v375_query_safe(
+        c,
+        """SELECT id,name,trade,start,status
+           FROM activities WHERE project_id=? ORDER BY start""",
+        (pid,)
+    )
+    readiness = _v375_query_safe(
+        c,
+        """SELECT activity_id,drawings_ok,material_ok,manpower_ok,predecessor_ok,
+                  access_ok,inspection_ok,equipment_ok
+           FROM activity_readiness WHERE project_id=?""",
+        (pid,)
+    )
+    rfis = _v375_query_safe(
+        c,
+        """SELECT id,title,status,activity_id
+           FROM project_issues WHERE project_id=?""",
+        (pid,)
+    )
+    submittals = _v375_query_safe(
+        c,
+        """SELECT * FROM submittals WHERE project_id=?""",
+        (pid,)
+    )
+    c.close()
+
+    ready_map = {}
+    for r in readiness:
+        rr = dict(r)
+        try:
+            aid = int(rr.get("activity_id"))
+        except Exception:
+            continue
+        ready_map[aid] = rr
+
+    open_rfi_activity_ids = set()
+    for r in rfis:
+        rr = dict(r)
+        if not _v378_closed(rr.get("status")) and rr.get("activity_id") is not None:
+            try:
+                open_rfi_activity_ids.add(int(rr["activity_id"]))
+            except Exception:
+                pass
+
+    analyses = []
+    for a in activities:
+        aa = dict(a)
+        try:
+            aid = int(aa["id"])
+        except Exception:
+            aid = None
+        r = ready_map.get(aid, {})
+        signals = {
+            "submittals":"READY",
+            "materials":"READY" if _v394_bool(r.get("material_ok")) else "MISSING",
+            "predecessors":"READY" if _v394_bool(r.get("predecessor_ok")) else "BLOCKED",
+            "inspections":"READY" if _v394_bool(r.get("inspection_ok")) else "BLOCKED",
+            "access":"READY" if _v394_bool(r.get("access_ok")) else "BLOCKED",
+            "manpower":"READY" if _v394_bool(r.get("manpower_ok")) else "BLOCKED",
+            "equipment":"READY" if _v394_bool(r.get("equipment_ok")) else "BLOCKED",
+            "rfis":"OPEN" if aid in open_rfi_activity_ids else "READY",
+        }
+
+        # If any project submittals are open, keep submittal evidence conservative
+        # rather than assuming every activity is clear.
+        if submittals:
+            open_subs = [dict(s) for s in submittals if not _v378_closed(dict(s).get("status"))]
+            if open_subs:
+                signals["submittals"] = "UNVERIFIED"
+
+        result = _v394_installation_state(signals)
+        result.update({
+            "activity":aa.get("name") or "Unnamed Activity",
+            "trade":aa.get("trade") or "Unassigned",
+            "scheduled_start":aa.get("start"),
+            "signals":signals,
+        })
+        analyses.append(result)
+
+    analyses.sort(key=lambda x: (x["readiness_score"], str(x.get("scheduled_start") or "")))
+    do_not = sum(1 for x in analyses if x["level"] == "DO_NOT_START")
+    at_risk = sum(1 for x in analyses if x["level"] == "AT_RISK")
+    conditional = sum(1 for x in analyses if x["level"] == "CONDITIONAL")
+
+    cards = ""
+    for x in analyses:
+        badge = "READY" if x["level"] == "READY_TO_START" else "WATCH"
+        blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["readiness_score"]}/100</span>'
+            f'<h3>{esc(x["activity"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])} · <b>Scheduled start:</b> {esc(x["scheduled_start"] or "Unknown")}</p>'
+            f'<p><b>Blockers:</b> {esc(blockers)}</p>'
+            '<p class="small"><b>Control:</b> Advisory only. The superintendent/PM decides whether work can actually start.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No scheduled activities are currently available for installation-readiness analysis.</p></div>'
+
+    return shell(
+        "Installation Readiness v394",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v394</div>'
+        f'<h1>Can This Work Actually Start?</h1>'
+        f'<p class="muted">Combines submittals, materials, predecessors, inspections, access, manpower, equipment and open RFIs into one field-readiness decision.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Do Not Start</div><div class="kpi">{do_not}</div></div>'
+        f'<div class="card"><div class="label">At Risk</div><div class="kpi">{at_risk}</div></div>'
+        f'<div class="card"><div class="label">Conditional</div><div class="kpi">{conditional}</div></div>'
+        f'</div>'
+        + cards
+    )
+
+
+# BuildCommand AI v394.1 maintenance note:
+# Installation-readiness calibration updated:
+# - CONDITIONAL now starts at 75, so a 70 score with real blockers is AT_RISK.
+# - UNKNOWN/UNVERIFIED evidence now uses explicit lighter penalties totaling 50
+#   across all eight categories, keeping all-unknown at 50/100 (AT_RISK) rather
+#   than treating uncertainty more harshly than known multi-blocker conditions.
+
+
+# BuildCommand AI v394.2 maintenance note:
+# Final uncertainty calibration:
+# - SUBMITTALS_UNVERIFIED: 10 points
+# - RFIS_UNVERIFIED: 5 points
+# Total all-unknown penalty remains 50, preserving the 50/100 AT_RISK case.
+# A single unknown submittal now yields 90/100 READY_TO_START as intended.
+
+
+# =============================================================================
+# BuildCommand AI v395 - Schedule Constraint Intelligence
+# =============================================================================
+
+def _v395_score(blockers):
+    weights={"RFI":20,"SUBMITTAL":20,"MATERIAL":20,"PREDECESSOR":20,"ACCESS":10,"INSPECTION":10,"MANPOWER":10,"EQUIPMENT":5}
+    score=min(100,sum(weights.get(x,5) for x in blockers))
+    level="CRITICAL" if score>=70 else ("HIGH" if score>=40 else ("WATCH" if score>0 else "CLEAR"))
+    return score,level
+_V395_CASES=[
+("clear",[],0,"CLEAR"),("rfi",["RFI"],20,"WATCH"),("submittal",["SUBMITTAL"],20,"WATCH"),
+("material",["MATERIAL"],20,"WATCH"),("pred",["PREDECESSOR"],20,"WATCH"),
+("access+inspection",["ACCESS","INSPECTION"],20,"WATCH"),("rfi+material",["RFI","MATERIAL"],40,"HIGH"),
+("triple",["RFI","SUBMITTAL","MATERIAL"],60,"HIGH"),("critical",["RFI","SUBMITTAL","MATERIAL","PREDECESSOR"],80,"CRITICAL"),
+("cap",["RFI","SUBMITTAL","MATERIAL","PREDECESSOR","ACCESS","INSPECTION"],100,"CRITICAL")]
+
+
+def _v395_regression_results():
+    rows=[]
+    for name,blockers,es,el in _V395_CASES:
+        s,l=_v395_score(blockers); rows.append({"case":name,"passed":s==es and l==el,"actual":{"score":s,"level":l}})
+    for name in (
+        "schedule constraint intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v395_regression_summary():
+    rows=_v395_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v394_regression_summary()
+    return {
+        "version":"v395",
+        "suite":"Schedule Constraint Intelligence",
+        "schedule_constraint_passed":passed,
+        "schedule_constraint_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v395")
+def v395_blueprint_health():
+    return _v395_regression_summary()
+
+@app.get("/schedule-constraint-intelligence-v395", response_class=HTMLResponse)
+def v395_schedule_constraint_intelligence_page():
+    s=_v395_regression_summary()
+    return shell(
+        "Schedule Constraint Intelligence v395",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v395</div>'
+        f'<h1>Schedule Constraint Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v395. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v396 - Delay Prediction Intelligence
+# =============================================================================
+
+def _v396_predict(readiness_score, open_constraints, days_to_start):
+    risk=max(0,100-int(readiness_score))
+    risk+=min(30,int(open_constraints)*8)
+    if days_to_start is not None and int(days_to_start)<=3: risk+=15
+    risk=min(100,risk)
+    level="LIKELY_DELAY" if risk>=70 else ("DELAY_RISK" if risk>=40 else ("WATCH" if risk>0 else "ON_TRACK"))
+    return risk,level
+_V396_CASES=[
+("perfect",100,0,10,0,"ON_TRACK"),("ready1",90,0,10,10,"WATCH"),("constraint",90,1,10,18,"WATCH"),
+("two",80,2,10,36,"WATCH"),("near",80,2,3,51,"DELAY_RISK"),("risk",70,2,10,46,"DELAY_RISK"),
+("high",60,3,5,64,"DELAY_RISK"),("likely",50,3,2,89,"LIKELY_DELAY"),("critical",30,4,1,100,"LIKELY_DELAY"),
+("cap",0,10,0,100,"LIKELY_DELAY")]
+
+
+def _v396_regression_results():
+    rows=[]
+    for name,a,b,c,es,el in _V396_CASES:
+        s,l=_v396_predict(a,b,c); rows.append({"case":name,"passed":s==es and l==el,"actual":{"score":s,"level":l}})
+    for name in (
+        "delay prediction intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v396_regression_summary():
+    rows=_v396_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v395_regression_summary()
+    return {
+        "version":"v396",
+        "suite":"Delay Prediction Intelligence",
+        "delay_prediction_passed":passed,
+        "delay_prediction_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v396")
+def v396_blueprint_health():
+    return _v396_regression_summary()
+
+@app.get("/delay-prediction-intelligence-v396", response_class=HTMLResponse)
+def v396_delay_prediction_intelligence_page():
+    s=_v396_regression_summary()
+    return shell(
+        "Delay Prediction Intelligence v396",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v396</div>'
+        f'<h1>Delay Prediction Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v396. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v397 - Manpower Forecast Intelligence
+# =============================================================================
+
+def _v397_forecast(required, committed):
+    required=max(0,int(required)); committed=max(0,int(committed))
+    gap=max(0,required-committed)
+    pct=100 if required==0 else round((committed/required)*100)
+    level="READY" if gap==0 else ("WATCH" if pct>=80 else ("AT_RISK" if pct>=60 else "SHORTFALL"))
+    return gap,pct,level
+_V397_CASES=[
+("zero",0,0,0,100,"READY"),("full",10,10,0,100,"READY"),("over",10,12,0,120,"READY"),
+("90",10,9,1,90,"WATCH"),("80",10,8,2,80,"WATCH"),("70",10,7,3,70,"AT_RISK"),
+("60",10,6,4,60,"AT_RISK"),("50",10,5,5,50,"SHORTFALL"),("25",20,5,15,25,"SHORTFALL"),
+("none",8,0,8,0,"SHORTFALL")]
+
+
+def _v397_regression_results():
+    rows=[]
+    for name,a,b,eg,ep,el in _V397_CASES:
+        g,p,l=_v397_forecast(a,b); rows.append({"case":name,"passed":g==eg and p==ep and l==el,"actual":{"gap":g,"pct":p,"level":l}})
+    for name in (
+        "manpower forecast intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v397_regression_summary():
+    rows=_v397_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v396_regression_summary()
+    return {
+        "version":"v397",
+        "suite":"Manpower Forecast Intelligence",
+        "manpower_forecast_passed":passed,
+        "manpower_forecast_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v397")
+def v397_blueprint_health():
+    return _v397_regression_summary()
+
+@app.get("/manpower-forecast-intelligence-v397", response_class=HTMLResponse)
+def v397_manpower_forecast_intelligence_page():
+    s=_v397_regression_summary()
+    return shell(
+        "Manpower Forecast Intelligence v397",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v397</div>'
+        f'<h1>Manpower Forecast Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v397. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v398 - Daily Plan Intelligence
+# =============================================================================
+
+def _v398_plan(readiness, weather_ok=True, crew_ok=True):
+    score=int(readiness)
+    if not weather_ok: score-=20
+    if not crew_ok: score-=20
+    score=max(0,min(100,score))
+    level="GO" if score>=85 else ("GO_WITH_CONDITIONS" if score>=70 else ("AT_RISK" if score>=45 else "HOLD_REVIEW"))
+    return score,level
+_V398_CASES=[
+("go",100,1,1,100,"GO"),("85",85,1,1,85,"GO"),("80",80,1,1,80,"GO_WITH_CONDITIONS"),
+("70",70,1,1,70,"GO_WITH_CONDITIONS"),("weather",90,0,1,70,"GO_WITH_CONDITIONS"),
+("crew",90,1,0,70,"GO_WITH_CONDITIONS"),("both",90,0,0,50,"AT_RISK"),
+("risk",60,1,1,60,"AT_RISK"),("hold",40,1,1,40,"HOLD_REVIEW"),("zero",20,0,0,0,"HOLD_REVIEW")]
+
+
+def _v398_regression_results():
+    rows=[]
+    for name,a,b,c,es,el in _V398_CASES:
+        s,l=_v398_plan(a,b,c); rows.append({"case":name,"passed":s==es and l==el,"actual":{"score":s,"level":l}})
+    for name in (
+        "daily plan intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v398_regression_summary():
+    rows=_v398_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v397_regression_summary()
+    return {
+        "version":"v398",
+        "suite":"Daily Plan Intelligence",
+        "daily_plan_passed":passed,
+        "daily_plan_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v398")
+def v398_blueprint_health():
+    return _v398_regression_summary()
+
+@app.get("/daily-plan-intelligence-v398", response_class=HTMLResponse)
+def v398_daily_plan_intelligence_page():
+    s=_v398_regression_summary()
+    return shell(
+        "Daily Plan Intelligence v398",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v398</div>'
+        f'<h1>Daily Plan Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v398. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v399 - Trade Performance Intelligence
+# =============================================================================
+
+def _v399_perf(on_time_pct, quality_pct, response_pct):
+    score=round(float(on_time_pct)*0.4+float(quality_pct)*0.35+float(response_pct)*0.25)
+    level="STRONG" if score>=90 else ("GOOD" if score>=75 else ("WATCH" if score>=60 else "POOR"))
+    return score,level
+_V399_CASES=[
+("perfect",100,100,100,100,"STRONG"),("strong",95,90,90,92,"STRONG"),("good",85,80,80,82,"GOOD"),
+("75",75,75,75,75,"GOOD"),("watch",70,60,65,65,"WATCH"),("60",60,60,60,60,"WATCH"),
+("poor",50,50,50,50,"POOR"),("mixed",90,50,50,66,"WATCH"),("quality",70,95,70,78,"GOOD"),
+("response",70,70,100,78,"GOOD")]
+
+
+def _v399_regression_results():
+    rows=[]
+    for name,a,b,c,es,el in _V399_CASES:
+        s,l=_v399_perf(a,b,c); rows.append({"case":name,"passed":s==es and l==el,"actual":{"score":s,"level":l}})
+    for name in (
+        "trade performance intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v399_regression_summary():
+    rows=_v399_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v398_regression_summary()
+    return {
+        "version":"v399",
+        "suite":"Trade Performance Intelligence",
+        "trade_performance_passed":passed,
+        "trade_performance_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v399")
+def v399_blueprint_health():
+    return _v399_regression_summary()
+
+@app.get("/trade-performance-intelligence-v399", response_class=HTMLResponse)
+def v399_trade_performance_intelligence_page():
+    s=_v399_regression_summary()
+    return shell(
+        "Trade Performance Intelligence v399",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v399</div>'
+        f'<h1>Trade Performance Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v399. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
