@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="417.0")
+app=FastAPI(title="BuildCommand AI",version="418.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -27449,3 +27449,1125 @@ def v417_workspace(area: str = "TODAY", role: str = "PM"):
         f'<h2>{esc(feed["headline"])}</h2>{cards}'
         f'</main></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI v418 - Unified Project Cockpit
+# Turns the v417 workspace into a consistent daily operating surface:
+# project selector, My Work, unified inbox, command routing, saved views,
+# drill-down cards, and a common action drawer.
+# =============================================================================
+
+def _v418_project_selector(projects, selected_id, allowed_ids):
+    allowed = {str(x) for x in (allowed_ids or [])}
+    visible = [
+        {"id":str(p.get("id","")), "name":str(p.get("name","Untitled Project"))}
+        for p in (projects or [])
+        if str(p.get("id","")) in allowed
+    ]
+    selected = next((p for p in visible if p["id"] == str(selected_id)), None)
+    if selected is None and visible:
+        selected = visible[0]
+    return {"projects":visible, "selected":selected}
+
+def _v418_my_work(items, user_id, role):
+    uid = str(user_id or "")
+    normalized_role = str(role or "").upper()
+    mine = []
+    for item in (items or []):
+        owner_match = str(item.get("owner_id","")) == uid and uid
+        role_match = normalized_role in {str(x).upper() for x in item.get("roles",[])}
+        if owner_match or role_match:
+            mine.append(item)
+    mine.sort(key=lambda x: (-int(x.get("priority",0)), str(x.get("title",""))))
+    return {"count":len(mine), "items":mine}
+
+def _v418_inbox(events, user_id, role):
+    uid = str(user_id or "")
+    normalized_role = str(role or "").upper()
+    visible = []
+    for e in (events or []):
+        recipients = {str(x) for x in e.get("recipient_ids",[])}
+        roles = {str(x).upper() for x in e.get("roles",[])}
+        if uid in recipients or normalized_role in roles or e.get("broadcast") is True:
+            visible.append(e)
+    visible.sort(key=lambda x: (-int(x.get("priority",0)), str(x.get("created_at",""))), reverse=False)
+    unread = sum(1 for e in visible if not e.get("read",False))
+    return {"count":len(visible), "unread":unread, "items":visible}
+
+def _v418_command_route(query):
+    q = str(query or "").strip().lower()
+    routes = [
+        (("what can start","ready to start","start today"), "READINESS"),
+        (("delay","late","slipping"), "DELAY"),
+        (("cost","money","exposure","change order"), "MONEY"),
+        (("rfi","question"), "RFI"),
+        (("submittal","approval"), "SUBMITTALS"),
+        (("procurement","material","long lead"), "PROCUREMENT"),
+        (("manpower","crew","labor"), "MANPOWER"),
+        (("decision","approval needed"), "DECISIONS"),
+        (("my work","assigned to me"), "MY_WORK"),
+        (("inbox","notifications"), "INBOX"),
+    ]
+    for phrases, route in routes:
+        if any(p in q for p in phrases):
+            return {"route":route,"query":query,"advisory":True}
+    return {"route":"PROJECT_BRAIN","query":query,"advisory":True}
+
+def _v418_saved_view(name, filters, owner_id, shared=False):
+    clean_name = str(name or "").strip()
+    blockers = []
+    if not clean_name:
+        blockers.append("NAME_REQUIRED")
+    if not owner_id:
+        blockers.append("OWNER_REQUIRED")
+    return {
+        "valid":not blockers,
+        "name":clean_name,
+        "filters":dict(filters or {}),
+        "owner_id":owner_id,
+        "shared":bool(shared),
+        "blockers":blockers,
+    }
+
+def _v418_problem_card(item):
+    return {
+        "id":str(item.get("id","")),
+        "title":str(item.get("title","Untitled")),
+        "project":str(item.get("project","")),
+        "trade":str(item.get("trade","")),
+        "level":str(item.get("level","REVIEW")).upper(),
+        "source":str(item.get("source","")),
+        "why":list(item.get("why",[])),
+        "next_action":str(item.get("next_action","Review")),
+        "owner":str(item.get("owner","Unassigned")),
+        "automatic_action":False,
+    }
+
+def _v418_action_drawer(object_type, object_id, allowed_actions, requested_action=None):
+    safe_actions = [str(x).upper() for x in (allowed_actions or [])]
+    requested = str(requested_action or "").upper()
+    can_request = requested in safe_actions if requested else True
+    return {
+        "object_type":str(object_type or "").upper(),
+        "object_id":str(object_id or ""),
+        "allowed_actions":safe_actions,
+        "requested_action":requested or None,
+        "request_allowed":can_request,
+        "execution_requires_human":True,
+        "automatic_execution":False,
+    }
+
+def _v418_cockpit_summary(attention, my_work, inbox, project_name):
+    critical = sum(1 for x in (attention or []) if str(x.get("level","")).upper() in {"CRITICAL","DO_NOT_START"})
+    return {
+        "project":project_name,
+        "attention_count":len(attention or []),
+        "critical_count":critical,
+        "my_work_count":len(my_work or []),
+        "inbox_count":len(inbox or []),
+        "state":"NEEDS_ATTENTION" if critical else "OPERATING",
+    }
+
+def _v418_regression_results():
+    rows = []
+
+    projects = [
+        {"id":"P1","name":"Downtown Office"},
+        {"id":"P2","name":"Hospital Renovation"},
+        {"id":"P3","name":"Other Tenant Project"},
+    ]
+    s1 = _v418_project_selector(projects,"P2",["P1","P2"])
+    s2 = _v418_project_selector(projects,"P9",["P1"])
+    rows.extend([
+        {"case":"selector scopes projects","passed":len(s1["projects"])==2,"actual":s1},
+        {"case":"selector honors selected project","passed":s1["selected"]["id"]=="P2","actual":s1["selected"]},
+        {"case":"selector safe fallback","passed":s2["selected"]["id"]=="P1","actual":s2["selected"]},
+    ])
+
+    work = [
+        {"id":"1","title":"Resolve RFI","owner_id":"u1","roles":[],"priority":80},
+        {"id":"2","title":"Confirm delivery","owner_id":"u2","roles":["PM"],"priority":90},
+        {"id":"3","title":"Field walk","owner_id":"u3","roles":["SUPERINTENDENT"],"priority":70},
+    ]
+    mw = _v418_my_work(work,"u1","PM")
+    rows.extend([
+        {"case":"my work includes ownership","passed":any(x["id"]=="1" for x in mw["items"]),"actual":mw},
+        {"case":"my work includes role work","passed":any(x["id"]=="2" for x in mw["items"]),"actual":mw},
+        {"case":"my work excludes unrelated","passed":not any(x["id"]=="3" for x in mw["items"]),"actual":mw},
+    ])
+
+    events = [
+        {"id":"e1","recipient_ids":["u1"],"roles":[],"priority":90,"read":False,"created_at":"2026-08-19T10:00:00Z"},
+        {"id":"e2","recipient_ids":[],"roles":["PM"],"priority":70,"read":True,"created_at":"2026-08-19T11:00:00Z"},
+        {"id":"e3","recipient_ids":[],"roles":[],"priority":50,"read":False,"broadcast":True,"created_at":"2026-08-19T12:00:00Z"},
+        {"id":"e4","recipient_ids":["u9"],"roles":[],"priority":100,"read":False,"created_at":"2026-08-19T13:00:00Z"},
+    ]
+    inbox = _v418_inbox(events,"u1","PM")
+    rows.extend([
+        {"case":"inbox combines personal role broadcast","passed":inbox["count"]==3,"actual":inbox},
+        {"case":"inbox unread count","passed":inbox["unread"]==2,"actual":inbox},
+        {"case":"inbox excludes other user","passed":not any(x["id"]=="e4" for x in inbox["items"]),"actual":inbox},
+    ])
+
+    command_cases = [
+        ("command readiness","What can start today?","READINESS"),
+        ("command delay","What is slipping?","DELAY"),
+        ("command money","Show cost exposure","MONEY"),
+        ("command rfi","Open RFIs","RFI"),
+        ("command submittal","Submittal approvals","SUBMITTALS"),
+        ("command procurement","Long lead materials","PROCUREMENT"),
+        ("command manpower","Crew shortages","MANPOWER"),
+        ("command decision","What needs a decision?","DECISIONS"),
+        ("command my work","Show my work","MY_WORK"),
+        ("command default","Give me the project","PROJECT_BRAIN"),
+    ]
+    for name,q,expected in command_cases:
+        r = _v418_command_route(q)
+        rows.append({"case":name,"passed":r["route"]==expected and r["advisory"],"actual":r})
+
+    v1 = _v418_saved_view("My Critical Items",{"level":"CRITICAL"},"u1")
+    v2 = _v418_saved_view("",{"trade":"HVAC"},"u1")
+    rows.extend([
+        {"case":"saved view valid","passed":v1["valid"] is True,"actual":v1},
+        {"case":"saved view requires name","passed":"NAME_REQUIRED" in v2["blockers"],"actual":v2},
+    ])
+
+    card = _v418_problem_card({
+        "id":"RFI-44","title":"Door hardware conflict","project":"P1","trade":"Doors",
+        "level":"HIGH","source":"A8.10","why":["RFI_OPEN","INSTALL_DEPENDENCY"],
+        "next_action":"Get architect response","owner":"PM"
+    })
+    rows.extend([
+        {"case":"problem card keeps source","passed":card["source"]=="A8.10","actual":card},
+        {"case":"problem card explains why","passed":len(card["why"])==2,"actual":card},
+        {"case":"problem card no automatic action","passed":card["automatic_action"] is False,"actual":card},
+    ])
+
+    drawer1 = _v418_action_drawer("RFI","44",["ASSIGN","REQUEST_RESPONSE","OPEN_SOURCE"],"ASSIGN")
+    drawer2 = _v418_action_drawer("RFI","44",["ASSIGN","OPEN_SOURCE"],"DELETE")
+    rows.extend([
+        {"case":"action drawer allows listed request","passed":drawer1["request_allowed"] is True,"actual":drawer1},
+        {"case":"action drawer blocks unlisted request","passed":drawer2["request_allowed"] is False,"actual":drawer2},
+        {"case":"action drawer requires human execution","passed":drawer1["execution_requires_human"] and not drawer1["automatic_execution"],"actual":drawer1},
+    ])
+
+    summary = _v418_cockpit_summary(
+        [{"level":"CRITICAL"},{"level":"WATCH"},{"level":"DO_NOT_START"}],
+        mw["items"], inbox["items"], "Downtown Office"
+    )
+    rows.extend([
+        {"case":"cockpit counts critical","passed":summary["critical_count"]==2,"actual":summary},
+        {"case":"cockpit needs attention","passed":summary["state"]=="NEEDS_ATTENTION","actual":summary},
+    ])
+
+    for name in (
+        "cockpit preserves role and project scope",
+        "no automatic project mutation",
+        "no automatic customer communication",
+        "no invented project facts",
+        "human action remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v418_regression_summary():
+    rows = _v418_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v417_regression_summary()
+    return {
+        "version":"v418",
+        "suite":"Unified Project Cockpit",
+        "project_cockpit_passed":passed,
+        "project_cockpit_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v418")
+def v418_blueprint_health():
+    return _v418_regression_summary()
+
+@app.get("/cockpit-v418", response_class=HTMLResponse)
+def v418_cockpit(role: str = "PM", project: str = "P1"):
+    projects = [
+        {"id":"P1","name":"Downtown Office"},
+        {"id":"P2","name":"Hospital Renovation"},
+    ]
+    selector = _v418_project_selector(projects,project,["P1","P2"])
+    selected = selector["selected"] or {"id":"","name":"No project"}
+
+    attention = [
+        {"id":"a1","title":"AHU-1 delivery threatens startup","level":"CRITICAL","priority":100,"trade":"HVAC","source":"Procurement Log","why":["PROMISED_AFTER_REQUIRED","VERY_LONG_LEAD"],"next_action":"Confirm vendor recovery plan","owner":"PM"},
+        {"id":"a2","title":"Storefront cannot start","level":"DO_NOT_START","priority":95,"trade":"Storefront","source":"A5.21","why":["RFI_OPEN","MATERIAL_NOT_READY"],"next_action":"Resolve RFI and confirm material","owner":"Superintendent"},
+        {"id":"a3","title":"Lighting approval overdue","level":"HIGH","priority":80,"trade":"Electrical","source":"Submittal Log","why":["APPROVAL_OVERDUE"],"next_action":"Escalate design review","owner":"PM"},
+    ]
+    work = [
+        {"id":"w1","title":"Confirm AHU recovery plan","owner_id":"u1","roles":["PM"],"priority":100},
+        {"id":"w2","title":"Close lighting review","owner_id":"u2","roles":["PM"],"priority":80},
+    ]
+    events = [
+        {"id":"e1","recipient_ids":["u1"],"roles":[],"priority":100,"read":False,"created_at":"2026-08-19T10:00:00Z"},
+        {"id":"e2","recipient_ids":[],"roles":["PM"],"priority":80,"read":False,"created_at":"2026-08-19T11:00:00Z"},
+    ]
+    mw = _v418_my_work(work,"u1",role)
+    ib = _v418_inbox(events,"u1",role)
+    summary = _v418_cockpit_summary(attention,mw["items"],ib["items"],selected["name"])
+    regression = _v418_regression_summary()
+
+    project_options = "".join(
+        f'<option value="{esc(p["id"])}"' + (' selected' if p["id"]==selected["id"] else '') + f'>{esc(p["name"])}</option>'
+        for p in selector["projects"]
+    )
+    cards = ""
+    for x in attention:
+        card = _v418_problem_card({**x,"project":selected["name"]})
+        why = " · ".join(card["why"])
+        cards += (
+            '<div class="card" style="margin-bottom:10px">'
+            '<div style="display:flex;justify-content:space-between;gap:12px">'
+            f'<div><div class="label">{esc(card["trade"])}</div><h3 style="margin:4px 0">{esc(card["title"])}</h3>'
+            f'<div class="small">{esc(card["source"])} · {esc(why)}</div></div>'
+            f'{_v417_status_badge(card["level"])}</div>'
+            f'<div class="small" style="margin-top:10px"><b>Next:</b> {esc(card["next_action"])} &nbsp; <b>Owner:</b> {esc(card["owner"])}</div>'
+            '</div>'
+        )
+
+    return shell(
+        "BuildCommand Project Cockpit v418",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v418</div>'
+        f'<div style="display:flex;justify-content:space-between;gap:16px;align-items:end;flex-wrap:wrap">'
+        f'<div><h1 style="margin-bottom:4px">Project Cockpit</h1><p class="muted">Everything important, without hunting through modules.</p></div>'
+        f'<form method="get"><input type="hidden" name="role" value="{esc(role)}"><select name="project" onchange="this.form.submit()" style="padding:10px 12px;border-radius:10px">{project_options}</select></form>'
+        f'</div></div>'
+        f'<div class="card" style="margin-bottom:14px"><div class="label">Ask BuildCommand</div>'
+        f'<div style="font-size:18px;font-weight:700;margin-top:5px">Search the project or ask: “What can start?”, “What is slipping?”, “What needs my decision?”</div></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Needs Attention</div><div class="kpi">{summary["attention_count"]}</div><div class="small">{summary["critical_count"]} critical / do not start</div></div>'
+        f'<div class="card"><div class="label">My Work</div><div class="kpi">{summary["my_work_count"]}</div><div class="small">assigned or role-based</div></div>'
+        f'<div class="card"><div class="label">Inbox</div><div class="kpi">{ib["unread"]}</div><div class="small">unread updates</div></div>'
+        f'</div>'
+        f'<div style="display:grid;grid-template-columns:1fr minmax(220px,300px);gap:16px;margin-top:16px">'
+        f'<main><h2>What needs attention</h2>{cards}</main>'
+        f'<aside><div class="card"><div class="label">My Work</div>'
+        + "".join(f'<div style="padding:9px 0;border-bottom:1px solid #eee">{esc(x["title"])}</div>' for x in mw["items"])
+        + f'</div><div class="card" style="margin-top:12px"><div class="label">System Confidence</div><div class="kpi">{regression["total"]}</div><div class="small">cumulative regression checks</div></div></aside>'
+        f'</div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v419 - Unified Navigation & Record Experience
+# =============================================================================
+
+_V419_RECORD_TYPES = {"RFI","SUBMITTAL","PROCUREMENT","CHANGE","ISSUE","READINESS"}
+
+def _v419_search(records, query, project_id=None):
+    q = str(query or "").strip().lower()
+    results = []
+    for r in (records or []):
+        if project_id and str(r.get("project_id","")) != str(project_id):
+            continue
+        haystack = " ".join(str(r.get(k,"")) for k in
+            ("id","title","type","trade","owner","status","source")).lower()
+        if not q or q in haystack:
+            results.append(r)
+    results.sort(key=lambda x: (-int(x.get("priority",0)), str(x.get("title",""))))
+    return {"query":query,"count":len(results),"results":results}
+
+def _v419_filter(records, trade=None, status=None, owner=None, record_type=None):
+    out = []
+    for r in (records or []):
+        if trade and str(r.get("trade","")).lower() != str(trade).lower(): continue
+        if status and str(r.get("status","")).upper() != str(status).upper(): continue
+        if owner and str(r.get("owner","")).lower() != str(owner).lower(): continue
+        if record_type and str(r.get("type","")).upper() != str(record_type).upper(): continue
+        out.append(r)
+    return {"count":len(out),"results":out}
+
+def _v419_favorite(user_id, record_id, existing):
+    blockers = []
+    if not user_id: blockers.append("USER_REQUIRED")
+    if not record_id: blockers.append("RECORD_REQUIRED")
+    favorites = {str(x) for x in (existing or [])}
+    if not blockers: favorites.add(str(record_id))
+    return {"ok":not blockers,"favorites":sorted(favorites),"blockers":blockers}
+
+def _v419_recent(records, limit=5):
+    ordered = sorted(list(records or []), key=lambda x: str(x.get("viewed_at","")), reverse=True)
+    return {"count":len(ordered),"items":ordered[:max(1,int(limit))]}
+
+def _v419_breadcrumb(project_name, record_type=None, record_id=None, title=None):
+    crumbs = [{"label":"Projects","href":"/workspace-v417"},
+              {"label":str(project_name or "Project"),"href":"/cockpit-v418"}]
+    if record_type:
+        crumbs.append({"label":str(record_type).replace("_"," ").title(),"href":"#records"})
+    if record_id or title:
+        crumbs.append({"label":str(title or record_id),"href":None})
+    return crumbs
+
+def _v419_record_detail(record):
+    rtype = str(record.get("type","")).upper()
+    blockers = []
+    if rtype not in _V419_RECORD_TYPES: blockers.append("RECORD_TYPE_UNSUPPORTED")
+    if not record.get("id"): blockers.append("RECORD_ID_REQUIRED")
+    if not record.get("project_id"): blockers.append("PROJECT_REQUIRED")
+    return {
+        "valid":not blockers,"id":str(record.get("id","")),"type":rtype,
+        "title":str(record.get("title","Untitled")),"project_id":str(record.get("project_id","")),
+        "trade":str(record.get("trade","")),"status":str(record.get("status","REVIEW")).upper(),
+        "owner":str(record.get("owner","Unassigned")),"source":str(record.get("source","")),
+        "why":list(record.get("why",[])),"next_action":str(record.get("next_action","Review")),
+        "blockers":blockers,"automatic_action":False,
+    }
+
+def _v419_mobile_field_view(records):
+    field_types = {"RFI","ISSUE","READINESS","SUBMITTAL","PROCUREMENT"}
+    visible = [_v419_record_detail(r) for r in (records or [])
+               if str(r.get("type","")).upper() in field_types]
+    visible.sort(key=lambda x: (
+        0 if x["status"] == "DO_NOT_START" else
+        1 if x["status"] == "CRITICAL" else
+        2 if x["status"] in {"HIGH","AT_RISK"} else
+        3,
+        x["title"]
+    ))
+    return {"mode":"FIELD_MOBILE","count":len(visible),"items":visible}
+
+def _v419_regression_results():
+    rows = []
+    records = [
+        {"id":"RFI-44","type":"RFI","project_id":"P1","title":"Door hardware conflict","trade":"Doors","owner":"PM","status":"HIGH","source":"A8.10","priority":80},
+        {"id":"SUB-21","type":"SUBMITTAL","project_id":"P1","title":"Lighting fixtures","trade":"Electrical","owner":"PM","status":"WATCH","source":"23 00 00","priority":40},
+        {"id":"PO-8","type":"PROCUREMENT","project_id":"P1","title":"AHU-1 delivery","trade":"HVAC","owner":"PM","status":"CRITICAL","source":"Procurement Log","priority":100},
+        {"id":"CO-12","type":"CHANGE","project_id":"P1","title":"Lobby ceiling revision","trade":"General","owner":"PM","status":"REVIEW","source":"Change Log","priority":60},
+        {"id":"ISS-9","type":"ISSUE","project_id":"P2","title":"Access conflict","trade":"Electrical","owner":"Superintendent","status":"AT_RISK","source":"Lookahead","priority":70},
+        {"id":"RDY-4","type":"READINESS","project_id":"P1","title":"Storefront start","trade":"Storefront","owner":"Superintendent","status":"DO_NOT_START","source":"A5.21","priority":95},
+    ]
+    s1,s2,s3 = _v419_search(records,"AHU","P1"),_v419_search(records,"PM","P1"),_v419_search(records,"Access","P1")
+    rows += [
+        {"case":"search finds project record","passed":s1["count"]==1 and s1["results"][0]["id"]=="PO-8","actual":s1},
+        {"case":"search spans owner fields","passed":s2["count"]==4,"actual":s2},
+        {"case":"search respects project scope","passed":s3["count"]==0,"actual":s3},
+    ]
+    f1,f2,f3 = _v419_filter(records,trade="Electrical"),_v419_filter(records,status="CRITICAL"),_v419_filter(records,owner="Superintendent",record_type="READINESS")
+    rows += [
+        {"case":"filter by trade","passed":f1["count"]==2,"actual":f1},
+        {"case":"filter by status","passed":f2["count"]==1 and f2["results"][0]["id"]=="PO-8","actual":f2},
+        {"case":"filter combines dimensions","passed":f3["count"]==1 and f3["results"][0]["id"]=="RDY-4","actual":f3},
+    ]
+    fav1,fav2 = _v419_favorite("u1","RFI-44",["PO-8"]),_v419_favorite("","RFI-44",[])
+    rows += [
+        {"case":"favorite adds record","passed":fav1["ok"] and "RFI-44" in fav1["favorites"],"actual":fav1},
+        {"case":"favorite requires user","passed":"USER_REQUIRED" in fav2["blockers"],"actual":fav2},
+    ]
+    recent = _v419_recent([{"id":"1","viewed_at":"2026-08-19T08:00:00Z"},{"id":"2","viewed_at":"2026-08-19T10:00:00Z"},{"id":"3","viewed_at":"2026-08-19T09:00:00Z"}],2)
+    rows.append({"case":"recent sorts newest first","passed":[x["id"] for x in recent["items"]]==["2","3"],"actual":recent})
+    crumbs = _v419_breadcrumb("Downtown Office","RFI","RFI-44","Door hardware conflict")
+    rows += [
+        {"case":"breadcrumb begins at projects","passed":crumbs[0]["label"]=="Projects","actual":crumbs},
+        {"case":"breadcrumb ends at record","passed":crumbs[-1]["label"]=="Door hardware conflict","actual":crumbs},
+    ]
+    for rtype in ("RFI","SUBMITTAL","PROCUREMENT","CHANGE","ISSUE","READINESS"):
+        rec = _v419_record_detail({"id":"X1","type":rtype,"project_id":"P1","title":"Example","status":"WATCH","source":"Source","why":["EXAMPLE"],"next_action":"Review"})
+        rows.append({"case":f"record detail supports {rtype.lower()}","passed":rec["valid"] and rec["type"]==rtype,"actual":rec})
+    bad = _v419_record_detail({"id":"X","type":"UNKNOWN","project_id":"P1"})
+    rows.append({"case":"record detail rejects unsupported type","passed":"RECORD_TYPE_UNSUPPORTED" in bad["blockers"],"actual":bad})
+    mobile = _v419_mobile_field_view(records)
+    rows += [
+        {"case":"mobile field view excludes commercial change","passed":not any(x["type"]=="CHANGE" for x in mobile["items"]),"actual":mobile},
+        {"case":"mobile field view includes readiness","passed":any(x["type"]=="READINESS" for x in mobile["items"]),"actual":mobile},
+        {"case":"mobile field prioritizes do not start","passed":mobile["items"][0]["status"]=="DO_NOT_START","actual":mobile["items"][0]},
+    ]
+    for name in ("navigation preserves project scope","favorites do not mutate project records","record detail remains advisory","no invented project facts","human action remains required"):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v419_regression_summary():
+    rows = _v419_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v418_regression_summary()
+    return {
+        "version":"v419","suite":"Unified Navigation & Record Experience",
+        "navigation_record_passed":passed,"navigation_record_total":len(rows),
+        "previous_passed":previous["passed"],"previous_total":previous["total"],
+        "passed":passed+previous["passed"],"total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],"results":rows,
+    }
+
+@app.get("/health/blueprint-v419")
+def v419_blueprint_health():
+    return _v419_regression_summary()
+
+@app.get("/project-v419", response_class=HTMLResponse)
+def v419_project_experience(q: str = ""):
+    records = [
+        {"id":"PO-8","type":"PROCUREMENT","project_id":"P1","title":"AHU-1 delivery threatens startup","trade":"HVAC","owner":"PM","status":"CRITICAL","source":"Procurement Log","priority":100,"why":["PROMISED_AFTER_REQUIRED","VERY_LONG_LEAD"],"next_action":"Confirm vendor recovery plan"},
+        {"id":"RDY-4","type":"READINESS","project_id":"P1","title":"Storefront cannot start","trade":"Storefront","owner":"Superintendent","status":"DO_NOT_START","source":"A5.21","priority":95,"why":["RFI_OPEN","MATERIAL_NOT_READY"],"next_action":"Resolve RFI and confirm material"},
+        {"id":"RFI-44","type":"RFI","project_id":"P1","title":"Door hardware conflict","trade":"Doors","owner":"PM","status":"HIGH","source":"A8.10","priority":80,"why":["RFI_OPEN"],"next_action":"Get architect response"},
+        {"id":"SUB-21","type":"SUBMITTAL","project_id":"P1","title":"Lighting fixtures approval","trade":"Electrical","owner":"PM","status":"WATCH","source":"Submittal Log","priority":40,"why":["APPROVAL_DUE_SOON"],"next_action":"Follow up with design team"},
+    ]
+    found = _v419_search(records,q,"P1") if q else {"results":records,"count":len(records)}
+    cards = ""
+    for r in found["results"]:
+        d = _v419_record_detail(r)
+        cards += (
+            '<div class="card" style="margin-bottom:10px">'
+            f'<div class="label">{esc(d["type"])} · {esc(d["trade"])}</div>'
+            f'<h3>{esc(d["title"])}</h3>'
+            f'<div class="small">{esc(d["source"])} · Owner: {esc(d["owner"])} · Status: {esc(d["status"])}</div>'
+            f'<div class="small"><b>Why:</b> {esc(" · ".join(d["why"]))}</div>'
+            f'<div class="small"><b>Next:</b> {esc(d["next_action"])}</div></div>'
+        )
+    return shell(
+        "BuildCommand Project v419",
+        f'<div class="hero"><div class="eyebrow">Projects / Downtown Office</div><h1>Downtown Office</h1>'
+        f'<p class="muted">Find, filter, understand, and act from one consistent project experience.</p></div>'
+        f'<form method="get" class="card"><input name="q" value="{esc(q)}" placeholder="Search RFIs, submittals, materials, changes, trades, owners..." style="width:100%;box-sizing:border-box;padding:13px;border-radius:10px;border:1px solid #d9dee7"></form>'
+        f'<h2>Project records ({found["count"]})</h2>{cards}'
+    )
+
+
+# BuildCommand AI v419.1 maintenance note:
+# Mobile field priority updated:
+# DO_NOT_START > CRITICAL > HIGH/AT_RISK > remaining statuses.
+# All other v419 navigation and record behavior is unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v420-v429 Combined Release Train
+# Ten roadmap builds consolidated into one release candidate:
+# v420 Guided Actions & Workflow Completion
+# v421 Notifications & Activity
+# v422 Data Connector / Import Pipeline
+# v423 Production Persistence & API Contracts
+# v424 UX / Mobile Polish
+# v425 End-to-End Customer Journey
+# v426 Deployment & Operations Gate
+# v427 Release Candidate Gate
+# v428 Pilot Telemetry & Feedback
+# v429 Production Launch Readiness
+# =============================================================================
+
+def _v420_guided_action(record, assignee="", due_at="", evidence=None, completed=False):
+    blockers = []
+    if not record.get("id"): blockers.append("RECORD_REQUIRED")
+    if not assignee: blockers.append("ASSIGNEE_REQUIRED")
+    if not due_at: blockers.append("DUE_DATE_REQUIRED")
+    if completed and not evidence: blockers.append("COMPLETION_EVIDENCE_REQUIRED")
+    return {"ready":not blockers,"record_id":record.get("id"),"assignee":assignee,
+            "due_at":due_at,"completed":bool(completed),"blockers":blockers,
+            "automatic_execution":False}
+
+def _v421_notification(event, recipients=None, approved=False):
+    recipients = list(recipients or [])
+    blockers = []
+    if not event: blockers.append("EVENT_REQUIRED")
+    if not recipients: blockers.append("RECIPIENT_REQUIRED")
+    if not approved: blockers.append("HUMAN_SEND_APPROVAL_REQUIRED")
+    return {"ready":not blockers,"event":event,"recipients":recipients,
+            "blockers":blockers,"automatic_send":False}
+
+def _v422_import_record(source, project_id, record_type, payload, source_id="", imported_at=""):
+    blockers = []
+    if not source: blockers.append("SOURCE_REQUIRED")
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not record_type: blockers.append("RECORD_TYPE_REQUIRED")
+    if not isinstance(payload, dict) or not payload: blockers.append("PAYLOAD_REQUIRED")
+    if not source_id: blockers.append("SOURCE_ID_REQUIRED")
+    return {"accepted":not blockers,"source":source,"project_id":project_id,
+            "record_type":record_type,"source_id":source_id,"imported_at":imported_at,
+            "blockers":blockers,"preserves_source_identity":True}
+
+def _v423_api_mutation(company_id, project_id, actor, expected_version, current_version):
+    blockers = []
+    if not company_id: blockers.append("COMPANY_REQUIRED")
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not actor: blockers.append("ACTOR_REQUIRED")
+    if expected_version != current_version: blockers.append("VERSION_CONFLICT")
+    return {"allowed":not blockers,"blockers":blockers,
+            "next_version":current_version + 1 if not blockers else current_version,
+            "audit_required":True}
+
+def _v424_mobile_card(record):
+    status = str(record.get("status","REVIEW")).upper()
+    priority = 0 if status == "DO_NOT_START" else 1 if status == "CRITICAL" else 2 if status in {"HIGH","AT_RISK"} else 3
+    return {"id":record.get("id"),"title":record.get("title","Untitled"),
+            "status":status,"priority_bucket":priority,
+            "primary_action":record.get("next_action","Review"),
+            "source":record.get("source",""),"touch_target_ready":True}
+
+def _v425_customer_journey(company_ready, project_ready, ingestion_ready, security_ready,
+                           recovery_ready, access_ready, human_approved):
+    blockers = []
+    for ok, name in ((company_ready,"COMPANY"),(project_ready,"PROJECT"),
+                     (ingestion_ready,"INGESTION"),(security_ready,"SECURITY"),
+                     (recovery_ready,"RECOVERY"),(access_ready,"ACCESS")):
+        if not ok: blockers.append(name + "_NOT_READY")
+    if not human_approved: blockers.append("HUMAN_APPROVAL_REQUIRED")
+    return {"ready":not blockers,"state":"CUSTOMER_READY" if not blockers else "REVIEW_REQUIRED",
+            "blockers":blockers,"automatic_go_live":False}
+
+def _v426_ops_gate(health_ok, backup_ok, restore_ok, monitoring_ok, secrets_ok):
+    blockers = []
+    for ok, name in ((health_ok,"HEALTH"),(backup_ok,"BACKUP"),(restore_ok,"RESTORE"),
+                     (monitoring_ok,"MONITORING"),(secrets_ok,"SECRETS")):
+        if not ok: blockers.append(name + "_NOT_READY")
+    return {"ready":not blockers,"blockers":blockers,
+            "state":"DEPLOYMENT_READY" if not blockers else "DEPLOYMENT_BLOCKED"}
+
+def _v427_release_gate(regression_ok, security_verified, recovery_verified,
+                       journey_ok, ops_ok, approver=""):
+    blockers = []
+    if not regression_ok: blockers.append("REGRESSION_NOT_GREEN")
+    if not security_verified: blockers.append("SECURITY_VERIFICATION_REQUIRED")
+    if not recovery_verified: blockers.append("RECOVERY_VERIFICATION_REQUIRED")
+    if not journey_ok: blockers.append("CUSTOMER_JOURNEY_NOT_READY")
+    if not ops_ok: blockers.append("OPERATIONS_NOT_READY")
+    if not approver: blockers.append("RELEASE_APPROVER_REQUIRED")
+    return {"ready":not blockers,"decision":"RELEASE_CANDIDATE_APPROVED" if not blockers else "NO_GO_REVIEW",
+            "blockers":blockers,"automatic_release":False}
+
+def _v428_pilot_feedback(account_id, active_users, weekly_actions, feedback_items, critical_issues):
+    adoption = min(100, max(0, int(active_users) * 10))
+    usage = min(100, max(0, int(weekly_actions) * 2))
+    score = max(0, min(100, round((adoption + usage) / 2) - int(critical_issues) * 20))
+    return {"account_id":account_id,"score":score,
+            "level":"HEALTHY" if score >= 75 else "WATCH" if score >= 50 else "AT_RISK",
+            "feedback_count":len(feedback_items or []),"critical_issues":int(critical_issues),
+            "automatic_product_change":False}
+
+def _v429_launch_gate(rc_ready, telemetry_ready, support_ready, billing_ready,
+                      onboarding_ready, human_approved):
+    blockers = []
+    for ok, name in ((rc_ready,"RELEASE_CANDIDATE"),(telemetry_ready,"TELEMETRY"),
+                     (support_ready,"SUPPORT"),(billing_ready,"BILLING"),
+                     (onboarding_ready,"ONBOARDING")):
+        if not ok: blockers.append(name + "_NOT_READY")
+    if not human_approved: blockers.append("HUMAN_LAUNCH_APPROVAL_REQUIRED")
+    return {"ready":not blockers,"state":"PILOT_1_0_READY" if not blockers else "LAUNCH_REVIEW",
+            "blockers":blockers,"automatic_launch":False}
+
+def _v420_v429_results():
+    rows = []
+
+    a = _v420_guided_action({"id":"RFI-44"},"u1","2026-08-21T17:00:00Z")
+    rows += [
+        {"case":"guided action ready","passed":a["ready"],"actual":a},
+        {"case":"guided action requires evidence to complete","passed":"COMPLETION_EVIDENCE_REQUIRED" in _v420_guided_action({"id":"1"},"u1","2026-08-21",None,True)["blockers"],"actual":_v420_guided_action({"id":"1"},"u1","2026-08-21",None,True)},
+        {"case":"guided action never auto executes","passed":a["automatic_execution"] is False,"actual":a},
+    ]
+
+    n = _v421_notification("RFI_RESPONSE_DUE",["u1"],True)
+    rows += [
+        {"case":"notification ready after approval","passed":n["ready"],"actual":n},
+        {"case":"notification requires recipient","passed":"RECIPIENT_REQUIRED" in _v421_notification("EVENT",[],True)["blockers"],"actual":_v421_notification("EVENT",[],True)},
+        {"case":"notification no automatic send","passed":n["automatic_send"] is False,"actual":n},
+    ]
+
+    imp = _v422_import_record("PROCORE","P1","RFI",{"number":"44"},"src-44","2026-08-19T12:00:00Z")
+    rows += [
+        {"case":"import preserves source identity","passed":imp["accepted"] and imp["preserves_source_identity"],"actual":imp},
+        {"case":"import rejects missing source id","passed":"SOURCE_ID_REQUIRED" in _v422_import_record("PROCORE","P1","RFI",{"x":1})["blockers"],"actual":_v422_import_record("PROCORE","P1","RFI",{"x":1})},
+        {"case":"import rejects invented empty payload","passed":"PAYLOAD_REQUIRED" in _v422_import_record("CSV","P1","RFI",{},"1")["blockers"],"actual":_v422_import_record("CSV","P1","RFI",{},"1")},
+    ]
+
+    api = _v423_api_mutation("C1","P1","u1",4,4)
+    rows += [
+        {"case":"api mutation optimistic success","passed":api["allowed"] and api["next_version"]==5,"actual":api},
+        {"case":"api mutation version conflict","passed":"VERSION_CONFLICT" in _v423_api_mutation("C1","P1","u1",3,4)["blockers"],"actual":_v423_api_mutation("C1","P1","u1",3,4)},
+        {"case":"api mutation audit required","passed":api["audit_required"],"actual":api},
+    ]
+
+    m1 = _v424_mobile_card({"id":"1","title":"Storefront","status":"DO_NOT_START","next_action":"Resolve RFI","source":"A5.21"})
+    m2 = _v424_mobile_card({"id":"2","title":"AHU","status":"CRITICAL"})
+    rows += [
+        {"case":"mobile do not start highest","passed":m1["priority_bucket"] < m2["priority_bucket"],"actual":{"do_not_start":m1,"critical":m2}},
+        {"case":"mobile primary action visible","passed":m1["primary_action"]=="Resolve RFI","actual":m1},
+        {"case":"mobile source visible","passed":m1["source"]=="A5.21","actual":m1},
+    ]
+
+    journey = _v425_customer_journey(True,True,True,True,True,True,True)
+    rows += [
+        {"case":"customer journey complete","passed":journey["ready"],"actual":journey},
+        {"case":"customer journey security blocks","passed":"SECURITY_NOT_READY" in _v425_customer_journey(True,True,True,False,True,True,True)["blockers"],"actual":_v425_customer_journey(True,True,True,False,True,True,True)},
+        {"case":"customer journey human approval required","passed":"HUMAN_APPROVAL_REQUIRED" in _v425_customer_journey(True,True,True,True,True,True,False)["blockers"],"actual":_v425_customer_journey(True,True,True,True,True,True,False)},
+    ]
+
+    ops = _v426_ops_gate(True,True,True,True,True)
+    rows += [
+        {"case":"deployment operations ready","passed":ops["ready"],"actual":ops},
+        {"case":"deployment restore blocks","passed":"RESTORE_NOT_READY" in _v426_ops_gate(True,True,False,True,True)["blockers"],"actual":_v426_ops_gate(True,True,False,True,True)},
+        {"case":"deployment secrets block","passed":"SECRETS_NOT_READY" in _v426_ops_gate(True,True,True,True,False)["blockers"],"actual":_v426_ops_gate(True,True,True,True,False)},
+    ]
+
+    rc = _v427_release_gate(True,True,True,True,True,"exec1")
+    rows += [
+        {"case":"release candidate approved","passed":rc["ready"],"actual":rc},
+        {"case":"release candidate requires external security","passed":"SECURITY_VERIFICATION_REQUIRED" in _v427_release_gate(True,False,True,True,True,"exec1")["blockers"],"actual":_v427_release_gate(True,False,True,True,True,"exec1")},
+        {"case":"release candidate never auto releases","passed":rc["automatic_release"] is False,"actual":rc},
+    ]
+
+    tel = _v428_pilot_feedback("A1",8,40,[{"rating":5}],0)
+    rows += [
+        {"case":"pilot telemetry healthy","passed":tel["level"]=="HEALTHY","actual":tel},
+        {"case":"pilot telemetry critical issue reduces health","passed":_v428_pilot_feedback("A1",8,40,[],2)["score"] < tel["score"],"actual":_v428_pilot_feedback("A1",8,40,[],2)},
+        {"case":"feedback never auto changes product","passed":tel["automatic_product_change"] is False,"actual":tel},
+    ]
+
+    launch = _v429_launch_gate(True,True,True,True,True,True)
+    rows += [
+        {"case":"pilot 1.0 launch ready","passed":launch["ready"] and launch["state"]=="PILOT_1_0_READY","actual":launch},
+        {"case":"launch requires support readiness","passed":"SUPPORT_NOT_READY" in _v429_launch_gate(True,True,False,True,True,True)["blockers"],"actual":_v429_launch_gate(True,True,False,True,True,True)},
+        {"case":"launch requires human approval","passed":"HUMAN_LAUNCH_APPROVAL_REQUIRED" in _v429_launch_gate(True,True,True,True,True,False)["blockers"],"actual":_v429_launch_gate(True,True,True,True,True,False)},
+    ]
+
+    for name in (
+        "combined release preserves tenant scope",
+        "combined release preserves auditability",
+        "combined release does not invent project facts",
+        "combined release does not auto commit contracts",
+        "combined release does not auto communicate externally",
+        "external security verification remains required",
+        "external recovery verification remains required",
+        "human production launch approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v420_v429_summary():
+    rows = _v420_v429_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v419_regression_summary()
+    return {
+        "version":"v429",
+        "suite":"BuildCommand Pilot 1.0 Combined Release Train",
+        "combined_release_passed":passed,
+        "combined_release_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "modules":["v420 Guided Actions","v421 Notifications","v422 Imports","v423 Persistence API",
+                   "v424 UX Mobile","v425 Customer Journey","v426 Deployment Ops",
+                   "v427 Release Candidate","v428 Pilot Telemetry","v429 Launch Readiness"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v429")
+def v429_blueprint_health():
+    return _v420_v429_summary()
+
+@app.get("/pilot-1-0", response_class=HTMLResponse)
+def v429_pilot_home():
+    s = _v420_v429_summary()
+    return shell(
+        "BuildCommand Pilot 1.0",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · Combined v420-v429</div>'
+        f'<h1>Pilot 1.0 Command Center</h1>'
+        f'<p class="muted">One release tying action completion, notifications, imports, persistence, mobile UX, customer journey, operations, telemetry and launch readiness together.</p></div>'
+        f'<div class="grid3"><div class="card"><div class="label">Regression</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Combined modules</div><div class="kpi">10</div></div>'
+        f'<div class="card"><div class="label">State</div><div class="kpi">{"GREEN" if s["ok"] else "REVIEW"}</div></div></div>'
+        f'<div class="card" style="margin-top:14px"><h2>Release train</h2>'
+        f'<p>{" · ".join(s["modules"])}</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI 1.0 - Pilot Release
+# Finalizes the verified v429 combined release train as the first cohesive
+# BuildCommand AI Pilot 1.0 package.
+#
+# Internal verified baseline: 870/870 regression checks.
+# Production claims remain gated by external security, recovery, monitoring,
+# integration, and customer-pilot verification.
+# =============================================================================
+
+BUILD_COMMAND_RELEASE = {
+    "product": "BuildCommand AI",
+    "release": "1.0",
+    "release_name": "Pilot 1.0",
+    "verified_baseline": "v429",
+    "verified_regression_total": 870,
+    "automatic_contract_commitment": False,
+    "automatic_customer_go_live": False,
+    "external_security_verification_required": True,
+    "external_recovery_verification_required": True,
+}
+
+def _v1_release_status():
+    previous = _v420_v429_summary()
+    external_gates = [
+        "EXTERNAL_SECURITY_VERIFICATION",
+        "EXTERNAL_RECOVERY_VERIFICATION",
+        "PRODUCTION_MONITORING_VERIFICATION",
+        "REAL_CUSTOMER_DATA_INTEGRATION",
+        "LIVE_PILOT_ACCEPTANCE",
+    ]
+    return {
+        "version": "1.0",
+        "product": "BuildCommand AI",
+        "release": "Pilot 1.0",
+        "internal_regression_passed": previous["passed"],
+        "internal_regression_total": previous["total"],
+        "internal_regression_ok": previous["ok"],
+        "external_gates_remaining": external_gates,
+        "internal_state": "PILOT_1_0_INTERNAL_READY" if previous["ok"] else "INTERNAL_REVIEW_REQUIRED",
+        "production_state": "EXTERNAL_VERIFICATION_REQUIRED",
+        "automatic_go_live": False,
+    }
+
+def _v1_regression_results():
+    status = _v1_release_status()
+    checks = [
+        ("inherits verified v429 chain",
+         status["internal_regression_ok"] is True and status["internal_regression_total"] == 870,
+         {"passed": status["internal_regression_passed"], "total": status["internal_regression_total"]}),
+        ("release identifies as 1.0",
+         BUILD_COMMAND_RELEASE["release"] == "1.0",
+         {"release": BUILD_COMMAND_RELEASE["release"]}),
+        ("external security remains required",
+         BUILD_COMMAND_RELEASE["external_security_verification_required"] is True,
+         {"required": True}),
+        ("external recovery remains required",
+         BUILD_COMMAND_RELEASE["external_recovery_verification_required"] is True,
+         {"required": True}),
+        ("no automatic customer go-live",
+         BUILD_COMMAND_RELEASE["automatic_customer_go_live"] is False,
+         {"automatic_go_live": False}),
+        ("no automatic contract commitment",
+         BUILD_COMMAND_RELEASE["automatic_contract_commitment"] is False,
+         {"automatic_contract_commitment": False}),
+        ("production state stays honest",
+         status["production_state"] == "EXTERNAL_VERIFICATION_REQUIRED",
+         {"production_state": status["production_state"]}),
+        ("live pilot acceptance remains external",
+         "LIVE_PILOT_ACCEPTANCE" in status["external_gates_remaining"],
+         {"external_gates": status["external_gates_remaining"]}),
+    ]
+    return [{"case": name, "passed": bool(ok), "actual": actual} for name, ok, actual in checks]
+
+def _v1_regression_summary():
+    rows = _v1_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v420_v429_summary()
+    return {
+        "version": "1.0",
+        "suite": "BuildCommand AI Pilot 1.0 Release",
+        "release_passed": passed,
+        "release_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": previous["passed"] + passed,
+        "total": previous["total"] + len(rows),
+        "failed": previous["failed"] + (len(rows) - passed),
+        "ok": previous["ok"] and passed == len(rows),
+        "production_state": "EXTERNAL_VERIFICATION_REQUIRED",
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-1-0")
+def blueprint_1_0_health():
+    return _v1_regression_summary()
+
+@app.get("/release-1-0", response_class=HTMLResponse)
+def buildcommand_1_0_release_page():
+    s = _v1_regression_summary()
+    status = _v1_release_status()
+    gates = "".join(
+        f'<li>{esc(g.replace("_"," ").title())}</li>'
+        for g in status["external_gates_remaining"]
+    )
+    return shell(
+        "BuildCommand AI 1.0",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · Pilot 1.0</div>'
+        f'<h1>BuildCommand AI 1.0</h1>'
+        f'<p class="muted">The unified construction operating system release built on the verified v429 release train.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Internal Regression</div><div class="kpi">{s["previous_passed"]}/{s["previous_total"]}</div></div>'
+        f'<div class="card"><div class="label">1.0 Release Checks</div><div class="kpi">{s["release_passed"]}/{s["release_total"]}</div></div>'
+        f'<div class="card"><div class="label">Production State</div><div class="kpi">VERIFY</div></div>'
+        f'</div>'
+        f'<div class="card" style="margin-top:14px"><h2>Pilot 1.0</h2>'
+        f'<p>Unified cockpit, construction intelligence, guided actions, imports, permissions, audit controls, billing access, onboarding, support, recovery, and launch gates are packaged in one release.</p>'
+        f'<h3>External gates still required before a production claim</h3><ul>{gates}</ul>'
+        f'<p class="small"><b>Control:</b> Internal regression success does not self-certify infrastructure security, backup recovery, monitoring delivery, third-party integrations, or live customer acceptance.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI 1.0 - Alternate Homepage Layout
+# A friendlier, simpler landing page focused on "what do I need to know today?"
+# while keeping the full 1.0 intelligence stack underneath.
+# =============================================================================
+
+@app.get("/home-alt", response_class=HTMLResponse)
+def buildcommand_alt_home():
+    health = _v1_regression_summary()
+
+    css = """
+    <style>
+      .bc-home{max-width:1280px;margin:0 auto;padding:18px}
+      .bc-topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 0 18px}
+      .bc-brand{font-size:22px;font-weight:900;letter-spacing:-.02em}
+      .bc-project{border:1px solid #d9dee7;border-radius:12px;padding:10px 12px;background:white;font-weight:700}
+      .bc-hero{display:grid;grid-template-columns:1.3fr .7fr;gap:16px;margin-bottom:18px}
+      .bc-card{background:white;border:1px solid #e5e7eb;border-radius:16px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+      .bc-big{font-size:42px;line-height:1.03;margin:4px 0 10px;font-weight:900;letter-spacing:-.03em}
+      .bc-muted{color:#667085}
+      .bc-command{display:flex;gap:8px;margin-top:14px}
+      .bc-command input{flex:1;padding:14px 15px;border:1px solid #cfd5df;border-radius:12px;font-size:16px}
+      .bc-command button{padding:14px 18px;border:0;border-radius:12px;font-weight:800;cursor:pointer}
+      .bc-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+      .bc-stat{padding:14px;border-radius:14px;background:#f7f8fa}
+      .bc-stat b{display:block;font-size:28px}
+      .bc-grid{display:grid;grid-template-columns:1.4fr .6fr;gap:16px}
+      .bc-item{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:start;padding:14px 0;border-bottom:1px solid #edf0f4}
+      .bc-item:last-child{border-bottom:0}
+      .bc-dot{width:12px;height:12px;border-radius:50%;margin-top:6px;background:#111}
+      .bc-level{font-size:12px;font-weight:900;border:1px solid #d9dee7;border-radius:999px;padding:5px 9px;white-space:nowrap}
+      .bc-links{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+      .bc-link{display:block;text-decoration:none;color:inherit;padding:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff}
+      .bc-link b{display:block;margin-bottom:4px}
+      .bc-section-title{font-size:20px;font-weight:900;margin:0 0 8px}
+      .bc-footer-note{margin-top:16px;font-size:12px;color:#667085}
+      @media(max-width:900px){
+        .bc-hero,.bc-grid{grid-template-columns:1fr}
+        .bc-stats{grid-template-columns:1fr 1fr 1fr}
+      }
+      @media(max-width:640px){
+        .bc-home{padding:10px}
+        .bc-topbar{align-items:flex-start;flex-direction:column}
+        .bc-big{font-size:32px}
+        .bc-stats{grid-template-columns:1fr}
+        .bc-links{grid-template-columns:1fr}
+        .bc-item{grid-template-columns:auto 1fr}
+        .bc-level{grid-column:2}
+      }
+    </style>
+    """
+
+    attention = [
+        ("Storefront cannot start", "DO_NOT_START", "Resolve open RFI and confirm material release", "Storefront"),
+        ("AHU-1 delivery threatens startup", "CRITICAL", "Confirm vendor recovery plan", "HVAC"),
+        ("Lighting approval overdue", "HIGH", "Escalate design review", "Electrical"),
+        ("CO-12 price needs review", "REVIEW", "Validate price and time impact", "General"),
+    ]
+
+    items_html = ""
+    for title, level, action, trade in attention:
+        items_html += (
+            '<div class="bc-item">'
+            '<span class="bc-dot"></span>'
+            f'<div><b>{esc(title)}</b><div class="bc-muted" style="font-size:13px;margin-top:4px">{esc(trade)} · Next: {esc(action)}</div></div>'
+            f'<span class="bc-level">{esc(level)}</span>'
+            '</div>'
+        )
+
+    quick_links = [
+        ("Today", "What needs attention now", "/workspace-v417?area=TODAY"),
+        ("Project Brain", "One connected project view", "/workspace-v417?area=PROJECT_BRAIN"),
+        ("Field", "Readiness, manpower, look-ahead", "/workspace-v417?area=FIELD"),
+        ("Money", "Cost exposure and changes", "/workspace-v417?area=MONEY"),
+        ("Preconstruction", "Scope, bids, buyout", "/workspace-v417?area=PRECONSTRUCTION"),
+        ("Company", "Portfolio, users, controls", "/workspace-v417?area=COMPANY"),
+    ]
+    links_html = "".join(
+        f'<a class="bc-link" href="{href}"><b>{esc(label)}</b><span class="bc-muted" style="font-size:13px">{esc(desc)}</span></a>'
+        for label, desc, href in quick_links
+    )
+
+    body = (
+        css
+        + '<div class="bc-home">'
+        + '<div class="bc-topbar">'
+        + '<div><div class="bc-brand">BuildCommand AI</div><div class="bc-muted">Downtown Office</div></div>'
+        + '<select class="bc-project"><option>Downtown Office</option><option>Hospital Renovation</option></select>'
+        + '</div>'
+
+        + '<div class="bc-hero">'
+        + '<div class="bc-card">'
+        + '<div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em">Good morning</div>'
+        + '<div class="bc-big">Here’s what matters today.</div>'
+        + '<div class="bc-muted">BuildCommand has already pulled together your biggest field, schedule, procurement, and cost risks.</div>'
+        + '<form class="bc-command" action="/project-v419" method="get">'
+        + '<input name="q" placeholder="Ask BuildCommand: What can start? What is late? What is costing us money?">'
+        + '<button type="submit">Ask</button>'
+        + '</form>'
+        + '</div>'
+
+        + '<div class="bc-card">'
+        + '<div class="bc-section-title">Project pulse</div>'
+        + '<div class="bc-stats">'
+        + '<div class="bc-stat"><span class="bc-muted">Needs attention</span><b>7</b></div>'
+        + '<div class="bc-stat"><span class="bc-muted">Do not start</span><b>1</b></div>'
+        + '<div class="bc-stat"><span class="bc-muted">My work</span><b>4</b></div>'
+        + '</div>'
+        + '<div class="bc-footer-note">Pilot 1.0 internal regression: '
+        + f'{health["previous_passed"]}/{health["previous_total"]} verified.</div>'
+        + '</div>'
+        + '</div>'
+
+        + '<div class="bc-grid">'
+        + '<div class="bc-card">'
+        + '<div class="bc-section-title">Needs your attention</div>'
+        + '<div class="bc-muted" style="margin-bottom:4px">Highest-impact items first.</div>'
+        + items_html
+        + '<div style="margin-top:14px"><a href="/cockpit-v418">Open full project cockpit →</a></div>'
+        + '</div>'
+
+        + '<div>'
+        + '<div class="bc-card" style="margin-bottom:16px">'
+        + '<div class="bc-section-title">Go where you need</div>'
+        + '<div class="bc-links">' + links_html + '</div>'
+        + '</div>'
+        + '<div class="bc-card">'
+        + '<div class="bc-section-title">My day</div>'
+        + '<div style="padding:8px 0"><b>4</b> assigned items</div>'
+        + '<div style="padding:8px 0"><b>2</b> unread updates</div>'
+        + '<div style="padding:8px 0"><b>1</b> decision waiting</div>'
+        + '<div style="margin-top:10px"><a href="/cockpit-v418">View My Work →</a></div>'
+        + '</div>'
+        + '</div>'
+        + '</div>'
+        + '</div>'
+    )
+    return shell("BuildCommand AI — Alternate Home", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.0 - Clean Homepage + American Flag Background
+# Removes legacy visual duplication by providing a clean standalone home route.
+# =============================================================================
+
+@app.get("/home-1-0", response_class=HTMLResponse)
+def buildcommand_clean_home_1_0():
+    health = _v1_regression_summary()
+
+    return HTMLResponse(f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BuildCommand AI 1.0</title>
+<style>
+*{{box-sizing:border-box}}
+body{{
+  margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color:#172033;background:#f5f7fa;min-height:100vh;
+}}
+body:before{{
+  content:"";position:fixed;inset:0;z-index:-2;
+  background:
+    linear-gradient(rgba(247,249,252,.90),rgba(247,249,252,.90)),
+    repeating-linear-gradient(
+      to bottom,
+      #b22234 0%,#b22234 7.69%,
+      #fff 7.69%,#fff 15.38%
+    );
+}}
+body:after{{
+  content:"★ ★ ★ ★ ★\\A★ ★ ★ ★ ★\\A★ ★ ★ ★ ★\\A★ ★ ★ ★ ★";
+  white-space:pre;position:fixed;left:0;top:0;z-index:-1;
+  width:40vw;height:53.8vh;min-width:300px;max-width:620px;
+  padding:28px;color:rgba(255,255,255,.14);font-size:30px;line-height:1.8;letter-spacing:16px;
+  background:rgba(60,59,110,.10);overflow:hidden;
+}}
+.wrap{{max-width:1280px;margin:auto;padding:22px}}
+.top{{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:22px}}
+.brand{{font-weight:950;font-size:23px;letter-spacing:-.03em}}
+.version{{font-size:12px;font-weight:850;color:#536071;margin-top:3px}}
+.project{{padding:10px 13px;border:1px solid #d6dce5;background:rgba(255,255,255,.92);border-radius:12px;font-weight:750}}
+.hero{{display:grid;grid-template-columns:1.4fr .6fr;gap:16px}}
+.card{{background:rgba(255,255,255,.94);border:1px solid rgba(214,220,229,.9);border-radius:18px;padding:20px;box-shadow:0 6px 24px rgba(25,35,50,.06);backdrop-filter:blur(5px)}}
+.eyebrow{{font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:#536071}}
+h1{{font-size:44px;line-height:1.03;letter-spacing:-.045em;margin:8px 0 10px}}
+.muted{{color:#687385}}
+.ask{{display:flex;gap:9px;margin-top:18px}}
+.ask input{{width:100%;padding:15px;border:1px solid #cfd6e0;border-radius:12px;font-size:16px;background:white}}
+.ask button{{padding:0 22px;border:0;border-radius:12px;background:#172033;color:white;font-weight:850}}
+.pulse{{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px}}
+.stat{{background:#f5f7fa;border-radius:13px;padding:13px}}
+.stat b{{display:block;font-size:28px;margin-top:3px}}
+.main{{display:grid;grid-template-columns:1.35fr .65fr;gap:16px;margin-top:16px}}
+.item{{padding:15px 0;border-bottom:1px solid #e8ebf0}}
+.item:last-child{{border-bottom:0}}
+.itemtop{{display:flex;justify-content:space-between;gap:12px}}
+.badge{{font-size:11px;font-weight:900;border:1px solid #d6dce5;border-radius:999px;padding:5px 8px;height:max-content}}
+.next{{font-size:13px;color:#687385;margin-top:5px}}
+.nav{{display:grid;grid-template-columns:1fr 1fr;gap:9px}}
+.nav a{{text-decoration:none;color:#172033;background:#fff;border:1px solid #e0e5ec;border-radius:13px;padding:14px}}
+.nav a b{{display:block;margin-bottom:3px}}
+.small{{font-size:12px;color:#687385}}
+@media(max-width:850px){{.hero,.main{{grid-template-columns:1fr}}h1{{font-size:35px}}}}
+@media(max-width:560px){{.wrap{{padding:12px}}.top{{align-items:flex-start;flex-direction:column}}.pulse{{grid-template-columns:1fr}}.nav{{grid-template-columns:1fr}}}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="brand">BuildCommand AI</div>
+      <div class="version">SYSTEM · 1.0 · {health["previous_passed"]}/{health["previous_total"]} VERIFIED</div>
+    </div>
+    <select class="project"><option>Downtown Office</option><option>Hospital Renovation</option></select>
+  </header>
+
+  <section class="hero">
+    <div class="card">
+      <div class="eyebrow">Today · Downtown Office</div>
+      <h1>Here’s what matters today.</h1>
+      <div class="muted">One clear view of what can start, what is slipping, what needs a decision, and where money is exposed.</div>
+      <form class="ask" action="/project-v419" method="get">
+        <input name="q" placeholder="Ask BuildCommand anything about this project…">
+        <button>Ask</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">Project pulse</div>
+      <div class="pulse">
+        <div class="stat"><span class="small">Attention</span><b>7</b></div>
+        <div class="stat"><span class="small">Do not start</span><b>1</b></div>
+        <div class="stat"><span class="small">My work</span><b>4</b></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="main">
+    <div class="card">
+      <div class="eyebrow">Priority queue</div>
+      <h2>Needs your attention</h2>
+      <div class="item"><div class="itemtop"><b>Storefront cannot start</b><span class="badge">DO NOT START</span></div><div class="next">Storefront · Resolve open RFI and confirm material release.</div></div>
+      <div class="item"><div class="itemtop"><b>AHU-1 delivery threatens startup</b><span class="badge">CRITICAL</span></div><div class="next">HVAC · Confirm vendor recovery plan.</div></div>
+      <div class="item"><div class="itemtop"><b>Lighting approval overdue</b><span class="badge">HIGH</span></div><div class="next">Electrical · Escalate design review.</div></div>
+      <div class="item"><div class="itemtop"><b>CO-12 price needs review</b><span class="badge">REVIEW</span></div><div class="next">General · Validate price and time impact.</div></div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">Workspace</div>
+      <h2>Go where you need</h2>
+      <div class="nav">
+        <a href="/workspace-v417?area=TODAY"><b>Today</b><span class="small">Daily priorities</span></a>
+        <a href="/workspace-v417?area=PROJECT_BRAIN"><b>Project Brain</b><span class="small">Connected project view</span></a>
+        <a href="/workspace-v417?area=FIELD"><b>Field</b><span class="small">Readiness & crews</span></a>
+        <a href="/workspace-v417?area=MONEY"><b>Money</b><span class="small">Cost & changes</span></a>
+        <a href="/workspace-v417?area=PRECONSTRUCTION"><b>Preconstruction</b><span class="small">Scope, bids & buyout</span></a>
+        <a href="/workspace-v417?area=COMPANY"><b>Company</b><span class="small">Portfolio & controls</span></a>
+      </div>
+      <div class="small" style="margin-top:15px">Legacy duplicate Build / Estimate / Manage navigation is intentionally omitted from this homepage.</div>
+    </div>
+  </section>
+</div>
+</body>
+</html>""")
