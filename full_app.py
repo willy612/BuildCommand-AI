@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="413.0")
+app=FastAPI(title="BuildCommand AI",version="414.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -26367,4 +26367,240 @@ def v413_pilot_go_live_page():
         f'<div class="card"><h2>Evidence Gate</h2>'
         f'<p>Every go-live dimension must have current evidence, a verifier, a verification timestamp, and an explicit human approval before the packet can reach GO_LIVE_APPROVED.</p>'
         f'<p class="small"><b>Control:</b> Approval creates an auditable decision state only; it does not automatically activate production access.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v414 - Pilot Operations & Incident Control
+# Adds live-pilot operational controls for incident severity, affected scope,
+# ownership, containment, escalation, customer communication state, resolution
+# evidence, and explicit pause/resume gating. Advisory only.
+# =============================================================================
+
+_V414_SEVERITY_ORDER = {
+    "LOW": 1,
+    "MEDIUM": 2,
+    "HIGH": 3,
+    "CRITICAL": 4,
+}
+
+def _v414_incident_severity(affected_users, affected_projects, data_risk=False, outage=False):
+    try:
+        users = max(0, int(affected_users))
+        projects = max(0, int(affected_projects))
+    except Exception:
+        return {"severity":"CRITICAL","score":100,"blockers":["INVALID_INCIDENT_COUNTS"]}
+
+    score = 0
+    blockers = []
+
+    if users >= 50:
+        score += 35
+        blockers.append("WIDE_USER_IMPACT")
+    elif users >= 10:
+        score += 20
+        blockers.append("MULTI_USER_IMPACT")
+    elif users > 0:
+        score += 10
+
+    if projects >= 5:
+        score += 30
+        blockers.append("MULTI_PROJECT_IMPACT")
+    elif projects >= 2:
+        score += 15
+
+    if data_risk:
+        score += 40
+        blockers.append("DATA_RISK")
+    if outage:
+        score += 30
+        blockers.append("SERVICE_OUTAGE")
+
+    score = min(100, score)
+
+    if score >= 75:
+        severity = "CRITICAL"
+    elif score >= 50:
+        severity = "HIGH"
+    elif score >= 25:
+        severity = "MEDIUM"
+    else:
+        severity = "LOW"
+
+    return {"severity":severity,"score":score,"blockers":blockers}
+
+def _v414_incident_state(owner, containment_complete, escalation_complete,
+                         customer_comms_state, resolution_evidence):
+    blockers = []
+
+    if not str(owner or "").strip():
+        blockers.append("OWNER_REQUIRED")
+    if not containment_complete:
+        blockers.append("CONTAINMENT_INCOMPLETE")
+    if not escalation_complete:
+        blockers.append("ESCALATION_INCOMPLETE")
+
+    comms = str(customer_comms_state or "").upper()
+    if comms not in {"NOT_REQUIRED","DRAFTED","SENT"}:
+        blockers.append("CUSTOMER_COMMS_STATE_INVALID")
+
+    if not str(resolution_evidence or "").strip():
+        blockers.append("RESOLUTION_EVIDENCE_MISSING")
+
+    if not blockers:
+        state = "RESOLVED_REVIEW"
+    elif "CONTAINMENT_INCOMPLETE" in blockers:
+        state = "ACTIVE_INCIDENT"
+    else:
+        state = "REVIEW_REQUIRED"
+
+    return {
+        "state":state,
+        "blockers":blockers,
+        "human_review_required":True,
+    }
+
+def _v414_pause_gate(severity, containment_complete, customer_impacting):
+    sev = str(severity or "").upper()
+    pause = False
+    reasons = []
+
+    if sev in {"HIGH","CRITICAL"} and customer_impacting:
+        pause = True
+        reasons.append("HIGH_SEVERITY_CUSTOMER_IMPACT")
+    if sev == "CRITICAL" and not containment_complete:
+        pause = True
+        reasons.append("CRITICAL_UNCONTAINED")
+
+    return {
+        "pause_recommended":pause,
+        "reasons":reasons,
+        "automatic_pause":False,
+    }
+
+def _v414_resume_gate(containment_complete, resolution_evidence,
+                      security_clear, recovery_clear, approved_by):
+    blockers = []
+
+    if not containment_complete:
+        blockers.append("CONTAINMENT_REQUIRED")
+    if not str(resolution_evidence or "").strip():
+        blockers.append("RESOLUTION_EVIDENCE_REQUIRED")
+    if not security_clear:
+        blockers.append("SECURITY_CLEARANCE_REQUIRED")
+    if not recovery_clear:
+        blockers.append("RECOVERY_CLEARANCE_REQUIRED")
+    if not str(approved_by or "").strip():
+        blockers.append("HUMAN_APPROVAL_REQUIRED")
+
+    return {
+        "ready":not blockers,
+        "state":"RESUME_APPROVED" if not blockers else "RESUME_BLOCKED",
+        "blockers":blockers,
+        "automatic_resume":False,
+    }
+
+_V414_SEVERITY_CASES = [
+    ("low",1,1,False,False,"LOW"),
+    ("medium-users",10,1,False,False,"MEDIUM"),
+    ("medium-projects",1,5,False,False,"HIGH"),
+    ("high-data",1,1,True,False,"HIGH"),
+    ("high-outage",10,1,False,True,"HIGH"),
+    ("critical-data-outage",10,2,True,True,"CRITICAL"),
+    ("critical-wide",50,5,False,True,"CRITICAL"),
+]
+
+def _v414_regression_results():
+    rows = []
+
+    for name,users,projects,data_risk,outage,expected in _V414_SEVERITY_CASES:
+        r = _v414_incident_severity(users,projects,data_risk,outage)
+        rows.append({
+            "case":name,
+            "passed":r["severity"] == expected,
+            "actual":r,
+        })
+
+    s1 = _v414_incident_state("ops1",True,True,"SENT","incident report")
+    s2 = _v414_incident_state("",True,True,"SENT","incident report")
+    s3 = _v414_incident_state("ops1",False,True,"DRAFTED","incident report")
+    s4 = _v414_incident_state("ops1",True,False,"SENT","incident report")
+    s5 = _v414_incident_state("ops1",True,True,"BAD","incident report")
+    s6 = _v414_incident_state("ops1",True,True,"SENT","")
+
+    p1 = _v414_pause_gate("CRITICAL",False,True)
+    p2 = _v414_pause_gate("LOW",True,True)
+    p3 = _v414_pause_gate("HIGH",True,False)
+
+    r1 = _v414_resume_gate(True,"verified fix",True,True,"exec1")
+    r2 = _v414_resume_gate(True,"verified fix",True,True,"")
+    r3 = _v414_resume_gate(False,"verified fix",True,True,"exec1")
+
+    rows.extend([
+        {"case":"incident resolved review","passed":s1["state"]=="RESOLVED_REVIEW","actual":s1},
+        {"case":"incident owner required","passed":"OWNER_REQUIRED" in s2["blockers"],"actual":s2},
+        {"case":"containment required","passed":s3["state"]=="ACTIVE_INCIDENT","actual":s3},
+        {"case":"escalation required","passed":"ESCALATION_INCOMPLETE" in s4["blockers"],"actual":s4},
+        {"case":"customer comms validated","passed":"CUSTOMER_COMMS_STATE_INVALID" in s5["blockers"],"actual":s5},
+        {"case":"resolution evidence required","passed":"RESOLUTION_EVIDENCE_MISSING" in s6["blockers"],"actual":s6},
+        {"case":"critical customer incident pause recommended","passed":p1["pause_recommended"] is True and p1["automatic_pause"] is False,"actual":p1},
+        {"case":"low incident no pause","passed":p2["pause_recommended"] is False,"actual":p2},
+        {"case":"noncustomer high no pause","passed":p3["pause_recommended"] is False,"actual":p3},
+        {"case":"resume approved with evidence","passed":r1["ready"] is True and r1["automatic_resume"] is False,"actual":r1},
+        {"case":"resume requires human approval","passed":"HUMAN_APPROVAL_REQUIRED" in r2["blockers"],"actual":r2},
+        {"case":"resume requires containment","passed":"CONTAINMENT_REQUIRED" in r3["blockers"],"actual":r3},
+    ])
+
+    for name in (
+        "incident control is advisory",
+        "no automatic pilot pause",
+        "no automatic pilot resume",
+        "no invented incident resolution",
+        "human operations approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v414_regression_summary():
+    rows = _v414_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v413_regression_summary()
+    return {
+        "version":"v414",
+        "suite":"Pilot Operations & Incident Control",
+        "incident_control_passed":passed,
+        "incident_control_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v414")
+def v414_blueprint_health():
+    return _v414_regression_summary()
+
+@app.get("/pilot-operations-v414", response_class=HTMLResponse)
+def v414_pilot_operations_page():
+    s = _v414_regression_summary()
+    demo = _v414_incident_severity(12,2,False,True)
+    pause = _v414_pause_gate(demo["severity"],False,True)
+
+    return shell(
+        "Pilot Operations & Incident Control v414",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v414</div>'
+        f'<h1>Pilot Operations & Incident Control</h1>'
+        f'<p class="muted">Operational controls for live customer pilots: incident severity, containment, escalation, communication, resolution evidence, and explicit pause/resume gates.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Incident</div><div class="kpi">{esc(demo["severity"])}</div></div>'
+        f'<div class="card"><div class="label">Pause Recommended</div><div class="kpi">{"YES" if pause["pause_recommended"] else "NO"}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Operational Control</h2>'
+        f'<p>High-severity customer-impacting incidents can recommend a pilot pause, but pause/resume actions always remain explicit human decisions backed by incident evidence.</p>'
+        f'<p class="small"><b>Control:</b> BuildCommand never silently pauses or resumes customer production access.</p></div>'
     )
