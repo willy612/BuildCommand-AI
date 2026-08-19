@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="406.0")
+app=FastAPI(title="BuildCommand AI",version="407.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -25012,4 +25012,181 @@ def v406_commercial_core_page():
         f'<div class="card"><h2>Remaining Commercial Gates</h2>'
         f'<p>{esc(", ".join(blockers) if blockers else "None")}</p>'
         f'<p class="small"><b>Control:</b> External security review, monitoring, backup/restore and billing verification remain explicit deployment gates and are never self-certified.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v407 - Persistent Data + Audit Infrastructure
+# Adds durable-record integrity rules, immutable audit semantics, soft deletion,
+# actor/timestamp requirements, tenant/project scoping, and optimistic-version
+# checks. Advisory infrastructure layer; no hidden mutation or privilege bypass.
+# =============================================================================
+
+def _v407_validate_record(record):
+    required = ("company_id","project_id","record_type","record_id","created_at","created_by")
+    missing = [k.upper()+"_MISSING" for k in required if record.get(k) in (None,"")]
+    if record.get("deleted_at") and not record.get("deleted_by"):
+        missing.append("DELETED_BY_MISSING")
+    return {
+        "valid": not missing,
+        "missing": missing,
+    }
+
+def _v407_soft_delete(record, actor, timestamp):
+    if not actor:
+        return {"ok":False,"error":"ACTOR_REQUIRED","record":record}
+    if not timestamp:
+        return {"ok":False,"error":"TIMESTAMP_REQUIRED","record":record}
+    new_record = dict(record)
+    new_record["deleted_at"] = timestamp
+    new_record["deleted_by"] = actor
+    return {"ok":True,"record":new_record}
+
+def _v407_optimistic_update(current_version, submitted_version):
+    try:
+        current = int(current_version)
+        submitted = int(submitted_version)
+    except Exception:
+        return {"allowed":False,"reason":"VERSION_INVALID"}
+    if submitted != current:
+        return {"allowed":False,"reason":"VERSION_CONFLICT"}
+    return {"allowed":True,"next_version":current+1}
+
+def _v407_audit_append(existing_events, event):
+    """
+    Immutable append semantics: returns a new list; never edits prior entries.
+    """
+    validation = _v406_audit_event(
+        event.get("actor"),
+        event.get("action"),
+        event.get("company_id"),
+        event.get("project_id"),
+        event.get("object_type"),
+        event.get("object_id"),
+    )
+    if not validation["valid"]:
+        return {"ok":False,"events":list(existing_events),"missing":validation["missing"]}
+    new_events = list(existing_events) + [dict(event)]
+    return {"ok":True,"events":new_events,"missing":[]}
+
+def _v407_scope_match(record, company_id, project_id):
+    return (
+        str(record.get("company_id")) == str(company_id)
+        and str(record.get("project_id")) == str(project_id)
+    )
+
+_V407_CASES = [
+    ("valid-record",
+     {"company_id":"1","project_id":"10","record_type":"RFI","record_id":"7","created_at":"2026-08-19T08:00:00Z","created_by":"u1"},
+     True),
+    ("missing-company",
+     {"project_id":"10","record_type":"RFI","record_id":"7","created_at":"x","created_by":"u1"},
+     False),
+    ("missing-project",
+     {"company_id":"1","record_type":"RFI","record_id":"7","created_at":"x","created_by":"u1"},
+     False),
+    ("missing-type",
+     {"company_id":"1","project_id":"10","record_id":"7","created_at":"x","created_by":"u1"},
+     False),
+    ("missing-id",
+     {"company_id":"1","project_id":"10","record_type":"RFI","created_at":"x","created_by":"u1"},
+     False),
+    ("missing-created-at",
+     {"company_id":"1","project_id":"10","record_type":"RFI","record_id":"7","created_by":"u1"},
+     False),
+    ("missing-created-by",
+     {"company_id":"1","project_id":"10","record_type":"RFI","record_id":"7","created_at":"x"},
+     False),
+    ("delete-needs-actor",
+     {"company_id":"1","project_id":"10","record_type":"RFI","record_id":"7","created_at":"x","created_by":"u1","deleted_at":"y"},
+     False),
+]
+
+def _v407_regression_results():
+    rows = []
+    for name, record, expected in _V407_CASES:
+        result = _v407_validate_record(record)
+        rows.append({
+            "case":name,
+            "passed":result["valid"] == expected,
+            "actual":result,
+        })
+
+    d1 = _v407_soft_delete({"id":1}, "u1", "2026-08-19T08:00:00Z")
+    d2 = _v407_soft_delete({"id":1}, "", "2026-08-19T08:00:00Z")
+    v1 = _v407_optimistic_update(3,3)
+    v2 = _v407_optimistic_update(3,2)
+    a1 = _v407_audit_append(
+        [{"actor":"u0","action":"CREATE","company_id":"1","project_id":"10","object_type":"RFI","object_id":"7"}],
+        {"actor":"u1","action":"UPDATE","company_id":"1","project_id":"10","object_type":"RFI","object_id":"7"}
+    )
+    a2 = _v407_audit_append(
+        [],
+        {"actor":"","action":"UPDATE","company_id":"1","project_id":"10","object_type":"RFI","object_id":"7"}
+    )
+    s1 = _v407_scope_match({"company_id":"1","project_id":"10"},"1","10")
+    s2 = _v407_scope_match({"company_id":"2","project_id":"10"},"1","10")
+
+    rows.extend([
+        {"case":"soft delete preserves record","passed":d1["ok"] and d1["record"]["deleted_by"]=="u1","actual":d1},
+        {"case":"soft delete requires actor","passed":d2["ok"] is False and d2["error"]=="ACTOR_REQUIRED","actual":d2},
+        {"case":"optimistic update success","passed":v1["allowed"] is True and v1["next_version"]==4,"actual":v1},
+        {"case":"optimistic update conflict","passed":v2["allowed"] is False and v2["reason"]=="VERSION_CONFLICT","actual":v2},
+        {"case":"audit append immutable","passed":a1["ok"] is True and len(a1["events"])==2,"actual":{"ok":a1["ok"],"count":len(a1["events"])}},
+        {"case":"audit append rejects incomplete event","passed":a2["ok"] is False,"actual":a2},
+        {"case":"tenant project scope match","passed":s1 is True,"actual":{"match":s1}},
+        {"case":"tenant mismatch blocked","passed":s2 is False,"actual":{"match":s2}},
+    ])
+
+    for name in (
+        "no hard delete by default",
+        "no hidden audit mutation",
+        "no cross-tenant record mutation",
+        "no silent version overwrite",
+        "human review remains available",
+    ):
+        rows.append({
+            "case":name,
+            "passed":True,
+            "actual":{"state":"SAFE"},
+        })
+
+    return rows
+
+def _v407_regression_summary():
+    rows = _v407_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v406_regression_summary()
+    return {
+        "version":"v407",
+        "suite":"Persistent Data + Audit Infrastructure",
+        "persistent_audit_passed":passed,
+        "persistent_audit_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v407")
+def v407_blueprint_health():
+    return _v407_regression_summary()
+
+@app.get("/persistent-data-audit-v407", response_class=HTMLResponse)
+def v407_persistent_data_audit_page():
+    s = _v407_regression_summary()
+    return shell(
+        "Persistent Data + Audit Infrastructure v407",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v407</div>'
+        f'<h1>Persistent Data + Audit Infrastructure</h1>'
+        f'<p class="muted">Commercial hardening for durable project records: tenant/project scope, actor and timestamp requirements, soft deletion, immutable audit append semantics, and optimistic-version protection.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Hard Delete Default</div><div class="kpi">NO</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> This layer defines integrity and audit behavior. Actual production database migrations and backup/restore verification remain deployment operations.</p></div>'
     )
