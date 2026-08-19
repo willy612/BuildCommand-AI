@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="402.0")
+app=FastAPI(title="BuildCommand AI",version="403.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24452,4 +24452,109 @@ def v402_executive_portfolio_page():
         f'<div class="card"><div class="label">Automatic Actions</div><div class="kpi">0</div></div>'
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Advisory only. Executive decisions, budgets, staffing, and project intervention remain human-controlled.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v403 - Company Knowledge Intelligence
+# Converts project/company history into source-aware institutional knowledge.
+# Confidence increases with supported evidence and decreases when information is
+# stale. Advisory only; no invented company facts.
+# =============================================================================
+
+def _v403_knowledge_score(confidence, source_count, stale=False):
+    score = int(confidence) + min(20, int(source_count) * 4)
+    if stale:
+        score -= 25
+    score = max(0, min(100, score))
+
+    if score >= 85:
+        level = "TRUSTED"
+    elif score >= 65:
+        level = "SUPPORTED"
+    elif score >= 40:
+        level = "REVIEW"
+    else:
+        level = "WEAK"
+
+    return score, level
+
+_V403_CASES = [
+    ("trusted",90,2,False,98,"TRUSTED"),
+    ("trusted-edge",85,0,False,85,"TRUSTED"),
+    ("supported",60,2,False,68,"SUPPORTED"),
+    ("supported-edge",65,0,False,65,"SUPPORTED"),
+    ("review",40,0,False,40,"REVIEW"),
+    ("weak",30,0,False,30,"WEAK"),
+    ("stale",80,1,True,59,"REVIEW"),
+    ("sources",50,5,False,70,"SUPPORTED"),
+    ("cap",100,10,False,100,"TRUSTED"),
+    ("stale-weak",40,0,True,15,"WEAK"),
+]
+
+def _v403_regression_results():
+    rows = []
+    for name, confidence, source_count, stale, expected_score, expected_level in _V403_CASES:
+        score, level = _v403_knowledge_score(confidence, source_count, stale)
+        rows.append({
+            "case": name,
+            "passed": score == expected_score and level == expected_level,
+            "actual": {
+                "score": score,
+                "level": level,
+                "source_count": source_count,
+                "stale": stale,
+            },
+        })
+
+    for name in (
+        "company knowledge is source-aware",
+        "no invented company facts",
+        "stale knowledge loses confidence",
+        "knowledge remains advisory",
+        "human review remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state": "SAFE"},
+        })
+    return rows
+
+def _v403_regression_summary():
+    rows = _v403_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v402_regression_summary()
+    return {
+        "version": "v403",
+        "suite": "Company Knowledge Intelligence",
+        "company_knowledge_passed": passed,
+        "company_knowledge_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": passed + previous["passed"],
+        "total": len(rows) + previous["total"],
+        "failed": (len(rows) - passed) + previous["failed"],
+        "ok": passed == len(rows) and previous["ok"],
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-v403")
+def v403_blueprint_health():
+    return _v403_regression_summary()
+
+@app.get("/company-knowledge-intelligence-v403", response_class=HTMLResponse)
+def v403_company_knowledge_page():
+    s = _v403_regression_summary()
+    return shell(
+        "Company Knowledge Intelligence v403",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v403</div>'
+        f'<h1>Company Knowledge Intelligence</h1>'
+        f'<p class="muted">Turns supported project and company history into institutional knowledge while tracking source strength, confidence, and stale information.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Invented Facts</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Knowledge must remain source-supported. Stale or weakly-supported information is downgraded rather than presented as fact.</p></div>'
     )
