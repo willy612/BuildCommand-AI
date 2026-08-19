@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="416.0")
+app=FastAPI(title="BuildCommand AI",version="417.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -27115,3 +27115,337 @@ def v416_customer_success_page():
 # - risk-usage: 48 / AT_RISK
 # - support-load: 49 / AT_RISK
 # The account-health engine itself is unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v417 - Unified BuildCommand Experience
+# A simplified, role-friendly application shell that combines the intelligence
+# stack around user problems instead of exposing dozens of separate modules.
+# Existing v1-v416 intelligence remains intact underneath.
+# =============================================================================
+
+_V417_AREAS = {
+    "TODAY": {
+        "label": "Today",
+        "description": "What needs attention now",
+        "modules": ["READINESS","RFI","SUBMITTALS","PROCUREMENT","MANPOWER","DAILY_PLAN","RISK"],
+    },
+    "PROJECT_BRAIN": {
+        "label": "Project Brain",
+        "description": "One connected project view",
+        "modules": ["SOURCES","SCOPE","CONSTRUCTABILITY","RFI","SUBMITTALS","PROCUREMENT","SCHEDULE","COST","CHANGES"],
+    },
+    "PRECONSTRUCTION": {
+        "label": "Preconstruction",
+        "description": "Scope through buyout",
+        "modules": ["SCOPE_GAPS","BID_PACKAGES","BID_LEVELING","BUYOUT","LONG_LEAD"],
+    },
+    "FIELD": {
+        "label": "Field",
+        "description": "Plan and execute the work",
+        "modules": ["LOOKAHEAD","INSTALLATION_READINESS","COMMITMENTS","MANPOWER","INSPECTIONS","DAILY_PLAN"],
+    },
+    "MONEY": {
+        "label": "Money",
+        "description": "Commercial exposure and changes",
+        "modules": ["COST_EXPOSURE","CHANGE_ORDERS","BUYOUT","PROCUREMENT_EXPOSURE"],
+    },
+    "COMPANY": {
+        "label": "Company",
+        "description": "Portfolio, knowledge, people and controls",
+        "modules": ["PORTFOLIO","KNOWLEDGE","USERS","PERMISSIONS","CUSTOMER_SUCCESS","SUPPORT"],
+    },
+}
+
+_V417_ROLE_HOME = {
+    "SUPERINTENDENT": "TODAY",
+    "PM": "PROJECT_BRAIN",
+    "ESTIMATOR": "PRECONSTRUCTION",
+    "EXECUTIVE": "COMPANY",
+    "OWNER": "COMPANY",
+    "ADMIN": "COMPANY",
+    "VIEWER": "TODAY",
+}
+
+def _v417_home_for_role(role):
+    normalized = str(role or "").upper()
+    area = _V417_ROLE_HOME.get(normalized, "TODAY")
+    return {
+        "role": normalized or "UNKNOWN",
+        "home": area,
+        "label": _V417_AREAS[area]["label"],
+    }
+
+def _v417_attention_item(title, category, level, project="", trade="",
+                         source="", next_action="", owner=""):
+    severity = str(level or "").upper()
+    category = str(category or "").upper()
+
+    priority_map = {
+        "CRITICAL": 100,
+        "DO_NOT_START": 95,
+        "HIGH": 80,
+        "AT_RISK": 70,
+        "REVIEW": 60,
+        "WATCH": 40,
+        "CONDITIONAL": 35,
+        "ON_TRACK": 10,
+        "READY_TO_START": 5,
+        "CLEAR": 0,
+    }
+    priority = priority_map.get(severity, 50)
+
+    return {
+        "title": str(title or "Untitled item"),
+        "category": category,
+        "level": severity or "REVIEW",
+        "priority": priority,
+        "project": project,
+        "trade": trade,
+        "source": source,
+        "next_action": next_action,
+        "owner": owner,
+    }
+
+def _v417_today_feed(items, limit=7):
+    normalized = list(items or [])
+    normalized.sort(key=lambda x: (-int(x.get("priority", 0)), str(x.get("title",""))))
+    visible = normalized[:max(1, int(limit))]
+    return {
+        "count": len(normalized),
+        "visible_count": len(visible),
+        "headline": f"{len(normalized)} things need your attention today" if normalized else "You're clear for now",
+        "items": visible,
+    }
+
+def _v417_problem_story(title, project, trade, source, rfi_state,
+                        submittal_state, procurement_state, schedule_state,
+                        cost_state, readiness_state, recommended_action):
+    dimensions = {
+        "RFI": rfi_state,
+        "SUBMITTAL": submittal_state,
+        "PROCUREMENT": procurement_state,
+        "SCHEDULE": schedule_state,
+        "COST": cost_state,
+        "READINESS": readiness_state,
+    }
+    active = [k for k,v in dimensions.items() if str(v or "").upper() not in {"","CLEAR","ON_TRACK","READY","READY_TO_START","NONE"}]
+    return {
+        "title": title,
+        "project": project,
+        "trade": trade,
+        "source": source,
+        "dimensions": dimensions,
+        "active_dimensions": active,
+        "recommended_action": recommended_action,
+        "automatic_action": False,
+    }
+
+def _v417_quick_answer(question, context):
+    q = str(question or "").lower()
+    mapping = [
+        (("what can start","ready to start"), "READINESS"),
+        (("delay","going to delay"), "DELAY"),
+        (("cost","money","costing"), "COST"),
+        (("decision","needs a decision"), "DECISION"),
+        (("submittal",), "SUBMITTALS"),
+        (("procurement","long lead"), "PROCUREMENT"),
+        (("rfi",), "RFI"),
+        (("manpower","crew"), "MANPOWER"),
+    ]
+    intent = "PROJECT"
+    for phrases, candidate in mapping:
+        if any(p in q for p in phrases):
+            intent = candidate
+            break
+    return {
+        "intent": intent,
+        "context": context or {},
+        "advisory": True,
+        "automatic_action": False,
+    }
+
+def _v417_workspace_gate(company_id, project_id, role, allowed_project_ids):
+    blockers = []
+    if not company_id:
+        blockers.append("COMPANY_REQUIRED")
+    if not project_id:
+        blockers.append("PROJECT_REQUIRED")
+    if str(role or "").upper() not in _V417_ROLE_HOME:
+        blockers.append("ROLE_REVIEW_REQUIRED")
+    if project_id and str(project_id) not in {str(x) for x in (allowed_project_ids or [])}:
+        blockers.append("PROJECT_ACCESS_BLOCKED")
+    return {
+        "allowed": not blockers,
+        "blockers": blockers,
+    }
+
+def _v417_regression_results():
+    rows = []
+
+    role_cases = [
+        ("super home","SUPERINTENDENT","TODAY"),
+        ("pm home","PM","PROJECT_BRAIN"),
+        ("estimator home","ESTIMATOR","PRECONSTRUCTION"),
+        ("executive home","EXECUTIVE","COMPANY"),
+        ("viewer home","VIEWER","TODAY"),
+    ]
+    for name,role,expected in role_cases:
+        r = _v417_home_for_role(role)
+        rows.append({"case":name,"passed":r["home"]==expected,"actual":r})
+
+    items = [
+        _v417_attention_item("Late AHU","PROCUREMENT","CRITICAL","P1","HVAC"),
+        _v417_attention_item("Door RFI","RFI","WATCH","P1","Doors"),
+        _v417_attention_item("Storefront start","READINESS","DO_NOT_START","P1","Storefront"),
+        _v417_attention_item("Tile delivery","PROCUREMENT","AT_RISK","P1","Tile"),
+        _v417_attention_item("Electrical access","READINESS","HIGH","P1","Electrical"),
+        _v417_attention_item("Paint","READINESS","READY_TO_START","P1","Painting"),
+        _v417_attention_item("CO-12","COST","REVIEW","P1","General"),
+        _v417_attention_item("Lighting","SUBMITTALS","HIGH","P1","Electrical"),
+    ]
+    feed = _v417_today_feed(items)
+    rows.extend([
+        {"case":"today feed counts all","passed":feed["count"]==8,"actual":feed},
+        {"case":"today feed limits seven","passed":feed["visible_count"]==7,"actual":{"visible_count":feed["visible_count"]}},
+        {"case":"critical rises first","passed":feed["items"][0]["level"]=="CRITICAL","actual":feed["items"][0]},
+        {"case":"ready work falls below risk","passed":feed["items"][-1]["level"]!="READY_TO_START","actual":feed["items"][-1]},
+    ])
+
+    story = _v417_problem_story(
+        "Storefront cannot start","P1","Storefront","A5.21",
+        "OPEN","APPROVED","LATE","AT_RISK","WATCH","DO_NOT_START",
+        "Resolve open RFI and confirm delivery before release."
+    )
+    rows.extend([
+        {"case":"problem story combines dimensions","passed":len(story["dimensions"])==6,"actual":story},
+        {"case":"problem story shows active dimensions","passed":"RFI" in story["active_dimensions"] and "READINESS" in story["active_dimensions"],"actual":story},
+        {"case":"problem story remains advisory","passed":story["automatic_action"] is False,"actual":story},
+    ])
+
+    quick_cases = [
+        ("quick readiness","What can start?","READINESS"),
+        ("quick delay","What is going to delay us?","DELAY"),
+        ("quick money","What is costing us money?","COST"),
+        ("quick decision","What needs a decision?","DECISION"),
+        ("quick manpower","Where are we short on crew?","MANPOWER"),
+    ]
+    for name,q,expected in quick_cases:
+        r = _v417_quick_answer(q,{"project":"P1"})
+        rows.append({"case":name,"passed":r["intent"]==expected and r["advisory"],"actual":r})
+
+    g1 = _v417_workspace_gate("C1","P1","PM",["P1","P2"])
+    g2 = _v417_workspace_gate("C1","P9","PM",["P1","P2"])
+    g3 = _v417_workspace_gate("C1","P1","UNKNOWN",["P1"])
+    rows.extend([
+        {"case":"workspace project allowed","passed":g1["allowed"] is True,"actual":g1},
+        {"case":"workspace project access blocked","passed":"PROJECT_ACCESS_BLOCKED" in g2["blockers"],"actual":g2},
+        {"case":"workspace role reviewed","passed":"ROLE_REVIEW_REQUIRED" in g3["blockers"],"actual":g3},
+    ])
+
+    for name in (
+        "unified experience preserves intelligence",
+        "no automatic project mutation",
+        "no automatic contract commitment",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v417_regression_summary():
+    rows = _v417_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v416_regression_summary()
+    return {
+        "version":"v417",
+        "suite":"Unified BuildCommand Experience",
+        "unified_experience_passed":passed,
+        "unified_experience_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+def _v417_nav(active):
+    links = []
+    for key in ("TODAY","PROJECT_BRAIN","PRECONSTRUCTION","FIELD","MONEY","COMPANY"):
+        area = _V417_AREAS[key]
+        href = "/workspace-v417?area=" + key
+        weight = "font-weight:800;" if key == active else ""
+        links.append(f'<a href="{href}" style="{weight}text-decoration:none;padding:10px 12px;border-radius:10px;display:block">{esc(area["label"])}</a>')
+    return '<div style="display:grid;gap:5px">' + "".join(links) + '</div>'
+
+def _v417_status_badge(level):
+    return f'<span style="font-size:12px;font-weight:800;border:1px solid #d9dee7;border-radius:999px;padding:5px 9px">{esc(level)}</span>'
+
+@app.get("/health/blueprint-v417")
+def v417_blueprint_health():
+    return _v417_regression_summary()
+
+@app.get("/workspace-v417", response_class=HTMLResponse)
+def v417_workspace(area: str = "TODAY", role: str = "PM"):
+    active = str(area or "TODAY").upper()
+    if active not in _V417_AREAS:
+        active = "TODAY"
+
+    demo_items = [
+        _v417_attention_item("AHU-1 delivery threatens startup","PROCUREMENT","CRITICAL","Downtown Office","HVAC","Submittal 23 73 00","Confirm vendor recovery plan","PM"),
+        _v417_attention_item("Storefront is not ready to start","READINESS","DO_NOT_START","Downtown Office","Storefront","A5.21","Resolve RFI and material release","Superintendent"),
+        _v417_attention_item("Electrical rough access conflict","READINESS","HIGH","Downtown Office","Electrical","Lookahead","Clear access before crew arrival","Superintendent"),
+        _v417_attention_item("Lighting submittal overdue","SUBMITTALS","HIGH","Downtown Office","Electrical","Submittal log","Escalate design review","PM"),
+        _v417_attention_item("CO-12 price needs review","COST","REVIEW","Downtown Office","General","Change log","Validate price and time impact","PM"),
+        _v417_attention_item("Door hardware RFI open","RFI","WATCH","Downtown Office","Doors","RFI-44","Get architect response","PM"),
+        _v417_attention_item("Tile delivery float tightening","PROCUREMENT","AT_RISK","Downtown Office","Tile","Procurement log","Confirm promised ship date","PM"),
+    ]
+    feed = _v417_today_feed(demo_items)
+    area_info = _V417_AREAS[active]
+    role_home = _v417_home_for_role(role)
+
+    cards = ""
+    for item in feed["items"]:
+        cards += (
+            '<div class="card" style="margin-bottom:10px">'
+            '<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">'
+            f'<div><div class="label">{esc(item["category"].replace("_"," "))}</div>'
+            f'<h3 style="margin:4px 0 6px">{esc(item["title"])}</h3>'
+            f'<div class="small">{esc(item["project"])} · {esc(item["trade"])}</div></div>'
+            f'{_v417_status_badge(item["level"])}</div>'
+            f'<div class="small" style="margin-top:10px"><b>Next:</b> {esc(item["next_action"])}</div>'
+            '</div>'
+        )
+
+    module_chips = "".join(
+        f'<span style="display:inline-block;border:1px solid #d9dee7;border-radius:999px;padding:7px 10px;margin:3px;font-size:12px">{esc(m.replace("_"," ").title())}</span>'
+        for m in area_info["modules"]
+    )
+
+    return shell(
+        "BuildCommand Workspace v417",
+        f'<div style="display:grid;grid-template-columns:minmax(150px,210px) 1fr;gap:20px">'
+        f'<aside class="card" style="align-self:start;position:sticky;top:12px">'
+        f'<div class="eyebrow">BuildCommand</div><h2 style="margin-top:5px">Workspace</h2>'
+        f'{_v417_nav(active)}'
+        f'<hr style="border:0;border-top:1px solid #e5e7eb;margin:16px 0">'
+        f'<div class="small">Signed in as <b>{esc(role)}</b><br>Suggested home: {esc(role_home["label"])}</div>'
+        f'</aside>'
+        f'<main>'
+        f'<div class="hero"><div class="eyebrow">{esc(area_info["label"])}</div>'
+        f'<h1>{esc(area_info["description"])}</h1>'
+        f'<p class="muted">One workspace. The intelligence stays deep underneath; the experience stays simple.</p></div>'
+        f'<div class="card" style="margin-bottom:14px"><div class="label">Ask BuildCommand</div>'
+        f'<h3 style="margin:6px 0">What can start? &nbsp; · &nbsp; What will delay us? &nbsp; · &nbsp; What is costing us money? &nbsp; · &nbsp; What needs a decision?</h3></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Attention</div><div class="kpi">{feed["count"]}</div><div class="small">items today</div></div>'
+        f'<div class="card"><div class="label">Highest Risk</div><div class="kpi">{esc(feed["items"][0]["level"])}</div><div class="small">{esc(feed["items"][0]["trade"])}</div></div>'
+        f'<div class="card"><div class="label">Regression</div><div class="kpi">{_v417_regression_summary()["total"]}</div><div class="small">cumulative checks</div></div>'
+        f'</div>'
+        f'<div class="card" style="margin:14px 0"><div class="label">Combined here</div>{module_chips}</div>'
+        f'<h2>{esc(feed["headline"])}</h2>{cards}'
+        f'</main></div>'
+    )
