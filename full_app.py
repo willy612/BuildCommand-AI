@@ -1013,69 +1013,9 @@ def _v37_link_card(title,desc,href,label="Open"):
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
-    """v372 lightweight BuildCommand cover page with Blueprint source-intelligence hardening."""
-    pid=project_id()
-    try:
-        p=db().execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone()
-        project_name=str(p["name"] if p and p["name"] else "Current Project")
-    except Exception:
-        project_name="Current Project"
+    """BuildCommand AI 1.0 primary homepage."""
+    return buildcommand_clean_home_1_0()
 
-    body = """
-    <style>
-    .bc370-cover{min-height:calc(100vh - 120px);display:flex;flex-direction:column;justify-content:center}
-    .bc370-hero{padding:52px 42px;border-radius:24px;background:linear-gradient(135deg,#111820 0%,#1e2a35 58%,#263847 100%);color:white;position:relative;overflow:hidden}
-    .bc370-kicker{font-size:11px;font-weight:850;letter-spacing:2px;opacity:.62;margin-bottom:14px}
-    .bc370-title{font-size:clamp(38px,6vw,74px);line-height:.94;letter-spacing:-2.5px;margin:0;max-width:920px}
-    .bc370-title span{display:block;opacity:.62;font-size:.45em;letter-spacing:.5px;margin-top:16px}
-    .bc370-copy{max-width:760px;font-size:17px;line-height:1.6;opacity:.78;margin:24px 0 30px}
-    .bc370-actions{display:flex;flex-wrap:wrap;gap:10px}
-    .bc370-actions a{display:inline-block;text-decoration:none;padding:12px 17px;border-radius:10px;font-weight:800}
-    .bc370-primary{background:white;color:#111820}.bc370-secondary{border:1px solid rgba(255,255,255,.24);color:white}
-    .bc370-project{margin-top:18px;font-size:12px;opacity:.6}
-    .bc370-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}
-    .bc370-launch{display:block;text-decoration:none;padding:20px;border:1px solid #e2e7ec;background:#fff;border-radius:15px;min-height:118px}
-    .bc370-launch:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(0,0,0,.08)}
-    .bc370-launch b{display:block;font-size:16px;margin-bottom:7px}.bc370-launch span{font-size:12px;line-height:1.45;opacity:.65}
-    .bc370-bottom{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px}
-    .bc370-command{padding:22px;border-radius:15px;border:1px solid #e2e7ec;background:#fff}.bc370-command h2{margin-top:0}
-    @media(max-width:1050px){.bc370-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media(max-width:650px){.bc370-hero{padding:34px 24px}.bc370-grid,.bc370-bottom{grid-template-columns:1fr}.bc370-title{letter-spacing:-1.5px}}
-    </style>
-    <div class="bc370-cover">
-      <section class="bc370-hero">
-        <div class="bc370-kicker">CONSTRUCTION OPERATION INTELLIGENCE SYSTEM</div>
-        <h1 class="bc370-title">BuildCommand AI<span>Command the project. Build with intelligence.</span></h1>
-        <p class="bc370-copy">One operating system connecting plans, scopes, field execution, project management, schedule, cost, safety, quality and construction intelligence.</p>
-        <div class="bc370-actions">
-          <a class="bc370-primary" href="/platform-369">Enter Command Center →</a>
-          <a class="bc370-secondary" href="/ask-buildcommand">Ask BuildCommand</a>
-          <a class="bc370-secondary" href="/blueprint-brain">Open Blueprint Brain</a>
-        </div>
-        <div class="bc370-project">ACTIVE PROJECT · __PROJECT__</div>
-      </section>
-      <section class="bc370-grid">
-        <a class="bc370-launch" href="/field-execution-4"><b>FIELD COMMAND</b><span>Daily priorities, trade readiness, production, constraints and handoffs.</span></a>
-        <a class="bc370-launch" href="/pm-command-4"><b>PM COMMAND</b><span>RFIs, submittals, decisions, coordination, procurement and changes.</span></a>
-        <a class="bc370-launch" href="/schedule-command-4"><b>SCHEDULE COMMAND</b><span>Look-aheads, sequence exposure, constraints and recovery intelligence.</span></a>
-        <a class="bc370-launch" href="/cost-command-4"><b>COST COMMAND</b><span>Known exposure, revisions, commercial risk and forecasting.</span></a>
-        <a class="bc370-launch" href="/blueprint-brain"><b>BLUEPRINT BRAIN</b><span>Read drawings and specifications and connect requirements to trades.</span></a>
-        <a class="bc370-launch" href="/knowledge-brain-2"><b>KNOWLEDGE BRAIN</b><span>Construction assemblies, trade ownership and cross-discipline reasoning.</span></a>
-        <a class="bc370-launch" href="/sqc-command"><b>SAFETY + QUALITY</b><span>Inspection readiness, QC checkpoints and project quality intelligence.</span></a>
-        <a class="bc370-launch" href="/autopilot"><b>PROJECT AUTOPILOT</b><span>What needs attention now, today, this week and next.</span></a>
-      </section>
-      <section class="bc370-bottom">
-        <div class="bc370-command">
-          <div class="bc370-kicker" style="color:#111820">BUILD COMMAND</div>
-          <h2>What do you need to know?</h2>
-          <p class="muted">Ask BuildCommand across the current project, or jump directly into the operating workspace you need.</p>
-          <div class="bc370-actions"><a class="bc370-primary" style="background:#111820;color:white" href="/ask-buildcommand">Ask BuildCommand →</a><a href="/platform-369">View all intelligence</a></div>
-        </div>
-        <div class="bc370-command"><div class="bc370-kicker" style="color:#111820">SYSTEM</div><h2>v372</h2><p class="muted">Lightweight cover page designed to open fast while keeping the intelligence engines behind the launch screen.</p></div>
-      </section>
-    </div>
-    """.replace("__PROJECT__",esc(project_name))
-    return shell("BuildCommand AI",body)
 
 @app.get("/build/analyze-project",response_class=HTMLResponse)
 def unified_analyze_project_page():
