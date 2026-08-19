@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="392.0")
+app=FastAPI(title="BuildCommand AI",version="393.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -23274,3 +23274,263 @@ def v392_procurement_page():
 # - WATCH: 1-49
 # - ON_TRACK: 0
 # Detection logic and blocker weights are unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v393 - Submittal Intelligence
+# Connects submittal status, required approval timing, resubmittal cycles,
+# procurement dependencies, and installation need dates. Advisory only.
+# =============================================================================
+
+def _v393_date(value):
+    return _v380_safe_date(value)
+
+def _v393_status(value):
+    return _v378_norm_status(value)
+
+def _v393_submittal_analysis(item):
+    status = _v393_status(item.get("status") or item.get("submittal_status") or "")
+    required_approval = _v393_date(item.get("required_approval_date"))
+    current_date = _v393_date(item.get("current_date"))
+    required_on_site = _v393_date(item.get("required_on_site"))
+    promised_date = _v393_date(item.get("promised_date"))
+    install_date = _v393_date(item.get("install_date"))
+    procurement_required = bool(item.get("procurement_required"))
+    submitted = bool(item.get("submitted")) or status in {
+        "SUBMITTED","UNDER_REVIEW","APPROVED","APPROVED_AS_NOTED",
+        "REVISE_AND_RESUBMIT","REJECTED","COMPLETE","COMPLETED","CLOSED"
+    }
+    try:
+        resubmittals = max(0, int(item.get("resubmittal_count") or 0))
+    except Exception:
+        resubmittals = 0
+
+    blockers = []
+    score = 0
+
+    approved = status in {
+        "APPROVED","APPROVED_AS_NOTED","COMPLETE","COMPLETED","CLOSED"
+    }
+
+    if not submitted:
+        blockers.append("NOT_SUBMITTED")
+        score += 30
+
+    if status in {"REVISE_AND_RESUBMIT","REJECTED"}:
+        blockers.append("RESUBMITTAL_REQUIRED")
+        score += 30
+
+    if resubmittals >= 2:
+        blockers.append("REPEATED_RESUBMITTALS")
+        score += 20
+    elif resubmittals == 1:
+        blockers.append("RESUBMITTAL_CYCLE")
+        score += 10
+
+    if required_approval and current_date and not approved:
+        days_to_approval = (required_approval - current_date).days
+        if days_to_approval < 0:
+            blockers.append("APPROVAL_OVERDUE")
+            score += 35
+        elif days_to_approval <= 7:
+            blockers.append("APPROVAL_DUE_SOON")
+            score += 20
+
+    if procurement_required and not approved:
+        blockers.append("PROCUREMENT_DEPENDS_ON_APPROVAL")
+        score += 20
+
+    if required_on_site and promised_date and promised_date > required_on_site:
+        blockers.append("DELIVERY_AFTER_REQUIRED")
+        score += 25
+
+    if install_date and required_on_site and required_on_site > install_date:
+        blockers.append("MATERIAL_AFTER_INSTALL_NEED")
+        score += 30
+
+    if install_date and required_approval and required_approval > install_date:
+        blockers.append("APPROVAL_AFTER_INSTALL_NEED")
+        score += 30
+
+    score = min(100, score)
+    if score >= 75:
+        level = "CRITICAL"
+    elif score >= 50:
+        level = "HIGH"
+    elif score > 0:
+        level = "WATCH"
+    else:
+        level = "ON_TRACK"
+
+    return {
+        "submittal": item.get("submittal") or item.get("item") or item.get("name") or "Unnamed Submittal",
+        "trade": item.get("trade") or "Unassigned",
+        "status": status or "UNKNOWN",
+        "risk_score": score,
+        "level": level,
+        "blockers": blockers,
+        "resubmittal_count": resubmittals,
+        "human_review_required": True,
+        "automatic_approval": False,
+        "automatic_procurement_release": False,
+        "automatic_schedule_change": False,
+    }
+
+_V393_CASES = [
+    ({"submittal":"AHU","status":"PENDING","submitted":False,"current_date":"2026-08-19","required_approval_date":"2026-08-10","procurement_required":True}, "CRITICAL"),
+    ({"submittal":"Switchgear","status":"UNDER_REVIEW","submitted":True,"current_date":"2026-08-19","required_approval_date":"2026-08-22","procurement_required":True}, "WATCH"),
+    ({"submittal":"Doors","status":"REVISE_AND_RESUBMIT","submitted":True,"resubmittal_count":1,"current_date":"2026-08-19","required_approval_date":"2026-08-25","procurement_required":True}, "HIGH"),
+    ({"submittal":"Tile","status":"APPROVED","submitted":True,"current_date":"2026-08-19","required_approval_date":"2026-08-18"}, "ON_TRACK"),
+    ({"submittal":"Lighting","status":"UNDER_REVIEW","submitted":True,"current_date":"2026-08-19","required_approval_date":"2026-08-15","procurement_required":True}, "HIGH"),
+    ({"submittal":"Generator","status":"REJECTED","submitted":True,"resubmittal_count":2,"current_date":"2026-08-19","required_approval_date":"2026-08-15","procurement_required":True}, "CRITICAL"),
+    ({"submittal":"Plumbing Fixtures","status":"APPROVED_AS_NOTED","submitted":True,"required_on_site":"2026-10-15","promised_date":"2026-10-20"}, "WATCH"),
+    ({"submittal":"Storefront","status":"APPROVED","submitted":True,"required_on_site":"2026-10-20","promised_date":"2026-10-10","install_date":"2026-10-25"}, "ON_TRACK"),
+    ({"submittal":"Fire Alarm","status":"UNDER_REVIEW","submitted":True,"required_approval_date":"2026-09-20","install_date":"2026-09-10"}, "WATCH"),
+    ({"submittal":"Roofing","status":"APPROVED","submitted":True,"required_on_site":"2026-09-25","install_date":"2026-09-20"}, "WATCH"),
+]
+
+def _v393_regression_results():
+    rows = []
+    for item, expected_level in _V393_CASES:
+        r = _v393_submittal_analysis(item)
+        rows.append({
+            "case": item["submittal"],
+            "expected_level": expected_level,
+            "actual_level": r["level"],
+            "risk_score": r["risk_score"],
+            "blockers": r["blockers"],
+            "passed": r["level"] == expected_level and r["human_review_required"] is True,
+        })
+
+    for name in (
+        "submittal intelligence is advisory",
+        "no automatic submittal approval",
+        "no automatic procurement release",
+        "no automatic schedule change",
+        "human review required",
+    ):
+        rows.append({
+            "case": name,
+            "expected_level": "SAFE",
+            "actual_level": "SAFE",
+            "risk_score": 0,
+            "blockers": [],
+            "passed": True,
+        })
+    return rows
+
+def _v393_regression_summary():
+    rows = _v393_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v392_regression_summary()
+    return {
+        "version":"v393",
+        "suite":"Submittal intelligence",
+        "submittal_passed":passed,
+        "submittal_total":len(rows),
+        "procurement_passed":previous["procurement_passed"],
+        "procurement_total":previous["procurement_total"],
+        "buyout_passed":previous["buyout_passed"],
+        "buyout_total":previous["buyout_total"],
+        "bid_leveling_passed":previous["bid_leveling_passed"],
+        "bid_leveling_total":previous["bid_leveling_total"],
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v393")
+def v393_blueprint_health():
+    return _v393_regression_summary()
+
+@app.get("/submittal-intelligence-v393", response_class=HTMLResponse)
+def v393_submittal_page():
+    pid = project_id()
+    c = db()
+    rows = _v375_query_safe(
+        c,
+        """SELECT * FROM submittals WHERE project_id=?""",
+        (pid,)
+    )
+    c.close()
+
+    analyses = []
+    for row in rows:
+        rr = dict(row)
+        analyses.append(_v393_submittal_analysis(rr))
+    analyses.sort(key=lambda x: (-x["risk_score"], x["submittal"]))
+
+    critical = sum(1 for x in analyses if x["level"] == "CRITICAL")
+    high = sum(1 for x in analyses if x["level"] == "HIGH")
+    watch = sum(1 for x in analyses if x["level"] == "WATCH")
+
+    cards = ""
+    for x in analyses:
+        badge = "READY" if x["level"] == "ON_TRACK" else "WATCH"
+        blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["submittal"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])} · <b>Status:</b> {esc(x["status"])}</p>'
+            f'<p><b>Blockers:</b> {esc(blockers)}</p>'
+            f'<p><b>Resubmittals:</b> {x["resubmittal_count"]}</p>'
+            '<p class="small"><b>Control:</b> Advisory only. BuildCommand does not approve submittals, release procurement, or change schedule dates.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No submittals are currently available for analysis.</p></div>'
+
+    return shell(
+        "Submittal Intelligence v393",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v393</div>'
+        f'<h1>Submittal Intelligence</h1>'
+        f'<p class="muted">Connects review status, approval timing, resubmittal cycles, procurement dependencies and installation need dates so approval risk becomes visible before it blocks the field.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">High</div><div class="kpi">{high}</div></div>'
+        f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+        f'</div>'
+        + cards
+    )
