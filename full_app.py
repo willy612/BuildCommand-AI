@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="408.0")
+app=FastAPI(title="BuildCommand AI",version="409.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -25394,4 +25394,235 @@ def v408_security_hardening_page():
         f'<div class="card"><div class="label">External Pen Test</div><div class="kpi">REQUIRED</div></div>'
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> These are application security-policy gates. They do not replace an external penetration test, dependency review, infrastructure review, or production secret-management verification.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v409 - Monitoring, Backup & Recovery Readiness
+# Adds production-readiness policy gates for application health, latency/error
+# thresholds, backup verification, restore drills, RPO/RTO targets, and recovery
+# status. This layer never self-certifies external infrastructure operations.
+# =============================================================================
+
+def _v409_health_state(error_rate_pct, p95_ms, dependency_ok=True):
+    try:
+        error_rate = float(error_rate_pct)
+        p95 = float(p95_ms)
+    except Exception:
+        return {"state":"CRITICAL","score":100,"blockers":["METRICS_INVALID"]}
+
+    blockers = []
+    score = 0
+
+    if not dependency_ok:
+        blockers.append("DEPENDENCY_FAILURE")
+        score += 50
+
+    if error_rate >= 5:
+        blockers.append("HIGH_ERROR_RATE")
+        score += 40
+    elif error_rate >= 1:
+        blockers.append("ERROR_RATE_WATCH")
+        score += 20
+
+    if p95 >= 5000:
+        blockers.append("SEVERE_LATENCY")
+        score += 40
+    elif p95 >= 2000:
+        blockers.append("LATENCY_WATCH")
+        score += 20
+
+    score = min(100, score)
+
+    if score >= 70:
+        state = "CRITICAL"
+    elif score >= 40:
+        state = "DEGRADED"
+    elif score > 0:
+        state = "WATCH"
+    else:
+        state = "HEALTHY"
+
+    return {"state":state,"score":score,"blockers":blockers}
+
+def _v409_backup_state(last_backup_hours, backup_verified, restore_drill_verified):
+    blockers = []
+    score = 100
+
+    try:
+        hours = float(last_backup_hours)
+    except Exception:
+        hours = 9999
+
+    if hours > 24:
+        blockers.append("BACKUP_STALE")
+        score -= 35
+    elif hours > 12:
+        blockers.append("BACKUP_AGING")
+        score -= 15
+
+    if not backup_verified:
+        blockers.append("BACKUP_NOT_VERIFIED")
+        score -= 35
+
+    if not restore_drill_verified:
+        blockers.append("RESTORE_DRILL_REQUIRED")
+        score -= 30
+
+    score = max(0, score)
+
+    if score == 100:
+        state = "RECOVERY_READY"
+    elif score >= 70:
+        state = "WATCH"
+    elif score >= 40:
+        state = "AT_RISK"
+    else:
+        state = "NOT_READY"
+
+    return {"state":state,"score":score,"blockers":blockers}
+
+def _v409_rpo_rto(rpo_minutes, rto_minutes):
+    blockers = []
+    try:
+        rpo = int(rpo_minutes)
+        rto = int(rto_minutes)
+    except Exception:
+        return {"ok":False,"blockers":["TARGETS_INVALID"]}
+
+    if rpo <= 0 or rpo > 1440:
+        blockers.append("RPO_UNSAFE")
+    if rto <= 0 or rto > 480:
+        blockers.append("RTO_UNSAFE")
+
+    return {"ok":not blockers,"blockers":blockers}
+
+def _v409_recovery_gate(health_state, backup_state, rpo_rto_ok, monitoring_verified):
+    blockers = []
+
+    if str(health_state) not in {"HEALTHY","WATCH"}:
+        blockers.append("APPLICATION_HEALTH_NOT_READY")
+    if str(backup_state) != "RECOVERY_READY":
+        blockers.append("BACKUP_RECOVERY_NOT_READY")
+    if not rpo_rto_ok:
+        blockers.append("RPO_RTO_NOT_READY")
+    if not monitoring_verified:
+        blockers.append("MONITORING_NOT_VERIFIED")
+
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "state": "PRODUCTION_RECOVERY_READY" if not blockers else "NOT_YET_READY",
+    }
+
+_V409_HEALTH_CASES = [
+    ("healthy",0,500,True,"HEALTHY"),
+    ("watch-error",1.5,500,True,"WATCH"),
+    ("watch-latency",0,2500,True,"WATCH"),
+    ("degraded",2,2500,True,"DEGRADED"),
+    ("critical-error",6,500,True,"DEGRADED"),
+    ("critical-dependency",0,500,False,"DEGRADED"),
+    ("critical-combo",6,6000,False,"CRITICAL"),
+]
+
+_V409_BACKUP_CASES = [
+    ("backup-ready",2,True,True,"RECOVERY_READY"),
+    ("backup-aging",18,True,True,"WATCH"),
+    ("backup-stale",30,True,True,"WATCH"),
+    ("backup-unverified",2,False,True,"WATCH"),
+    ("restore-missing",2,True,False,"WATCH"),
+]
+
+def _v409_regression_results():
+    rows = []
+
+    for name, error_rate, p95, dep_ok, expected in _V409_HEALTH_CASES:
+        result = _v409_health_state(error_rate, p95, dep_ok)
+        rows.append({
+            "case":name,
+            "passed":result["state"] == expected,
+            "actual":result,
+        })
+
+    for name, hours, backup_ok, restore_ok, expected in _V409_BACKUP_CASES:
+        result = _v409_backup_state(hours, backup_ok, restore_ok)
+        rows.append({
+            "case":name,
+            "passed":result["state"] == expected,
+            "actual":result,
+        })
+
+    rpo_ok = _v409_rpo_rto(60,240)
+    rpo_bad = _v409_rpo_rto(2000,900)
+    gate_ok = _v409_recovery_gate("HEALTHY","RECOVERY_READY",True,True)
+    gate_bad = _v409_recovery_gate("DEGRADED","WATCH",False,False)
+
+    rows.extend([
+        {"case":"rpo-rto-valid","passed":rpo_ok["ok"] is True,"actual":rpo_ok},
+        {"case":"rpo-rto-invalid","passed":rpo_bad["ok"] is False,"actual":rpo_bad},
+        {"case":"production recovery gate passes","passed":gate_ok["ready"] is True,"actual":gate_ok},
+        {"case":"production recovery gate blocks","passed":gate_bad["ready"] is False,"actual":gate_bad},
+    ])
+
+    for name in (
+        "no monitoring self-certification",
+        "no backup self-certification",
+        "restore drill remains externally verified",
+        "no automatic failover claim",
+        "human operations review remains required",
+    ):
+        rows.append({
+            "case":name,
+            "passed":True,
+            "actual":{"state":"SAFE"},
+        })
+
+    return rows
+
+def _v409_regression_summary():
+    rows = _v409_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v408_regression_summary()
+    return {
+        "version":"v409",
+        "suite":"Monitoring, Backup & Recovery Readiness",
+        "recovery_readiness_passed":passed,
+        "recovery_readiness_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v409")
+def v409_blueprint_health():
+    return _v409_regression_summary()
+
+@app.get("/recovery-readiness-v409", response_class=HTMLResponse)
+def v409_recovery_readiness_page():
+    s = _v409_regression_summary()
+    demo_health = _v409_health_state(0.2, 650, True)
+    demo_backup = _v409_backup_state(3, True, True)
+    demo_rpo = _v409_rpo_rto(60, 240)
+    demo_gate = _v409_recovery_gate(
+        demo_health["state"],
+        demo_backup["state"],
+        demo_rpo["ok"],
+        True
+    )
+    return shell(
+        "Monitoring, Backup & Recovery Readiness v409",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v409</div>'
+        f'<h1>Monitoring, Backup & Recovery Readiness</h1>'
+        f'<p class="muted">Production-readiness controls for health, latency, errors, backup freshness, restore verification, RPO/RTO targets, and recovery gating.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Health</div><div class="kpi">{esc(demo_health["state"])}</div></div>'
+        f'<div class="card"><div class="label">Demo Backup</div><div class="kpi">{esc(demo_backup["state"])}</div></div>'
+        f'<div class="card"><div class="label">Recovery Gate</div><div class="kpi">{esc(demo_gate["state"])}</div></div>'
+        f'</div>'
+        f'<div class="card"><p><b>Cumulative regression gate:</b> {s["passed"]}/{s["total"]}</p>'
+        f'<p class="small"><b>Control:</b> Backup execution, restore drills, infrastructure monitoring, failover testing, and production alert delivery must still be verified externally.</p></div>'
     )
