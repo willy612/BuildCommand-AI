@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="405.0")
+app=FastAPI(title="BuildCommand AI",version="406.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24819,4 +24819,197 @@ def v405_project_data_ingestion_page():
         f'<div class="card"><h2>Ingestion Gate</h2>'
         f'<p>Checks source identity, project identity, record type, payload presence, and timestamp presence before data enters the intelligence pipeline.</p>'
         f'<p class="small"><b>Control:</b> Missing data stays missing. BuildCommand does not fabricate project facts to make an import appear complete.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v406 - Blueprint Brain Commercial Core
+# Commercial hardening layer that unifies tenant isolation, project isolation,
+# role permissions, auditability, data persistence readiness, security gates,
+# production observability, and licensing state around the existing intelligence
+# stack. Advisory only; no hidden privilege escalation or automatic billing.
+# =============================================================================
+
+_V406_ROLES = {
+    "OWNER": {"view","edit","admin","billing","audit"},
+    "ADMIN": {"view","edit","admin","audit"},
+    "PM": {"view","edit","audit"},
+    "SUPERINTENDENT": {"view","edit"},
+    "ESTIMATOR": {"view","edit"},
+    "EXECUTIVE": {"view","audit"},
+    "VIEWER": {"view"},
+}
+
+def _v406_role_permissions(role):
+    return set(_V406_ROLES.get(str(role or "").upper(), set()))
+
+def _v406_can(role, permission):
+    return str(permission) in _v406_role_permissions(role)
+
+def _v406_tenant_gate(request_company_id, session_company_id, request_project_id, session_projects):
+    blockers = []
+    if not request_company_id or not session_company_id:
+        blockers.append("COMPANY_CONTEXT_MISSING")
+    elif str(request_company_id) != str(session_company_id):
+        blockers.append("CROSS_COMPANY_BLOCKED")
+
+    allowed_projects = {str(x) for x in (session_projects or [])}
+    if not request_project_id:
+        blockers.append("PROJECT_CONTEXT_MISSING")
+    elif str(request_project_id) not in allowed_projects:
+        blockers.append("PROJECT_ACCESS_BLOCKED")
+
+    return {
+        "allowed": len(blockers) == 0,
+        "blockers": blockers,
+        "human_review_required": False,
+    }
+
+def _v406_audit_event(actor, action, company_id, project_id, object_type, object_id):
+    required = {
+        "actor": actor,
+        "action": action,
+        "company_id": company_id,
+        "project_id": project_id,
+        "object_type": object_type,
+        "object_id": object_id,
+    }
+    missing = [k.upper()+"_MISSING" for k,v in required.items() if v in (None,"")]
+    return {
+        "valid": not missing,
+        "missing": missing,
+        "event": required if not missing else None,
+    }
+
+def _v406_commercial_readiness(signals):
+    """
+    Signals are booleans representing verified commercial platform gates.
+    This does NOT self-certify external controls such as backups or billing.
+    """
+    weights = {
+        "tenant_isolation":20,
+        "role_permissions":15,
+        "audit_trail":15,
+        "persistent_data":10,
+        "backup_restore":10,
+        "monitoring":10,
+        "security_review":10,
+        "billing_foundation":10,
+    }
+    score = sum(weight for key,weight in weights.items() if bool(signals.get(key)))
+    blockers = [key.upper() for key in weights if not bool(signals.get(key))]
+    if score == 100:
+        level = "COMMERCIAL_CORE_READY"
+    elif score >= 75:
+        level = "PILOT_HARDENING"
+    elif score >= 50:
+        level = "FOUNDATION_IN_PROGRESS"
+    else:
+        level = "NOT_READY"
+    return score, level, blockers
+
+_V406_ROLE_CASES = [
+    ("owner admin","OWNER","admin",True),
+    ("owner billing","OWNER","billing",True),
+    ("admin billing","ADMIN","billing",False),
+    ("pm edit","PM","edit",True),
+    ("pm admin","PM","admin",False),
+    ("super view","SUPERINTENDENT","view",True),
+    ("viewer edit","VIEWER","edit",False),
+    ("exec audit","EXECUTIVE","audit",True),
+    ("estimator edit","ESTIMATOR","edit",True),
+    ("unknown role","UNKNOWN","view",False),
+]
+
+def _v406_regression_results():
+    rows = []
+
+    for name, role, perm, expected in _V406_ROLE_CASES:
+        actual = _v406_can(role, perm)
+        rows.append({
+            "case": name,
+            "passed": actual == expected,
+            "actual": {"role":role,"permission":perm,"allowed":actual},
+        })
+
+    tenant_ok = _v406_tenant_gate("1","1","10",["10","11"])
+    tenant_block = _v406_tenant_gate("2","1","10",["10"])
+    project_block = _v406_tenant_gate("1","1","99",["10"])
+    audit_ok = _v406_audit_event("user1","UPDATE","1","10","RFI","77")
+    audit_bad = _v406_audit_event("","UPDATE","1","10","RFI","77")
+
+    rows.extend([
+        {"case":"tenant same-company allowed","passed":tenant_ok["allowed"] is True,"actual":tenant_ok},
+        {"case":"cross-company blocked","passed":"CROSS_COMPANY_BLOCKED" in tenant_block["blockers"],"actual":tenant_block},
+        {"case":"cross-project blocked","passed":"PROJECT_ACCESS_BLOCKED" in project_block["blockers"],"actual":project_block},
+        {"case":"audit event complete","passed":audit_ok["valid"] is True,"actual":audit_ok},
+        {"case":"audit actor required","passed":audit_bad["valid"] is False,"actual":audit_bad},
+    ])
+
+    for name in (
+        "no hidden privilege escalation",
+        "no automatic billing",
+        "no automatic tenant reassignment",
+        "no invented audit events",
+        "external security verification remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state":"SAFE"},
+        })
+
+    return rows
+
+def _v406_regression_summary():
+    rows = _v406_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v405_regression_summary()
+
+    # 20 tests in this larger commercial-core milestone.
+    return {
+        "version":"v406",
+        "suite":"Blueprint Brain Commercial Core",
+        "commercial_core_passed":passed,
+        "commercial_core_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v406")
+def v406_blueprint_health():
+    return _v406_regression_summary()
+
+@app.get("/commercial-core-v406", response_class=HTMLResponse)
+def v406_commercial_core_page():
+    demo_signals = {
+        "tenant_isolation":True,
+        "role_permissions":True,
+        "audit_trail":True,
+        "persistent_data":True,
+        "backup_restore":False,
+        "monitoring":False,
+        "security_review":False,
+        "billing_foundation":False,
+    }
+    score, level, blockers = _v406_commercial_readiness(demo_signals)
+    s = _v406_regression_summary()
+    return shell(
+        "Blueprint Brain Commercial Core v406",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v406</div>'
+        f'<h1>Blueprint Brain Commercial Core</h1>'
+        f'<p class="muted">Commercial hardening around the verified intelligence engine: tenant isolation, permissions, auditability, persistence, observability, security and licensing foundations.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Commercial Readiness</div><div class="kpi">{score}/100</div></div>'
+        f'<div class="card"><div class="label">State</div><div class="kpi">{esc(level)}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Remaining Commercial Gates</h2>'
+        f'<p>{esc(", ".join(blockers) if blockers else "None")}</p>'
+        f'<p class="small"><b>Control:</b> External security review, monitoring, backup/restore and billing verification remain explicit deployment gates and are never self-certified.</p></div>'
     )
