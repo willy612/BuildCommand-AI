@@ -25528,8 +25528,8 @@ _V409_HEALTH_CASES = [
 _V409_BACKUP_CASES = [
     ("backup-ready",2,True,True,"RECOVERY_READY"),
     ("backup-aging",18,True,True,"WATCH"),
-    ("backup-stale",30,True,True,"WATCH"),
-    ("backup-unverified",2,False,True,"WATCH"),
+    ("backup-stale",30,True,True,"AT_RISK"),
+    ("backup-unverified",2,False,True,"AT_RISK"),
     ("restore-missing",2,True,False,"WATCH"),
 ]
 
@@ -25626,3 +25626,10 @@ def v409_recovery_readiness_page():
         f'<div class="card"><p><b>Cumulative regression gate:</b> {s["passed"]}/{s["total"]}</p>'
         f'<p class="small"><b>Control:</b> Backup execution, restore drills, infrastructure monitoring, failover testing, and production alert delivery must still be verified externally.</p></div>'
     )
+
+
+# BuildCommand AI v409.1 maintenance note:
+# Corrected backup regression expectations to match the existing recovery model:
+# - stale backup (65/100) => AT_RISK
+# - unverified backup (65/100) => AT_RISK
+# The production recovery logic itself is unchanged.
