@@ -23325,7 +23325,7 @@ def _v393_submittal_analysis(item):
         score += 20
     elif resubmittals == 1:
         blockers.append("RESUBMITTAL_CYCLE")
-        score += 10
+        score += 5
 
     if required_approval and current_date and not approved:
         days_to_approval = (required_approval - current_date).days
@@ -23334,7 +23334,7 @@ def _v393_submittal_analysis(item):
             score += 35
         elif days_to_approval <= 7:
             blockers.append("APPROVAL_DUE_SOON")
-            score += 20
+            score += 15
 
     if procurement_required and not approved:
         blockers.append("PROCUREMENT_DEPENDS_ON_APPROVAL")
@@ -23534,3 +23534,10 @@ def v393_submittal_page():
         f'</div>'
         + cards
     )
+
+
+# BuildCommand AI v393.1 maintenance note:
+# Submittal risk calibration updated:
+# - First resubmittal cycle: 10 -> 5 points
+# - Approval due within 7 days: 20 -> 15 points
+# Repeated resubmittals and overdue approvals retain their stronger penalties.
