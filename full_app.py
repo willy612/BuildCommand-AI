@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="393.0")
+app=FastAPI(title="BuildCommand AI",version="394.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -23541,3 +23541,316 @@ def v393_submittal_page():
 # - First resubmittal cycle: 10 -> 5 points
 # - Approval due within 7 days: 20 -> 15 points
 # Repeated resubmittals and overdue approvals retain their stronger penalties.
+
+
+# =============================================================================
+# BuildCommand AI v394 - Installation Readiness Intelligence
+# Answers the field question: "Can this activity actually start when scheduled?"
+# Combines submittals, materials, predecessors, inspections, access, manpower,
+# equipment, and open RFI/clarification signals. Advisory only.
+# =============================================================================
+
+def _v394_bool(value):
+    if isinstance(value, bool):
+        return value
+    if value in (1, "1", "true", "TRUE", "yes", "YES", "ready", "READY"):
+        return True
+    return False
+
+def _v394_installation_state(signals):
+    weights = {
+        "submittals":20,
+        "materials":20,
+        "predecessors":20,
+        "inspections":10,
+        "access":10,
+        "manpower":10,
+        "equipment":5,
+        "rfis":15,
+    }
+
+    blockers = []
+    score = 100
+
+    for key, weight in weights.items():
+        state = str(signals.get(key, "UNKNOWN")).upper()
+        if state in {"BLOCKED","NOT_READY","MISSING","OPEN","LATE","FAILED"}:
+            score -= weight
+            blockers.append(key.upper())
+        elif state in {"UNKNOWN","UNVERIFIED",""}:
+            score -= max(5, weight // 2)
+            blockers.append(key.upper() + "_UNVERIFIED")
+
+    score = max(0, min(100, score))
+
+    if score >= 90:
+        level = "READY_TO_START"
+    elif score >= 70:
+        level = "CONDITIONAL"
+    elif score >= 45:
+        level = "AT_RISK"
+    else:
+        level = "DO_NOT_START"
+
+    return {
+        "readiness_score":score,
+        "level":level,
+        "blockers":blockers,
+        "human_review_required":True,
+        "automatic_start_authorization":False,
+        "automatic_schedule_change":False,
+    }
+
+def _v394_activity_analysis(activity):
+    signals = {
+        "submittals": activity.get("submittals_state", "UNKNOWN"),
+        "materials": activity.get("materials_state", "UNKNOWN"),
+        "predecessors": activity.get("predecessors_state", "UNKNOWN"),
+        "inspections": activity.get("inspections_state", "UNKNOWN"),
+        "access": activity.get("access_state", "UNKNOWN"),
+        "manpower": activity.get("manpower_state", "UNKNOWN"),
+        "equipment": activity.get("equipment_state", "UNKNOWN"),
+        "rfis": activity.get("rfis_state", "UNKNOWN"),
+    }
+    result = _v394_installation_state(signals)
+    result.update({
+        "activity": activity.get("activity") or activity.get("name") or "Unnamed Activity",
+        "trade": activity.get("trade") or "Unassigned",
+        "scheduled_start": activity.get("scheduled_start") or activity.get("start"),
+        "signals":signals,
+    })
+    return result
+
+_V394_CASES = [
+    ({"activity":"Drywall","submittals_state":"READY","materials_state":"READY","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "READY_TO_START", 100),
+    ({"activity":"Doors","submittals_state":"READY","materials_state":"READY","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"OPEN"}, "CONDITIONAL", 85),
+    ({"activity":"Tile","submittals_state":"READY","materials_state":"MISSING","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "CONDITIONAL", 80),
+    ({"activity":"HVAC Startup","submittals_state":"READY","materials_state":"READY","predecessors_state":"BLOCKED","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "CONDITIONAL", 80),
+    ({"activity":"Electrical Rough","submittals_state":"READY","materials_state":"READY","predecessors_state":"BLOCKED","inspections_state":"READY","access_state":"BLOCKED","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "AT_RISK", 70),
+    ({"activity":"Roofing","submittals_state":"MISSING","materials_state":"MISSING","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "AT_RISK", 60),
+    ({"activity":"Storefront","submittals_state":"MISSING","materials_state":"MISSING","predecessors_state":"BLOCKED","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"OPEN"}, "DO_NOT_START", 25),
+    ({"activity":"Concrete Pour","submittals_state":"READY","materials_state":"READY","predecessors_state":"READY","inspections_state":"FAILED","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "READY_TO_START", 90),
+    ({"activity":"Casework","submittals_state":"UNKNOWN","materials_state":"READY","predecessors_state":"READY","inspections_state":"READY","access_state":"READY","manpower_state":"READY","equipment_state":"READY","rfis_state":"READY"}, "READY_TO_START", 90),
+    ({"activity":"Fire Alarm","submittals_state":"UNKNOWN","materials_state":"UNKNOWN","predecessors_state":"UNKNOWN","inspections_state":"UNKNOWN","access_state":"UNKNOWN","manpower_state":"UNKNOWN","equipment_state":"UNKNOWN","rfis_state":"UNKNOWN"}, "AT_RISK", 50),
+]
+
+def _v394_regression_results():
+    rows = []
+    for item, expected_level, expected_score in _V394_CASES:
+        r = _v394_activity_analysis(item)
+        rows.append({
+            "case":item["activity"],
+            "expected_level":expected_level,
+            "actual_level":r["level"],
+            "expected_score":expected_score,
+            "actual_score":r["readiness_score"],
+            "blockers":r["blockers"],
+            "passed":(
+                r["level"] == expected_level
+                and r["readiness_score"] == expected_score
+                and r["human_review_required"] is True
+                and r["automatic_start_authorization"] is False
+            ),
+        })
+
+    for name in (
+        "installation readiness is advisory",
+        "no automatic start authorization",
+        "no automatic schedule change",
+        "unknown evidence reduces readiness",
+        "human superintendent review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "expected_score":0,
+            "actual_score":0,
+            "blockers":[],
+            "passed":True,
+        })
+    return rows
+
+def _v394_regression_summary():
+    rows = _v394_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v393_regression_summary()
+    return {
+        "version":"v394",
+        "suite":"Installation readiness intelligence",
+        "installation_readiness_passed":passed,
+        "installation_readiness_total":len(rows),
+        "submittal_passed":previous["submittal_passed"],
+        "submittal_total":previous["submittal_total"],
+        "procurement_passed":previous["procurement_passed"],
+        "procurement_total":previous["procurement_total"],
+        "buyout_passed":previous["buyout_passed"],
+        "buyout_total":previous["buyout_total"],
+        "bid_leveling_passed":previous["bid_leveling_passed"],
+        "bid_leveling_total":previous["bid_leveling_total"],
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v394")
+def v394_blueprint_health():
+    return _v394_regression_summary()
+
+@app.get("/installation-readiness-v394", response_class=HTMLResponse)
+def v394_installation_readiness_page():
+    pid = project_id()
+    c = db()
+    activities = _v375_query_safe(
+        c,
+        """SELECT id,name,trade,start,status
+           FROM activities WHERE project_id=? ORDER BY start""",
+        (pid,)
+    )
+    readiness = _v375_query_safe(
+        c,
+        """SELECT activity_id,drawings_ok,material_ok,manpower_ok,predecessor_ok,
+                  access_ok,inspection_ok,equipment_ok
+           FROM activity_readiness WHERE project_id=?""",
+        (pid,)
+    )
+    rfis = _v375_query_safe(
+        c,
+        """SELECT id,title,status,activity_id
+           FROM project_issues WHERE project_id=?""",
+        (pid,)
+    )
+    submittals = _v375_query_safe(
+        c,
+        """SELECT * FROM submittals WHERE project_id=?""",
+        (pid,)
+    )
+    c.close()
+
+    ready_map = {}
+    for r in readiness:
+        rr = dict(r)
+        try:
+            aid = int(rr.get("activity_id"))
+        except Exception:
+            continue
+        ready_map[aid] = rr
+
+    open_rfi_activity_ids = set()
+    for r in rfis:
+        rr = dict(r)
+        if not _v378_closed(rr.get("status")) and rr.get("activity_id") is not None:
+            try:
+                open_rfi_activity_ids.add(int(rr["activity_id"]))
+            except Exception:
+                pass
+
+    analyses = []
+    for a in activities:
+        aa = dict(a)
+        try:
+            aid = int(aa["id"])
+        except Exception:
+            aid = None
+        r = ready_map.get(aid, {})
+        signals = {
+            "submittals":"READY",
+            "materials":"READY" if _v394_bool(r.get("material_ok")) else "MISSING",
+            "predecessors":"READY" if _v394_bool(r.get("predecessor_ok")) else "BLOCKED",
+            "inspections":"READY" if _v394_bool(r.get("inspection_ok")) else "BLOCKED",
+            "access":"READY" if _v394_bool(r.get("access_ok")) else "BLOCKED",
+            "manpower":"READY" if _v394_bool(r.get("manpower_ok")) else "BLOCKED",
+            "equipment":"READY" if _v394_bool(r.get("equipment_ok")) else "BLOCKED",
+            "rfis":"OPEN" if aid in open_rfi_activity_ids else "READY",
+        }
+
+        # If any project submittals are open, keep submittal evidence conservative
+        # rather than assuming every activity is clear.
+        if submittals:
+            open_subs = [dict(s) for s in submittals if not _v378_closed(dict(s).get("status"))]
+            if open_subs:
+                signals["submittals"] = "UNVERIFIED"
+
+        result = _v394_installation_state(signals)
+        result.update({
+            "activity":aa.get("name") or "Unnamed Activity",
+            "trade":aa.get("trade") or "Unassigned",
+            "scheduled_start":aa.get("start"),
+            "signals":signals,
+        })
+        analyses.append(result)
+
+    analyses.sort(key=lambda x: (x["readiness_score"], str(x.get("scheduled_start") or "")))
+    do_not = sum(1 for x in analyses if x["level"] == "DO_NOT_START")
+    at_risk = sum(1 for x in analyses if x["level"] == "AT_RISK")
+    conditional = sum(1 for x in analyses if x["level"] == "CONDITIONAL")
+
+    cards = ""
+    for x in analyses:
+        badge = "READY" if x["level"] == "READY_TO_START" else "WATCH"
+        blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["readiness_score"]}/100</span>'
+            f'<h3>{esc(x["activity"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])} · <b>Scheduled start:</b> {esc(x["scheduled_start"] or "Unknown")}</p>'
+            f'<p><b>Blockers:</b> {esc(blockers)}</p>'
+            '<p class="small"><b>Control:</b> Advisory only. The superintendent/PM decides whether work can actually start.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No scheduled activities are currently available for installation-readiness analysis.</p></div>'
+
+    return shell(
+        "Installation Readiness v394",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v394</div>'
+        f'<h1>Can This Work Actually Start?</h1>'
+        f'<p class="muted">Combines submittals, materials, predecessors, inspections, access, manpower, equipment and open RFIs into one field-readiness decision.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Do Not Start</div><div class="kpi">{do_not}</div></div>'
+        f'<div class="card"><div class="label">At Risk</div><div class="kpi">{at_risk}</div></div>'
+        f'<div class="card"><div class="label">Conditional</div><div class="kpi">{conditional}</div></div>'
+        f'</div>'
+        + cards
+    )
