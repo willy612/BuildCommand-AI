@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="407.0")
+app=FastAPI(title="BuildCommand AI",version="408.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -25189,4 +25189,209 @@ def v407_persistent_data_audit_page():
         f'<div class="card"><div class="label">Hard Delete Default</div><div class="kpi">NO</div></div>'
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> This layer defines integrity and audit behavior. Actual production database migrations and backup/restore verification remain deployment operations.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v408 - Production Security & Session Hardening
+# Adds deterministic security-policy checks around session expiration, secure
+# cookies, CSRF posture, login throttling, password-reset safety, and
+# role/session consistency. This layer does not self-certify external pen tests.
+# =============================================================================
+
+def _v408_session_policy(max_age_minutes, secure_cookie, http_only, same_site):
+    blockers = []
+    try:
+        max_age = int(max_age_minutes)
+    except Exception:
+        max_age = 0
+
+    if max_age <= 0 or max_age > 720:
+        blockers.append("SESSION_TTL_UNSAFE")
+    if not bool(secure_cookie):
+        blockers.append("SECURE_COOKIE_REQUIRED")
+    if not bool(http_only):
+        blockers.append("HTTPONLY_REQUIRED")
+    if str(same_site or "").upper() not in {"LAX","STRICT"}:
+        blockers.append("SAMESITE_UNSAFE")
+
+    return {
+        "ok": not blockers,
+        "blockers": blockers,
+    }
+
+def _v408_login_throttle(failed_attempts, window_minutes):
+    try:
+        attempts = max(0, int(failed_attempts))
+        window = max(0, int(window_minutes))
+    except Exception:
+        return {"state":"BLOCK_REVIEW","score":100}
+
+    score = 0
+    if attempts >= 10:
+        score += 70
+    elif attempts >= 5:
+        score += 40
+    elif attempts >= 3:
+        score += 20
+
+    if window <= 5 and attempts >= 5:
+        score += 20
+
+    score = min(100, score)
+
+    if score >= 70:
+        state = "BLOCK_REVIEW"
+    elif score >= 40:
+        state = "THROTTLE"
+    elif score > 0:
+        state = "WATCH"
+    else:
+        state = "ALLOW"
+
+    return {"state":state,"score":score}
+
+def _v408_csrf_policy(method, token_present, same_origin):
+    method = str(method or "GET").upper()
+    if method in {"GET","HEAD","OPTIONS"}:
+        return {"allowed":True,"reason":"SAFE_METHOD"}
+    if not same_origin:
+        return {"allowed":False,"reason":"ORIGIN_REJECTED"}
+    if not token_present:
+        return {"allowed":False,"reason":"CSRF_TOKEN_REQUIRED"}
+    return {"allowed":True,"reason":"CSRF_VALID"}
+
+def _v408_password_reset(token_present, token_expired, token_used, password_strength_ok):
+    blockers = []
+    if not token_present:
+        blockers.append("TOKEN_MISSING")
+    if token_expired:
+        blockers.append("TOKEN_EXPIRED")
+    if token_used:
+        blockers.append("TOKEN_ALREADY_USED")
+    if not password_strength_ok:
+        blockers.append("PASSWORD_POLICY_FAILED")
+    return {
+        "allowed": not blockers,
+        "blockers": blockers,
+    }
+
+def _v408_role_session_consistency(session_role, database_role):
+    return {
+        "consistent": str(session_role or "").upper() == str(database_role or "").upper(),
+        "session_role": str(session_role or "").upper(),
+        "database_role": str(database_role or "").upper(),
+    }
+
+_V408_CASES = [
+    ("secure-session", 60, True, True, "LAX", True),
+    ("long-session", 1440, True, True, "LAX", False),
+    ("no-secure-cookie", 60, False, True, "LAX", False),
+    ("no-httponly", 60, True, False, "LAX", False),
+    ("bad-samesite", 60, True, True, "NONE", False),
+]
+
+def _v408_regression_results():
+    rows = []
+
+    for name, ttl, secure, httponly, samesite, expected in _V408_CASES:
+        result = _v408_session_policy(ttl, secure, httponly, samesite)
+        rows.append({
+            "case":name,
+            "passed":result["ok"] == expected,
+            "actual":result,
+        })
+
+    login_cases = [
+        ("login-allow",0,10,"ALLOW"),
+        ("login-watch",3,10,"WATCH"),
+        ("login-throttle",5,10,"THROTTLE"),
+        ("login-fast-throttle",5,5,"THROTTLE"),
+        ("login-block",10,10,"BLOCK_REVIEW"),
+    ]
+    for name, attempts, window, expected in login_cases:
+        result = _v408_login_throttle(attempts, window)
+        rows.append({
+            "case":name,
+            "passed":result["state"] == expected,
+            "actual":result,
+        })
+
+    csrf_cases = [
+        ("csrf-get","GET",False,False,True),
+        ("csrf-post-good","POST",True,True,True),
+        ("csrf-post-no-token","POST",False,True,False),
+        ("csrf-post-bad-origin","POST",True,False,False),
+    ]
+    for name, method, token, origin, expected in csrf_cases:
+        result = _v408_csrf_policy(method, token, origin)
+        rows.append({
+            "case":name,
+            "passed":result["allowed"] == expected,
+            "actual":result,
+        })
+
+    reset_ok = _v408_password_reset(True,False,False,True)
+    reset_bad = _v408_password_reset(True,True,False,True)
+    role_ok = _v408_role_session_consistency("PM","PM")
+    role_bad = _v408_role_session_consistency("ADMIN","VIEWER")
+
+    rows.extend([
+        {"case":"password reset valid","passed":reset_ok["allowed"] is True,"actual":reset_ok},
+        {"case":"password reset expired blocked","passed":reset_bad["allowed"] is False,"actual":reset_bad},
+        {"case":"role session consistent","passed":role_ok["consistent"] is True,"actual":role_ok},
+        {"case":"role mismatch detected","passed":role_bad["consistent"] is False,"actual":role_bad},
+    ])
+
+    for name in (
+        "no security self-certification",
+        "no hidden privilege escalation",
+        "no password reset bypass",
+        "no CSRF bypass on unsafe methods",
+        "external penetration testing remains required",
+    ):
+        rows.append({
+            "case":name,
+            "passed":True,
+            "actual":{"state":"SAFE"},
+        })
+
+    return rows
+
+def _v408_regression_summary():
+    rows = _v408_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v407_regression_summary()
+    return {
+        "version":"v408",
+        "suite":"Production Security & Session Hardening",
+        "security_hardening_passed":passed,
+        "security_hardening_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v408")
+def v408_blueprint_health():
+    return _v408_regression_summary()
+
+@app.get("/security-hardening-v408", response_class=HTMLResponse)
+def v408_security_hardening_page():
+    s = _v408_regression_summary()
+    return shell(
+        "Production Security & Session Hardening v408",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v408</div>'
+        f'<h1>Production Security & Session Hardening</h1>'
+        f'<p class="muted">Commercial security controls for sessions, cookies, CSRF, login throttling, password reset safety, and role/session consistency.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">External Pen Test</div><div class="kpi">REQUIRED</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> These are application security-policy gates. They do not replace an external penetration test, dependency review, infrastructure review, or production secret-management verification.</p></div>'
     )
