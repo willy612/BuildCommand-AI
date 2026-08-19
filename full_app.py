@@ -23578,14 +23578,24 @@ def _v394_installation_state(signals):
             score -= weight
             blockers.append(key.upper())
         elif state in {"UNKNOWN","UNVERIFIED",""}:
-            score -= max(5, weight // 2)
+            unknown_penalties = {
+                "submittals":8,
+                "materials":8,
+                "predecessors":8,
+                "inspections":5,
+                "access":5,
+                "manpower":5,
+                "equipment":4,
+                "rfis":7,
+            }
+            score -= unknown_penalties.get(key, 5)
             blockers.append(key.upper() + "_UNVERIFIED")
 
     score = max(0, min(100, score))
 
     if score >= 90:
         level = "READY_TO_START"
-    elif score >= 70:
+    elif score >= 75:
         level = "CONDITIONAL"
     elif score >= 45:
         level = "AT_RISK"
@@ -23854,3 +23864,11 @@ def v394_installation_readiness_page():
         f'</div>'
         + cards
     )
+
+
+# BuildCommand AI v394.1 maintenance note:
+# Installation-readiness calibration updated:
+# - CONDITIONAL now starts at 75, so a 70 score with real blockers is AT_RISK.
+# - UNKNOWN/UNVERIFIED evidence now uses explicit lighter penalties totaling 50
+#   across all eight categories, keeping all-unknown at 50/100 (AT_RISK) rather
+#   than treating uncertainty more harshly than known multi-blocker conditions.
