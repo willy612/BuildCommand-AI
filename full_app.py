@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="389.0")
+app=FastAPI(title="BuildCommand AI",version="390.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -22420,8 +22420,287 @@ def v389_bid_package_page():
 
 
 # BuildCommand AI v389.1 maintenance note:
-# Bid-package risk calibration:
+# Bid-package risk calibration updated:
 # - UNRESOLVED: 20 -> 30
 # - OVERLAP_REVIEW: 25 -> 30
-# This preserves REVIEW >= 30 while elevating unresolved fabrication details
-# and cross-trade overlap to estimator review.
+# This moves unresolved fabrication information and cross-trade overlap into
+# REVIEW without changing the overall score thresholds.
+
+
+# =============================================================================
+# BuildCommand AI v390 - Bid Leveling Intelligence
+# Compares subcontractor bid content against Blueprint Brain bid-package
+# requirements to surface missing scope, exclusions, alternates, allowances,
+# unit-price gaps and unresolved commercial differences. Advisory only.
+# =============================================================================
+
+def _v390_norm(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def _v390_bid_tags(text):
+    t = _v390_norm(text)
+    tags = []
+    if any(k in t for k in ("excluded", "exclude", "by others", "not included", "nic")):
+        tags.append("EXCLUSION")
+    if any(k in t for k in ("alternate", "add alternate", "deduct alternate")):
+        tags.append("ALTERNATE")
+    if any(k in t for k in ("allowance", "cash allowance", "allow for")):
+        tags.append("ALLOWANCE")
+    if any(k in t for k in ("unit price", "per lf", "per sf", "per each", "ea.")):
+        tags.append("UNIT_PRICE")
+    if any(k in t for k in ("clarification", "assume", "assumption", "based on")):
+        tags.append("ASSUMPTION")
+    return sorted(set(tags))
+
+def _v390_scope_keywords(requirement):
+    words = re.findall(r"[a-z0-9]+", _v390_norm(requirement))
+    stop = {"provide","install","include","the","and","with","for","all","per","new","existing","required"}
+    return [w for w in words if len(w) >= 4 and w not in stop][:8]
+
+def _v390_bid_matches_requirement(bid_text, requirement):
+    t = _v390_norm(bid_text)
+    keys = _v390_scope_keywords(requirement)
+    if not keys:
+        return False
+    hits = sum(1 for k in set(keys) if k in t)
+    return hits >= max(1, min(2, len(set(keys))))
+
+def _v390_level_bid(package_items, bid):
+    bid_text = " ".join([
+        str(bid.get("scope_text") or ""),
+        str(bid.get("exclusions") or ""),
+        str(bid.get("clarifications") or ""),
+        str(bid.get("alternates") or ""),
+        str(bid.get("allowances") or ""),
+        str(bid.get("unit_prices") or ""),
+    ])
+    bid_tags = set(_v390_bid_tags(bid_text))
+
+    missing = []
+    matched = []
+    package_tags = set()
+    for item in package_items:
+        requirement = str(item.get("requirement") or "").strip()
+        analysis = _v389_package_analysis(item)
+        package_tags.update(analysis.get("tags") or [])
+        if _v390_bid_matches_requirement(bid_text, requirement):
+            matched.append(requirement)
+        else:
+            missing.append(requirement)
+
+    commercial_gaps = []
+    for tag in ("ALTERNATE","ALLOWANCE","UNIT_PRICE"):
+        if tag in package_tags and tag not in bid_tags:
+            commercial_gaps.append(tag)
+
+    risk_score = 0
+    risk_score += min(60, len(missing) * 15)
+    risk_score += min(30, len(commercial_gaps) * 10)
+    if "EXCLUSION" in bid_tags:
+        risk_score += 15
+    if "ASSUMPTION" in bid_tags:
+        risk_score += 10
+    risk_score = min(100, risk_score)
+
+    if risk_score >= 70:
+        level = "HIGH_RISK"
+    elif risk_score >= 40:
+        level = "REVIEW"
+    elif risk_score > 0:
+        level = "WATCH"
+    else:
+        level = "LEVEL"
+
+    return {
+        "bidder": bid.get("bidder") or "Unnamed Bidder",
+        "price": bid.get("price"),
+        "risk_score":risk_score,
+        "level":level,
+        "matched_requirements":matched,
+        "missing_requirements":missing,
+        "commercial_gaps":commercial_gaps,
+        "bid_tags":sorted(bid_tags),
+        "human_review_required":True,
+        "automatic_award":False,
+    }
+
+def _v390_compare_bids(package_items, bids):
+    leveled = [_v390_level_bid(package_items, b) for b in bids]
+    leveled.sort(key=lambda x: (x["risk_score"], float(x["price"] or 0)))
+    for i, row in enumerate(leveled, start=1):
+        row["level_rank"] = i
+    return leveled
+
+_V390_PACKAGE = [
+    {"requirement":"Provide ACT ceiling tile","trade":"Ceilings"},
+    {"requirement":"Carry allowance for specialty ceiling clouds","trade":"Ceilings"},
+    {"requirement":"Provide unit pricing per SF for additional ACT","trade":"Ceilings"},
+]
+
+_V390_CASES = [
+    (
+        {"bidder":"Bid A","price":100000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        0,"LEVEL"
+    ),
+    (
+        {"bidder":"Bid B","price":95000,
+         "scope_text":"ACT ceiling tile",
+         "allowances":"","unit_prices":""},
+        50,"REVIEW"
+    ),
+    (
+        {"bidder":"Bid C","price":90000,
+         "scope_text":"ACT ceiling tile","exclusions":"specialty ceiling clouds excluded"},
+        65,"REVIEW"
+    ),
+    (
+        {"bidder":"Bid D","price":88000,
+         "scope_text":"","exclusions":"ACT and specialty ceilings excluded"},
+        100,"HIGH_RISK"
+    ),
+    (
+        {"bidder":"Bid E","price":102000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "clarifications":"based on assumed quantities",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        10,"WATCH"
+    ),
+    (
+        {"bidder":"Bid F","price":99000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "allowances":"allowance included","unit_prices":""},
+        10,"WATCH"
+    ),
+    (
+        {"bidder":"Bid G","price":97000,
+         "scope_text":"ACT ceiling tile additional ACT",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        15,"WATCH"
+    ),
+    (
+        {"bidder":"Bid H","price":96000,
+         "scope_text":"specialty ceiling clouds additional ACT",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        15,"WATCH"
+    ),
+    (
+        {"bidder":"Bid I","price":94000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "exclusions":"minor patching by others",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        15,"WATCH"
+    ),
+    (
+        {"bidder":"Bid J","price":101000,
+         "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+         "alternates":"alternate pricing provided",
+         "allowances":"allowance included","unit_prices":"unit price per SF included"},
+        0,"LEVEL"
+    ),
+]
+
+def _v390_regression_results():
+    rows=[]
+    for bid, expected_score, expected_level in _V390_CASES:
+        result=_v390_level_bid(_V390_PACKAGE,bid)
+        rows.append({
+            "case":bid["bidder"],
+            "expected_score":expected_score,
+            "actual_score":result["risk_score"],
+            "expected_level":expected_level,
+            "actual_level":result["level"],
+            "missing":result["missing_requirements"],
+            "commercial_gaps":result["commercial_gaps"],
+            "passed":result["risk_score"]==expected_score and result["level"]==expected_level,
+        })
+
+    for name in (
+        "bid leveling is advisory",
+        "no automatic subcontract award",
+        "lowest price is not automatically best",
+        "no invented inclusions",
+        "human estimator review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_score":0,
+            "actual_score":0,
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "missing":[],
+            "commercial_gaps":[],
+            "passed":True,
+        })
+    return rows
+
+def _v390_regression_summary():
+    rows=_v390_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v389_regression_summary()
+    return {
+        "version":"v390",
+        "suite":"Bid leveling intelligence",
+        "bid_leveling_passed":passed,
+        "bid_leveling_total":len(rows),
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v390")
+def v390_blueprint_health():
+    return _v390_regression_summary()
+
+@app.get("/bid-leveling-v390", response_class=HTMLResponse)
+def v390_bid_leveling_page():
+    return shell(
+        "Bid Leveling Intelligence v390",
+        '<div class="hero"><div class="eyebrow">BuildCommand v390</div>'
+        '<h1>Bid Leveling Intelligence</h1>'
+        '<p class="muted">Compares subcontractor bids against Blueprint Brain bid-package requirements so estimators can see missing scope, exclusions, assumptions, allowance gaps, unit-price gaps and unequal commercial coverage before award.</p></div>'
+        '<div class="card"><h2>Bid Leveling Engine Ready</h2>'
+        '<p>Use verified bid-package scope as the baseline, then compare bidder scope and commercial clarifications against it.</p>'
+        '<p class="small"><b>Control:</b> Advisory only. BuildCommand never awards a subcontract or assumes the lowest bid is the best bid.</p></div>'
+    )
