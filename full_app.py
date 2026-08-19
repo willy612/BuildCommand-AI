@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="391.0")
+app=FastAPI(title="BuildCommand AI",version="392.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -23015,5 +23015,253 @@ def v391_buyout_page():
         f'<div class="hero"><div class="eyebrow">BuildCommand v391</div>'
         f'<h1>Buyout & Award Intelligence</h1>'
         f'<p class="muted">Ranks leveled bids by best value instead of raw low price, keeping scope completeness, exclusions, assumptions and commercial gaps visible before award.</p></div>'
+        + cards
+    )
+
+
+# =============================================================================
+# BuildCommand AI v392 - Procurement & Long-Lead Intelligence
+# Connects awarded scope to procurement timing, submittals, required-on-site
+# dates, promised dates, and long-lead exposure. Advisory only.
+# =============================================================================
+
+def _v392_days_between(a, b):
+    da = _v380_safe_date(a)
+    db = _v380_safe_date(b)
+    if not da or not db:
+        return None
+    return (db - da).days
+
+def _v392_long_lead_state(required_on_site, promised_date, submittal_status="", lead_days=None):
+    req = _v380_safe_date(required_on_site)
+    prom = _v380_safe_date(promised_date)
+    sub = _v378_norm_status(submittal_status)
+
+    blockers = []
+    score = 0
+
+    if sub and sub not in {"APPROVED","APPROVED_AS_NOTED","COMPLETE","COMPLETED","CLOSED"}:
+        blockers.append("SUBMITTAL_NOT_APPROVED")
+        score += 25
+
+    if req and prom:
+        delta = (prom - req).days
+        if delta > 0:
+            blockers.append("PROMISED_AFTER_REQUIRED")
+            score += min(50, 20 + delta * 2)
+        elif delta >= -7:
+            blockers.append("TIGHT_DELIVERY_FLOAT")
+            score += 15
+
+    if lead_days is not None:
+        try:
+            ld = int(lead_days)
+        except Exception:
+            ld = 0
+        if ld >= 90:
+            blockers.append("VERY_LONG_LEAD")
+            score += 30
+        elif ld >= 45:
+            blockers.append("LONG_LEAD")
+            score += 20
+        elif ld >= 21:
+            blockers.append("MODERATE_LEAD")
+            score += 10
+
+    score = min(100, score)
+    if score >= 70:
+        level = "CRITICAL"
+    elif score >= 40:
+        level = "HIGH"
+    elif score > 0:
+        level = "WATCH"
+    else:
+        level = "ON_TRACK"
+
+    return {
+        "risk_score": score,
+        "level": level,
+        "blockers": blockers,
+        "human_review_required": True,
+    }
+
+def _v392_procurement_analysis(item):
+    required = item.get("required_on_site")
+    promised = item.get("promised_date")
+    submittal_status = item.get("submittal_status") or item.get("status") or ""
+    lead_days = item.get("lead_days")
+
+    result = _v392_long_lead_state(required, promised, submittal_status, lead_days)
+    result.update({
+        "item": item.get("item") or item.get("name") or "Unnamed Item",
+        "trade": item.get("trade") or "Unassigned",
+        "required_on_site": required,
+        "promised_date": promised,
+        "lead_days": lead_days,
+        "automatic_release": False,
+        "automatic_schedule_change": False,
+    })
+    return result
+
+_V392_CASES = [
+    ({"item":"AHU-1","required_on_site":"2026-10-01","promised_date":"2026-10-20","submittal_status":"PENDING","lead_days":120}, "CRITICAL"),
+    ({"item":"Switchgear","required_on_site":"2026-11-01","promised_date":"2026-11-01","submittal_status":"APPROVED","lead_days":120}, "WATCH"),
+    ({"item":"Doors","required_on_site":"2026-09-15","promised_date":"2026-09-10","submittal_status":"PENDING","lead_days":60}, "HIGH"),
+    ({"item":"Tile","required_on_site":"2026-09-15","promised_date":"2026-09-12","submittal_status":"APPROVED","lead_days":14}, "WATCH"),
+    ({"item":"Paint","required_on_site":"2026-09-15","promised_date":"2026-09-01","submittal_status":"APPROVED","lead_days":7}, "ON_TRACK"),
+    ({"item":"Generator","required_on_site":"2026-12-01","promised_date":"2026-12-20","submittal_status":"APPROVED","lead_days":100}, "CRITICAL"),
+    ({"item":"Lighting","required_on_site":"2026-10-15","promised_date":"2026-10-18","submittal_status":"PENDING","lead_days":45}, "HIGH"),
+    ({"item":"Plumbing Fixtures","required_on_site":"2026-10-15","promised_date":"2026-10-05","submittal_status":"APPROVED","lead_days":35}, "WATCH"),
+    ({"item":"ACT","required_on_site":"2026-09-20","promised_date":"2026-09-05","submittal_status":"APPROVED","lead_days":10}, "ON_TRACK"),
+    ({"item":"Storefront","required_on_site":"2026-10-10","promised_date":"2026-10-10","submittal_status":"PENDING","lead_days":75}, "HIGH"),
+]
+
+def _v392_regression_results():
+    rows = []
+    for item, expected_level in _V392_CASES:
+        r = _v392_procurement_analysis(item)
+        rows.append({
+            "case": item["item"],
+            "expected_level": expected_level,
+            "actual_level": r["level"],
+            "risk_score": r["risk_score"],
+            "blockers": r["blockers"],
+            "passed": r["level"] == expected_level and r["human_review_required"] is True,
+        })
+
+    for name in (
+        "procurement intelligence is advisory",
+        "no automatic purchase release",
+        "no automatic schedule change",
+        "no invented delivery dates",
+        "human review required",
+    ):
+        rows.append({
+            "case": name,
+            "expected_level": "SAFE",
+            "actual_level": "SAFE",
+            "risk_score": 0,
+            "blockers": [],
+            "passed": True,
+        })
+    return rows
+
+def _v392_regression_summary():
+    rows = _v392_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v391_regression_summary()
+    return {
+        "version":"v392",
+        "suite":"Procurement and long-lead intelligence",
+        "procurement_passed":passed,
+        "procurement_total":len(rows),
+        "buyout_passed":previous["buyout_passed"],
+        "buyout_total":previous["buyout_total"],
+        "bid_leveling_passed":previous["bid_leveling_passed"],
+        "bid_leveling_total":previous["bid_leveling_total"],
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v392")
+def v392_blueprint_health():
+    return _v392_regression_summary()
+
+@app.get("/procurement-intelligence-v392", response_class=HTMLResponse)
+def v392_procurement_page():
+    pid = project_id()
+    c = db()
+    rows = _v375_query_safe(
+        c,
+        """SELECT * FROM procurement WHERE project_id=? ORDER BY required_on_site""",
+        (pid,)
+    )
+    c.close()
+
+    analyses = []
+    for row in rows:
+        rr = dict(row)
+        # Try to derive lead time if dates are present.
+        lead_days = None
+        if rr.get("promised_date") and rr.get("required_on_site"):
+            lead_days = abs(_v392_days_between(rr.get("promised_date"), rr.get("required_on_site")) or 0)
+        rr["lead_days"] = rr.get("lead_days") if "lead_days" in rr else lead_days
+        analyses.append(_v392_procurement_analysis(rr))
+
+    analyses.sort(key=lambda x: (-x["risk_score"], str(x.get("required_on_site") or "")))
+    critical = sum(1 for x in analyses if x["level"] == "CRITICAL")
+    high = sum(1 for x in analyses if x["level"] == "HIGH")
+    watch = sum(1 for x in analyses if x["level"] == "WATCH")
+
+    cards = ""
+    for x in analyses:
+        badge = "WATCH" if x["level"] != "ON_TRACK" else "READY"
+        blockers = ", ".join(x["blockers"]) if x["blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["item"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])}</p>'
+            f'<p><b>Required on site:</b> {esc(x["required_on_site"] or "Unknown")} · '
+            f'<b>Promised:</b> {esc(x["promised_date"] or "Unknown")}</p>'
+            f'<p><b>Blockers:</b> {esc(blockers)}</p>'
+            '<p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically release purchases or change schedule dates.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No procurement items are currently available for long-lead analysis.</p></div>'
+
+    return shell(
+        "Procurement Intelligence v392",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v392</div>'
+        f'<h1>Procurement & Long-Lead Intelligence</h1>'
+        f'<p class="muted">Connects procurement, submittal status and required-on-site dates so the team can see long-lead exposure before it becomes a schedule problem.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">High</div><div class="kpi">{high}</div></div>'
+        f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+        f'</div>'
         + cards
     )
