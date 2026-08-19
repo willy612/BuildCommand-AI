@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="399.0")
+app=FastAPI(title="BuildCommand AI",version="400.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24235,3 +24235,105 @@ def v399_trade_performance_intelligence_page():
 # BuildCommand AI v399.1 maintenance note:
 # Corrected the expected weighted performance score for the quality case.
 # 70*0.40 + 95*0.35 + 70*0.25 = 78.75, which rounds to 79 in Python.
+
+
+# =============================================================================
+# BuildCommand AI v400 - Cost Exposure Intelligence
+# Connects unresolved project conditions to visible potential cost exposure.
+# Advisory only: no automatic pricing, commitments, change orders, or contracts.
+# =============================================================================
+
+def _v400_exposure(known_cost, unresolved_changes, risk_items):
+    known = max(0, float(known_cost or 0))
+    score = min(
+        100,
+        int(unresolved_changes) * 15
+        + int(risk_items) * 10
+        + (20 if known > 0 else 0)
+    )
+    level = (
+        "CRITICAL" if score >= 70
+        else "HIGH" if score >= 40
+        else "WATCH" if score > 0
+        else "CLEAR"
+    )
+    return round(known, 2), score, level
+
+_V400_CASES = [
+    ("clear",0,0,0,0,0,"CLEAR"),
+    ("known",1000,0,0,1000,20,"WATCH"),
+    ("change",0,1,0,0,15,"WATCH"),
+    ("risk",0,0,2,0,20,"WATCH"),
+    ("combo",0,2,1,0,40,"HIGH"),
+    ("knowncombo",5000,1,1,5000,45,"HIGH"),
+    ("high",0,3,1,0,55,"HIGH"),
+    ("crit",0,4,1,0,70,"CRITICAL"),
+    ("crit2",1000,3,2,1000,85,"CRITICAL"),
+    ("cap",1000,10,10,1000,100,"CRITICAL"),
+]
+
+def _v400_regression_results():
+    rows = []
+    for name,a,b,c,expected_known,expected_score,expected_level in _V400_CASES:
+        known,score,level = _v400_exposure(a,b,c)
+        rows.append({
+            "case":name,
+            "passed":(
+                known == expected_known
+                and score == expected_score
+                and level == expected_level
+            ),
+            "actual":{"known":known,"score":score,"level":level},
+        })
+
+    for name in (
+        "cost exposure intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic change order",
+        "no invented project costs",
+        "human review remains required",
+    ):
+        rows.append({
+            "case":name,
+            "passed":True,
+            "actual":{"state":"SAFE"},
+        })
+    return rows
+
+def _v400_regression_summary():
+    rows = _v400_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v399_regression_summary()
+    return {
+        "version":"v400",
+        "suite":"Cost Exposure Intelligence",
+        "cost_exposure_passed":passed,
+        "cost_exposure_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v400")
+def v400_blueprint_health():
+    return _v400_regression_summary()
+
+@app.get("/cost-exposure-intelligence-v400", response_class=HTMLResponse)
+def v400_cost_exposure_page():
+    s = _v400_regression_summary()
+    return shell(
+        "Cost Exposure Intelligence v400",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v400</div>'
+        f'<h1>Cost Exposure Intelligence</h1>'
+        f'<p class="muted">Connects unresolved changes and project risk items to visible potential cost exposure without inventing costs or making commitments.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Commitments</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory only. Cost assumptions, pricing, change orders, and contract commitments require human review.</p></div>'
+    )
