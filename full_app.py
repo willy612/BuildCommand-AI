@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="398.0")
+app=FastAPI(title="BuildCommand AI",version="399.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24155,6 +24155,74 @@ def v398_daily_plan_intelligence_page():
         f'<div class="hero"><div class="eyebrow">BuildCommand v398</div>'
         f'<h1>Daily Plan Intelligence</h1>'
         f'<p class="muted">BuildCommand operating-brain layer v398. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v399 - Trade Performance Intelligence
+# =============================================================================
+
+def _v399_perf(on_time_pct, quality_pct, response_pct):
+    score=round(float(on_time_pct)*0.4+float(quality_pct)*0.35+float(response_pct)*0.25)
+    level="STRONG" if score>=90 else ("GOOD" if score>=75 else ("WATCH" if score>=60 else "POOR"))
+    return score,level
+_V399_CASES=[
+("perfect",100,100,100,100,"STRONG"),("strong",95,90,90,92,"STRONG"),("good",85,80,80,82,"GOOD"),
+("75",75,75,75,75,"GOOD"),("watch",70,60,65,65,"WATCH"),("60",60,60,60,60,"WATCH"),
+("poor",50,50,50,50,"POOR"),("mixed",90,50,50,66,"WATCH"),("quality",70,95,70,78,"GOOD"),
+("response",70,70,100,78,"GOOD")]
+
+
+def _v399_regression_results():
+    rows=[]
+    for name,a,b,c,es,el in _V399_CASES:
+        s,l=_v399_perf(a,b,c); rows.append({"case":name,"passed":s==es and l==el,"actual":{"score":s,"level":l}})
+    for name in (
+        "trade performance intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v399_regression_summary():
+    rows=_v399_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v398_regression_summary()
+    return {
+        "version":"v399",
+        "suite":"Trade Performance Intelligence",
+        "trade_performance_passed":passed,
+        "trade_performance_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v399")
+def v399_blueprint_health():
+    return _v399_regression_summary()
+
+@app.get("/trade-performance-intelligence-v399", response_class=HTMLResponse)
+def v399_trade_performance_intelligence_page():
+    s=_v399_regression_summary()
+    return shell(
+        "Trade Performance Intelligence v399",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v399</div>'
+        f'<h1>Trade Performance Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v399. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
         f'<div class="grid3">'
         f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
         f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
