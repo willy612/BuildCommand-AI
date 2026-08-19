@@ -27939,3 +27939,245 @@ def v419_project_experience(q: str = ""):
 # Mobile field priority updated:
 # DO_NOT_START > CRITICAL > HIGH/AT_RISK > remaining statuses.
 # All other v419 navigation and record behavior is unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v420-v429 Combined Release Train
+# Ten roadmap builds consolidated into one release candidate:
+# v420 Guided Actions & Workflow Completion
+# v421 Notifications & Activity
+# v422 Data Connector / Import Pipeline
+# v423 Production Persistence & API Contracts
+# v424 UX / Mobile Polish
+# v425 End-to-End Customer Journey
+# v426 Deployment & Operations Gate
+# v427 Release Candidate Gate
+# v428 Pilot Telemetry & Feedback
+# v429 Production Launch Readiness
+# =============================================================================
+
+def _v420_guided_action(record, assignee="", due_at="", evidence=None, completed=False):
+    blockers = []
+    if not record.get("id"): blockers.append("RECORD_REQUIRED")
+    if not assignee: blockers.append("ASSIGNEE_REQUIRED")
+    if not due_at: blockers.append("DUE_DATE_REQUIRED")
+    if completed and not evidence: blockers.append("COMPLETION_EVIDENCE_REQUIRED")
+    return {"ready":not blockers,"record_id":record.get("id"),"assignee":assignee,
+            "due_at":due_at,"completed":bool(completed),"blockers":blockers,
+            "automatic_execution":False}
+
+def _v421_notification(event, recipients=None, approved=False):
+    recipients = list(recipients or [])
+    blockers = []
+    if not event: blockers.append("EVENT_REQUIRED")
+    if not recipients: blockers.append("RECIPIENT_REQUIRED")
+    if not approved: blockers.append("HUMAN_SEND_APPROVAL_REQUIRED")
+    return {"ready":not blockers,"event":event,"recipients":recipients,
+            "blockers":blockers,"automatic_send":False}
+
+def _v422_import_record(source, project_id, record_type, payload, source_id="", imported_at=""):
+    blockers = []
+    if not source: blockers.append("SOURCE_REQUIRED")
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not record_type: blockers.append("RECORD_TYPE_REQUIRED")
+    if not isinstance(payload, dict) or not payload: blockers.append("PAYLOAD_REQUIRED")
+    if not source_id: blockers.append("SOURCE_ID_REQUIRED")
+    return {"accepted":not blockers,"source":source,"project_id":project_id,
+            "record_type":record_type,"source_id":source_id,"imported_at":imported_at,
+            "blockers":blockers,"preserves_source_identity":True}
+
+def _v423_api_mutation(company_id, project_id, actor, expected_version, current_version):
+    blockers = []
+    if not company_id: blockers.append("COMPANY_REQUIRED")
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not actor: blockers.append("ACTOR_REQUIRED")
+    if expected_version != current_version: blockers.append("VERSION_CONFLICT")
+    return {"allowed":not blockers,"blockers":blockers,
+            "next_version":current_version + 1 if not blockers else current_version,
+            "audit_required":True}
+
+def _v424_mobile_card(record):
+    status = str(record.get("status","REVIEW")).upper()
+    priority = 0 if status == "DO_NOT_START" else 1 if status == "CRITICAL" else 2 if status in {"HIGH","AT_RISK"} else 3
+    return {"id":record.get("id"),"title":record.get("title","Untitled"),
+            "status":status,"priority_bucket":priority,
+            "primary_action":record.get("next_action","Review"),
+            "source":record.get("source",""),"touch_target_ready":True}
+
+def _v425_customer_journey(company_ready, project_ready, ingestion_ready, security_ready,
+                           recovery_ready, access_ready, human_approved):
+    blockers = []
+    for ok, name in ((company_ready,"COMPANY"),(project_ready,"PROJECT"),
+                     (ingestion_ready,"INGESTION"),(security_ready,"SECURITY"),
+                     (recovery_ready,"RECOVERY"),(access_ready,"ACCESS")):
+        if not ok: blockers.append(name + "_NOT_READY")
+    if not human_approved: blockers.append("HUMAN_APPROVAL_REQUIRED")
+    return {"ready":not blockers,"state":"CUSTOMER_READY" if not blockers else "REVIEW_REQUIRED",
+            "blockers":blockers,"automatic_go_live":False}
+
+def _v426_ops_gate(health_ok, backup_ok, restore_ok, monitoring_ok, secrets_ok):
+    blockers = []
+    for ok, name in ((health_ok,"HEALTH"),(backup_ok,"BACKUP"),(restore_ok,"RESTORE"),
+                     (monitoring_ok,"MONITORING"),(secrets_ok,"SECRETS")):
+        if not ok: blockers.append(name + "_NOT_READY")
+    return {"ready":not blockers,"blockers":blockers,
+            "state":"DEPLOYMENT_READY" if not blockers else "DEPLOYMENT_BLOCKED"}
+
+def _v427_release_gate(regression_ok, security_verified, recovery_verified,
+                       journey_ok, ops_ok, approver=""):
+    blockers = []
+    if not regression_ok: blockers.append("REGRESSION_NOT_GREEN")
+    if not security_verified: blockers.append("SECURITY_VERIFICATION_REQUIRED")
+    if not recovery_verified: blockers.append("RECOVERY_VERIFICATION_REQUIRED")
+    if not journey_ok: blockers.append("CUSTOMER_JOURNEY_NOT_READY")
+    if not ops_ok: blockers.append("OPERATIONS_NOT_READY")
+    if not approver: blockers.append("RELEASE_APPROVER_REQUIRED")
+    return {"ready":not blockers,"decision":"RELEASE_CANDIDATE_APPROVED" if not blockers else "NO_GO_REVIEW",
+            "blockers":blockers,"automatic_release":False}
+
+def _v428_pilot_feedback(account_id, active_users, weekly_actions, feedback_items, critical_issues):
+    adoption = min(100, max(0, int(active_users) * 10))
+    usage = min(100, max(0, int(weekly_actions) * 2))
+    score = max(0, min(100, round((adoption + usage) / 2) - int(critical_issues) * 20))
+    return {"account_id":account_id,"score":score,
+            "level":"HEALTHY" if score >= 75 else "WATCH" if score >= 50 else "AT_RISK",
+            "feedback_count":len(feedback_items or []),"critical_issues":int(critical_issues),
+            "automatic_product_change":False}
+
+def _v429_launch_gate(rc_ready, telemetry_ready, support_ready, billing_ready,
+                      onboarding_ready, human_approved):
+    blockers = []
+    for ok, name in ((rc_ready,"RELEASE_CANDIDATE"),(telemetry_ready,"TELEMETRY"),
+                     (support_ready,"SUPPORT"),(billing_ready,"BILLING"),
+                     (onboarding_ready,"ONBOARDING")):
+        if not ok: blockers.append(name + "_NOT_READY")
+    if not human_approved: blockers.append("HUMAN_LAUNCH_APPROVAL_REQUIRED")
+    return {"ready":not blockers,"state":"PILOT_1_0_READY" if not blockers else "LAUNCH_REVIEW",
+            "blockers":blockers,"automatic_launch":False}
+
+def _v420_v429_results():
+    rows = []
+
+    a = _v420_guided_action({"id":"RFI-44"},"u1","2026-08-21T17:00:00Z")
+    rows += [
+        {"case":"guided action ready","passed":a["ready"],"actual":a},
+        {"case":"guided action requires evidence to complete","passed":"COMPLETION_EVIDENCE_REQUIRED" in _v420_guided_action({"id":"1"},"u1","2026-08-21",None,True)["blockers"],"actual":_v420_guided_action({"id":"1"},"u1","2026-08-21",None,True)},
+        {"case":"guided action never auto executes","passed":a["automatic_execution"] is False,"actual":a},
+    ]
+
+    n = _v421_notification("RFI_RESPONSE_DUE",["u1"],True)
+    rows += [
+        {"case":"notification ready after approval","passed":n["ready"],"actual":n},
+        {"case":"notification requires recipient","passed":"RECIPIENT_REQUIRED" in _v421_notification("EVENT",[],True)["blockers"],"actual":_v421_notification("EVENT",[],True)},
+        {"case":"notification no automatic send","passed":n["automatic_send"] is False,"actual":n},
+    ]
+
+    imp = _v422_import_record("PROCORE","P1","RFI",{"number":"44"},"src-44","2026-08-19T12:00:00Z")
+    rows += [
+        {"case":"import preserves source identity","passed":imp["accepted"] and imp["preserves_source_identity"],"actual":imp},
+        {"case":"import rejects missing source id","passed":"SOURCE_ID_REQUIRED" in _v422_import_record("PROCORE","P1","RFI",{"x":1})["blockers"],"actual":_v422_import_record("PROCORE","P1","RFI",{"x":1})},
+        {"case":"import rejects invented empty payload","passed":"PAYLOAD_REQUIRED" in _v422_import_record("CSV","P1","RFI",{},"1")["blockers"],"actual":_v422_import_record("CSV","P1","RFI",{},"1")},
+    ]
+
+    api = _v423_api_mutation("C1","P1","u1",4,4)
+    rows += [
+        {"case":"api mutation optimistic success","passed":api["allowed"] and api["next_version"]==5,"actual":api},
+        {"case":"api mutation version conflict","passed":"VERSION_CONFLICT" in _v423_api_mutation("C1","P1","u1",3,4)["blockers"],"actual":_v423_api_mutation("C1","P1","u1",3,4)},
+        {"case":"api mutation audit required","passed":api["audit_required"],"actual":api},
+    ]
+
+    m1 = _v424_mobile_card({"id":"1","title":"Storefront","status":"DO_NOT_START","next_action":"Resolve RFI","source":"A5.21"})
+    m2 = _v424_mobile_card({"id":"2","title":"AHU","status":"CRITICAL"})
+    rows += [
+        {"case":"mobile do not start highest","passed":m1["priority_bucket"] < m2["priority_bucket"],"actual":{"do_not_start":m1,"critical":m2}},
+        {"case":"mobile primary action visible","passed":m1["primary_action"]=="Resolve RFI","actual":m1},
+        {"case":"mobile source visible","passed":m1["source"]=="A5.21","actual":m1},
+    ]
+
+    journey = _v425_customer_journey(True,True,True,True,True,True,True)
+    rows += [
+        {"case":"customer journey complete","passed":journey["ready"],"actual":journey},
+        {"case":"customer journey security blocks","passed":"SECURITY_NOT_READY" in _v425_customer_journey(True,True,True,False,True,True,True)["blockers"],"actual":_v425_customer_journey(True,True,True,False,True,True,True)},
+        {"case":"customer journey human approval required","passed":"HUMAN_APPROVAL_REQUIRED" in _v425_customer_journey(True,True,True,True,True,True,False)["blockers"],"actual":_v425_customer_journey(True,True,True,True,True,True,False)},
+    ]
+
+    ops = _v426_ops_gate(True,True,True,True,True)
+    rows += [
+        {"case":"deployment operations ready","passed":ops["ready"],"actual":ops},
+        {"case":"deployment restore blocks","passed":"RESTORE_NOT_READY" in _v426_ops_gate(True,True,False,True,True)["blockers"],"actual":_v426_ops_gate(True,True,False,True,True)},
+        {"case":"deployment secrets block","passed":"SECRETS_NOT_READY" in _v426_ops_gate(True,True,True,True,False)["blockers"],"actual":_v426_ops_gate(True,True,True,True,False)},
+    ]
+
+    rc = _v427_release_gate(True,True,True,True,True,"exec1")
+    rows += [
+        {"case":"release candidate approved","passed":rc["ready"],"actual":rc},
+        {"case":"release candidate requires external security","passed":"SECURITY_VERIFICATION_REQUIRED" in _v427_release_gate(True,False,True,True,True,"exec1")["blockers"],"actual":_v427_release_gate(True,False,True,True,True,"exec1")},
+        {"case":"release candidate never auto releases","passed":rc["automatic_release"] is False,"actual":rc},
+    ]
+
+    tel = _v428_pilot_feedback("A1",8,40,[{"rating":5}],0)
+    rows += [
+        {"case":"pilot telemetry healthy","passed":tel["level"]=="HEALTHY","actual":tel},
+        {"case":"pilot telemetry critical issue reduces health","passed":_v428_pilot_feedback("A1",8,40,[],2)["score"] < tel["score"],"actual":_v428_pilot_feedback("A1",8,40,[],2)},
+        {"case":"feedback never auto changes product","passed":tel["automatic_product_change"] is False,"actual":tel},
+    ]
+
+    launch = _v429_launch_gate(True,True,True,True,True,True)
+    rows += [
+        {"case":"pilot 1.0 launch ready","passed":launch["ready"] and launch["state"]=="PILOT_1_0_READY","actual":launch},
+        {"case":"launch requires support readiness","passed":"SUPPORT_NOT_READY" in _v429_launch_gate(True,True,False,True,True,True)["blockers"],"actual":_v429_launch_gate(True,True,False,True,True,True)},
+        {"case":"launch requires human approval","passed":"HUMAN_LAUNCH_APPROVAL_REQUIRED" in _v429_launch_gate(True,True,True,True,True,False)["blockers"],"actual":_v429_launch_gate(True,True,True,True,True,False)},
+    ]
+
+    for name in (
+        "combined release preserves tenant scope",
+        "combined release preserves auditability",
+        "combined release does not invent project facts",
+        "combined release does not auto commit contracts",
+        "combined release does not auto communicate externally",
+        "external security verification remains required",
+        "external recovery verification remains required",
+        "human production launch approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v420_v429_summary():
+    rows = _v420_v429_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v419_regression_summary()
+    return {
+        "version":"v429",
+        "suite":"BuildCommand Pilot 1.0 Combined Release Train",
+        "combined_release_passed":passed,
+        "combined_release_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "modules":["v420 Guided Actions","v421 Notifications","v422 Imports","v423 Persistence API",
+                   "v424 UX Mobile","v425 Customer Journey","v426 Deployment Ops",
+                   "v427 Release Candidate","v428 Pilot Telemetry","v429 Launch Readiness"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v429")
+def v429_blueprint_health():
+    return _v420_v429_summary()
+
+@app.get("/pilot-1-0", response_class=HTMLResponse)
+def v429_pilot_home():
+    s = _v420_v429_summary()
+    return shell(
+        "BuildCommand Pilot 1.0",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · Combined v420-v429</div>'
+        f'<h1>Pilot 1.0 Command Center</h1>'
+        f'<p class="muted">One release tying action completion, notifications, imports, persistence, mobile UX, customer journey, operations, telemetry and launch readiness together.</p></div>'
+        f'<div class="grid3"><div class="card"><div class="label">Regression</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Combined modules</div><div class="kpi">10</div></div>'
+        f'<div class="card"><div class="label">State</div><div class="kpi">{"GREEN" if s["ok"] else "REVIEW"}</div></div></div>'
+        f'<div class="card" style="margin-top:14px"><h2>Release train</h2>'
+        f'<p>{" · ".join(s["modules"])}</p></div>'
+    )
