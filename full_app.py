@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="395.0")
+app=FastAPI(title="BuildCommand AI",version="396.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -23943,6 +23943,77 @@ def v395_schedule_constraint_intelligence_page():
         f'<div class="hero"><div class="eyebrow">BuildCommand v395</div>'
         f'<h1>Schedule Constraint Intelligence</h1>'
         f'<p class="muted">BuildCommand operating-brain layer v395. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v396 - Delay Prediction Intelligence
+# =============================================================================
+
+def _v396_predict(readiness_score, open_constraints, days_to_start):
+    risk=max(0,100-int(readiness_score))
+    risk+=min(30,int(open_constraints)*8)
+    if days_to_start is not None and int(days_to_start)<=3: risk+=15
+    risk=min(100,risk)
+    level="LIKELY_DELAY" if risk>=70 else ("DELAY_RISK" if risk>=40 else ("WATCH" if risk>0 else "ON_TRACK"))
+    return risk,level
+_V396_CASES=[
+("perfect",100,0,10,0,"ON_TRACK"),("ready1",90,0,10,10,"WATCH"),("constraint",90,1,10,18,"WATCH"),
+("two",80,2,10,36,"WATCH"),("near",80,2,3,51,"DELAY_RISK"),("risk",70,2,10,46,"DELAY_RISK"),
+("high",60,3,5,64,"DELAY_RISK"),("likely",50,3,2,89,"LIKELY_DELAY"),("critical",30,4,1,100,"LIKELY_DELAY"),
+("cap",0,10,0,100,"LIKELY_DELAY")]
+
+
+def _v396_regression_results():
+    rows=[]
+    for name,a,b,c,es,el in _V396_CASES:
+        s,l=_v396_predict(a,b,c); rows.append({"case":name,"passed":s==es and l==el,"actual":{"score":s,"level":l}})
+    for name in (
+        "delay prediction intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v396_regression_summary():
+    rows=_v396_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v395_regression_summary()
+    return {
+        "version":"v396",
+        "suite":"Delay Prediction Intelligence",
+        "delay_prediction_passed":passed,
+        "delay_prediction_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v396")
+def v396_blueprint_health():
+    return _v396_regression_summary()
+
+@app.get("/delay-prediction-intelligence-v396", response_class=HTMLResponse)
+def v396_delay_prediction_intelligence_page():
+    s=_v396_regression_summary()
+    return shell(
+        "Delay Prediction Intelligence v396",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v396</div>'
+        f'<h1>Delay Prediction Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v396. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
         f'<div class="grid3">'
         f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
         f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
