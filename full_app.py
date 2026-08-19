@@ -21853,6 +21853,14 @@ def _v388_scope_signals(item):
         predicted = _v371_trade_owner(req)
     except Exception:
         predicted = ""
+
+    # Override common finish-language edge case:
+    # "Paint hollow metal doors and frames" is finish scope even though the
+    # underlying assembly belongs to Doors & Hardware.
+    req_n = _v388_norm(req)
+    if re.search(r"\bpaint(?:ing)?\b.{0,80}\b(door|doors|frame|frames|hollow metal)\b", req_n):
+        predicted = "Paint"
+
     if trade and predicted and trade.lower() not in {"unknown","tbd","other","general","unassigned"}:
         if _v388_norm(trade) != _v388_norm(predicted):
             add(
@@ -21862,9 +21870,17 @@ def _v388_scope_signals(item):
             )
 
     # Buried general note / all-trades language.
-    if any(k in t for k in (
-        "all trades", "contractor shall coordinate", "contractor to verify",
-        "coordinate all work", "include all", "provide all required"
+    broad_general_note = any(k in t for k in (
+        "all trades", "contractor shall coordinate", "coordinate all work"
+    ))
+    if broad_general_note:
+        add(
+            "BURIED_GENERAL_NOTE", "HIGH",
+            "Broad all-trades/general-coordination language may create obligations across multiple trade packages.",
+            "Break the general-note obligation into explicit affected-trade scope before bid leveling or award."
+        )
+    elif any(k in t for k in (
+        "contractor to verify", "include all", "provide all required"
     )):
         add(
             "BURIED_GENERAL_NOTE", "MEDIUM",
@@ -22074,3 +22090,10 @@ def v388_scope_gap_page():
         f'</div>'
         + cards
     )
+
+
+# BuildCommand AI v388.1 maintenance note:
+# 1) Paint/finish language on doors and frames is treated as Paint scope for
+#    trade-ownership review rather than assembly ownership.
+# 2) Broad "all trades / coordinate all work" notes are HIGH-risk scope-gap
+#    signals because they can create multi-trade obligations.
