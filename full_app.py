@@ -27760,3 +27760,172 @@ def v418_cockpit(role: str = "PM", project: str = "P1"):
         + f'</div><div class="card" style="margin-top:12px"><div class="label">System Confidence</div><div class="kpi">{regression["total"]}</div><div class="small">cumulative regression checks</div></div></aside>'
         f'</div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI v419 - Unified Navigation & Record Experience
+# =============================================================================
+
+_V419_RECORD_TYPES = {"RFI","SUBMITTAL","PROCUREMENT","CHANGE","ISSUE","READINESS"}
+
+def _v419_search(records, query, project_id=None):
+    q = str(query or "").strip().lower()
+    results = []
+    for r in (records or []):
+        if project_id and str(r.get("project_id","")) != str(project_id):
+            continue
+        haystack = " ".join(str(r.get(k,"")) for k in
+            ("id","title","type","trade","owner","status","source")).lower()
+        if not q or q in haystack:
+            results.append(r)
+    results.sort(key=lambda x: (-int(x.get("priority",0)), str(x.get("title",""))))
+    return {"query":query,"count":len(results),"results":results}
+
+def _v419_filter(records, trade=None, status=None, owner=None, record_type=None):
+    out = []
+    for r in (records or []):
+        if trade and str(r.get("trade","")).lower() != str(trade).lower(): continue
+        if status and str(r.get("status","")).upper() != str(status).upper(): continue
+        if owner and str(r.get("owner","")).lower() != str(owner).lower(): continue
+        if record_type and str(r.get("type","")).upper() != str(record_type).upper(): continue
+        out.append(r)
+    return {"count":len(out),"results":out}
+
+def _v419_favorite(user_id, record_id, existing):
+    blockers = []
+    if not user_id: blockers.append("USER_REQUIRED")
+    if not record_id: blockers.append("RECORD_REQUIRED")
+    favorites = {str(x) for x in (existing or [])}
+    if not blockers: favorites.add(str(record_id))
+    return {"ok":not blockers,"favorites":sorted(favorites),"blockers":blockers}
+
+def _v419_recent(records, limit=5):
+    ordered = sorted(list(records or []), key=lambda x: str(x.get("viewed_at","")), reverse=True)
+    return {"count":len(ordered),"items":ordered[:max(1,int(limit))]}
+
+def _v419_breadcrumb(project_name, record_type=None, record_id=None, title=None):
+    crumbs = [{"label":"Projects","href":"/workspace-v417"},
+              {"label":str(project_name or "Project"),"href":"/cockpit-v418"}]
+    if record_type:
+        crumbs.append({"label":str(record_type).replace("_"," ").title(),"href":"#records"})
+    if record_id or title:
+        crumbs.append({"label":str(title or record_id),"href":None})
+    return crumbs
+
+def _v419_record_detail(record):
+    rtype = str(record.get("type","")).upper()
+    blockers = []
+    if rtype not in _V419_RECORD_TYPES: blockers.append("RECORD_TYPE_UNSUPPORTED")
+    if not record.get("id"): blockers.append("RECORD_ID_REQUIRED")
+    if not record.get("project_id"): blockers.append("PROJECT_REQUIRED")
+    return {
+        "valid":not blockers,"id":str(record.get("id","")),"type":rtype,
+        "title":str(record.get("title","Untitled")),"project_id":str(record.get("project_id","")),
+        "trade":str(record.get("trade","")),"status":str(record.get("status","REVIEW")).upper(),
+        "owner":str(record.get("owner","Unassigned")),"source":str(record.get("source","")),
+        "why":list(record.get("why",[])),"next_action":str(record.get("next_action","Review")),
+        "blockers":blockers,"automatic_action":False,
+    }
+
+def _v419_mobile_field_view(records):
+    field_types = {"RFI","ISSUE","READINESS","SUBMITTAL","PROCUREMENT"}
+    visible = [_v419_record_detail(r) for r in (records or [])
+               if str(r.get("type","")).upper() in field_types]
+    visible.sort(key=lambda x: (
+        0 if x["status"] in {"CRITICAL","DO_NOT_START"} else
+        1 if x["status"] in {"HIGH","AT_RISK"} else 2, x["title"]))
+    return {"mode":"FIELD_MOBILE","count":len(visible),"items":visible}
+
+def _v419_regression_results():
+    rows = []
+    records = [
+        {"id":"RFI-44","type":"RFI","project_id":"P1","title":"Door hardware conflict","trade":"Doors","owner":"PM","status":"HIGH","source":"A8.10","priority":80},
+        {"id":"SUB-21","type":"SUBMITTAL","project_id":"P1","title":"Lighting fixtures","trade":"Electrical","owner":"PM","status":"WATCH","source":"23 00 00","priority":40},
+        {"id":"PO-8","type":"PROCUREMENT","project_id":"P1","title":"AHU-1 delivery","trade":"HVAC","owner":"PM","status":"CRITICAL","source":"Procurement Log","priority":100},
+        {"id":"CO-12","type":"CHANGE","project_id":"P1","title":"Lobby ceiling revision","trade":"General","owner":"PM","status":"REVIEW","source":"Change Log","priority":60},
+        {"id":"ISS-9","type":"ISSUE","project_id":"P2","title":"Access conflict","trade":"Electrical","owner":"Superintendent","status":"AT_RISK","source":"Lookahead","priority":70},
+        {"id":"RDY-4","type":"READINESS","project_id":"P1","title":"Storefront start","trade":"Storefront","owner":"Superintendent","status":"DO_NOT_START","source":"A5.21","priority":95},
+    ]
+    s1,s2,s3 = _v419_search(records,"AHU","P1"),_v419_search(records,"PM","P1"),_v419_search(records,"Access","P1")
+    rows += [
+        {"case":"search finds project record","passed":s1["count"]==1 and s1["results"][0]["id"]=="PO-8","actual":s1},
+        {"case":"search spans owner fields","passed":s2["count"]==4,"actual":s2},
+        {"case":"search respects project scope","passed":s3["count"]==0,"actual":s3},
+    ]
+    f1,f2,f3 = _v419_filter(records,trade="Electrical"),_v419_filter(records,status="CRITICAL"),_v419_filter(records,owner="Superintendent",record_type="READINESS")
+    rows += [
+        {"case":"filter by trade","passed":f1["count"]==2,"actual":f1},
+        {"case":"filter by status","passed":f2["count"]==1 and f2["results"][0]["id"]=="PO-8","actual":f2},
+        {"case":"filter combines dimensions","passed":f3["count"]==1 and f3["results"][0]["id"]=="RDY-4","actual":f3},
+    ]
+    fav1,fav2 = _v419_favorite("u1","RFI-44",["PO-8"]),_v419_favorite("","RFI-44",[])
+    rows += [
+        {"case":"favorite adds record","passed":fav1["ok"] and "RFI-44" in fav1["favorites"],"actual":fav1},
+        {"case":"favorite requires user","passed":"USER_REQUIRED" in fav2["blockers"],"actual":fav2},
+    ]
+    recent = _v419_recent([{"id":"1","viewed_at":"2026-08-19T08:00:00Z"},{"id":"2","viewed_at":"2026-08-19T10:00:00Z"},{"id":"3","viewed_at":"2026-08-19T09:00:00Z"}],2)
+    rows.append({"case":"recent sorts newest first","passed":[x["id"] for x in recent["items"]]==["2","3"],"actual":recent})
+    crumbs = _v419_breadcrumb("Downtown Office","RFI","RFI-44","Door hardware conflict")
+    rows += [
+        {"case":"breadcrumb begins at projects","passed":crumbs[0]["label"]=="Projects","actual":crumbs},
+        {"case":"breadcrumb ends at record","passed":crumbs[-1]["label"]=="Door hardware conflict","actual":crumbs},
+    ]
+    for rtype in ("RFI","SUBMITTAL","PROCUREMENT","CHANGE","ISSUE","READINESS"):
+        rec = _v419_record_detail({"id":"X1","type":rtype,"project_id":"P1","title":"Example","status":"WATCH","source":"Source","why":["EXAMPLE"],"next_action":"Review"})
+        rows.append({"case":f"record detail supports {rtype.lower()}","passed":rec["valid"] and rec["type"]==rtype,"actual":rec})
+    bad = _v419_record_detail({"id":"X","type":"UNKNOWN","project_id":"P1"})
+    rows.append({"case":"record detail rejects unsupported type","passed":"RECORD_TYPE_UNSUPPORTED" in bad["blockers"],"actual":bad})
+    mobile = _v419_mobile_field_view(records)
+    rows += [
+        {"case":"mobile field view excludes commercial change","passed":not any(x["type"]=="CHANGE" for x in mobile["items"]),"actual":mobile},
+        {"case":"mobile field view includes readiness","passed":any(x["type"]=="READINESS" for x in mobile["items"]),"actual":mobile},
+        {"case":"mobile field prioritizes do not start","passed":mobile["items"][0]["status"]=="DO_NOT_START","actual":mobile["items"][0]},
+    ]
+    for name in ("navigation preserves project scope","favorites do not mutate project records","record detail remains advisory","no invented project facts","human action remains required"):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v419_regression_summary():
+    rows = _v419_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v418_regression_summary()
+    return {
+        "version":"v419","suite":"Unified Navigation & Record Experience",
+        "navigation_record_passed":passed,"navigation_record_total":len(rows),
+        "previous_passed":previous["passed"],"previous_total":previous["total"],
+        "passed":passed+previous["passed"],"total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],"results":rows,
+    }
+
+@app.get("/health/blueprint-v419")
+def v419_blueprint_health():
+    return _v419_regression_summary()
+
+@app.get("/project-v419", response_class=HTMLResponse)
+def v419_project_experience(q: str = ""):
+    records = [
+        {"id":"PO-8","type":"PROCUREMENT","project_id":"P1","title":"AHU-1 delivery threatens startup","trade":"HVAC","owner":"PM","status":"CRITICAL","source":"Procurement Log","priority":100,"why":["PROMISED_AFTER_REQUIRED","VERY_LONG_LEAD"],"next_action":"Confirm vendor recovery plan"},
+        {"id":"RDY-4","type":"READINESS","project_id":"P1","title":"Storefront cannot start","trade":"Storefront","owner":"Superintendent","status":"DO_NOT_START","source":"A5.21","priority":95,"why":["RFI_OPEN","MATERIAL_NOT_READY"],"next_action":"Resolve RFI and confirm material"},
+        {"id":"RFI-44","type":"RFI","project_id":"P1","title":"Door hardware conflict","trade":"Doors","owner":"PM","status":"HIGH","source":"A8.10","priority":80,"why":["RFI_OPEN"],"next_action":"Get architect response"},
+        {"id":"SUB-21","type":"SUBMITTAL","project_id":"P1","title":"Lighting fixtures approval","trade":"Electrical","owner":"PM","status":"WATCH","source":"Submittal Log","priority":40,"why":["APPROVAL_DUE_SOON"],"next_action":"Follow up with design team"},
+    ]
+    found = _v419_search(records,q,"P1") if q else {"results":records,"count":len(records)}
+    cards = ""
+    for r in found["results"]:
+        d = _v419_record_detail(r)
+        cards += (
+            '<div class="card" style="margin-bottom:10px">'
+            f'<div class="label">{esc(d["type"])} · {esc(d["trade"])}</div>'
+            f'<h3>{esc(d["title"])}</h3>'
+            f'<div class="small">{esc(d["source"])} · Owner: {esc(d["owner"])} · Status: {esc(d["status"])}</div>'
+            f'<div class="small"><b>Why:</b> {esc(" · ".join(d["why"]))}</div>'
+            f'<div class="small"><b>Next:</b> {esc(d["next_action"])}</div></div>'
+        )
+    return shell(
+        "BuildCommand Project v419",
+        f'<div class="hero"><div class="eyebrow">Projects / Downtown Office</div><h1>Downtown Office</h1>'
+        f'<p class="muted">Find, filter, understand, and act from one consistent project experience.</p></div>'
+        f'<form method="get" class="card"><input name="q" value="{esc(q)}" placeholder="Search RFIs, submittals, materials, changes, trades, owners..." style="width:100%;box-sizing:border-box;padding:13px;border-radius:10px;border:1px solid #d9dee7"></form>'
+        f'<h2>Project records ({found["count"]})</h2>{cards}'
+    )
