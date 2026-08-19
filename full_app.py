@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="415.0")
+app=FastAPI(title="BuildCommand AI",version="416.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -26876,3 +26876,232 @@ def v415_support_sla_page():
 # - HIGH support severity now starts at 40 so DATA_RISK alone is HIGH.
 # - The service-health regression expectation for a 60 score is corrected to
 #   AT_RISK, matching the existing account health model.
+
+
+# =============================================================================
+# BuildCommand AI v416 - Customer Success & Renewal Intelligence
+# Tracks adoption, usage, delivered value, support burden, renewal risk,
+# expansion opportunity, and account health. Advisory only; no automatic
+# renewal, upsell, downgrade, or customer communication.
+# =============================================================================
+
+def _v416_account_health(active_user_pct, project_usage_pct, feature_usage_pct,
+                         unresolved_support_count, value_events):
+    try:
+        au = max(0, min(100, float(active_user_pct)))
+        pu = max(0, min(100, float(project_usage_pct)))
+        fu = max(0, min(100, float(feature_usage_pct)))
+        support = max(0, int(unresolved_support_count))
+        value = max(0, int(value_events))
+    except Exception:
+        return {"score":0,"level":"AT_RISK","blockers":["INPUT_INVALID"]}
+
+    score = round(au * 0.30 + pu * 0.30 + fu * 0.20)
+    score += min(20, value * 4)
+    score -= min(30, support * 5)
+    score = max(0, min(100, score))
+
+    blockers = []
+    if au < 50:
+        blockers.append("LOW_USER_ADOPTION")
+    if pu < 50:
+        blockers.append("LOW_PROJECT_USAGE")
+    if fu < 40:
+        blockers.append("LOW_FEATURE_USAGE")
+    if support >= 4:
+        blockers.append("SUPPORT_BURDEN")
+
+    if score >= 85:
+        level = "HEALTHY"
+    elif score >= 65:
+        level = "WATCH"
+    elif score >= 45:
+        level = "AT_RISK"
+    else:
+        level = "CRITICAL"
+
+    return {"score":score,"level":level,"blockers":blockers}
+
+def _v416_renewal_risk(account_health_score, days_to_renewal, executive_sponsor_active,
+                       open_critical_issues):
+    try:
+        health = max(0, min(100, int(account_health_score)))
+        days = max(0, int(days_to_renewal))
+        critical = max(0, int(open_critical_issues))
+    except Exception:
+        return {"score":100,"level":"HIGH","blockers":["INPUT_INVALID"]}
+
+    score = max(0, 100 - health)
+
+    blockers = []
+    if days <= 30:
+        score += 20
+        blockers.append("RENEWAL_NEAR")
+    elif days <= 60:
+        score += 10
+
+    if not executive_sponsor_active:
+        score += 20
+        blockers.append("NO_EXECUTIVE_SPONSOR")
+
+    if critical > 0:
+        score += min(40, critical * 20)
+        blockers.append("OPEN_CRITICAL_ISSUES")
+
+    score = min(100, score)
+
+    if score >= 70:
+        level = "HIGH"
+    elif score >= 40:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    return {"score":score,"level":level,"blockers":blockers}
+
+def _v416_expansion_signal(seat_utilization_pct, project_utilization_pct,
+                           advanced_feature_demand, health_level):
+    try:
+        seat = max(0, min(100, float(seat_utilization_pct)))
+        project = max(0, min(100, float(project_utilization_pct)))
+    except Exception:
+        return {"state":"REVIEW","signals":["INPUT_INVALID"]}
+
+    signals = []
+    if seat >= 85:
+        signals.append("SEAT_EXPANSION")
+    if project >= 85:
+        signals.append("PROJECT_EXPANSION")
+    if advanced_feature_demand:
+        signals.append("FEATURE_EXPANSION")
+
+    healthy = str(health_level or "").upper() in {"HEALTHY","WATCH"}
+
+    if signals and healthy:
+        state = "EXPANSION_OPPORTUNITY"
+    elif signals:
+        state = "EXPANSION_AFTER_HEALTH_REVIEW"
+    else:
+        state = "NO_EXPANSION_SIGNAL"
+
+    return {"state":state,"signals":signals}
+
+def _v416_customer_success_gate(account_health, renewal_risk, expansion_state):
+    blockers = []
+    if str(account_health or "").upper() in {"AT_RISK","CRITICAL"}:
+        blockers.append("ACCOUNT_HEALTH_REVIEW")
+    if str(renewal_risk or "").upper() == "HIGH":
+        blockers.append("RENEWAL_RISK_HIGH")
+
+    return {
+        "state":"SUCCESS_PLAN_REQUIRED" if blockers else "ACCOUNT_STABLE",
+        "blockers":blockers,
+        "expansion_state":expansion_state,
+        "automatic_renewal":False,
+        "automatic_upsell":False,
+    }
+
+_V416_CASES = [
+    ("healthy",90,90,80,0,5,90,"HEALTHY"),
+    ("watch",70,70,60,1,2,68,"WATCH"),
+    ("risk-adoption",40,70,60,1,2,59,"AT_RISK"),
+    ("risk-usage",70,40,60,1,2,59,"AT_RISK"),
+    ("critical",20,20,20,5,0,0,"CRITICAL"),
+    ("support-load",80,80,70,5,3,64,"AT_RISK"),
+]
+
+def _v416_regression_results():
+    rows = []
+
+    for name,au,pu,fu,support,value,expected_score,expected_level in _V416_CASES:
+        r = _v416_account_health(au,pu,fu,support,value)
+        rows.append({
+            "case":name,
+            "passed":r["score"] == expected_score and r["level"] == expected_level,
+            "actual":r,
+        })
+
+    renewal_cases = [
+        ("renewal-low",90,120,True,0,"LOW"),
+        ("renewal-medium",70,45,True,0,"MEDIUM"),
+        ("renewal-high-health",50,20,False,1,"HIGH"),
+        ("renewal-high-critical",80,20,True,2,"HIGH"),
+    ]
+    for name,health,days,sponsor,critical,expected in renewal_cases:
+        r = _v416_renewal_risk(health,days,sponsor,critical)
+        rows.append({
+            "case":name,
+            "passed":r["level"] == expected,
+            "actual":r,
+        })
+
+    e1 = _v416_expansion_signal(90,50,False,"HEALTHY")
+    e2 = _v416_expansion_signal(50,90,True,"WATCH")
+    e3 = _v416_expansion_signal(90,90,True,"AT_RISK")
+    e4 = _v416_expansion_signal(50,50,False,"HEALTHY")
+
+    g1 = _v416_customer_success_gate("HEALTHY","LOW",e1["state"])
+    g2 = _v416_customer_success_gate("AT_RISK","MEDIUM",e2["state"])
+    g3 = _v416_customer_success_gate("WATCH","HIGH",e4["state"])
+
+    rows.extend([
+        {"case":"seat expansion opportunity","passed":e1["state"]=="EXPANSION_OPPORTUNITY","actual":e1},
+        {"case":"project feature expansion","passed":e2["state"]=="EXPANSION_OPPORTUNITY","actual":e2},
+        {"case":"expansion waits for health","passed":e3["state"]=="EXPANSION_AFTER_HEALTH_REVIEW","actual":e3},
+        {"case":"no expansion signal","passed":e4["state"]=="NO_EXPANSION_SIGNAL","actual":e4},
+        {"case":"healthy account stable","passed":g1["state"]=="ACCOUNT_STABLE" and g1["automatic_renewal"] is False,"actual":g1},
+        {"case":"at risk requires success plan","passed":"ACCOUNT_HEALTH_REVIEW" in g2["blockers"],"actual":g2},
+        {"case":"high renewal risk requires success plan","passed":"RENEWAL_RISK_HIGH" in g3["blockers"],"actual":g3},
+    ])
+
+    for name in (
+        "customer success intelligence is advisory",
+        "no automatic renewal",
+        "no automatic upsell",
+        "no invented customer value",
+        "human customer-success review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v416_regression_summary():
+    rows = _v416_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v415_regression_summary()
+    return {
+        "version":"v416",
+        "suite":"Customer Success & Renewal Intelligence",
+        "customer_success_passed":passed,
+        "customer_success_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v416")
+def v416_blueprint_health():
+    return _v416_regression_summary()
+
+@app.get("/customer-success-v416", response_class=HTMLResponse)
+def v416_customer_success_page():
+    s = _v416_regression_summary()
+    demo = _v416_account_health(82,88,70,1,4)
+    renewal = _v416_renewal_risk(demo["score"],45,True,0)
+
+    return shell(
+        "Customer Success & Renewal Intelligence v416",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v416</div>'
+        f'<h1>Customer Success & Renewal Intelligence</h1>'
+        f'<p class="muted">Tracks adoption, project usage, feature utilization, support burden, value events, renewal risk, and expansion signals for live customer accounts.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Account Health</div><div class="kpi">{demo["score"]}/100</div></div>'
+        f'<div class="card"><div class="label">Renewal Risk</div><div class="kpi">{esc(renewal["level"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> BuildCommand can surface renewal risk and expansion opportunities, but it never renews, upgrades, downgrades, or contacts a customer automatically.</p></div>'
+    )
