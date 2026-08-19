@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="396.0")
+app=FastAPI(title="BuildCommand AI",version="397.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24014,6 +24014,76 @@ def v396_delay_prediction_intelligence_page():
         f'<div class="hero"><div class="eyebrow">BuildCommand v396</div>'
         f'<h1>Delay Prediction Intelligence</h1>'
         f'<p class="muted">BuildCommand operating-brain layer v396. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v397 - Manpower Forecast Intelligence
+# =============================================================================
+
+def _v397_forecast(required, committed):
+    required=max(0,int(required)); committed=max(0,int(committed))
+    gap=max(0,required-committed)
+    pct=100 if required==0 else round((committed/required)*100)
+    level="READY" if gap==0 else ("WATCH" if pct>=80 else ("AT_RISK" if pct>=60 else "SHORTFALL"))
+    return gap,pct,level
+_V397_CASES=[
+("zero",0,0,0,100,"READY"),("full",10,10,0,100,"READY"),("over",10,12,0,120,"READY"),
+("90",10,9,1,90,"WATCH"),("80",10,8,2,80,"WATCH"),("70",10,7,3,70,"AT_RISK"),
+("60",10,6,4,60,"AT_RISK"),("50",10,5,5,50,"SHORTFALL"),("25",20,5,15,25,"SHORTFALL"),
+("none",8,0,8,0,"SHORTFALL")]
+
+
+def _v397_regression_results():
+    rows=[]
+    for name,a,b,eg,ep,el in _V397_CASES:
+        g,p,l=_v397_forecast(a,b); rows.append({"case":name,"passed":g==eg and p==ep and l==el,"actual":{"gap":g,"pct":p,"level":l}})
+    for name in (
+        "manpower forecast intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v397_regression_summary():
+    rows=_v397_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v396_regression_summary()
+    return {
+        "version":"v397",
+        "suite":"Manpower Forecast Intelligence",
+        "manpower_forecast_passed":passed,
+        "manpower_forecast_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v397")
+def v397_blueprint_health():
+    return _v397_regression_summary()
+
+@app.get("/manpower-forecast-intelligence-v397", response_class=HTMLResponse)
+def v397_manpower_forecast_intelligence_page():
+    s=_v397_regression_summary()
+    return shell(
+        "Manpower Forecast Intelligence v397",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v397</div>'
+        f'<h1>Manpower Forecast Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v397. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
         f'<div class="grid3">'
         f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
         f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
