@@ -22195,8 +22195,8 @@ def _v389_package_risk(signals):
     score = 0
     weights = {
         "EXCLUSION":25,
-        "OVERLAP_REVIEW":25,
-        "UNRESOLVED":20,
+        "OVERLAP_REVIEW":30,
+        "UNRESOLVED":30,
         "SPLIT_RESPONSIBILITY":15,
         "OWNER_FURNISHED":15,
         "ALLOWANCE":10,
@@ -22417,3 +22417,11 @@ def v389_bid_package_page():
         + package_html +
         '<div class="card"><p class="small"><b>Control:</b> Advisory only. Estimators/preconstruction staff retain control of bid scope, pricing, awards and contract language.</p></div>'
     )
+
+
+# BuildCommand AI v389.1 maintenance note:
+# Bid-package risk calibration:
+# - UNRESOLVED: 20 -> 30
+# - OVERLAP_REVIEW: 25 -> 30
+# This preserves REVIEW >= 30 while elevating unresolved fabrication details
+# and cross-trade overlap to estimator review.
