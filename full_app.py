@@ -28181,3 +28181,125 @@ def v429_pilot_home():
         f'<div class="card" style="margin-top:14px"><h2>Release train</h2>'
         f'<p>{" · ".join(s["modules"])}</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.0 - Pilot Release
+# Finalizes the verified v429 combined release train as the first cohesive
+# BuildCommand AI Pilot 1.0 package.
+#
+# Internal verified baseline: 870/870 regression checks.
+# Production claims remain gated by external security, recovery, monitoring,
+# integration, and customer-pilot verification.
+# =============================================================================
+
+BUILD_COMMAND_RELEASE = {
+    "product": "BuildCommand AI",
+    "release": "1.0",
+    "release_name": "Pilot 1.0",
+    "verified_baseline": "v429",
+    "verified_regression_total": 870,
+    "automatic_contract_commitment": False,
+    "automatic_customer_go_live": False,
+    "external_security_verification_required": True,
+    "external_recovery_verification_required": True,
+}
+
+def _v1_release_status():
+    previous = _v420_v429_summary()
+    external_gates = [
+        "EXTERNAL_SECURITY_VERIFICATION",
+        "EXTERNAL_RECOVERY_VERIFICATION",
+        "PRODUCTION_MONITORING_VERIFICATION",
+        "REAL_CUSTOMER_DATA_INTEGRATION",
+        "LIVE_PILOT_ACCEPTANCE",
+    ]
+    return {
+        "version": "1.0",
+        "product": "BuildCommand AI",
+        "release": "Pilot 1.0",
+        "internal_regression_passed": previous["passed"],
+        "internal_regression_total": previous["total"],
+        "internal_regression_ok": previous["ok"],
+        "external_gates_remaining": external_gates,
+        "internal_state": "PILOT_1_0_INTERNAL_READY" if previous["ok"] else "INTERNAL_REVIEW_REQUIRED",
+        "production_state": "EXTERNAL_VERIFICATION_REQUIRED",
+        "automatic_go_live": False,
+    }
+
+def _v1_regression_results():
+    status = _v1_release_status()
+    checks = [
+        ("inherits verified v429 chain",
+         status["internal_regression_ok"] is True and status["internal_regression_total"] == 870,
+         {"passed": status["internal_regression_passed"], "total": status["internal_regression_total"]}),
+        ("release identifies as 1.0",
+         BUILD_COMMAND_RELEASE["release"] == "1.0",
+         {"release": BUILD_COMMAND_RELEASE["release"]}),
+        ("external security remains required",
+         BUILD_COMMAND_RELEASE["external_security_verification_required"] is True,
+         {"required": True}),
+        ("external recovery remains required",
+         BUILD_COMMAND_RELEASE["external_recovery_verification_required"] is True,
+         {"required": True}),
+        ("no automatic customer go-live",
+         BUILD_COMMAND_RELEASE["automatic_customer_go_live"] is False,
+         {"automatic_go_live": False}),
+        ("no automatic contract commitment",
+         BUILD_COMMAND_RELEASE["automatic_contract_commitment"] is False,
+         {"automatic_contract_commitment": False}),
+        ("production state stays honest",
+         status["production_state"] == "EXTERNAL_VERIFICATION_REQUIRED",
+         {"production_state": status["production_state"]}),
+        ("live pilot acceptance remains external",
+         "LIVE_PILOT_ACCEPTANCE" in status["external_gates_remaining"],
+         {"external_gates": status["external_gates_remaining"]}),
+    ]
+    return [{"case": name, "passed": bool(ok), "actual": actual} for name, ok, actual in checks]
+
+def _v1_regression_summary():
+    rows = _v1_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v420_v429_summary()
+    return {
+        "version": "1.0",
+        "suite": "BuildCommand AI Pilot 1.0 Release",
+        "release_passed": passed,
+        "release_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": previous["passed"] + passed,
+        "total": previous["total"] + len(rows),
+        "failed": previous["failed"] + (len(rows) - passed),
+        "ok": previous["ok"] and passed == len(rows),
+        "production_state": "EXTERNAL_VERIFICATION_REQUIRED",
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-1-0")
+def blueprint_1_0_health():
+    return _v1_regression_summary()
+
+@app.get("/release-1-0", response_class=HTMLResponse)
+def buildcommand_1_0_release_page():
+    s = _v1_regression_summary()
+    status = _v1_release_status()
+    gates = "".join(
+        f'<li>{esc(g.replace("_"," ").title())}</li>'
+        for g in status["external_gates_remaining"]
+    )
+    return shell(
+        "BuildCommand AI 1.0",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · Pilot 1.0</div>'
+        f'<h1>BuildCommand AI 1.0</h1>'
+        f'<p class="muted">The unified construction operating system release built on the verified v429 release train.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Internal Regression</div><div class="kpi">{s["previous_passed"]}/{s["previous_total"]}</div></div>'
+        f'<div class="card"><div class="label">1.0 Release Checks</div><div class="kpi">{s["release_passed"]}/{s["release_total"]}</div></div>'
+        f'<div class="card"><div class="label">Production State</div><div class="kpi">VERIFY</div></div>'
+        f'</div>'
+        f'<div class="card" style="margin-top:14px"><h2>Pilot 1.0</h2>'
+        f'<p>Unified cockpit, construction intelligence, guided actions, imports, permissions, audit controls, billing access, onboarding, support, recovery, and launch gates are packaged in one release.</p>'
+        f'<h3>External gates still required before a production claim</h3><ul>{gates}</ul>'
+        f'<p class="small"><b>Control:</b> Internal regression success does not self-certify infrastructure security, backup recovery, monitoring delivery, third-party integrations, or live customer acceptance.</p></div>'
+    )
