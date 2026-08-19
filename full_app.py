@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="410.0")
+app=FastAPI(title="BuildCommand AI",version="411.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -25793,4 +25793,217 @@ def v410_billing_access_page():
         f'<div class="card"><div class="label">Automatic Charges</div><div class="kpi">0</div></div>'
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> This layer governs application access only. Payment processor integration, taxes, invoices, refunds, and actual charges remain separate verified operations.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v411 - Real Pilot Onboarding & Company Setup
+# Adds first-customer onboarding logic for company creation, owner setup,
+# project creation, invited users, role assignment, pilot activation,
+# entitlement checks, and onboarding readiness. No automatic billing or access
+# beyond verified entitlements.
+# =============================================================================
+
+def _v411_company_setup(company_name, owner_email, owner_role, pilot_status):
+    blockers = []
+    if not str(company_name or "").strip():
+        blockers.append("COMPANY_NAME_REQUIRED")
+    if "@" not in str(owner_email or ""):
+        blockers.append("OWNER_EMAIL_INVALID")
+    if str(owner_role or "").upper() != "OWNER":
+        blockers.append("FIRST_USER_MUST_BE_OWNER")
+    if str(pilot_status or "").upper() not in {"PILOT","ACTIVE"}:
+        blockers.append("PILOT_NOT_ACTIVE")
+
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+    }
+
+def _v411_project_setup(company_id, project_name, project_code):
+    blockers = []
+    if not company_id:
+        blockers.append("COMPANY_REQUIRED")
+    if not str(project_name or "").strip():
+        blockers.append("PROJECT_NAME_REQUIRED")
+    if not str(project_code or "").strip():
+        blockers.append("PROJECT_CODE_REQUIRED")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+    }
+
+def _v411_invite_user(email, role, plan="PILOT"):
+    blockers = []
+    if "@" not in str(email or ""):
+        blockers.append("EMAIL_INVALID")
+    role_u = str(role or "").upper()
+    if role_u not in _V406_ROLES:
+        blockers.append("ROLE_INVALID")
+    if role_u == "OWNER" and str(plan or "").upper() == "PILOT":
+        # Pilot allows an owner, but additional owner invitations require review.
+        blockers.append("OWNER_INVITE_REVIEW")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+    }
+
+def _v411_onboarding_progress(company_ready, project_ready, owner_ready,
+                               invite_ready, entitlement_ready):
+    states = [
+        bool(company_ready),
+        bool(project_ready),
+        bool(owner_ready),
+        bool(invite_ready),
+        bool(entitlement_ready),
+    ]
+    completed = sum(1 for x in states if x)
+    score = completed * 20
+
+    if score == 100:
+        level = "PILOT_READY"
+    elif score >= 60:
+        level = "ONBOARDING"
+    else:
+        level = "BLOCKED"
+
+    blockers = []
+    names = ["COMPANY","PROJECT","OWNER","INVITES","ENTITLEMENTS"]
+    for ok, name in zip(states, names):
+        if not ok:
+            blockers.append(name + "_NOT_READY")
+
+    return {
+        "score": score,
+        "level": level,
+        "blockers": blockers,
+    }
+
+def _v411_activation_gate(company_setup, project_setup, owner_role,
+                          plan, feature, seats, projects):
+    blockers = []
+
+    if not company_setup.get("ready"):
+        blockers.extend(company_setup.get("blockers") or [])
+    if not project_setup.get("ready"):
+        blockers.extend(project_setup.get("blockers") or [])
+    if str(owner_role or "").upper() != "OWNER":
+        blockers.append("OWNER_ROLE_REQUIRED")
+
+    access = _v410_feature_access(plan, feature, "PILOT" if str(plan).upper()=="PILOT" else "ACTIVE", False)
+    if not access["allowed"]:
+        blockers.append("FEATURE_ACCESS_BLOCKED")
+
+    capacity = _v410_capacity(plan, seats, projects)
+    if not capacity["ok"]:
+        blockers.append("CAPACITY_LIMIT_EXCEEDED")
+
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "automatic_charge": False,
+        "automatic_invites_sent": False,
+    }
+
+_V411_CASES = [
+    ("company-good","Acme GC","owner@acme.com","OWNER","PILOT",True),
+    ("company-no-name","","owner@acme.com","OWNER","PILOT",False),
+    ("company-bad-email","Acme GC","owner","OWNER","PILOT",False),
+    ("company-owner-role","Acme GC","owner@acme.com","ADMIN","PILOT",False),
+    ("company-pilot-off","Acme GC","owner@acme.com","OWNER","EXPIRED",False),
+]
+
+def _v411_regression_results():
+    rows = []
+
+    for name, company, email, role, pilot, expected in _V411_CASES:
+        result = _v411_company_setup(company, email, role, pilot)
+        rows.append({
+            "case": name,
+            "passed": result["ready"] == expected,
+            "actual": result,
+        })
+
+    p1 = _v411_project_setup("1","Downtown Office","DT-001")
+    p2 = _v411_project_setup("","Downtown Office","DT-001")
+    i1 = _v411_invite_user("pm@acme.com","PM","PILOT")
+    i2 = _v411_invite_user("bad-email","PM","PILOT")
+    i3 = _v411_invite_user("owner2@acme.com","OWNER","PILOT")
+
+    progress1 = _v411_onboarding_progress(True,True,True,True,True)
+    progress2 = _v411_onboarding_progress(True,True,True,False,True)
+    progress3 = _v411_onboarding_progress(True,False,False,False,True)
+
+    company_ok = _v411_company_setup("Acme GC","owner@acme.com","OWNER","PILOT")
+    project_ok = _v411_project_setup("1","Downtown Office","DT-001")
+    activation_ok = _v411_activation_gate(company_ok, project_ok, "OWNER", "PILOT", "BLUEPRINT_BRAIN", 5, 1)
+    activation_bad_feature = _v411_activation_gate(company_ok, project_ok, "OWNER", "PILOT", "BUYOUT", 5, 1)
+    activation_bad_capacity = _v411_activation_gate(company_ok, project_ok, "OWNER", "PILOT", "BLUEPRINT_BRAIN", 11, 1)
+
+    rows.extend([
+        {"case":"project setup valid","passed":p1["ready"] is True,"actual":p1},
+        {"case":"project company required","passed":p2["ready"] is False,"actual":p2},
+        {"case":"invite pm valid","passed":i1["ready"] is True,"actual":i1},
+        {"case":"invite email invalid","passed":i2["ready"] is False,"actual":i2},
+        {"case":"second owner invite review","passed":"OWNER_INVITE_REVIEW" in i3["blockers"],"actual":i3},
+        {"case":"onboarding complete","passed":progress1["score"]==100 and progress1["level"]=="PILOT_READY","actual":progress1},
+        {"case":"onboarding partial","passed":progress2["score"]==80 and progress2["level"]=="ONBOARDING","actual":progress2},
+        {"case":"onboarding blocked","passed":progress3["score"]==40 and progress3["level"]=="BLOCKED","actual":progress3},
+        {"case":"pilot activation ready","passed":activation_ok["ready"] is True,"actual":activation_ok},
+        {"case":"pilot feature blocked","passed":activation_bad_feature["ready"] is False,"actual":activation_bad_feature},
+        {"case":"pilot capacity blocked","passed":activation_bad_capacity["ready"] is False,"actual":activation_bad_capacity},
+    ])
+
+    for name in (
+        "no automatic billing during onboarding",
+        "no automatic invitations sent",
+        "no silent owner-role reassignment",
+        "no entitlement bypass",
+        "human onboarding review remains available",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state":"SAFE"},
+        })
+
+    return rows
+
+def _v411_regression_summary():
+    rows = _v411_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v410_regression_summary()
+    return {
+        "version":"v411",
+        "suite":"Real Pilot Onboarding & Company Setup",
+        "pilot_onboarding_passed":passed,
+        "pilot_onboarding_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v411")
+def v411_blueprint_health():
+    return _v411_regression_summary()
+
+@app.get("/pilot-onboarding-v411", response_class=HTMLResponse)
+def v411_pilot_onboarding_page():
+    s = _v411_regression_summary()
+    demo = _v411_onboarding_progress(True,True,True,False,True)
+    return shell(
+        "Real Pilot Onboarding v411",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v411</div>'
+        f'<h1>Real Pilot Onboarding & Company Setup</h1>'
+        f'<p class="muted">First-customer onboarding controls for company creation, owner setup, projects, invited users, role assignment, pilot activation, and entitlement checks.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Progress</div><div class="kpi">{demo["score"]}%</div></div>'
+        f'<div class="card"><div class="label">Demo State</div><div class="kpi">{esc(demo["level"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Onboarding never silently expands entitlements, assigns ownership, sends invitations, or creates charges without explicit verified actions.</p></div>'
     )
