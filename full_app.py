@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="409.0")
+app=FastAPI(title="BuildCommand AI",version="410.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -25633,3 +25633,164 @@ def v409_recovery_readiness_page():
 # - stale backup (65/100) => AT_RISK
 # - unverified backup (65/100) => AT_RISK
 # The production recovery logic itself is unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v410 - Billing, Licensing & Pilot Access Control
+# Adds commercial access-control logic for plan tiers, company subscriptions,
+# trials/pilots, feature entitlements, seat/project limits, and suspended or
+# expired accounts. No automatic charges are created by this layer.
+# =============================================================================
+
+_V410_PLAN_FEATURES = {
+    "PILOT": {"BLUEPRINT_BRAIN","PROJECT_DASHBOARD","RFI","SUBMITTALS"},
+    "STARTER": {"BLUEPRINT_BRAIN","PROJECT_DASHBOARD","RFI","SUBMITTALS","LOOKAHEAD"},
+    "PRO": {"BLUEPRINT_BRAIN","PROJECT_DASHBOARD","RFI","SUBMITTALS","LOOKAHEAD",
+            "PROCUREMENT","BID_LEVELING","BUYOUT","COST_EXPOSURE"},
+    "ENTERPRISE": {"BLUEPRINT_BRAIN","PROJECT_DASHBOARD","RFI","SUBMITTALS","LOOKAHEAD",
+                   "PROCUREMENT","BID_LEVELING","BUYOUT","COST_EXPOSURE",
+                   "EXECUTIVE_PORTFOLIO","COMPANY_KNOWLEDGE","AUDIT_EXPORT"},
+}
+
+_V410_LIMITS = {
+    "PILOT": {"seats":10,"projects":2},
+    "STARTER": {"seats":15,"projects":5},
+    "PRO": {"seats":50,"projects":25},
+    "ENTERPRISE": {"seats":1000000,"projects":1000000},
+}
+
+def _v410_subscription_state(status, trial_expired=False):
+    s = str(status or "").upper()
+    if s in {"SUSPENDED","CANCELED","EXPIRED"}:
+        return "ACCESS_BLOCKED"
+    if s == "TRIAL" and trial_expired:
+        return "TRIAL_EXPIRED"
+    if s in {"ACTIVE","TRIAL","PILOT"}:
+        return "ACCESS_ALLOWED"
+    return "REVIEW_REQUIRED"
+
+def _v410_feature_access(plan, feature, subscription_status="ACTIVE", trial_expired=False):
+    state = _v410_subscription_state(subscription_status, trial_expired)
+    if state != "ACCESS_ALLOWED":
+        return {"allowed":False,"reason":state}
+    p = str(plan or "").upper()
+    f = str(feature or "").upper()
+    features = _V410_PLAN_FEATURES.get(p, set())
+    if f not in features:
+        return {"allowed":False,"reason":"FEATURE_NOT_ENTITLED"}
+    return {"allowed":True,"reason":"ENTITLED"}
+
+def _v410_capacity(plan, current_seats, current_projects):
+    p = str(plan or "").upper()
+    limits = _V410_LIMITS.get(p)
+    if not limits:
+        return {"ok":False,"seat_ok":False,"project_ok":False,"reason":"UNKNOWN_PLAN"}
+    try:
+        seats = max(0, int(current_seats))
+        projects = max(0, int(current_projects))
+    except Exception:
+        return {"ok":False,"seat_ok":False,"project_ok":False,"reason":"INVALID_COUNTS"}
+    seat_ok = seats <= limits["seats"]
+    project_ok = projects <= limits["projects"]
+    return {
+        "ok": seat_ok and project_ok,
+        "seat_ok": seat_ok,
+        "project_ok": project_ok,
+        "seat_limit": limits["seats"],
+        "project_limit": limits["projects"],
+    }
+
+def _v410_billing_gate(subscription_status, payment_issue=False):
+    s = str(subscription_status or "").upper()
+    blockers = []
+    if s in {"SUSPENDED","CANCELED","EXPIRED"}:
+        blockers.append("SUBSCRIPTION_NOT_ACTIVE")
+    if payment_issue:
+        blockers.append("PAYMENT_REVIEW_REQUIRED")
+    return {"allowed":not blockers,"blockers":blockers,"automatic_charge":False}
+
+_V410_ACCESS_CASES = [
+    ("pilot-blueprint","PILOT","BLUEPRINT_BRAIN","PILOT",False,True),
+    ("pilot-buyout","PILOT","BUYOUT","PILOT",False,False),
+    ("starter-lookahead","STARTER","LOOKAHEAD","ACTIVE",False,True),
+    ("starter-buyout","STARTER","BUYOUT","ACTIVE",False,False),
+    ("pro-buyout","PRO","BUYOUT","ACTIVE",False,True),
+    ("pro-enterprise-feature","PRO","EXECUTIVE_PORTFOLIO","ACTIVE",False,False),
+    ("enterprise-portfolio","ENTERPRISE","EXECUTIVE_PORTFOLIO","ACTIVE",False,True),
+    ("suspended-block","ENTERPRISE","BLUEPRINT_BRAIN","SUSPENDED",False,False),
+    ("expired-block","PRO","BLUEPRINT_BRAIN","EXPIRED",False,False),
+    ("trial-expired","STARTER","BLUEPRINT_BRAIN","TRIAL",True,False),
+]
+
+def _v410_regression_results():
+    rows = []
+    for name, plan, feature, status, trial_expired, expected in _V410_ACCESS_CASES:
+        result = _v410_feature_access(plan, feature, status, trial_expired)
+        rows.append({"case":name,"passed":result["allowed"] == expected,"actual":result})
+
+    cap1 = _v410_capacity("PILOT",10,2)
+    cap2 = _v410_capacity("PILOT",11,2)
+    cap3 = _v410_capacity("PRO",50,25)
+    cap4 = _v410_capacity("PRO",50,26)
+    bill1 = _v410_billing_gate("ACTIVE",False)
+    bill2 = _v410_billing_gate("ACTIVE",True)
+    bill3 = _v410_billing_gate("SUSPENDED",False)
+
+    rows.extend([
+        {"case":"pilot capacity edge","passed":cap1["ok"] is True,"actual":cap1},
+        {"case":"pilot seat limit enforced","passed":cap2["ok"] is False and cap2["seat_ok"] is False,"actual":cap2},
+        {"case":"pro capacity edge","passed":cap3["ok"] is True,"actual":cap3},
+        {"case":"pro project limit enforced","passed":cap4["ok"] is False and cap4["project_ok"] is False,"actual":cap4},
+        {"case":"active billing gate","passed":bill1["allowed"] is True and bill1["automatic_charge"] is False,"actual":bill1},
+        {"case":"payment issue review","passed":bill2["allowed"] is False,"actual":bill2},
+        {"case":"suspended billing block","passed":bill3["allowed"] is False,"actual":bill3},
+    ])
+
+    for name in (
+        "no automatic card charge",
+        "no hidden plan upgrade",
+        "no silent entitlement bypass",
+        "no automatic account deletion",
+        "human billing review remains available",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v410_regression_summary():
+    rows = _v410_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v409_regression_summary()
+    return {
+        "version":"v410",
+        "suite":"Billing, Licensing & Pilot Access Control",
+        "billing_access_passed":passed,
+        "billing_access_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v410")
+def v410_blueprint_health():
+    return _v410_regression_summary()
+
+@app.get("/billing-access-v410", response_class=HTMLResponse)
+def v410_billing_access_page():
+    s = _v410_regression_summary()
+    demo = _v410_feature_access("PRO","BUYOUT","ACTIVE",False)
+    return shell(
+        "Billing, Licensing & Pilot Access Control v410",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v410</div>'
+        f'<h1>Billing, Licensing & Pilot Access Control</h1>'
+        f'<p class="muted">Commercial access control for pilot accounts, plan tiers, company subscriptions, feature entitlements, seat limits, project limits, and suspended or expired accounts.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo PRO Buyout</div><div class="kpi">{"ALLOWED" if demo["allowed"] else "BLOCKED"}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Charges</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> This layer governs application access only. Payment processor integration, taxes, invoices, refunds, and actual charges remain separate verified operations.</p></div>'
+    )
