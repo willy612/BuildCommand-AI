@@ -24175,7 +24175,7 @@ def _v399_perf(on_time_pct, quality_pct, response_pct):
 _V399_CASES=[
 ("perfect",100,100,100,100,"STRONG"),("strong",95,90,90,92,"STRONG"),("good",85,80,80,82,"GOOD"),
 ("75",75,75,75,75,"GOOD"),("watch",70,60,65,65,"WATCH"),("60",60,60,60,60,"WATCH"),
-("poor",50,50,50,50,"POOR"),("mixed",90,50,50,66,"WATCH"),("quality",70,95,70,78,"GOOD"),
+("poor",50,50,50,50,"POOR"),("mixed",90,50,50,66,"WATCH"),("quality",70,95,70,79,"GOOD"),
 ("response",70,70,100,78,"GOOD")]
 
 
@@ -24230,3 +24230,8 @@ def v399_trade_performance_intelligence_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
     )
+
+
+# BuildCommand AI v399.1 maintenance note:
+# Corrected the expected weighted performance score for the quality case.
+# 70*0.40 + 95*0.35 + 70*0.25 = 78.75, which rounds to 79 in Python.
