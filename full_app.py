@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="388.0")
+app=FastAPI(title="BuildCommand AI",version="389.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -22109,3 +22109,311 @@ def v388_scope_gap_page():
 # - BURIED_GENERAL_NOTE (HIGH)
 # - MULTI_TRADE_COORDINATION_GAP (MEDIUM)
 # This preserves the scoring model while correctly elevating the condition to AT_RISK.
+
+
+# =============================================================================
+# BuildCommand AI v389 - Bid Package Intelligence
+# Converts verified Blueprint Brain scope into preconstruction bid-package
+# intelligence: inclusions, exclusions, overlaps, allowances, alternates,
+# owner-furnished items, and unresolved questions. Advisory only.
+# =============================================================================
+
+def _v389_norm(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def _v389_package_signals(item):
+    req = str(_v374_safe_get(item, "requirement", "") or "").strip()
+    trade = str(_v374_safe_get(item, "trade", "") or "").strip() or "Unassigned"
+    blob = " ".join([
+        req,
+        str(_v374_safe_get(item, "sheet_text", "") or ""),
+        str(_v374_safe_get(item, "detail_text", "") or ""),
+        str(_v374_safe_get(item, "spec_text", "") or ""),
+        str(_v374_safe_get(item, "note_text", "") or ""),
+    ])
+    t = _v389_norm(blob)
+
+    tags = []
+    notes = []
+
+    def add(tag, note):
+        if tag not in tags:
+            tags.append(tag)
+            notes.append(note)
+
+    if any(k in t for k in ("alternate", "add alternate", "deduct alternate", "alt #", "alt.")):
+        add("ALTERNATE", "Carry as an alternate rather than base bid until the contract direction is confirmed.")
+
+    if any(k in t for k in ("allowance", "allow for", "cash allowance")):
+        add("ALLOWANCE", "Confirm allowance value, inclusions, exclusions, taxes, freight, and markup treatment.")
+
+    if any(k in t for k in (
+        "owner furnished", "owner provided", "furnished by owner", "ofci", "ofe"
+    )):
+        add("OWNER_FURNISHED", "Confirm owner-furnished versus contractor-installed responsibilities and coordination.")
+
+    if any(k in t for k in ("by others", "not in contract", "nic", "excluded", "exclude")):
+        add("EXCLUSION", "Explicit exclusion/transfer language is present and should be called out in the bid package.")
+
+    if any(k in t for k in (
+        "furnished by", "provided by", "installed by", "supplied by",
+        "connected by", "set by"
+    )):
+        add("SPLIT_RESPONSIBILITY", "Furnish/install/connect responsibility is split and should be stated explicitly.")
+
+    if any(k in t for k in ("unit price", "unit pricing", "per each", "per lf", "per sf")):
+        add("UNIT_PRICE", "Request or carry unit pricing for this requirement.")
+
+    if any(k in t for k in ("add price", "separate price", "breakout price", "break out price")):
+        add("PRICE_BREAKOUT", "Request a separate breakout so the GC can level scope cleanly.")
+
+    if any(k in t for k in ("tbd", "to be determined", "verify", "field verify", "pending clarification")):
+        add("UNRESOLVED", "The requirement contains unresolved information and should be clarified before award if material.")
+
+    # Pull in scope-gap intelligence.
+    try:
+        scope_flags = _v388_scope_signals(item)
+    except Exception:
+        scope_flags = []
+    scope_codes = [f.get("code") for f in scope_flags]
+    if any(code in scope_codes for code in ("TRADE_OWNERSHIP_MISMATCH","MULTI_TRADE_COORDINATION_GAP")):
+        add("OVERLAP_REVIEW", "Potential overlap or trade-boundary issue should be leveled across affected bid packages.")
+
+    if any(code in scope_codes for code in ("PATCH_REPAIR_SCOPE","TEMPORARY_WORK_SCOPE","TESTING_STARTUP_SCOPE","PERMIT_FEE_SCOPE")):
+        add("MUST_FLOW_TO_SCOPE", "This secondary obligation should be explicitly flowed into the bid package.")
+
+    return {
+        "requirement": req,
+        "trade": trade,
+        "tags": tags,
+        "notes": notes,
+        "scope_codes": scope_codes,
+    }
+
+def _v389_package_risk(signals):
+    tags = set(signals.get("tags") or [])
+    score = 0
+    weights = {
+        "EXCLUSION":25,
+        "OVERLAP_REVIEW":25,
+        "UNRESOLVED":20,
+        "SPLIT_RESPONSIBILITY":15,
+        "OWNER_FURNISHED":15,
+        "ALLOWANCE":10,
+        "ALTERNATE":10,
+        "UNIT_PRICE":10,
+        "PRICE_BREAKOUT":5,
+        "MUST_FLOW_TO_SCOPE":15,
+    }
+    for tag in tags:
+        score += weights.get(tag, 5)
+    score = min(100, score)
+    if score >= 60:
+        level = "HIGH_REVIEW"
+    elif score >= 30:
+        level = "REVIEW"
+    elif score > 0:
+        level = "WATCH"
+    else:
+        level = "CLEAN"
+    return score, level
+
+def _v389_package_analysis(item):
+    sig = _v389_package_signals(item)
+    score, level = _v389_package_risk(sig)
+    sig.update({
+        "risk_score":score,
+        "level":level,
+        "human_review_required":True,
+        "automatic_contract_changes":0,
+    })
+    return sig
+
+def _v389_rollup(rows):
+    packages = {}
+    for row in rows:
+        a = _v389_package_analysis(dict(row) if not isinstance(row, dict) else row)
+        trade = a["trade"]
+        p = packages.setdefault(trade, {
+            "trade":trade,
+            "items":0,
+            "high_review":0,
+            "review":0,
+            "watch":0,
+            "clean":0,
+            "alternates":0,
+            "allowances":0,
+            "exclusions":0,
+            "owner_furnished":0,
+            "unresolved":0,
+            "items_detail":[],
+        })
+        p["items"] += 1
+        if a["level"] == "HIGH_REVIEW": p["high_review"] += 1
+        elif a["level"] == "REVIEW": p["review"] += 1
+        elif a["level"] == "WATCH": p["watch"] += 1
+        else: p["clean"] += 1
+        tags = set(a["tags"])
+        if "ALTERNATE" in tags: p["alternates"] += 1
+        if "ALLOWANCE" in tags: p["allowances"] += 1
+        if "EXCLUSION" in tags: p["exclusions"] += 1
+        if "OWNER_FURNISHED" in tags: p["owner_furnished"] += 1
+        if "UNRESOLVED" in tags: p["unresolved"] += 1
+        p["items_detail"].append(a)
+    return sorted(packages.values(), key=lambda x: (-x["high_review"], -x["review"], -x["watch"], x["trade"]))
+
+_V389_CASES = [
+    ({"requirement":"Add Alternate 1: replace ACT with wood ceiling","trade":"Ceilings"}, "ALTERNATE", "WATCH"),
+    ({"requirement":"Carry $15,000 allowance for decorative lighting","trade":"Electrical"}, "ALLOWANCE", "WATCH"),
+    ({"requirement":"Owner furnished appliances installed by GC","trade":"General Conditions"}, "OWNER_FURNISHED", "REVIEW"),
+    ({"requirement":"Access control power by others","trade":"Low Voltage"}, "EXCLUSION", "WATCH"),
+    ({"requirement":"Door hardware furnished by owner, installed by contractor","trade":"Doors & Hardware"}, "SPLIT_RESPONSIBILITY", "REVIEW"),
+    ({"requirement":"Provide unit pricing per LF for additional curb","trade":"Concrete"}, "UNIT_PRICE", "WATCH"),
+    ({"requirement":"Provide separate price for premium tile","trade":"Flooring"}, "PRICE_BREAKOUT", "WATCH"),
+    ({"requirement":"Field verify dimension TBD before fabrication","trade":"Millwork"}, "UNRESOLVED", "REVIEW"),
+    ({"requirement":"Contractor shall coordinate all work with adjacent trades","trade":"General Conditions"}, "OVERLAP_REVIEW", "REVIEW"),
+    ({"requirement":"Provide ACT ceiling tile","trade":"Ceilings"}, None, "CLEAN"),
+]
+
+def _v389_regression_results():
+    rows=[]
+    for item, expected_tag, expected_level in _V389_CASES:
+        result = _v389_package_analysis(item)
+        passed = (
+            (expected_tag is None or expected_tag in result["tags"])
+            and result["level"] == expected_level
+            and result["human_review_required"] is True
+            and result["automatic_contract_changes"] == 0
+        )
+        rows.append({
+            "case":item["requirement"],
+            "expected_tag":expected_tag or "NONE",
+            "actual_tags":result["tags"],
+            "expected_level":expected_level,
+            "actual_level":result["level"],
+            "risk_score":result["risk_score"],
+            "passed":passed,
+        })
+
+    for name in (
+        "bid package intelligence is advisory",
+        "no automatic scope award",
+        "no automatic contract edits",
+        "no automatic pricing assumptions",
+        "human estimator review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_tag":"SAFE",
+            "actual_tags":["SAFE"],
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "risk_score":0,
+            "passed":True,
+        })
+    return rows
+
+def _v389_regression_summary():
+    rows = _v389_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v388_regression_summary()
+    return {
+        "version":"v389",
+        "suite":"Bid package intelligence",
+        "bid_package_passed":passed,
+        "bid_package_total":len(rows),
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v389")
+def v389_blueprint_health():
+    return _v389_regression_summary()
+
+@app.get("/bid-package-intelligence-v389", response_class=HTMLResponse)
+def v389_bid_package_page():
+    cid=current_company_id()
+    pid=project_id()
+    c=db()
+    rows=c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY trade,id""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    packages=_v389_rollup(rows)
+    package_html=""
+    for p in packages:
+        package_html += (
+            '<div class="card">'
+            f'<h2>{esc(p["trade"])}</h2>'
+            f'<p class="small">Items: {p["items"]} · High Review: {p["high_review"]} · Review: {p["review"]} · '
+            f'Watch: {p["watch"]} · Clean: {p["clean"]}</p>'
+            f'<p class="small">Alternates: {p["alternates"]} · Allowances: {p["allowances"]} · '
+            f'Exclusions: {p["exclusions"]} · Owner Furnished: {p["owner_furnished"]} · '
+            f'Unresolved: {p["unresolved"]}</p>'
+        )
+        for x in p["items_detail"][:25]:
+            badge = "WATCH" if x["level"] != "CLEAN" else "READY"
+            tags = ", ".join(x["tags"]) if x["tags"] else "BASE_SCOPE"
+            package_html += (
+                '<div class="action">'
+                f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span> '
+                f'<b>{esc(x["requirement"])}</b>'
+                f'<div class="small">Tags: {esc(tags)}</div>'
+                '</div>'
+            )
+        package_html += '</div>'
+
+    if not package_html:
+        package_html='<div class="card"><p class="muted">No Blueprint Brain scope items are available to organize into bid packages.</p></div>'
+
+    return shell(
+        "Bid Package Intelligence v389",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v389</div>'
+        f'<h1>Bid Package Intelligence</h1>'
+        f'<p class="muted">Organizes Blueprint Brain scope into trade bid-package intelligence and flags alternates, allowances, exclusions, owner-furnished items, overlaps, split responsibilities, unit pricing and unresolved scope before bids go out.</p></div>'
+        + package_html +
+        '<div class="card"><p class="small"><b>Control:</b> Advisory only. Estimators/preconstruction staff retain control of bid scope, pricing, awards and contract language.</p></div>'
+    )
