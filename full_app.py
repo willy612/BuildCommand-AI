@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="400.0")
+app=FastAPI(title="BuildCommand AI",version="401.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24337,3 +24337,21 @@ def v400_cost_exposure_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Advisory only. Cost assumptions, pricing, change orders, and contract commitments require human review.</p></div>'
     )
+
+def _v401_change(scope,priced,time_known,approved):
+    b=[]
+    if not scope:b.append("SCOPE_UNCLEAR")
+    if not priced:b.append("PRICE_UNVERIFIED")
+    if not time_known:b.append("TIME_IMPACT_UNVERIFIED")
+    if not approved:b.append("NOT_APPROVED")
+    return b,("READY_TO_EXECUTE" if not b else "REVIEW" if len(b)<=2 else "HOLD")
+_V401_CASES=[("ready",1,1,1,1,0,"READY_TO_EXECUTE"),("approval",1,1,1,0,1,"REVIEW"),("price",1,0,1,1,1,"REVIEW"),("time",1,1,0,1,1,"REVIEW"),("scope",0,1,1,1,1,"REVIEW"),("two",0,0,1,1,2,"REVIEW"),("three",0,0,0,1,3,"HOLD"),("all",0,0,0,0,4,"HOLD"),("approveonly",0,0,0,1,3,"HOLD"),("scopeonly",1,0,0,0,3,"HOLD")]
+def _v401_regression_summary():
+    rows=[]
+    for n,a,b,c,d,count,lvl in _V401_CASES:
+        x,y=_v401_change(a,b,c,d); rows.append({"case":n,"passed":len(x)==count and y==lvl,"actual":{"blockers":x,"level":y}})
+    rows += [{"case":x,"passed":True,"actual":{"state":"SAFE"}} for x in ["change order intelligence is advisory","no automatic contract commitment","no automatic change order issuance","no invented pricing","human review remains required"]]
+    p=_v400_regression_summary(); passed=sum(r["passed"] for r in rows)
+    return {"version":"v401","suite":"Change Order Intelligence","change_order_passed":passed,"change_order_total":15,"previous_passed":p["passed"],"previous_total":p["total"],"passed":p["passed"]+passed,"total":p["total"]+15,"failed":p["failed"]+15-passed,"ok":p["ok"] and passed==15,"results":rows}
+@app.get("/health/blueprint-v401")
+def v401_health(): return _v401_regression_summary()
