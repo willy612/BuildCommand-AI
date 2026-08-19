@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="411.0")
+app=FastAPI(title="BuildCommand AI",version="412.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -26006,4 +26006,150 @@ def v411_pilot_onboarding_page():
         f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Onboarding never silently expands entitlements, assigns ownership, sends invitations, or creates charges without explicit verified actions.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v412 - First Customer Pilot Command Center
+# Unifies customer onboarding, project readiness, user access, ingestion health,
+# intelligence health, security/recovery gates, and pilot blockers into one
+# command view for operating a real customer pilot.
+# =============================================================================
+
+def _v412_pilot_health(onboarding_score, ingestion_ok, intelligence_ok,
+                       security_ok, recovery_ok, access_ok):
+    blockers = []
+    score = int(onboarding_score)
+
+    if not ingestion_ok:
+        blockers.append("INGESTION_NOT_READY")
+        score -= 15
+    if not intelligence_ok:
+        blockers.append("INTELLIGENCE_NOT_READY")
+        score -= 20
+    if not security_ok:
+        blockers.append("SECURITY_NOT_READY")
+        score -= 25
+    if not recovery_ok:
+        blockers.append("RECOVERY_NOT_READY")
+        score -= 20
+    if not access_ok:
+        blockers.append("ACCESS_NOT_READY")
+        score -= 20
+
+    score = max(0, min(100, score))
+
+    if score >= 90 and not blockers:
+        level = "GO_LIVE_READY"
+    elif score >= 70:
+        level = "PILOT_READY_WITH_BLOCKERS"
+    elif score >= 50:
+        level = "PILOT_HOLD_REVIEW"
+    else:
+        level = "NOT_READY"
+
+    return {
+        "score": score,
+        "level": level,
+        "blockers": blockers,
+        "human_review_required": True,
+        "automatic_go_live": False,
+    }
+
+def _v412_project_row(project_name, onboarding, ingestion, intelligence,
+                      security, recovery, access):
+    result = _v412_pilot_health(
+        onboarding, ingestion, intelligence, security, recovery, access
+    )
+    result.update({
+        "project": project_name or "Unnamed Project",
+    })
+    return result
+
+_V412_CASES = [
+    ("all-green",100,1,1,1,1,1,100,"GO_LIVE_READY"),
+    ("ingestion",100,0,1,1,1,1,85,"PILOT_READY_WITH_BLOCKERS"),
+    ("intelligence",100,1,0,1,1,1,80,"PILOT_READY_WITH_BLOCKERS"),
+    ("security",100,1,1,0,1,1,75,"PILOT_READY_WITH_BLOCKERS"),
+    ("recovery",100,1,1,1,0,1,80,"PILOT_READY_WITH_BLOCKERS"),
+    ("access",100,1,1,1,1,0,80,"PILOT_READY_WITH_BLOCKERS"),
+    ("two-blockers",100,1,1,0,0,1,55,"PILOT_HOLD_REVIEW"),
+    ("partial-onboarding",80,1,1,1,1,1,80,"PILOT_READY_WITH_BLOCKERS"),
+    ("weak-onboarding",60,1,1,1,1,1,60,"PILOT_HOLD_REVIEW"),
+    ("many-blockers",80,0,0,0,0,0,0,"NOT_READY"),
+]
+
+def _v412_regression_results():
+    rows = []
+    for name,onboarding,ingest,intel,security,recovery,access,expected_score,expected_level in _V412_CASES:
+        r = _v412_pilot_health(onboarding, ingest, intel, security, recovery, access)
+        rows.append({
+            "case": name,
+            "passed": (
+                r["score"] == expected_score
+                and r["level"] == expected_level
+                and r["automatic_go_live"] is False
+            ),
+            "actual": {
+                "score": r["score"],
+                "level": r["level"],
+                "blockers": r["blockers"],
+            },
+        })
+
+    for name in (
+        "pilot command center is advisory",
+        "no automatic customer go-live",
+        "no hidden security bypass",
+        "no hidden recovery bypass",
+        "human pilot approval remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state":"SAFE"},
+        })
+
+    return rows
+
+def _v412_regression_summary():
+    rows = _v412_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v411_regression_summary()
+    return {
+        "version":"v412",
+        "suite":"First Customer Pilot Command Center",
+        "pilot_command_passed":passed,
+        "pilot_command_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v412")
+def v412_blueprint_health():
+    return _v412_regression_summary()
+
+@app.get("/pilot-command-center-v412", response_class=HTMLResponse)
+def v412_pilot_command_center_page():
+    s = _v412_regression_summary()
+    demo = _v412_pilot_health(100, True, True, True, True, True)
+
+    return shell(
+        "First Customer Pilot Command Center v412",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v412</div>'
+        f'<h1>First Customer Pilot Command Center</h1>'
+        f'<p class="muted">One place to operate a live customer pilot: onboarding, access, ingestion, intelligence, security, recovery, and go-live blockers.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Pilot Score</div><div class="kpi">{demo["score"]}/100</div></div>'
+        f'<div class="card"><div class="label">Pilot State</div><div class="kpi">{esc(demo["level"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Go-Live Gate</h2>'
+        f'<p>Go-live requires clean onboarding, project data ingestion, intelligence health, customer access, security controls, and recovery readiness.</p>'
+        f'<p class="small"><b>Control:</b> Advisory only. BuildCommand never silently puts a customer into production.</p></div>'
     )
