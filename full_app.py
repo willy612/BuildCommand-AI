@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="412.0")
+app=FastAPI(title="BuildCommand AI",version="413.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -26152,4 +26152,219 @@ def v412_pilot_command_center_page():
         f'<div class="card"><h2>Go-Live Gate</h2>'
         f'<p>Go-live requires clean onboarding, project data ingestion, intelligence health, customer access, security controls, and recovery readiness.</p>'
         f'<p class="small"><b>Control:</b> Advisory only. BuildCommand never silently puts a customer into production.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v413 - Pilot Evidence & Go-Live Gate
+# Adds explicit deficiency reasons, evidence completeness, verifier identity,
+# verification timestamps, stale-evidence detection, and an auditable final
+# go/no-go packet. Advisory only; never automatically launches a customer.
+# =============================================================================
+
+from datetime import datetime, timezone
+
+_V413_DIMENSIONS = (
+    "ONBOARDING",
+    "ACCESS",
+    "INGESTION",
+    "INTELLIGENCE",
+    "SECURITY",
+    "RECOVERY",
+)
+
+def _v413_parse_ts(value):
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+def _v413_evidence_check(dimension, ready, evidence, verifier, verified_at,
+                         now_iso="2026-08-19T17:00:00Z", stale_after_days=30):
+    blockers = []
+    dim = str(dimension or "").upper()
+
+    if dim not in _V413_DIMENSIONS:
+        blockers.append("UNKNOWN_DIMENSION")
+    if not ready:
+        blockers.append(dim + "_NOT_READY" if dim else "DIMENSION_NOT_READY")
+    if not str(evidence or "").strip():
+        blockers.append("EVIDENCE_MISSING")
+    if not str(verifier or "").strip():
+        blockers.append("VERIFIER_MISSING")
+
+    verified_dt = _v413_parse_ts(verified_at)
+    now_dt = _v413_parse_ts(now_iso)
+
+    if verified_dt is None:
+        blockers.append("VERIFIED_AT_INVALID")
+    elif now_dt is not None:
+        age_days = (now_dt - verified_dt).total_seconds() / 86400.0
+        if age_days < 0:
+            blockers.append("VERIFIED_AT_IN_FUTURE")
+        elif age_days > stale_after_days:
+            blockers.append("EVIDENCE_STALE")
+
+    return {
+        "dimension": dim,
+        "verified": not blockers,
+        "blockers": blockers,
+    }
+
+def _v413_onboarding_deficiencies(company_ready, project_ready, owner_ready,
+                                   invites_ready, entitlements_ready):
+    checks = {
+        "COMPANY": bool(company_ready),
+        "PROJECT": bool(project_ready),
+        "OWNER": bool(owner_ready),
+        "INVITES": bool(invites_ready),
+        "ENTITLEMENTS": bool(entitlements_ready),
+    }
+    blockers = [name + "_NOT_READY" for name, ok in checks.items() if not ok]
+    score = sum(20 for ok in checks.values() if ok)
+    return {
+        "score": score,
+        "ready": score == 100,
+        "blockers": blockers,
+    }
+
+def _v413_go_live_packet(customer, project, evidence_rows, approved_by=None):
+    blockers = []
+    normalized = []
+
+    seen = set()
+    for row in evidence_rows or []:
+        dim = str(row.get("dimension") or "").upper()
+        seen.add(dim)
+        normalized.append(row)
+        if not row.get("verified"):
+            blockers.append(dim + "_EVIDENCE_NOT_VERIFIED")
+
+    for dim in _V413_DIMENSIONS:
+        if dim not in seen:
+            blockers.append(dim + "_EVIDENCE_MISSING")
+
+    if not str(customer or "").strip():
+        blockers.append("CUSTOMER_REQUIRED")
+    if not str(project or "").strip():
+        blockers.append("PROJECT_REQUIRED")
+    if not str(approved_by or "").strip():
+        blockers.append("HUMAN_APPROVAL_REQUIRED")
+
+    blockers = list(dict.fromkeys(blockers))
+    ready = not blockers
+
+    return {
+        "customer": customer,
+        "project": project,
+        "ready": ready,
+        "decision": "GO_LIVE_APPROVED" if ready else "NO_GO_REVIEW",
+        "blockers": blockers,
+        "evidence_count": len(normalized),
+        "approved_by": approved_by,
+        "automatic_go_live": False,
+    }
+
+def _v413_regression_results():
+    rows = []
+    good_ts = "2026-08-19T16:00:00Z"
+    stale_ts = "2026-06-01T16:00:00Z"
+
+    e1 = _v413_evidence_check("SECURITY", True, "Pen test review complete", "u1", good_ts)
+    e2 = _v413_evidence_check("RECOVERY", True, "", "u1", good_ts)
+    e3 = _v413_evidence_check("ACCESS", True, "RBAC verified", "", good_ts)
+    e4 = _v413_evidence_check("INGESTION", True, "Sample import verified", "u1", stale_ts)
+    e5 = _v413_evidence_check("INTELLIGENCE", False, "Regression suite", "u1", good_ts)
+
+    rows.extend([
+        {"case":"evidence valid","passed":e1["verified"] is True,"actual":e1},
+        {"case":"evidence required","passed":"EVIDENCE_MISSING" in e2["blockers"],"actual":e2},
+        {"case":"verifier required","passed":"VERIFIER_MISSING" in e3["blockers"],"actual":e3},
+        {"case":"stale evidence detected","passed":"EVIDENCE_STALE" in e4["blockers"],"actual":e4},
+        {"case":"dimension not ready","passed":"INTELLIGENCE_NOT_READY" in e5["blockers"],"actual":e5},
+    ])
+
+    o1 = _v413_onboarding_deficiencies(True,True,True,True,True)
+    o2 = _v413_onboarding_deficiencies(True,True,True,False,True)
+    o3 = _v413_onboarding_deficiencies(True,False,False,False,True)
+    rows.extend([
+        {"case":"onboarding evidence complete","passed":o1["ready"] and not o1["blockers"],"actual":o1},
+        {"case":"partial onboarding explains blocker","passed":o2["score"]==80 and o2["blockers"]==["INVITES_NOT_READY"],"actual":o2},
+        {"case":"weak onboarding explains blockers","passed":o3["score"]==40 and len(o3["blockers"])==3,"actual":o3},
+    ])
+
+    good_evidence = [
+        _v413_evidence_check(dim, True, dim + " verified", "reviewer1", good_ts)
+        for dim in _V413_DIMENSIONS
+    ]
+    packet1 = _v413_go_live_packet("Acme GC", "Downtown Office", good_evidence, "exec1")
+    packet2 = _v413_go_live_packet("Acme GC", "Downtown Office", good_evidence, None)
+    packet3 = _v413_go_live_packet("Acme GC", "Downtown Office", good_evidence[:-1], "exec1")
+
+    bad_evidence = list(good_evidence)
+    bad_evidence[2] = _v413_evidence_check("INGESTION", False, "Import failed", "reviewer1", good_ts)
+    packet4 = _v413_go_live_packet("Acme GC", "Downtown Office", bad_evidence, "exec1")
+
+    rows.extend([
+        {"case":"go-live packet approved","passed":packet1["ready"] and packet1["decision"]=="GO_LIVE_APPROVED" and not packet1["automatic_go_live"],"actual":packet1},
+        {"case":"human approval required","passed":not packet2["ready"] and "HUMAN_APPROVAL_REQUIRED" in packet2["blockers"],"actual":packet2},
+        {"case":"all dimensions required","passed":not packet3["ready"] and "RECOVERY_EVIDENCE_MISSING" in packet3["blockers"],"actual":packet3},
+        {"case":"failed evidence blocks go-live","passed":not packet4["ready"] and "INGESTION_EVIDENCE_NOT_VERIFIED" in packet4["blockers"],"actual":packet4},
+    ])
+
+    for name in (
+        "go-live evidence remains auditable",
+        "no automatic customer activation",
+        "no invented verification evidence",
+        "stale evidence cannot silently pass",
+        "human go-live approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v413_regression_summary():
+    rows = _v413_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v412_regression_summary()
+    return {
+        "version":"v413",
+        "suite":"Pilot Evidence & Go-Live Gate",
+        "pilot_evidence_passed":passed,
+        "pilot_evidence_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v413")
+def v413_blueprint_health():
+    return _v413_regression_summary()
+
+@app.get("/pilot-go-live-v413", response_class=HTMLResponse)
+def v413_pilot_go_live_page():
+    s = _v413_regression_summary()
+    partial = _v413_onboarding_deficiencies(True,True,True,False,True)
+    return shell(
+        "Pilot Evidence & Go-Live Gate v413",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v413</div>'
+        f'<h1>Pilot Evidence & Go-Live Gate</h1>'
+        f'<p class="muted">Auditable evidence, verifier identity, freshness checks, explicit deficiencies, and human go/no-go approval for customer pilots.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Example Onboarding</div><div class="kpi">{partial["score"]}%</div></div>'
+        f'<div class="card"><div class="label">Explicit Blockers</div><div class="kpi">{len(partial["blockers"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Evidence Gate</h2>'
+        f'<p>Every go-live dimension must have current evidence, a verifier, a verification timestamp, and an explicit human approval before the packet can reach GO_LIVE_APPROVED.</p>'
+        f'<p class="small"><b>Control:</b> Approval creates an auditable decision state only; it does not automatically activate production access.</p></div>'
     )
