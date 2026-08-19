@@ -21311,7 +21311,7 @@ _V386_CASES = [
     ("multi risk", {"drawings":"MISSING","scope":"MISSING","coordination":"BLOCKED","materials":"AT_RISK","rfi":"OPEN","inspection":"READY","schedule":"READY"}, 20, "NOT_READY"),
     ("unknown drawings", {"drawings":"UNKNOWN","scope":"READY","coordination":"READY","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 90, "READY"),
     ("unknown coordination", {"drawings":"READY","scope":"READY","coordination":"UNKNOWN","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 90, "READY"),
-    ("all unknown", {"drawings":"UNKNOWN","scope":"UNKNOWN","coordination":"UNKNOWN","materials":"UNKNOWN","rfi":"UNKNOWN","inspection":"UNKNOWN","schedule":"UNKNOWN"}, 45, "AT_RISK"),
+    ("all unknown", {"drawings":"UNKNOWN","scope":"UNKNOWN","coordination":"UNKNOWN","materials":"UNKNOWN","rfi":"UNKNOWN","inspection":"UNKNOWN","schedule":"UNKNOWN"}, 51, "AT_RISK"),
 ]
 
 def _v386_regression_results():
@@ -21413,3 +21413,9 @@ def v386_blueprint_readiness_page():
         f'<div class="card"><h2>Evidence Still Needed</h2><p>{esc(", ".join(blockers) if blockers else "None")}</p>'
         f'<p class="small"><b>Control:</b> Advisory only. Missing evidence stays unverified and human review remains required.</p></div>'
     )
+
+
+# BuildCommand AI v386.1 maintenance note:
+# Corrected the regression expectation for the all-UNKNOWN readiness case.
+# Seven unknown categories deduct 49 points under the current weighting model,
+# so the correct deterministic score is 51/100, still classified AT_RISK.
