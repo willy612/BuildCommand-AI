@@ -27832,8 +27832,12 @@ def _v419_mobile_field_view(records):
     visible = [_v419_record_detail(r) for r in (records or [])
                if str(r.get("type","")).upper() in field_types]
     visible.sort(key=lambda x: (
-        0 if x["status"] in {"CRITICAL","DO_NOT_START"} else
-        1 if x["status"] in {"HIGH","AT_RISK"} else 2, x["title"]))
+        0 if x["status"] == "DO_NOT_START" else
+        1 if x["status"] == "CRITICAL" else
+        2 if x["status"] in {"HIGH","AT_RISK"} else
+        3,
+        x["title"]
+    ))
     return {"mode":"FIELD_MOBILE","count":len(visible),"items":visible}
 
 def _v419_regression_results():
@@ -27929,3 +27933,9 @@ def v419_project_experience(q: str = ""):
         f'<form method="get" class="card"><input name="q" value="{esc(q)}" placeholder="Search RFIs, submittals, materials, changes, trades, owners..." style="width:100%;box-sizing:border-box;padding:13px;border-radius:10px;border:1px solid #d9dee7"></form>'
         f'<h2>Project records ({found["count"]})</h2>{cards}'
     )
+
+
+# BuildCommand AI v419.1 maintenance note:
+# Mobile field priority updated:
+# DO_NOT_START > CRITICAL > HIGH/AT_RISK > remaining statuses.
+# All other v419 navigation and record behavior is unchanged.
