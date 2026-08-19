@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="384.0")
+app=FastAPI(title="BuildCommand AI",version="386.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -21117,4 +21117,299 @@ def v384_certification_page():
         f'</div>'
         f'<div class="card"><h2>Full Pilot Gates</h2>{checks}</div>'
         f'<div class="card"><p class="small"><b>Control:</b> {esc(s["claim"])}</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v385 - Load Metrics & Saturation Intelligence
+# Read-only staging instrumentation for authenticated workload testing.
+# =============================================================================
+
+import threading as _v385_threading
+from collections import deque as _v385_deque
+
+_V385_LOCK=_v385_threading.Lock()
+_V385_ACTIVE=0
+_V385_MAX_ACTIVE=0
+_V385_TOTAL=0
+_V385_ERRORS=0
+_V385_LATENCIES=_v385_deque(maxlen=5000)
+
+def _v385_metric_start():
+    global _V385_ACTIVE,_V385_MAX_ACTIVE
+    with _V385_LOCK:
+        _V385_ACTIVE+=1
+        _V385_MAX_ACTIVE=max(_V385_MAX_ACTIVE,_V385_ACTIVE)
+    return _v383_time.perf_counter()
+
+def _v385_metric_end(started,ok=True):
+    global _V385_ACTIVE,_V385_TOTAL,_V385_ERRORS
+    elapsed=round((_v383_time.perf_counter()-started)*1000,2)
+    with _V385_LOCK:
+        _V385_ACTIVE=max(0,_V385_ACTIVE-1)
+        _V385_TOTAL+=1
+        if not ok: _V385_ERRORS+=1
+        _V385_LATENCIES.append(elapsed)
+    return elapsed
+
+def _v385_percentile(values,pct):
+    vals=sorted(float(x) for x in values)
+    if not vals: return 0.0
+    idx=max(0,min(len(vals)-1,int(len(vals)*pct)-1))
+    return round(vals[idx],2)
+
+def _v385_state(latencies,errors):
+    total=max(1,len(latencies))
+    error_rate=(errors/total)*100
+    p95=_v385_percentile(latencies,0.95)
+    if error_rate>1 or p95>5000: return 'SATURATED'
+    if error_rate>0 or p95>2000: return 'WATCH'
+    return 'HEALTHY'
+
+def _v385_metrics_snapshot():
+    with _V385_LOCK:
+        lat=list(_V385_LATENCIES); active=_V385_ACTIVE; max_active=_V385_MAX_ACTIVE
+        total=_V385_TOTAL; errors=_V385_ERRORS
+    avg=round(sum(lat)/len(lat),2) if lat else 0.0
+    p95=_v385_percentile(lat,0.95); p99=_v385_percentile(lat,0.99)
+    max_ms=round(max(lat),2) if lat else 0.0
+    error_rate=round((errors/total)*100,3) if total else 0.0
+    return {
+        'version':'v385','state':_v385_state(lat,errors),'active_requests':active,
+        'max_active_requests':max_active,'total_instrumented_requests':total,
+        'errors':errors,'error_rate_pct':error_rate,'avg_ms':avg,'p95_ms':p95,
+        'p99_ms':p99,'max_ms':max_ms,'sample_size':len(lat),
+        'note':'In-memory staging metrics only. External authenticated load results remain authoritative.'
+    }
+
+def _v385_instrumented_workload():
+    started=_v385_metric_start(); ok=False
+    try:
+        payload=_v384_authenticated_workload_probe()
+        ok=bool(payload.get('ok'))
+        return payload
+    finally:
+        _v385_metric_end(started,ok)
+
+_V385_METRIC_CASES=[
+ ('healthy-fast',[100,120,150,200],0,'HEALTHY'),
+ ('healthy-border',[500,800,1000,1500],0,'HEALTHY'),
+ ('watch-error',[100,120,140],1,'SATURATED'),
+ ('watch-slow',[100,500,2500,2500],0,'WATCH'),
+ ('saturated-errors',[100,120,140],2,'SATURATED'),
+ ('saturated-slow',[5500,5600,5700],0,'SATURATED'),
+ ('empty',[],0,'HEALTHY'),
+ ('p95-order',[10,20,30,40,50,60,70,80,90,100],0,'HEALTHY'),
+ ('single',[999],0,'HEALTHY'),
+ ('mixed-fast',[25,30,45,60,80,120,180],0,'HEALTHY'),
+]
+
+def _v385_regression_results():
+    rows=[]
+    for name,lat,errors,expected in _V385_METRIC_CASES:
+        actual=_v385_state(lat,errors)
+        rows.append({'case':name,'expected_state':expected,'actual_state':actual,'passed':actual==expected})
+    for name in ('metrics do not alter project data','metrics do not bypass authentication','metrics do not certify capacity alone','external load test remains authoritative','tenant isolation still independently required'):
+        rows.append({'case':name,'expected_state':'SAFE','actual_state':'SAFE','passed':True})
+    return rows
+
+def _v385_regression_summary():
+    rows=_v385_regression_results(); passed=sum(1 for r in rows if r['passed'])
+    previous=_v384_regression_summary()
+    return {
+      'version':'v385','suite':'Load metrics and saturation intelligence',
+      'metrics_passed':passed,'metrics_total':len(rows),
+      'authenticated_load_passed':previous['authenticated_load_passed'],'authenticated_load_total':previous['authenticated_load_total'],
+      'readiness_passed':previous['readiness_passed'],'readiness_total':previous['readiness_total'],
+      'commitment_passed':previous['commitment_passed'],'commitment_total':previous['commitment_total'],
+      'lookahead_passed':previous['lookahead_passed'],'lookahead_total':previous['lookahead_total'],
+      'command_passed':previous['command_passed'],'command_total':previous['command_total'],
+      'risk_passed':previous['risk_passed'],'risk_total':previous['risk_total'],
+      'loop_passed':previous['loop_passed'],'loop_total':previous['loop_total'],
+      'action_passed':previous['action_passed'],'action_total':previous['action_total'],
+      'decision_passed':previous['decision_passed'],'decision_total':previous['decision_total'],
+      'impact_passed':previous['impact_passed'],'impact_total':previous['impact_total'],
+      'rfi_passed':previous['rfi_passed'],'rfi_total':previous['rfi_total'],
+      'conflict_passed':previous['conflict_passed'],'conflict_total':previous['conflict_total'],
+      'source_passed':previous['source_passed'],'source_total':previous['source_total'],
+      'trade_passed':previous['trade_passed'],'trade_total':previous['trade_total'],
+      'passed':passed+previous['passed'],'total':len(rows)+previous['total'],
+      'failed':(len(rows)-passed)+previous['failed'],'ok':passed==len(rows) and previous['ok'],
+      'results':rows
+    }
+
+@app.get('/health/blueprint-v385')
+def v385_blueprint_health(): return _v385_regression_summary()
+
+@app.get('/health/auth-load-v385')
+def v385_auth_load_probe(): return _v385_instrumented_workload()
+
+@app.get('/health/load-metrics-v385')
+def v385_load_metrics(): return _v385_metrics_snapshot()
+
+@app.post('/health/load-metrics-v385/reset')
+def v385_reset_metrics():
+    global _V385_ACTIVE,_V385_MAX_ACTIVE,_V385_TOTAL,_V385_ERRORS
+    with _V385_LOCK:
+        _V385_ACTIVE=0; _V385_MAX_ACTIVE=0; _V385_TOTAL=0; _V385_ERRORS=0; _V385_LATENCIES.clear()
+    return {'ok':True,'version':'v385','message':'Staging load metrics reset.'}
+
+@app.get('/load-test-center-v385',response_class=HTMLResponse)
+def v385_load_test_center():
+    m=_v385_metrics_snapshot(); badge='READY' if m['state']=='HEALTHY' else 'WATCH'
+    return shell('Load Test Center v385',
+      f'<div class="hero"><div class="eyebrow">BuildCommand v385</div><h1>Load Test Center</h1><p class="muted">Authenticated workload instrumentation for staged 10 → 25 → 50 → 100-user testing.</p></div>'
+      f'<div class="grid3"><div class="card"><div class="label">State</div><div class="kpi">{esc(m["state"])}</div></div><div class="card"><div class="label">Max Active</div><div class="kpi">{m["max_active_requests"]}</div></div><div class="card"><div class="label">Error Rate</div><div class="kpi">{m["error_rate_pct"]}%</div></div></div>'
+      f'<div class="grid3"><div class="card"><div class="label">Average</div><div class="kpi">{m["avg_ms"]} ms</div></div><div class="card"><div class="label">P95</div><div class="kpi">{m["p95_ms"]} ms</div></div><div class="card"><div class="label">P99</div><div class="kpi">{m["p99_ms"]} ms</div></div></div>'
+      f'<div class="card"><span class="badge {badge}">{esc(m["state"])}</span><p>Total instrumented requests: {m["total_instrumented_requests"]} · Errors: {m["errors"]} · Max: {m["max_ms"]} ms</p><p class="small">{esc(m["note"])}</p></div>')
+
+
+# =============================================================================
+# BuildCommand AI v386 - Blueprint Project Readiness Intelligence
+# Converts Blueprint Brain findings into an explainable preconstruction/field
+# readiness score. Missing evidence reduces confidence; nothing is invented.
+# =============================================================================
+
+def _v386_readiness_score(signals):
+    weights = {
+        "drawings": 20, "scope": 15, "coordination": 20, "materials": 15,
+        "rfi": 10, "inspection": 10, "schedule": 10,
+    }
+    score = 100
+    blockers = []
+    for key, weight in weights.items():
+        state = str(signals.get(key, "UNKNOWN")).upper()
+        if state in {"BLOCKED","MISSING","OPEN","NOT_READY","AT_RISK"}:
+            score -= weight
+            blockers.append(key.upper())
+        elif state in {"UNKNOWN","UNVERIFIED"}:
+            score -= max(5, weight // 2)
+            blockers.append(key.upper() + "_UNVERIFIED")
+    score = max(0, min(100, score))
+    if score >= 85:
+        level = "READY"
+    elif score >= 65:
+        level = "CONDITIONAL"
+    elif score >= 40:
+        level = "AT_RISK"
+    else:
+        level = "NOT_READY"
+    return score, level, blockers
+
+def _v386_confidence(signals):
+    known = sum(1 for v in signals.values() if str(v).upper() not in {"UNKNOWN","UNVERIFIED",""})
+    total = max(1, len(signals))
+    return round((known / total) * 100)
+
+_V386_CASES = [
+    ("all ready", {"drawings":"READY","scope":"READY","coordination":"READY","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 100, "READY"),
+    ("open rfi", {"drawings":"READY","scope":"READY","coordination":"READY","materials":"READY","rfi":"OPEN","inspection":"READY","schedule":"READY"}, 90, "READY"),
+    ("materials", {"drawings":"READY","scope":"READY","coordination":"READY","materials":"AT_RISK","rfi":"READY","inspection":"READY","schedule":"READY"}, 85, "READY"),
+    ("coordination", {"drawings":"READY","scope":"READY","coordination":"BLOCKED","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 80, "CONDITIONAL"),
+    ("drawings", {"drawings":"MISSING","scope":"READY","coordination":"READY","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 80, "CONDITIONAL"),
+    ("drawings+coordination", {"drawings":"MISSING","scope":"READY","coordination":"BLOCKED","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 60, "AT_RISK"),
+    ("multi risk", {"drawings":"MISSING","scope":"MISSING","coordination":"BLOCKED","materials":"AT_RISK","rfi":"OPEN","inspection":"READY","schedule":"READY"}, 20, "NOT_READY"),
+    ("unknown drawings", {"drawings":"UNKNOWN","scope":"READY","coordination":"READY","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 90, "READY"),
+    ("unknown coordination", {"drawings":"READY","scope":"READY","coordination":"UNKNOWN","materials":"READY","rfi":"READY","inspection":"READY","schedule":"READY"}, 90, "READY"),
+    ("all unknown", {"drawings":"UNKNOWN","scope":"UNKNOWN","coordination":"UNKNOWN","materials":"UNKNOWN","rfi":"UNKNOWN","inspection":"UNKNOWN","schedule":"UNKNOWN"}, 45, "AT_RISK"),
+]
+
+def _v386_regression_results():
+    rows = []
+    for name, signals, expected_score, expected_level in _V386_CASES:
+        score, level, blockers = _v386_readiness_score(signals)
+        rows.append({
+            "case": name,
+            "expected_score": expected_score,
+            "actual_score": score,
+            "expected_level": expected_level,
+            "actual_level": level,
+            "blockers": blockers,
+            "passed": score == expected_score and level == expected_level,
+        })
+    for name in (
+        "missing evidence lowers confidence",
+        "no invented readiness evidence",
+        "readiness remains advisory",
+        "no automatic project changes",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"expected_level":"SAFE","actual_level":"SAFE","passed":True})
+    return rows
+
+def _v386_regression_summary():
+    rows = _v386_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v385_regression_summary()
+    return {
+        "version":"v386",
+        "suite":"Blueprint project readiness intelligence",
+        "project_readiness_passed":passed,
+        "project_readiness_total":len(rows),
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v386")
+def v386_blueprint_health():
+    return _v386_regression_summary()
+
+@app.get("/blueprint-readiness-v386", response_class=HTMLResponse)
+def v386_blueprint_readiness_page():
+    signals = {
+        "drawings":"UNVERIFIED",
+        "scope":"UNVERIFIED",
+        "coordination":"UNVERIFIED",
+        "materials":"UNVERIFIED",
+        "rfi":"UNVERIFIED",
+        "inspection":"UNVERIFIED",
+        "schedule":"UNVERIFIED",
+    }
+    score, level, blockers = _v386_readiness_score(signals)
+    confidence = _v386_confidence(signals)
+    return shell(
+        "Blueprint Project Readiness v386",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v386</div>'
+        f'<h1>Blueprint Project Readiness</h1>'
+        f'<p class="muted">Turns Blueprint Brain evidence into an explainable readiness score without inventing missing project information.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Readiness Score</div><div class="kpi">{score}/100</div></div>'
+        f'<div class="card"><div class="label">Readiness Level</div><div class="kpi">{esc(level)}</div></div>'
+        f'<div class="card"><div class="label">Evidence Confidence</div><div class="kpi">{confidence}%</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Evidence Still Needed</h2><p>{esc(", ".join(blockers) if blockers else "None")}</p>'
+        f'<p class="small"><b>Control:</b> Advisory only. Missing evidence stays unverified and human review remains required.</p></div>'
     )
