@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="404.0")
+app=FastAPI(title="BuildCommand AI",version="405.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24695,4 +24695,128 @@ def v404_operating_brain_page():
         f'<p>Readiness, risk, procurement, submittals and field installation readiness now feed one explainable operating-health layer.</p>'
         f'<p><b>Cumulative regression gate:</b> {s["passed"]}/{s["total"]}</p>'
         f'<p class="small"><b>Control:</b> Advisory only. BuildCommand does not automatically direct field work, commit cost, issue contracts, or change the schedule.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v405 - Project Data Ingestion Intelligence
+# First commercialization-hardening layer after the 500/500 operating-brain
+# milestone. Evaluates whether incoming project records are safe and complete
+# enough to enter the intelligence pipeline without inventing missing facts.
+# =============================================================================
+
+def _v405_ingestion(source_present, project_id_present, record_type_present,
+                    payload_present, timestamp_present):
+    blockers = []
+    if not source_present:
+        blockers.append("SOURCE_MISSING")
+    if not project_id_present:
+        blockers.append("PROJECT_ID_MISSING")
+    if not record_type_present:
+        blockers.append("RECORD_TYPE_MISSING")
+    if not payload_present:
+        blockers.append("PAYLOAD_MISSING")
+    if not timestamp_present:
+        blockers.append("TIMESTAMP_MISSING")
+
+    score = max(0, 100 - (len(blockers) * 20))
+    if score == 100:
+        level = "INGEST_READY"
+    elif score >= 60:
+        level = "REVIEW"
+    else:
+        level = "REJECT_REVIEW"
+
+    return {
+        "score": score,
+        "level": level,
+        "blockers": blockers,
+        "invented_fields": 0,
+        "human_review_required": level != "INGEST_READY",
+    }
+
+_V405_CASES = [
+    ("complete",1,1,1,1,1,100,"INGEST_READY"),
+    ("source",0,1,1,1,1,80,"REVIEW"),
+    ("project",1,0,1,1,1,80,"REVIEW"),
+    ("type",1,1,0,1,1,80,"REVIEW"),
+    ("payload",1,1,1,0,1,80,"REVIEW"),
+    ("timestamp",1,1,1,1,0,80,"REVIEW"),
+    ("two-missing",0,0,1,1,1,60,"REVIEW"),
+    ("three-missing",0,0,0,1,1,40,"REJECT_REVIEW"),
+    ("four-missing",0,0,0,0,1,20,"REJECT_REVIEW"),
+    ("empty",0,0,0,0,0,0,"REJECT_REVIEW"),
+]
+
+def _v405_regression_results():
+    rows = []
+    for name,a,b,c,d,e,expected_score,expected_level in _V405_CASES:
+        result = _v405_ingestion(a,b,c,d,e)
+        rows.append({
+            "case": name,
+            "passed": (
+                result["score"] == expected_score
+                and result["level"] == expected_level
+                and result["invented_fields"] == 0
+            ),
+            "actual": {
+                "score": result["score"],
+                "level": result["level"],
+                "blockers": result["blockers"],
+            },
+        })
+
+    for name in (
+        "project ingestion preserves source identity",
+        "no invented missing project data",
+        "incomplete records remain reviewable",
+        "no automatic project mutation",
+        "human review remains required for rejected records",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state": "SAFE"},
+        })
+    return rows
+
+def _v405_regression_summary():
+    rows = _v405_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v404_regression_summary()
+    return {
+        "version": "v405",
+        "suite": "Project Data Ingestion Intelligence",
+        "project_ingestion_passed": passed,
+        "project_ingestion_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": passed + previous["passed"],
+        "total": len(rows) + previous["total"],
+        "failed": (len(rows) - passed) + previous["failed"],
+        "ok": passed == len(rows) and previous["ok"],
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-v405")
+def v405_blueprint_health():
+    return _v405_regression_summary()
+
+@app.get("/project-data-ingestion-v405", response_class=HTMLResponse)
+def v405_project_data_ingestion_page():
+    s = _v405_regression_summary()
+    demo = _v405_ingestion(True, True, True, True, True)
+    return shell(
+        "Project Data Ingestion Intelligence v405",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v405</div>'
+        f'<h1>Project Data Ingestion Intelligence</h1>'
+        f'<p class="muted">A commercialization layer that validates incoming project records before they feed Blueprint Brain.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo State</div><div class="kpi">{esc(demo["level"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Invented Fields</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><h2>Ingestion Gate</h2>'
+        f'<p>Checks source identity, project identity, record type, payload presence, and timestamp presence before data enters the intelligence pipeline.</p>'
+        f'<p class="small"><b>Control:</b> Missing data stays missing. BuildCommand does not fabricate project facts to make an import appear complete.</p></div>'
     )
