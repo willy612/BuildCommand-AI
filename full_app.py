@@ -22454,21 +22454,44 @@ def _v390_bid_tags(text):
 
 def _v390_scope_keywords(requirement):
     words = re.findall(r"[a-z0-9]+", _v390_norm(requirement))
-    stop = {"provide","install","include","the","and","with","for","all","per","new","existing","required"}
+    stop = {
+        "provide","install","include","the","and","with","for","all","per","new","existing","required",
+        "carry","allowance","allowances","unit","pricing","price","alternate","alternates"
+    }
     return [w for w in words if len(w) >= 4 and w not in stop][:8]
 
-def _v390_bid_matches_requirement(bid_text, requirement):
-    t = _v390_norm(bid_text)
+def _v390_bid_matches_requirement(scope_text, requirement):
+    t = _v390_norm(scope_text)
     keys = _v390_scope_keywords(requirement)
     if not keys:
         return False
     hits = sum(1 for k in set(keys) if k in t)
     return hits >= max(1, min(2, len(set(keys))))
 
+def _v390_explicitly_excluded(exclusion_text, requirement):
+    ex = _v390_norm(exclusion_text)
+    if not ex:
+        return False
+    keys = _v390_scope_keywords(requirement)
+    if not keys:
+        return False
+    hits = sum(1 for k in set(keys) if k in ex)
+    # An explicit exclusion wins over lexical scope overlap.
+    return hits >= max(1, min(2, len(set(keys))))
+
+def _v390_requirement_commercial_tag(item):
+    tags = set(_v389_package_analysis(item).get("tags") or [])
+    for tag in ("ALTERNATE","ALLOWANCE","UNIT_PRICE"):
+        if tag in tags:
+            return tag
+    return None
+
 def _v390_level_bid(package_items, bid):
+    scope_text = str(bid.get("scope_text") or "")
+    exclusions_text = str(bid.get("exclusions") or "")
     bid_text = " ".join([
-        str(bid.get("scope_text") or ""),
-        str(bid.get("exclusions") or ""),
+        scope_text,
+        exclusions_text,
         str(bid.get("clarifications") or ""),
         str(bid.get("alternates") or ""),
         str(bid.get("allowances") or ""),
@@ -22479,15 +22502,24 @@ def _v390_level_bid(package_items, bid):
     missing = []
     matched = []
     package_tags = set()
+
     for item in package_items:
         requirement = str(item.get("requirement") or "").strip()
         analysis = _v389_package_analysis(item)
         package_tags.update(analysis.get("tags") or [])
-        if _v390_bid_matches_requirement(bid_text, requirement):
+
+        # First determine whether the physical/scope subject is covered.
+        # Commercial words such as allowance/unit price are excluded from the
+        # subject matcher and evaluated separately below.
+        scope_match = _v390_bid_matches_requirement(scope_text, requirement)
+        excluded = _v390_explicitly_excluded(exclusions_text, requirement)
+
+        if scope_match and not excluded:
             matched.append(requirement)
         else:
             missing.append(requirement)
 
+    # Commercial coverage is a separate apples-to-apples dimension.
     commercial_gaps = []
     for tag in ("ALTERNATE","ALLOWANCE","UNIT_PRICE"):
         if tag in package_tags and tag not in bid_tags:
@@ -22496,10 +22528,19 @@ def _v390_level_bid(package_items, bid):
     risk_score = 0
     risk_score += min(60, len(missing) * 15)
     risk_score += min(30, len(commercial_gaps) * 10)
+
+    # Any explicit exclusion language deserves review, even when it refers to
+    # secondary work outside the baseline package.
     if "EXCLUSION" in bid_tags:
         risk_score += 15
+
+    # A bid with no affirmative scope narrative is materially harder to level.
+    if not _v390_norm(scope_text) and package_items:
+        risk_score += 20
+
     if "ASSUMPTION" in bid_tags:
         risk_score += 10
+
     risk_score = min(100, risk_score)
 
     if risk_score >= 70:
@@ -22523,6 +22564,7 @@ def _v390_level_bid(package_items, bid):
         "human_review_required":True,
         "automatic_award":False,
     }
+
 
 def _v390_compare_bids(package_items, bids):
     leveled = [_v390_level_bid(package_items, b) for b in bids]
@@ -22704,3 +22746,18 @@ def v390_bid_leveling_page():
         '<p>Use verified bid-package scope as the baseline, then compare bidder scope and commercial clarifications against it.</p>'
         '<p class="small"><b>Control:</b> Advisory only. BuildCommand never awards a subcontract or assumes the lowest bid is the best bid.</p></div>'
     )
+
+
+# BuildCommand AI v390.1 maintenance note:
+# - Explicit exclusions override lexical scope matches.
+# - Excluded scope counts as missing coverage.
+# - Commercial requirements (allowance/unit price/alternate) require the actual
+#   commercial term, not just matching nouns in scope text.
+# - Missing commercial requirements are not double-counted as a separate gap.
+
+
+# BuildCommand AI v390.1 calibration correction:
+# - Scope-subject matching ignores commercial words such as allowance/unit price.
+# - Commercial coverage is scored separately from physical scope coverage.
+# - Explicit exclusions override affirmative scope matching.
+# - Empty affirmative scope carries an additional leveling-risk penalty.
