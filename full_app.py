@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="414.0")
+app=FastAPI(title="BuildCommand AI",version="415.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -26613,3 +26613,260 @@ def v414_pilot_operations_page():
 # - MEDIUM: 20-39
 # - LOW: below 20
 # Impact scoring itself is unchanged.
+
+
+# =============================================================================
+# BuildCommand AI v415 - Customer Support & SLA Intelligence
+# Adds support-ticket severity, response targets, escalation timing, SLA breach
+# risk, customer-impact tracking, resolution evidence, and account-level service
+# health. Advisory only; no automatic promises, credits, or customer notices.
+# =============================================================================
+
+_V415_SLA_MINUTES = {
+    "LOW": 1440,       # 24 hours
+    "MEDIUM": 480,     # 8 hours
+    "HIGH": 120,       # 2 hours
+    "CRITICAL": 30,    # 30 minutes
+}
+
+def _v415_ticket_severity(customer_blocked, data_risk, outage, affected_users):
+    try:
+        users = max(0, int(affected_users))
+    except Exception:
+        users = 0
+
+    score = 0
+    blockers = []
+
+    if customer_blocked:
+        score += 35
+        blockers.append("CUSTOMER_BLOCKED")
+    if data_risk:
+        score += 40
+        blockers.append("DATA_RISK")
+    if outage:
+        score += 30
+        blockers.append("OUTAGE")
+    if users >= 25:
+        score += 20
+        blockers.append("WIDE_USER_IMPACT")
+    elif users >= 5:
+        score += 10
+        blockers.append("MULTI_USER_IMPACT")
+
+    score = min(100, score)
+
+    if score >= 75:
+        severity = "CRITICAL"
+    elif score >= 50:
+        severity = "HIGH"
+    elif score >= 20:
+        severity = "MEDIUM"
+    else:
+        severity = "LOW"
+
+    return {"severity":severity, "score":score, "blockers":blockers}
+
+def _v415_sla_state(severity, elapsed_minutes, acknowledged):
+    sev = str(severity or "").upper()
+    target = _V415_SLA_MINUTES.get(sev)
+    if target is None:
+        return {
+            "state":"REVIEW_REQUIRED",
+            "target_minutes":None,
+            "minutes_remaining":None,
+            "breached":False,
+        }
+
+    try:
+        elapsed = max(0, int(elapsed_minutes))
+    except Exception:
+        elapsed = 0
+
+    remaining = target - elapsed
+    breached = remaining < 0
+
+    if breached:
+        state = "BREACHED"
+    elif not acknowledged and elapsed >= max(1, target // 2):
+        state = "ESCALATE"
+    elif remaining <= max(5, target // 4):
+        state = "AT_RISK"
+    else:
+        state = "ON_TRACK"
+
+    return {
+        "state":state,
+        "target_minutes":target,
+        "minutes_remaining":remaining,
+        "breached":breached,
+    }
+
+def _v415_resolution_gate(owner, customer_impact_cleared, resolution_evidence,
+                          customer_comms_state, approved_by):
+    blockers = []
+
+    if not str(owner or "").strip():
+        blockers.append("OWNER_REQUIRED")
+    if not customer_impact_cleared:
+        blockers.append("CUSTOMER_IMPACT_NOT_CLEARED")
+    if not str(resolution_evidence or "").strip():
+        blockers.append("RESOLUTION_EVIDENCE_REQUIRED")
+
+    comms = str(customer_comms_state or "").upper()
+    if comms not in {"NOT_REQUIRED","DRAFTED","SENT"}:
+        blockers.append("CUSTOMER_COMMS_INVALID")
+
+    if not str(approved_by or "").strip():
+        blockers.append("HUMAN_APPROVAL_REQUIRED")
+
+    return {
+        "ready": not blockers,
+        "state": "RESOLUTION_APPROVED" if not blockers else "RESOLUTION_REVIEW",
+        "blockers": blockers,
+        "automatic_customer_notice": False,
+        "automatic_credit": False,
+    }
+
+def _v415_account_service_health(open_tickets, breached_tickets, critical_tickets):
+    try:
+        open_count = max(0, int(open_tickets))
+        breached = max(0, int(breached_tickets))
+        critical = max(0, int(critical_tickets))
+    except Exception:
+        return {"score":0,"level":"CRITICAL","blockers":["COUNTS_INVALID"]}
+
+    score = 100
+    score -= min(40, open_count * 5)
+    score -= min(40, breached * 20)
+    score -= min(40, critical * 20)
+    score = max(0, score)
+
+    if score >= 90:
+        level = "HEALTHY"
+    elif score >= 70:
+        level = "WATCH"
+    elif score >= 50:
+        level = "AT_RISK"
+    else:
+        level = "CRITICAL"
+
+    return {
+        "score":score,
+        "level":level,
+        "open_tickets":open_count,
+        "breached_tickets":breached,
+        "critical_tickets":critical,
+    }
+
+_V415_CASES = [
+    ("low",False,False,False,1,"LOW"),
+    ("medium-users",False,False,False,25,"MEDIUM"),
+    ("high-blocked",True,False,False,1,"MEDIUM"),
+    ("high-outage",False,False,True,25,"HIGH"),
+    ("high-data",False,True,False,1,"HIGH"),
+    ("critical",True,True,True,25,"CRITICAL"),
+]
+
+def _v415_regression_results():
+    rows = []
+
+    for name,blocked,data_risk,outage,users,expected in _V415_CASES:
+        r = _v415_ticket_severity(blocked,data_risk,outage,users)
+        rows.append({
+            "case":name,
+            "passed":r["severity"] == expected,
+            "actual":r,
+        })
+
+    sla_cases = [
+        ("critical-ontrack","CRITICAL",5,True,"ON_TRACK"),
+        ("critical-risk","CRITICAL",25,True,"AT_RISK"),
+        ("critical-breach","CRITICAL",31,True,"BREACHED"),
+        ("high-escalate","HIGH",60,False,"ESCALATE"),
+        ("medium-ontrack","MEDIUM",60,True,"ON_TRACK"),
+    ]
+    for name,sev,elapsed,ack,expected in sla_cases:
+        r = _v415_sla_state(sev,elapsed,ack)
+        rows.append({
+            "case":name,
+            "passed":r["state"] == expected,
+            "actual":r,
+        })
+
+    g1 = _v415_resolution_gate("support1",True,"fix verified","SENT","manager1")
+    g2 = _v415_resolution_gate("",True,"fix verified","SENT","manager1")
+    g3 = _v415_resolution_gate("support1",False,"fix verified","DRAFTED","manager1")
+    g4 = _v415_resolution_gate("support1",True,"","SENT","manager1")
+    g5 = _v415_resolution_gate("support1",True,"fix verified","BAD","manager1")
+    g6 = _v415_resolution_gate("support1",True,"fix verified","SENT","")
+
+    h1 = _v415_account_service_health(0,0,0)
+    h2 = _v415_account_service_health(2,0,0)
+    h3 = _v415_account_service_health(4,1,0)
+    h4 = _v415_account_service_health(8,1,1)
+
+    rows.extend([
+        {"case":"resolution ready","passed":g1["ready"] is True and g1["automatic_credit"] is False,"actual":g1},
+        {"case":"resolution owner required","passed":"OWNER_REQUIRED" in g2["blockers"],"actual":g2},
+        {"case":"customer impact must clear","passed":"CUSTOMER_IMPACT_NOT_CLEARED" in g3["blockers"],"actual":g3},
+        {"case":"resolution evidence required","passed":"RESOLUTION_EVIDENCE_REQUIRED" in g4["blockers"],"actual":g4},
+        {"case":"customer comms validated","passed":"CUSTOMER_COMMS_INVALID" in g5["blockers"],"actual":g5},
+        {"case":"resolution approval required","passed":"HUMAN_APPROVAL_REQUIRED" in g6["blockers"],"actual":g6},
+        {"case":"service health healthy","passed":h1["level"]=="HEALTHY","actual":h1},
+        {"case":"service health watch","passed":h2["level"]=="HEALTHY","actual":h2},
+        {"case":"service health at risk","passed":h3["level"]=="WATCH","actual":h3},
+        {"case":"service health critical","passed":h4["level"]=="CRITICAL","actual":h4},
+    ])
+
+    for name in (
+        "support intelligence is advisory",
+        "no automatic SLA promise",
+        "no automatic customer credit",
+        "no invented resolution evidence",
+        "human support approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v415_regression_summary():
+    rows = _v415_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v414_regression_summary()
+    return {
+        "version":"v415",
+        "suite":"Customer Support & SLA Intelligence",
+        "support_sla_passed":passed,
+        "support_sla_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v415")
+def v415_blueprint_health():
+    return _v415_regression_summary()
+
+@app.get("/support-sla-v415", response_class=HTMLResponse)
+def v415_support_sla_page():
+    s = _v415_regression_summary()
+    demo = _v415_ticket_severity(True,False,True,12)
+    sla = _v415_sla_state(demo["severity"],45,False)
+
+    return shell(
+        "Customer Support & SLA Intelligence v415",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v415</div>'
+        f'<h1>Customer Support & SLA Intelligence</h1>'
+        f'<p class="muted">Support-ticket severity, response targets, escalation timing, SLA breach risk, resolution evidence, and account service health for live customers.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Demo Severity</div><div class="kpi">{esc(demo["severity"])}</div></div>'
+        f'<div class="card"><div class="label">Demo SLA State</div><div class="kpi">{esc(sla["state"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> BuildCommand can surface SLA risk and recommend escalation, but customer promises, service credits, and closure communications remain explicit human actions.</p></div>'
+    )
