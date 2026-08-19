@@ -21879,6 +21879,11 @@ def _v388_scope_signals(item):
             "Broad all-trades/general-coordination language may create obligations across multiple trade packages.",
             "Break the general-note obligation into explicit affected-trade scope before bid leveling or award."
         )
+        add(
+            "MULTI_TRADE_COORDINATION_GAP", "MEDIUM",
+            "The requirement creates a coordination obligation spanning multiple trades without a single explicit owner.",
+            "Assign coordination ownership and flow the requirement into each affected trade package."
+        )
     elif any(k in t for k in (
         "contractor to verify", "include all", "provide all required"
     )):
@@ -22097,3 +22102,10 @@ def v388_scope_gap_page():
 #    trade-ownership review rather than assembly ownership.
 # 2) Broad "all trades / coordinate all work" notes are HIGH-risk scope-gap
 #    signals because they can create multi-trade obligations.
+
+
+# BuildCommand AI v388.2 maintenance note:
+# Broad "coordinate all work / all trades" language now generates both:
+# - BURIED_GENERAL_NOTE (HIGH)
+# - MULTI_TRADE_COORDINATION_GAP (MEDIUM)
+# This preserves the scoring model while correctly elevating the condition to AT_RISK.
