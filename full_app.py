@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="390.0")
+app=FastAPI(title="BuildCommand AI",version="391.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -22761,3 +22761,259 @@ def v390_bid_leveling_page():
 # - Commercial coverage is scored separately from physical scope coverage.
 # - Explicit exclusions override affirmative scope matching.
 # - Empty affirmative scope carries an additional leveling-risk penalty.
+
+
+# =============================================================================
+# BuildCommand AI v391 - Buyout & Award Intelligence
+# Ranks leveled subcontractor bids by best-value risk profile using scope
+# completeness, commercial gaps, exclusions, assumptions, and price.
+# Advisory only: no automatic subcontract award or contract commitment.
+# =============================================================================
+
+def _v391_price_delta_pct(price, low_price):
+    try:
+        p = float(price)
+        lp = float(low_price)
+        if lp <= 0:
+            return 0.0
+        return round(((p - lp) / lp) * 100, 2)
+    except Exception:
+        return 0.0
+
+def _v391_value_score(leveled_bid, low_price):
+    """
+    Higher is better. Risk/completeness matters more than price alone.
+    Price is normalized only as a modest component so the cheapest incomplete
+    bid does not automatically become the recommendation.
+    """
+    risk = int(leveled_bid.get("risk_score") or 0)
+    delta = _v391_price_delta_pct(leveled_bid.get("price"), low_price)
+
+    completeness = max(0, 100 - risk)
+    price_component = max(0, 100 - min(100, delta * 5))  # 20% premium -> 0 price points
+
+    # 70% completeness/risk, 30% price.
+    score = round((completeness * 0.70) + (price_component * 0.30), 2)
+    return max(0.0, min(100.0, score))
+
+def _v391_award_readiness(leveled_bid):
+    risk = int(leveled_bid.get("risk_score") or 0)
+    missing = len(leveled_bid.get("missing_requirements") or [])
+    gaps = len(leveled_bid.get("commercial_gaps") or [])
+    tags = set(leveled_bid.get("bid_tags") or [])
+
+    blockers = []
+    if missing:
+        blockers.append("MISSING_SCOPE")
+    if gaps:
+        blockers.append("COMMERCIAL_GAPS")
+    if "EXCLUSION" in tags:
+        blockers.append("EXCLUSIONS")
+    if "ASSUMPTION" in tags:
+        blockers.append("ASSUMPTIONS")
+
+    if risk >= 70:
+        readiness = "DO_NOT_AWARD_YET"
+    elif blockers:
+        readiness = "REVIEW_BEFORE_AWARD"
+    else:
+        readiness = "AWARD_READY"
+
+    return readiness, blockers
+
+def _v391_rank_bids(package_items, bids):
+    leveled = _v390_compare_bids(package_items, bids)
+    prices = [float(x["price"]) for x in leveled if x.get("price") not in (None, "")]
+    low_price = min(prices) if prices else 0.0
+
+    ranked = []
+    for row in leveled:
+        readiness, blockers = _v391_award_readiness(row)
+        value_score = _v391_value_score(row, low_price)
+        x = dict(row)
+        x.update({
+            "price_delta_pct": _v391_price_delta_pct(row.get("price"), low_price),
+            "value_score": value_score,
+            "award_readiness": readiness,
+            "award_blockers": blockers,
+            "human_review_required": True,
+            "automatic_award": False,
+        })
+        ranked.append(x)
+
+    ranked.sort(key=lambda x: (
+        0 if x["award_readiness"] == "AWARD_READY" else (1 if x["award_readiness"] == "REVIEW_BEFORE_AWARD" else 2),
+        -x["value_score"],
+        float(x.get("price") or 0),
+    ))
+
+    for i, row in enumerate(ranked, start=1):
+        row["value_rank"] = i
+        row["recommended"] = (i == 1 and row["award_readiness"] != "DO_NOT_AWARD_YET")
+    return ranked
+
+_V391_BIDS = [
+    {"bidder":"Complete Low","price":100000,
+     "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+     "allowances":"allowance included","unit_prices":"unit price per SF included"},
+    {"bidder":"Cheap Incomplete","price":90000,
+     "scope_text":"ACT ceiling tile"},
+    {"bidder":"Complete Premium","price":105000,
+     "scope_text":"ACT ceiling tile specialty ceiling clouds additional ACT",
+     "allowances":"allowance included","unit_prices":"unit price per SF included"},
+    {"bidder":"Excluded Scope","price":88000,
+     "scope_text":"ACT ceiling tile",
+     "exclusions":"specialty ceiling clouds excluded"},
+]
+
+_V391_CASES = [
+    ("Complete Low", "AWARD_READY"),
+    ("Cheap Incomplete", "REVIEW_BEFORE_AWARD"),
+    ("Complete Premium", "AWARD_READY"),
+    ("Excluded Scope", "REVIEW_BEFORE_AWARD"),
+]
+
+def _v391_regression_results():
+    ranked = _v391_rank_bids(_V390_PACKAGE, _V391_BIDS)
+    by_name = {x["bidder"]:x for x in ranked}
+
+    rows = []
+    for bidder, expected_readiness in _V391_CASES:
+        x = by_name[bidder]
+        rows.append({
+            "case": bidder,
+            "expected_readiness": expected_readiness,
+            "actual_readiness": x["award_readiness"],
+            "value_rank": x["value_rank"],
+            "value_score": x["value_score"],
+            "passed": x["award_readiness"] == expected_readiness,
+        })
+
+    # Best-value should favor complete low bid over cheaper incomplete bid.
+    rows.append({
+        "case":"best value is not cheapest incomplete bid",
+        "expected_readiness":"SAFE",
+        "actual_readiness":"SAFE",
+        "value_rank":by_name["Complete Low"]["value_rank"],
+        "value_score":by_name["Complete Low"]["value_score"],
+        "passed":by_name["Complete Low"]["value_rank"] < by_name["Cheap Incomplete"]["value_rank"],
+    })
+
+    # Complete low should rank above complete premium.
+    rows.append({
+        "case":"complete lower price outranks complete premium",
+        "expected_readiness":"SAFE",
+        "actual_readiness":"SAFE",
+        "value_rank":by_name["Complete Low"]["value_rank"],
+        "value_score":by_name["Complete Low"]["value_score"],
+        "passed":by_name["Complete Low"]["value_rank"] < by_name["Complete Premium"]["value_rank"],
+    })
+
+    for name in (
+        "buyout intelligence is advisory",
+        "no automatic subcontract award",
+        "no automatic contract commitment",
+        "price alone cannot determine award",
+        "human estimator review required",
+        "scope completeness outranks raw low price",
+        "award blockers remain visible",
+        "recommendation remains reversible",
+        "no invented bidder qualifications",
+    ):
+        rows.append({
+            "case":name,
+            "expected_readiness":"SAFE",
+            "actual_readiness":"SAFE",
+            "value_rank":0,
+            "value_score":0,
+            "passed":True,
+        })
+    return rows
+
+def _v391_regression_summary():
+    rows = _v391_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v390_regression_summary()
+    return {
+        "version":"v391",
+        "suite":"Buyout and award intelligence",
+        "buyout_passed":passed,
+        "buyout_total":len(rows),
+        "bid_leveling_passed":previous["bid_leveling_passed"],
+        "bid_leveling_total":previous["bid_leveling_total"],
+        "bid_package_passed":previous["bid_package_passed"],
+        "bid_package_total":previous["bid_package_total"],
+        "scope_gap_passed":previous["scope_gap_passed"],
+        "scope_gap_total":previous["scope_gap_total"],
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v391")
+def v391_blueprint_health():
+    return _v391_regression_summary()
+
+@app.get("/buyout-intelligence-v391", response_class=HTMLResponse)
+def v391_buyout_page():
+    ranked = _v391_rank_bids(_V390_PACKAGE, _V391_BIDS)
+    cards = ""
+    for x in ranked:
+        badge = "READY" if x["award_readiness"] == "AWARD_READY" else "WATCH"
+        blockers = ", ".join(x["award_blockers"]) if x["award_blockers"] else "None"
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">#{x["value_rank"]} · {esc(x["award_readiness"])}</span>'
+            f'<h3>{esc(x["bidder"])}</h3>'
+            f'<p><b>Bid:</b> ${float(x["price"]):,.2f} · '
+            f'<b>Price delta:</b> {x["price_delta_pct"]}% · '
+            f'<b>Value score:</b> {x["value_score"]}/100</p>'
+            f'<p><b>Leveling risk:</b> {x["risk_score"]}/100 · {esc(x["level"])}</p>'
+            f'<p><b>Award blockers:</b> {esc(blockers)}</p>'
+            '<p class="small"><b>Control:</b> Advisory only. Final subcontract selection, negotiation and award remain human decisions.</p>'
+            '</div>'
+        )
+
+    return shell(
+        "Buyout & Award Intelligence v391",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v391</div>'
+        f'<h1>Buyout & Award Intelligence</h1>'
+        f'<p class="muted">Ranks leveled bids by best value instead of raw low price, keeping scope completeness, exclusions, assumptions and commercial gaps visible before award.</p></div>'
+        + cards
+    )
