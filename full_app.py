@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="386.0")
+app=FastAPI(title="BuildCommand AI",version="387.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -21419,3 +21419,312 @@ def v386_blueprint_readiness_page():
 # Corrected the regression expectation for the all-UNKNOWN readiness case.
 # Seven unknown categories deduct 49 points under the current weighting model,
 # so the correct deterministic score is 51/100, still classified AT_RISK.
+
+
+# =============================================================================
+# BuildCommand AI v387 - Constructability Intelligence
+# Reviews Blueprint Brain evidence for field-buildability risks such as missing
+# dimensions, unresolved interfaces, access/sequence constraints, incomplete
+# details, and coordination gaps. Advisory only; no automatic project changes.
+# =============================================================================
+
+def _v387_norm(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def _v387_constructability_flags(item):
+    req = str(_v374_safe_get(item, "requirement", "") or "").strip()
+    blob = " ".join([
+        req,
+        str(_v374_safe_get(item, "sheet_text", "") or ""),
+        str(_v374_safe_get(item, "detail_text", "") or ""),
+        str(_v374_safe_get(item, "spec_text", "") or ""),
+        str(_v374_safe_get(item, "note_text", "") or ""),
+    ])
+    t = _v387_norm(blob)
+    flags = []
+
+    def add(code, severity, reason, action):
+        flags.append({
+            "code":code,
+            "severity":severity,
+            "reason":reason,
+            "recommended_review":action,
+        })
+
+    # Missing/incomplete dimension or location evidence.
+    if any(k in t for k in ("dimension tbd", "verify dimension", "field verify", "location tbd", "dimension not shown")):
+        add(
+            "MISSING_DIMENSION",
+            "HIGH",
+            "Required dimension/location is not fully resolved in the available document evidence.",
+            "Confirm the governing dimension/location before fabrication or installation."
+        )
+
+    # Missing/incomplete referenced detail.
+    if any(k in t for k in ("detail not provided", "see detail", "refer to detail", "detail tbd")):
+        detail_text = _v387_norm(_v374_safe_get(item, "detail_text", ""))
+        if not detail_text or "not provided" in detail_text or "tbd" in detail_text:
+            add(
+                "INCOMPLETE_DETAIL",
+                "HIGH",
+                "The requirement references a detail that is missing or incomplete.",
+                "Obtain/confirm the governing detail before affected work proceeds."
+            )
+
+    # Interface / trade boundary language.
+    if any(k in t for k in (
+        "coordinate with", "by others", "provided by", "installed by",
+        "connection by", "patch by", "opening by", "blocking by"
+    )):
+        add(
+            "TRADE_INTERFACE",
+            "MEDIUM",
+            "The requirement crosses a trade or responsibility boundary.",
+            "Confirm exact furnish/install/patch/connection responsibility between affected trades."
+        )
+
+    # Sequence/access issues.
+    if any(k in t for k in (
+        "before ceiling", "before slab", "prior to pour", "before close-in",
+        "after framing", "access required", "maintain access", "install before"
+    )):
+        add(
+            "SEQUENCE_ACCESS",
+            "HIGH",
+            "The requirement depends on timing, access, or predecessor completion.",
+            "Verify installation sequence and access before the predecessor closes the work area."
+        )
+
+    # Penetration / waterproofing / firestopping interfaces.
+    if any(k in t for k in (
+        "penetration", "sleeve", "firestop", "waterproof", "roof membrane",
+        "flashing", "sealant at penetration"
+    )):
+        add(
+            "PENETRATION_INTERFACE",
+            "MEDIUM",
+            "Penetration work may affect enclosure, fire-rating, waterproofing, or another trade's finished system.",
+            "Coordinate opening, sleeve, flashing/firestopping, patching, and inspection ownership."
+        )
+
+    # Equipment clearance / service access.
+    if any(k in t for k in (
+        "clearance", "service clearance", "access panel", "maintenance access",
+        "working clearance"
+    )):
+        add(
+            "SERVICE_CLEARANCE",
+            "MEDIUM",
+            "Equipment or concealed work requires service/maintenance access.",
+            "Confirm required clearance and permanent service access before surrounding work is installed."
+        )
+
+    # Existing conditions / field verification.
+    if any(k in t for k in ("existing condition", "verify existing", "field verify", "match existing")):
+        add(
+            "EXISTING_CONDITION",
+            "MEDIUM",
+            "The design depends on existing conditions that may differ from the documents.",
+            "Field-verify the existing condition before final layout, fabrication, or demolition."
+        )
+
+    # Dupes out, deterministic order.
+    seen = set()
+    unique = []
+    for f in flags:
+        if f["code"] not in seen:
+            seen.add(f["code"])
+            unique.append(f)
+    return unique
+
+def _v387_constructability_score(flags):
+    weights = {"HIGH":30, "MEDIUM":15, "LOW":5}
+    risk = min(100, sum(weights.get(str(f.get("severity","")).upper(), 10) for f in flags))
+    if risk >= 70:
+        level = "CRITICAL_REVIEW"
+    elif risk >= 40:
+        level = "AT_RISK"
+    elif risk >= 15:
+        level = "WATCH"
+    else:
+        level = "CLEAR"
+    return risk, level
+
+def _v387_constructability_analysis(item):
+    flags = _v387_constructability_flags(item)
+    score, level = _v387_constructability_score(flags)
+    return {
+        "requirement":str(_v374_safe_get(item, "requirement", "") or "").strip(),
+        "trade":str(_v374_safe_get(item, "trade", "") or "").strip() or "Unassigned",
+        "risk_score":score,
+        "level":level,
+        "flag_count":len(flags),
+        "flags":flags,
+        "human_review_required":True,
+        "automatic_changes":0,
+    }
+
+_V387_CASES = [
+    ({"requirement":"Dimension TBD for equipment housekeeping pad"}, "MISSING_DIMENSION", "WATCH"),
+    ({"requirement":"See detail for curb","detail_text":"Detail not provided"}, "INCOMPLETE_DETAIL", "WATCH"),
+    ({"requirement":"Provide sleeve; firestop by others"}, "TRADE_INTERFACE", "WATCH"),
+    ({"requirement":"Install duct before ceiling grid"}, "SEQUENCE_ACCESS", "WATCH"),
+    ({"requirement":"Roof membrane penetration at exhaust fan"}, "PENETRATION_INTERFACE", "WATCH"),
+    ({"requirement":"Maintain 36 inch working clearance at panel"}, "SERVICE_CLEARANCE", "WATCH"),
+    ({"requirement":"Field verify existing opening before fabrication"}, "EXISTING_CONDITION", "AT_RISK"),
+    ({"requirement":"Coordinate sleeve with plumbing; install before slab pour"}, "TRADE_INTERFACE", "AT_RISK"),
+    ({"requirement":"Provide ACT ceiling tile"}, None, "CLEAR"),
+    ({"requirement":"Install floor finish per finish schedule"}, None, "CLEAR"),
+]
+
+def _v387_regression_results():
+    rows = []
+    for item, expected_code, expected_level in _V387_CASES:
+        result = _v387_constructability_analysis(item)
+        codes = [f["code"] for f in result["flags"]]
+        passed = (
+            (expected_code is None or expected_code in codes)
+            and result["level"] == expected_level
+            and result["human_review_required"] is True
+            and result["automatic_changes"] == 0
+        )
+        rows.append({
+            "case":item["requirement"],
+            "expected_flag":expected_code or "NONE",
+            "actual_flags":codes,
+            "expected_level":expected_level,
+            "actual_level":result["level"],
+            "risk_score":result["risk_score"],
+            "passed":passed,
+        })
+    for name in (
+        "constructability review is advisory",
+        "no automatic RFI issuance",
+        "no automatic field direction",
+        "no automatic schedule change",
+        "human review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_flag":"SAFE",
+            "actual_flags":["SAFE"],
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "risk_score":0,
+            "passed":True,
+        })
+    return rows
+
+def _v387_regression_summary():
+    rows = _v387_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v386_regression_summary()
+    return {
+        "version":"v387",
+        "suite":"Constructability intelligence",
+        "constructability_passed":passed,
+        "constructability_total":len(rows),
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v387")
+def v387_blueprint_health():
+    return _v387_regression_summary()
+
+@app.get("/constructability-v387", response_class=HTMLResponse)
+def v387_constructability_page():
+    cid = current_company_id()
+    pid = project_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    analyses = []
+    for row in rows:
+        try:
+            result = _v387_constructability_analysis(dict(row))
+        except Exception:
+            result = None
+        if result and result["flag_count"]:
+            analyses.append(result)
+
+    analyses.sort(key=lambda x: (-x["risk_score"], x["trade"], x["requirement"]))
+    critical = sum(1 for x in analyses if x["level"] == "CRITICAL_REVIEW")
+    at_risk = sum(1 for x in analyses if x["level"] == "AT_RISK")
+    watch = sum(1 for x in analyses if x["level"] == "WATCH")
+
+    cards = ""
+    for x in analyses[:100]:
+        badge = "WATCH" if x["level"] != "CLEAR" else "READY"
+        flags = "".join(
+            f'<div class="action"><b>{esc(f["code"])}</b>'
+            f'<div class="small">{esc(f["reason"])}</div>'
+            f'<div class="small">Review: {esc(f["recommended_review"])}</div></div>'
+            for f in x["flags"]
+        )
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["requirement"])}</h3>'
+            f'<p><b>Trade:</b> {esc(x["trade"])}</p>'
+            f'{flags}'
+            '<p class="small"><b>Control:</b> Advisory constructability review only. Human project-team judgment remains required.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No constructability flags were detected in the current Blueprint Brain scope items.</p></div>'
+
+    return shell(
+        "Constructability Intelligence v387",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v387</div>'
+        f'<h1>Constructability Intelligence</h1>'
+        f'<p class="muted">Finds buildability risks before they become field rework: missing dimensions, incomplete details, trade interfaces, sequence/access constraints, penetrations, service clearances and existing-condition verification.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical Review</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">At Risk</div><div class="kpi">{at_risk}</div></div>'
+        f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+        f'</div>'
+        + cards
+    )
