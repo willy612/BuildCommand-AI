@@ -26658,7 +26658,7 @@ def _v415_ticket_severity(customer_blocked, data_risk, outage, affected_users):
 
     if score >= 75:
         severity = "CRITICAL"
-    elif score >= 50:
+    elif score >= 40:
         severity = "HIGH"
     elif score >= 20:
         severity = "MEDIUM"
@@ -26815,7 +26815,7 @@ def _v415_regression_results():
         {"case":"resolution approval required","passed":"HUMAN_APPROVAL_REQUIRED" in g6["blockers"],"actual":g6},
         {"case":"service health healthy","passed":h1["level"]=="HEALTHY","actual":h1},
         {"case":"service health watch","passed":h2["level"]=="HEALTHY","actual":h2},
-        {"case":"service health at risk","passed":h3["level"]=="WATCH","actual":h3},
+        {"case":"service health at risk","passed":h3["level"]=="AT_RISK","actual":h3},
         {"case":"service health critical","passed":h4["level"]=="CRITICAL","actual":h4},
     ])
 
@@ -26870,3 +26870,9 @@ def v415_support_sla_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> BuildCommand can surface SLA risk and recommend escalation, but customer promises, service credits, and closure communications remain explicit human actions.</p></div>'
     )
+
+
+# BuildCommand AI v415.1 maintenance note:
+# - HIGH support severity now starts at 40 so DATA_RISK alone is HIGH.
+# - The service-health regression expectation for a 60 score is corrected to
+#   AT_RISK, matching the existing account health model.
