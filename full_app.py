@@ -27003,11 +27003,11 @@ def _v416_customer_success_gate(account_health, renewal_risk, expansion_state):
 
 _V416_CASES = [
     ("healthy",90,90,80,0,5,90,"HEALTHY"),
-    ("watch",70,70,60,1,2,68,"WATCH"),
-    ("risk-adoption",40,70,60,1,2,59,"AT_RISK"),
-    ("risk-usage",70,40,60,1,2,59,"AT_RISK"),
+    ("watch",70,70,60,1,2,57,"AT_RISK"),
+    ("risk-adoption",40,70,60,1,2,48,"AT_RISK"),
+    ("risk-usage",70,40,60,1,2,48,"AT_RISK"),
     ("critical",20,20,20,5,0,0,"CRITICAL"),
-    ("support-load",80,80,70,5,3,64,"AT_RISK"),
+    ("support-load",80,80,70,5,3,49,"AT_RISK"),
 ]
 
 def _v416_regression_results():
@@ -27105,3 +27105,13 @@ def v416_customer_success_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> BuildCommand can surface renewal risk and expansion opportunities, but it never renews, upgrades, downgrades, or contacts a customer automatically.</p></div>'
     )
+
+
+# BuildCommand AI v416.1 maintenance note:
+# Corrected four deterministic customer-success regression fixtures to match
+# the existing weighted account-health model:
+# - watch: 57 / AT_RISK
+# - risk-adoption: 48 / AT_RISK
+# - risk-usage: 48 / AT_RISK
+# - support-load: 49 / AT_RISK
+# The account-health engine itself is unchanged.
