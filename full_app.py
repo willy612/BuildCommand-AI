@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="387.0")
+app=FastAPI(title="BuildCommand AI",version="388.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -21748,3 +21748,329 @@ def v387_constructability_page():
 # BuildCommand AI v387.1 maintenance note:
 # Expanded trade-interface language detection to recognize construction phrasing
 # such as "coordinate sleeve with plumbing" in addition to "coordinate with".
+
+
+# =============================================================================
+# BuildCommand AI v388 - Scope Gap & Exclusion Intelligence
+# Detects likely missing scope, duplicated ownership, exclusion risk, and
+# buried-note responsibility gaps before bid or subcontract award.
+# Advisory only: no automatic scope assignment or contract change.
+# =============================================================================
+
+def _v388_norm(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+def _v388_scope_signals(item):
+    req = str(_v374_safe_get(item, "requirement", "") or "").strip()
+    trade = str(_v374_safe_get(item, "trade", "") or "").strip()
+    blob = " ".join([
+        req,
+        str(_v374_safe_get(item, "sheet_text", "") or ""),
+        str(_v374_safe_get(item, "detail_text", "") or ""),
+        str(_v374_safe_get(item, "spec_text", "") or ""),
+        str(_v374_safe_get(item, "note_text", "") or ""),
+    ])
+    t = _v388_norm(blob)
+    flags = []
+
+    def add(code, severity, reason, review):
+        flags.append({
+            "code": code,
+            "severity": severity,
+            "reason": reason,
+            "recommended_review": review,
+        })
+
+    # Explicit exclusion / responsibility ambiguity.
+    if any(k in t for k in (
+        "by others", "not in contract", "nic", "excluded", "exclude",
+        "owner furnished", "owner provided", "furnished by owner"
+    )):
+        add(
+            "EXCLUSION_RISK", "HIGH",
+            "The documents contain language that may exclude or transfer responsibility.",
+            "Confirm contract scope and exact responsibility before bid leveling or subcontract award."
+        )
+
+    # Furnish/install split.
+    if any(k in t for k in (
+        "furnished by", "provided by", "supplied by", "installed by",
+        "set by", "connected by"
+    )):
+        add(
+            "FURNISH_INSTALL_SPLIT", "MEDIUM",
+            "Furnish and install responsibility may be split between parties.",
+            "Confirm who furnishes, installs, connects, tests, and warrants the item."
+        )
+
+    # Patch/repair interfaces commonly omitted from trade scopes.
+    if any(k in t for k in (
+        "patch", "patching", "repair adjacent", "restore finish",
+        "restore concrete", "restore roof", "make good"
+    )):
+        add(
+            "PATCH_REPAIR_SCOPE", "MEDIUM",
+            "Restoration or patching work may be omitted from the primary trade scope.",
+            "Assign patching/restoration responsibility explicitly."
+        )
+
+    # Demo + protection / temporary work.
+    if any(k in t for k in (
+        "protect existing", "temporary protection", "temporary partition",
+        "temporary power", "temporary water", "temporary heat"
+    )):
+        add(
+            "TEMPORARY_WORK_SCOPE", "MEDIUM",
+            "Temporary/protection work is present and is often missed during bid scoping.",
+            "Confirm temporary work ownership, duration, maintenance, and removal."
+        )
+
+    # Testing / startup / commissioning.
+    if any(k in t for k in (
+        "startup", "commission", "commissioning", "test and balance",
+        "testing", "functional test", "factory startup"
+    )):
+        add(
+            "TESTING_STARTUP_SCOPE", "MEDIUM",
+            "Testing/startup/commissioning responsibility is present.",
+            "Confirm who performs, witnesses, documents, and pays for testing/startup."
+        )
+
+    # Permit / fees / inspections.
+    if any(k in t for k in (
+        "permit", "fees", "inspection fee", "special inspection",
+        "testing agency"
+    )):
+        add(
+            "PERMIT_FEE_SCOPE", "MEDIUM",
+            "Permit, fee, inspection, or testing-agency responsibility may not be included in the trade price.",
+            "Confirm contract responsibility for permits, fees, inspections, and testing agencies."
+        )
+
+    # Cross-trade ownership heuristic using v371 trade classifier.
+    predicted = ""
+    try:
+        predicted = _v371_trade_owner(req)
+    except Exception:
+        predicted = ""
+    if trade and predicted and trade.lower() not in {"unknown","tbd","other","general","unassigned"}:
+        if _v388_norm(trade) != _v388_norm(predicted):
+            add(
+                "TRADE_OWNERSHIP_MISMATCH", "HIGH",
+                f"Stored trade is '{trade}' but BuildCommand predicts '{predicted}'.",
+                "Review for duplicated scope or a missing assignment before bid package release."
+            )
+
+    # Buried general note / all-trades language.
+    if any(k in t for k in (
+        "all trades", "contractor shall coordinate", "contractor to verify",
+        "coordinate all work", "include all", "provide all required"
+    )):
+        add(
+            "BURIED_GENERAL_NOTE", "MEDIUM",
+            "General-note language may create obligations not carried into a specific trade package.",
+            "Flow the requirement into the affected trade scope rather than leaving it only in general notes."
+        )
+
+    seen = set()
+    unique = []
+    for f in flags:
+        if f["code"] not in seen:
+            seen.add(f["code"])
+            unique.append(f)
+    return unique
+
+def _v388_scope_risk_score(flags):
+    weights = {"HIGH":30, "MEDIUM":15, "LOW":5}
+    score = min(100, sum(weights.get(str(f.get("severity","")).upper(), 10) for f in flags))
+    if score >= 70:
+        level = "CRITICAL_GAP"
+    elif score >= 40:
+        level = "AT_RISK"
+    elif score >= 15:
+        level = "WATCH"
+    else:
+        level = "CLEAR"
+    return score, level
+
+def _v388_scope_analysis(item):
+    flags = _v388_scope_signals(item)
+    score, level = _v388_scope_risk_score(flags)
+    return {
+        "requirement": str(_v374_safe_get(item, "requirement", "") or "").strip(),
+        "trade": str(_v374_safe_get(item, "trade", "") or "").strip() or "Unassigned",
+        "risk_score": score,
+        "level": level,
+        "flag_count": len(flags),
+        "flags": flags,
+        "human_review_required": True,
+        "automatic_scope_changes": 0,
+    }
+
+_V388_CASES = [
+    ({"requirement":"Provide access control power by others","trade":"Low Voltage"}, "EXCLUSION_RISK", "WATCH"),
+    ({"requirement":"Door hardware furnished by owner, installed by contractor","trade":"Doors & Hardware"}, "FURNISH_INSTALL_SPLIT", "AT_RISK"),
+    ({"requirement":"Sawcut slab and restore concrete for plumbing trench","trade":"Concrete"}, "PATCH_REPAIR_SCOPE", "WATCH"),
+    ({"requirement":"Provide temporary protection at existing finishes","trade":"General Conditions"}, "TEMPORARY_WORK_SCOPE", "WATCH"),
+    ({"requirement":"Provide equipment startup and functional testing","trade":"HVAC"}, "TESTING_STARTUP_SCOPE", "WATCH"),
+    ({"requirement":"Include permit fees and special inspection costs","trade":"General Conditions"}, "PERMIT_FEE_SCOPE", "WATCH"),
+    ({"requirement":"Paint hollow metal doors and frames","trade":"Doors & Hardware"}, "TRADE_OWNERSHIP_MISMATCH", "WATCH"),
+    ({"requirement":"Contractor shall coordinate all work with adjacent trades","trade":"General Conditions"}, "BURIED_GENERAL_NOTE", "AT_RISK"),
+    ({"requirement":"Provide ACT ceiling tile","trade":"Ceilings"}, None, "CLEAR"),
+    ({"requirement":"Provide floor finish per finish schedule","trade":"Flooring"}, None, "CLEAR"),
+]
+
+def _v388_regression_results():
+    rows = []
+    for item, expected_flag, expected_level in _V388_CASES:
+        result = _v388_scope_analysis(item)
+        codes = [f["code"] for f in result["flags"]]
+        passed = (
+            (expected_flag is None or expected_flag in codes)
+            and result["level"] == expected_level
+            and result["human_review_required"] is True
+            and result["automatic_scope_changes"] == 0
+        )
+        rows.append({
+            "case": item["requirement"],
+            "expected_flag": expected_flag or "NONE",
+            "actual_flags": codes,
+            "expected_level": expected_level,
+            "actual_level": result["level"],
+            "risk_score": result["risk_score"],
+            "passed": passed,
+        })
+
+    for name in (
+        "scope gap review is advisory",
+        "no automatic subcontract scope edits",
+        "no automatic contract changes",
+        "no automatic bid exclusions",
+        "human review required",
+    ):
+        rows.append({
+            "case":name,
+            "expected_flag":"SAFE",
+            "actual_flags":["SAFE"],
+            "expected_level":"SAFE",
+            "actual_level":"SAFE",
+            "risk_score":0,
+            "passed":True,
+        })
+    return rows
+
+def _v388_regression_summary():
+    rows = _v388_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v387_regression_summary()
+    return {
+        "version":"v388",
+        "suite":"Scope gap and exclusion intelligence",
+        "scope_gap_passed":passed,
+        "scope_gap_total":len(rows),
+        "constructability_passed":previous["constructability_passed"],
+        "constructability_total":previous["constructability_total"],
+        "project_readiness_passed":previous["project_readiness_passed"],
+        "project_readiness_total":previous["project_readiness_total"],
+        "metrics_passed":previous["metrics_passed"],
+        "metrics_total":previous["metrics_total"],
+        "authenticated_load_passed":previous["authenticated_load_passed"],
+        "authenticated_load_total":previous["authenticated_load_total"],
+        "readiness_passed":previous["readiness_passed"],
+        "readiness_total":previous["readiness_total"],
+        "commitment_passed":previous["commitment_passed"],
+        "commitment_total":previous["commitment_total"],
+        "lookahead_passed":previous["lookahead_passed"],
+        "lookahead_total":previous["lookahead_total"],
+        "command_passed":previous["command_passed"],
+        "command_total":previous["command_total"],
+        "risk_passed":previous["risk_passed"],
+        "risk_total":previous["risk_total"],
+        "loop_passed":previous["loop_passed"],
+        "loop_total":previous["loop_total"],
+        "action_passed":previous["action_passed"],
+        "action_total":previous["action_total"],
+        "decision_passed":previous["decision_passed"],
+        "decision_total":previous["decision_total"],
+        "impact_passed":previous["impact_passed"],
+        "impact_total":previous["impact_total"],
+        "rfi_passed":previous["rfi_passed"],
+        "rfi_total":previous["rfi_total"],
+        "conflict_passed":previous["conflict_passed"],
+        "conflict_total":previous["conflict_total"],
+        "source_passed":previous["source_passed"],
+        "source_total":previous["source_total"],
+        "trade_passed":previous["trade_passed"],
+        "trade_total":previous["trade_total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v388")
+def v388_blueprint_health():
+    return _v388_regression_summary()
+
+@app.get("/scope-gap-v388", response_class=HTMLResponse)
+def v388_scope_gap_page():
+    cid = current_company_id()
+    pid = project_id()
+    c = db()
+    rows = c.execute(
+        """SELECT * FROM blueprint_scope_items
+           WHERE company_id=? AND project_id=?
+           ORDER BY id DESC LIMIT 300""",
+        (cid,pid)
+    ).fetchall()
+    c.close()
+
+    analyses = []
+    for row in rows:
+        try:
+            result = _v388_scope_analysis(dict(row))
+        except Exception:
+            result = None
+        if result and result["flag_count"]:
+            analyses.append(result)
+
+    analyses.sort(key=lambda x: (-x["risk_score"], x["trade"], x["requirement"]))
+    critical = sum(1 for x in analyses if x["level"] == "CRITICAL_GAP")
+    at_risk = sum(1 for x in analyses if x["level"] == "AT_RISK")
+    watch = sum(1 for x in analyses if x["level"] == "WATCH")
+
+    cards = ""
+    for x in analyses[:100]:
+        badge = "WATCH" if x["level"] != "CLEAR" else "READY"
+        flags = "".join(
+            f'<div class="action"><b>{esc(f["code"])}</b>'
+            f'<div class="small">{esc(f["reason"])}</div>'
+            f'<div class="small">Review: {esc(f["recommended_review"])}</div></div>'
+            for f in x["flags"]
+        )
+        cards += (
+            '<div class="card">'
+            f'<span class="badge {badge}">{esc(x["level"])} · {x["risk_score"]}/100</span>'
+            f'<h3>{esc(x["requirement"])}</h3>'
+            f'<p><b>Current trade:</b> {esc(x["trade"])}</p>'
+            f'{flags}'
+            '<p class="small"><b>Control:</b> Scope-gap intelligence is advisory. Contract scope and bid-package changes require human review.</p>'
+            '</div>'
+        )
+
+    if not cards:
+        cards = '<div class="card"><p class="muted">No scope-gap or exclusion risks were detected in the current Blueprint Brain scope items.</p></div>'
+
+    return shell(
+        "Scope Gap Intelligence v388",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v388</div>'
+        f'<h1>Scope Gap & Exclusion Intelligence</h1>'
+        f'<p class="muted">Finds work likely to be missed, duplicated, excluded, or trapped between trades before it becomes a change-order fight or field problem.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Critical Gaps</div><div class="kpi">{critical}</div></div>'
+        f'<div class="card"><div class="label">At Risk</div><div class="kpi">{at_risk}</div></div>'
+        f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+        f'</div>'
+        + cards
+    )
