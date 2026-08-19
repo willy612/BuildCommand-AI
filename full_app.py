@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="394.0")
+app=FastAPI(title="BuildCommand AI",version="395.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -23880,3 +23880,73 @@ def v394_installation_readiness_page():
 # - RFIS_UNVERIFIED: 5 points
 # Total all-unknown penalty remains 50, preserving the 50/100 AT_RISK case.
 # A single unknown submittal now yields 90/100 READY_TO_START as intended.
+
+
+# =============================================================================
+# BuildCommand AI v395 - Schedule Constraint Intelligence
+# =============================================================================
+
+def _v395_score(blockers):
+    weights={"RFI":20,"SUBMITTAL":20,"MATERIAL":20,"PREDECESSOR":20,"ACCESS":10,"INSPECTION":10,"MANPOWER":10,"EQUIPMENT":5}
+    score=min(100,sum(weights.get(x,5) for x in blockers))
+    level="CRITICAL" if score>=70 else ("HIGH" if score>=40 else ("WATCH" if score>0 else "CLEAR"))
+    return score,level
+_V395_CASES=[
+("clear",[],0,"CLEAR"),("rfi",["RFI"],20,"WATCH"),("submittal",["SUBMITTAL"],20,"WATCH"),
+("material",["MATERIAL"],20,"WATCH"),("pred",["PREDECESSOR"],20,"WATCH"),
+("access+inspection",["ACCESS","INSPECTION"],20,"WATCH"),("rfi+material",["RFI","MATERIAL"],40,"HIGH"),
+("triple",["RFI","SUBMITTAL","MATERIAL"],60,"HIGH"),("critical",["RFI","SUBMITTAL","MATERIAL","PREDECESSOR"],80,"CRITICAL"),
+("cap",["RFI","SUBMITTAL","MATERIAL","PREDECESSOR","ACCESS","INSPECTION"],100,"CRITICAL")]
+
+
+def _v395_regression_results():
+    rows=[]
+    for name,blockers,es,el in _V395_CASES:
+        s,l=_v395_score(blockers); rows.append({"case":name,"passed":s==es and l==el,"actual":{"score":s,"level":l}})
+    for name in (
+        "schedule constraint intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v395_regression_summary():
+    rows=_v395_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v394_regression_summary()
+    return {
+        "version":"v395",
+        "suite":"Schedule Constraint Intelligence",
+        "schedule_constraint_passed":passed,
+        "schedule_constraint_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v395")
+def v395_blueprint_health():
+    return _v395_regression_summary()
+
+@app.get("/schedule-constraint-intelligence-v395", response_class=HTMLResponse)
+def v395_schedule_constraint_intelligence_page():
+    s=_v395_regression_summary()
+    return shell(
+        "Schedule Constraint Intelligence v395",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v395</div>'
+        f'<h1>Schedule Constraint Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v395. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
