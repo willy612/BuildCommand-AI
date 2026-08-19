@@ -26420,9 +26420,9 @@ def _v414_incident_severity(affected_users, affected_projects, data_risk=False, 
 
     if score >= 75:
         severity = "CRITICAL"
-    elif score >= 50:
+    elif score >= 40:
         severity = "HIGH"
-    elif score >= 25:
+    elif score >= 20:
         severity = "MEDIUM"
     else:
         severity = "LOW"
@@ -26604,3 +26604,12 @@ def v414_pilot_operations_page():
         f'<p>High-severity customer-impacting incidents can recommend a pilot pause, but pause/resume actions always remain explicit human decisions backed by incident evidence.</p>'
         f'<p class="small"><b>Control:</b> BuildCommand never silently pauses or resumes customer production access.</p></div>'
     )
+
+
+# BuildCommand AI v414.1 maintenance note:
+# Incident severity thresholds recalibrated:
+# - CRITICAL: 75+
+# - HIGH: 40-74
+# - MEDIUM: 20-39
+# - LOW: below 20
+# Impact scoring itself is unchanged.
