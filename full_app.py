@@ -21472,10 +21472,25 @@ def _v387_constructability_flags(item):
             )
 
     # Interface / trade boundary language.
-    if any(k in t for k in (
+    trade_interface = any(k in t for k in (
         "coordinate with", "by others", "provided by", "installed by",
-        "connection by", "patch by", "opening by", "blocking by"
-    )):
+        "furnished by", "connection by", "connected by", "patch by",
+        "patching by", "opening by", "blocking by", "coordinate between"
+    ))
+
+    # Catch construction grammar such as:
+    # "coordinate sleeve with plumbing", "coordinate curb with roofing",
+    # "coordinate opening with structural", etc.
+    if not trade_interface:
+        trade_interface = bool(re.search(
+            r"\bcoordinate\b.{0,80}\bwith\b.{0,80}\b"
+            r"(plumbing|electrical|mechanical|hvac|roofing|structural|concrete|"
+            r"framing|drywall|fire\s*sprinkler|low\s*voltage|storefront|doors?|"
+            r"ceilings?|flooring|painting|paint|millwork|masonry|steel)\b",
+            t
+        ))
+
+    if trade_interface:
         add(
             "TRADE_INTERFACE",
             "MEDIUM",
@@ -21728,3 +21743,8 @@ def v387_constructability_page():
         f'</div>'
         + cards
     )
+
+
+# BuildCommand AI v387.1 maintenance note:
+# Expanded trade-interface language detection to recognize construction phrasing
+# such as "coordinate sleeve with plumbing" in addition to "coordinate with".
