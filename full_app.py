@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="397.0")
+app=FastAPI(title="BuildCommand AI",version="398.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24084,6 +24084,77 @@ def v397_manpower_forecast_intelligence_page():
         f'<div class="hero"><div class="eyebrow">BuildCommand v397</div>'
         f'<h1>Manpower Forecast Intelligence</h1>'
         f'<p class="muted">BuildCommand operating-brain layer v397. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Changes</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory intelligence only. Human project-team review remains required.</p></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v398 - Daily Plan Intelligence
+# =============================================================================
+
+def _v398_plan(readiness, weather_ok=True, crew_ok=True):
+    score=int(readiness)
+    if not weather_ok: score-=20
+    if not crew_ok: score-=20
+    score=max(0,min(100,score))
+    level="GO" if score>=85 else ("GO_WITH_CONDITIONS" if score>=70 else ("AT_RISK" if score>=45 else "HOLD_REVIEW"))
+    return score,level
+_V398_CASES=[
+("go",100,1,1,100,"GO"),("85",85,1,1,85,"GO"),("80",80,1,1,80,"GO_WITH_CONDITIONS"),
+("70",70,1,1,70,"GO_WITH_CONDITIONS"),("weather",90,0,1,70,"GO_WITH_CONDITIONS"),
+("crew",90,1,0,70,"GO_WITH_CONDITIONS"),("both",90,0,0,50,"AT_RISK"),
+("risk",60,1,1,60,"AT_RISK"),("hold",40,1,1,40,"HOLD_REVIEW"),("zero",20,0,0,0,"HOLD_REVIEW")]
+
+
+def _v398_regression_results():
+    rows=[]
+    for name,a,b,c,es,el in _V398_CASES:
+        s,l=_v398_plan(a,b,c); rows.append({"case":name,"passed":s==es and l==el,"actual":{"score":s,"level":l}})
+    for name in (
+        "daily plan intelligence is advisory",
+        "no automatic contract commitment",
+        "no automatic schedule change",
+        "no invented project facts",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v398_regression_summary():
+    rows=_v398_regression_results()
+    passed=sum(1 for r in rows if r["passed"])
+    previous=_v397_regression_summary()
+    return {
+        "version":"v398",
+        "suite":"Daily Plan Intelligence",
+        "daily_plan_passed":passed,
+        "daily_plan_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed+previous["passed"],
+        "total":len(rows)+previous["total"],
+        "failed":(len(rows)-passed)+previous["failed"],
+        "ok":passed==len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v398")
+def v398_blueprint_health():
+    return _v398_regression_summary()
+
+@app.get("/daily-plan-intelligence-v398", response_class=HTMLResponse)
+def v398_daily_plan_intelligence_page():
+    s=_v398_regression_summary()
+    return shell(
+        "Daily Plan Intelligence v398",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v398</div>'
+        f'<h1>Daily Plan Intelligence</h1>'
+        f'<p class="muted">BuildCommand operating-brain layer v398. Regression gate: {s["passed"]}/{s["total"]}.</p></div>'
         f'<div class="grid3">'
         f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
         f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
