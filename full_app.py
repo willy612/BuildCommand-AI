@@ -23579,14 +23579,14 @@ def _v394_installation_state(signals):
             blockers.append(key.upper())
         elif state in {"UNKNOWN","UNVERIFIED",""}:
             unknown_penalties = {
-                "submittals":8,
+                "submittals":10,
                 "materials":8,
                 "predecessors":8,
                 "inspections":5,
                 "access":5,
                 "manpower":5,
                 "equipment":4,
-                "rfis":7,
+                "rfis":5,
             }
             score -= unknown_penalties.get(key, 5)
             blockers.append(key.upper() + "_UNVERIFIED")
@@ -23872,3 +23872,11 @@ def v394_installation_readiness_page():
 # - UNKNOWN/UNVERIFIED evidence now uses explicit lighter penalties totaling 50
 #   across all eight categories, keeping all-unknown at 50/100 (AT_RISK) rather
 #   than treating uncertainty more harshly than known multi-blocker conditions.
+
+
+# BuildCommand AI v394.2 maintenance note:
+# Final uncertainty calibration:
+# - SUBMITTALS_UNVERIFIED: 10 points
+# - RFIS_UNVERIFIED: 5 points
+# Total all-unknown penalty remains 50, preserving the 50/100 AT_RISK case.
+# A single unknown submittal now yields 90/100 READY_TO_START as intended.
