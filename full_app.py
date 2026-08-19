@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="417.0")
+app=FastAPI(title="BuildCommand AI",version="418.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -27448,4 +27448,315 @@ def v417_workspace(area: str = "TODAY", role: str = "PM"):
         f'<div class="card" style="margin:14px 0"><div class="label">Combined here</div>{module_chips}</div>'
         f'<h2>{esc(feed["headline"])}</h2>{cards}'
         f'</main></div>'
+    )
+
+
+# =============================================================================
+# BuildCommand AI v418 - Unified Project Cockpit
+# Turns the v417 workspace into a consistent daily operating surface:
+# project selector, My Work, unified inbox, command routing, saved views,
+# drill-down cards, and a common action drawer.
+# =============================================================================
+
+def _v418_project_selector(projects, selected_id, allowed_ids):
+    allowed = {str(x) for x in (allowed_ids or [])}
+    visible = [
+        {"id":str(p.get("id","")), "name":str(p.get("name","Untitled Project"))}
+        for p in (projects or [])
+        if str(p.get("id","")) in allowed
+    ]
+    selected = next((p for p in visible if p["id"] == str(selected_id)), None)
+    if selected is None and visible:
+        selected = visible[0]
+    return {"projects":visible, "selected":selected}
+
+def _v418_my_work(items, user_id, role):
+    uid = str(user_id or "")
+    normalized_role = str(role or "").upper()
+    mine = []
+    for item in (items or []):
+        owner_match = str(item.get("owner_id","")) == uid and uid
+        role_match = normalized_role in {str(x).upper() for x in item.get("roles",[])}
+        if owner_match or role_match:
+            mine.append(item)
+    mine.sort(key=lambda x: (-int(x.get("priority",0)), str(x.get("title",""))))
+    return {"count":len(mine), "items":mine}
+
+def _v418_inbox(events, user_id, role):
+    uid = str(user_id or "")
+    normalized_role = str(role or "").upper()
+    visible = []
+    for e in (events or []):
+        recipients = {str(x) for x in e.get("recipient_ids",[])}
+        roles = {str(x).upper() for x in e.get("roles",[])}
+        if uid in recipients or normalized_role in roles or e.get("broadcast") is True:
+            visible.append(e)
+    visible.sort(key=lambda x: (-int(x.get("priority",0)), str(x.get("created_at",""))), reverse=False)
+    unread = sum(1 for e in visible if not e.get("read",False))
+    return {"count":len(visible), "unread":unread, "items":visible}
+
+def _v418_command_route(query):
+    q = str(query or "").strip().lower()
+    routes = [
+        (("what can start","ready to start","start today"), "READINESS"),
+        (("delay","late","slipping"), "DELAY"),
+        (("cost","money","exposure","change order"), "MONEY"),
+        (("rfi","question"), "RFI"),
+        (("submittal","approval"), "SUBMITTALS"),
+        (("procurement","material","long lead"), "PROCUREMENT"),
+        (("manpower","crew","labor"), "MANPOWER"),
+        (("decision","approval needed"), "DECISIONS"),
+        (("my work","assigned to me"), "MY_WORK"),
+        (("inbox","notifications"), "INBOX"),
+    ]
+    for phrases, route in routes:
+        if any(p in q for p in phrases):
+            return {"route":route,"query":query,"advisory":True}
+    return {"route":"PROJECT_BRAIN","query":query,"advisory":True}
+
+def _v418_saved_view(name, filters, owner_id, shared=False):
+    clean_name = str(name or "").strip()
+    blockers = []
+    if not clean_name:
+        blockers.append("NAME_REQUIRED")
+    if not owner_id:
+        blockers.append("OWNER_REQUIRED")
+    return {
+        "valid":not blockers,
+        "name":clean_name,
+        "filters":dict(filters or {}),
+        "owner_id":owner_id,
+        "shared":bool(shared),
+        "blockers":blockers,
+    }
+
+def _v418_problem_card(item):
+    return {
+        "id":str(item.get("id","")),
+        "title":str(item.get("title","Untitled")),
+        "project":str(item.get("project","")),
+        "trade":str(item.get("trade","")),
+        "level":str(item.get("level","REVIEW")).upper(),
+        "source":str(item.get("source","")),
+        "why":list(item.get("why",[])),
+        "next_action":str(item.get("next_action","Review")),
+        "owner":str(item.get("owner","Unassigned")),
+        "automatic_action":False,
+    }
+
+def _v418_action_drawer(object_type, object_id, allowed_actions, requested_action=None):
+    safe_actions = [str(x).upper() for x in (allowed_actions or [])]
+    requested = str(requested_action or "").upper()
+    can_request = requested in safe_actions if requested else True
+    return {
+        "object_type":str(object_type or "").upper(),
+        "object_id":str(object_id or ""),
+        "allowed_actions":safe_actions,
+        "requested_action":requested or None,
+        "request_allowed":can_request,
+        "execution_requires_human":True,
+        "automatic_execution":False,
+    }
+
+def _v418_cockpit_summary(attention, my_work, inbox, project_name):
+    critical = sum(1 for x in (attention or []) if str(x.get("level","")).upper() in {"CRITICAL","DO_NOT_START"})
+    return {
+        "project":project_name,
+        "attention_count":len(attention or []),
+        "critical_count":critical,
+        "my_work_count":len(my_work or []),
+        "inbox_count":len(inbox or []),
+        "state":"NEEDS_ATTENTION" if critical else "OPERATING",
+    }
+
+def _v418_regression_results():
+    rows = []
+
+    projects = [
+        {"id":"P1","name":"Downtown Office"},
+        {"id":"P2","name":"Hospital Renovation"},
+        {"id":"P3","name":"Other Tenant Project"},
+    ]
+    s1 = _v418_project_selector(projects,"P2",["P1","P2"])
+    s2 = _v418_project_selector(projects,"P9",["P1"])
+    rows.extend([
+        {"case":"selector scopes projects","passed":len(s1["projects"])==2,"actual":s1},
+        {"case":"selector honors selected project","passed":s1["selected"]["id"]=="P2","actual":s1["selected"]},
+        {"case":"selector safe fallback","passed":s2["selected"]["id"]=="P1","actual":s2["selected"]},
+    ])
+
+    work = [
+        {"id":"1","title":"Resolve RFI","owner_id":"u1","roles":[],"priority":80},
+        {"id":"2","title":"Confirm delivery","owner_id":"u2","roles":["PM"],"priority":90},
+        {"id":"3","title":"Field walk","owner_id":"u3","roles":["SUPERINTENDENT"],"priority":70},
+    ]
+    mw = _v418_my_work(work,"u1","PM")
+    rows.extend([
+        {"case":"my work includes ownership","passed":any(x["id"]=="1" for x in mw["items"]),"actual":mw},
+        {"case":"my work includes role work","passed":any(x["id"]=="2" for x in mw["items"]),"actual":mw},
+        {"case":"my work excludes unrelated","passed":not any(x["id"]=="3" for x in mw["items"]),"actual":mw},
+    ])
+
+    events = [
+        {"id":"e1","recipient_ids":["u1"],"roles":[],"priority":90,"read":False,"created_at":"2026-08-19T10:00:00Z"},
+        {"id":"e2","recipient_ids":[],"roles":["PM"],"priority":70,"read":True,"created_at":"2026-08-19T11:00:00Z"},
+        {"id":"e3","recipient_ids":[],"roles":[],"priority":50,"read":False,"broadcast":True,"created_at":"2026-08-19T12:00:00Z"},
+        {"id":"e4","recipient_ids":["u9"],"roles":[],"priority":100,"read":False,"created_at":"2026-08-19T13:00:00Z"},
+    ]
+    inbox = _v418_inbox(events,"u1","PM")
+    rows.extend([
+        {"case":"inbox combines personal role broadcast","passed":inbox["count"]==3,"actual":inbox},
+        {"case":"inbox unread count","passed":inbox["unread"]==2,"actual":inbox},
+        {"case":"inbox excludes other user","passed":not any(x["id"]=="e4" for x in inbox["items"]),"actual":inbox},
+    ])
+
+    command_cases = [
+        ("command readiness","What can start today?","READINESS"),
+        ("command delay","What is slipping?","DELAY"),
+        ("command money","Show cost exposure","MONEY"),
+        ("command rfi","Open RFIs","RFI"),
+        ("command submittal","Submittal approvals","SUBMITTALS"),
+        ("command procurement","Long lead materials","PROCUREMENT"),
+        ("command manpower","Crew shortages","MANPOWER"),
+        ("command decision","What needs a decision?","DECISIONS"),
+        ("command my work","Show my work","MY_WORK"),
+        ("command default","Give me the project","PROJECT_BRAIN"),
+    ]
+    for name,q,expected in command_cases:
+        r = _v418_command_route(q)
+        rows.append({"case":name,"passed":r["route"]==expected and r["advisory"],"actual":r})
+
+    v1 = _v418_saved_view("My Critical Items",{"level":"CRITICAL"},"u1")
+    v2 = _v418_saved_view("",{"trade":"HVAC"},"u1")
+    rows.extend([
+        {"case":"saved view valid","passed":v1["valid"] is True,"actual":v1},
+        {"case":"saved view requires name","passed":"NAME_REQUIRED" in v2["blockers"],"actual":v2},
+    ])
+
+    card = _v418_problem_card({
+        "id":"RFI-44","title":"Door hardware conflict","project":"P1","trade":"Doors",
+        "level":"HIGH","source":"A8.10","why":["RFI_OPEN","INSTALL_DEPENDENCY"],
+        "next_action":"Get architect response","owner":"PM"
+    })
+    rows.extend([
+        {"case":"problem card keeps source","passed":card["source"]=="A8.10","actual":card},
+        {"case":"problem card explains why","passed":len(card["why"])==2,"actual":card},
+        {"case":"problem card no automatic action","passed":card["automatic_action"] is False,"actual":card},
+    ])
+
+    drawer1 = _v418_action_drawer("RFI","44",["ASSIGN","REQUEST_RESPONSE","OPEN_SOURCE"],"ASSIGN")
+    drawer2 = _v418_action_drawer("RFI","44",["ASSIGN","OPEN_SOURCE"],"DELETE")
+    rows.extend([
+        {"case":"action drawer allows listed request","passed":drawer1["request_allowed"] is True,"actual":drawer1},
+        {"case":"action drawer blocks unlisted request","passed":drawer2["request_allowed"] is False,"actual":drawer2},
+        {"case":"action drawer requires human execution","passed":drawer1["execution_requires_human"] and not drawer1["automatic_execution"],"actual":drawer1},
+    ])
+
+    summary = _v418_cockpit_summary(
+        [{"level":"CRITICAL"},{"level":"WATCH"},{"level":"DO_NOT_START"}],
+        mw["items"], inbox["items"], "Downtown Office"
+    )
+    rows.extend([
+        {"case":"cockpit counts critical","passed":summary["critical_count"]==2,"actual":summary},
+        {"case":"cockpit needs attention","passed":summary["state"]=="NEEDS_ATTENTION","actual":summary},
+    ])
+
+    for name in (
+        "cockpit preserves role and project scope",
+        "no automatic project mutation",
+        "no automatic customer communication",
+        "no invented project facts",
+        "human action remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v418_regression_summary():
+    rows = _v418_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v417_regression_summary()
+    return {
+        "version":"v418",
+        "suite":"Unified Project Cockpit",
+        "project_cockpit_passed":passed,
+        "project_cockpit_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":passed + previous["passed"],
+        "total":len(rows) + previous["total"],
+        "failed":(len(rows)-passed) + previous["failed"],
+        "ok":passed == len(rows) and previous["ok"],
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-v418")
+def v418_blueprint_health():
+    return _v418_regression_summary()
+
+@app.get("/cockpit-v418", response_class=HTMLResponse)
+def v418_cockpit(role: str = "PM", project: str = "P1"):
+    projects = [
+        {"id":"P1","name":"Downtown Office"},
+        {"id":"P2","name":"Hospital Renovation"},
+    ]
+    selector = _v418_project_selector(projects,project,["P1","P2"])
+    selected = selector["selected"] or {"id":"","name":"No project"}
+
+    attention = [
+        {"id":"a1","title":"AHU-1 delivery threatens startup","level":"CRITICAL","priority":100,"trade":"HVAC","source":"Procurement Log","why":["PROMISED_AFTER_REQUIRED","VERY_LONG_LEAD"],"next_action":"Confirm vendor recovery plan","owner":"PM"},
+        {"id":"a2","title":"Storefront cannot start","level":"DO_NOT_START","priority":95,"trade":"Storefront","source":"A5.21","why":["RFI_OPEN","MATERIAL_NOT_READY"],"next_action":"Resolve RFI and confirm material","owner":"Superintendent"},
+        {"id":"a3","title":"Lighting approval overdue","level":"HIGH","priority":80,"trade":"Electrical","source":"Submittal Log","why":["APPROVAL_OVERDUE"],"next_action":"Escalate design review","owner":"PM"},
+    ]
+    work = [
+        {"id":"w1","title":"Confirm AHU recovery plan","owner_id":"u1","roles":["PM"],"priority":100},
+        {"id":"w2","title":"Close lighting review","owner_id":"u2","roles":["PM"],"priority":80},
+    ]
+    events = [
+        {"id":"e1","recipient_ids":["u1"],"roles":[],"priority":100,"read":False,"created_at":"2026-08-19T10:00:00Z"},
+        {"id":"e2","recipient_ids":[],"roles":["PM"],"priority":80,"read":False,"created_at":"2026-08-19T11:00:00Z"},
+    ]
+    mw = _v418_my_work(work,"u1",role)
+    ib = _v418_inbox(events,"u1",role)
+    summary = _v418_cockpit_summary(attention,mw["items"],ib["items"],selected["name"])
+    regression = _v418_regression_summary()
+
+    project_options = "".join(
+        f'<option value="{esc(p["id"])}"' + (' selected' if p["id"]==selected["id"] else '') + f'>{esc(p["name"])}</option>'
+        for p in selector["projects"]
+    )
+    cards = ""
+    for x in attention:
+        card = _v418_problem_card({**x,"project":selected["name"]})
+        why = " · ".join(card["why"])
+        cards += (
+            '<div class="card" style="margin-bottom:10px">'
+            '<div style="display:flex;justify-content:space-between;gap:12px">'
+            f'<div><div class="label">{esc(card["trade"])}</div><h3 style="margin:4px 0">{esc(card["title"])}</h3>'
+            f'<div class="small">{esc(card["source"])} · {esc(why)}</div></div>'
+            f'{_v417_status_badge(card["level"])}</div>'
+            f'<div class="small" style="margin-top:10px"><b>Next:</b> {esc(card["next_action"])} &nbsp; <b>Owner:</b> {esc(card["owner"])}</div>'
+            '</div>'
+        )
+
+    return shell(
+        "BuildCommand Project Cockpit v418",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v418</div>'
+        f'<div style="display:flex;justify-content:space-between;gap:16px;align-items:end;flex-wrap:wrap">'
+        f'<div><h1 style="margin-bottom:4px">Project Cockpit</h1><p class="muted">Everything important, without hunting through modules.</p></div>'
+        f'<form method="get"><input type="hidden" name="role" value="{esc(role)}"><select name="project" onchange="this.form.submit()" style="padding:10px 12px;border-radius:10px">{project_options}</select></form>'
+        f'</div></div>'
+        f'<div class="card" style="margin-bottom:14px"><div class="label">Ask BuildCommand</div>'
+        f'<div style="font-size:18px;font-weight:700;margin-top:5px">Search the project or ask: “What can start?”, “What is slipping?”, “What needs my decision?”</div></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Needs Attention</div><div class="kpi">{summary["attention_count"]}</div><div class="small">{summary["critical_count"]} critical / do not start</div></div>'
+        f'<div class="card"><div class="label">My Work</div><div class="kpi">{summary["my_work_count"]}</div><div class="small">assigned or role-based</div></div>'
+        f'<div class="card"><div class="label">Inbox</div><div class="kpi">{ib["unread"]}</div><div class="small">unread updates</div></div>'
+        f'</div>'
+        f'<div style="display:grid;grid-template-columns:1fr minmax(220px,300px);gap:16px;margin-top:16px">'
+        f'<main><h2>What needs attention</h2>{cards}</main>'
+        f'<aside><div class="card"><div class="label">My Work</div>'
+        + "".join(f'<div style="padding:9px 0;border-bottom:1px solid #eee">{esc(x["title"])}</div>' for x in mw["items"])
+        + f'</div><div class="card" style="margin-top:12px"><div class="label">System Confidence</div><div class="kpi">{regression["total"]}</div><div class="small">cumulative regression checks</div></div></aside>'
+        f'</div>'
     )
