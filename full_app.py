@@ -28303,3 +28303,143 @@ def buildcommand_1_0_release_page():
         f'<h3>External gates still required before a production claim</h3><ul>{gates}</ul>'
         f'<p class="small"><b>Control:</b> Internal regression success does not self-certify infrastructure security, backup recovery, monitoring delivery, third-party integrations, or live customer acceptance.</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.0 - Alternate Homepage Layout
+# A friendlier, simpler landing page focused on "what do I need to know today?"
+# while keeping the full 1.0 intelligence stack underneath.
+# =============================================================================
+
+@app.get("/home-alt", response_class=HTMLResponse)
+def buildcommand_alt_home():
+    health = _v1_regression_summary()
+
+    css = """
+    <style>
+      .bc-home{max-width:1280px;margin:0 auto;padding:18px}
+      .bc-topbar{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 0 18px}
+      .bc-brand{font-size:22px;font-weight:900;letter-spacing:-.02em}
+      .bc-project{border:1px solid #d9dee7;border-radius:12px;padding:10px 12px;background:white;font-weight:700}
+      .bc-hero{display:grid;grid-template-columns:1.3fr .7fr;gap:16px;margin-bottom:18px}
+      .bc-card{background:white;border:1px solid #e5e7eb;border-radius:16px;padding:18px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+      .bc-big{font-size:42px;line-height:1.03;margin:4px 0 10px;font-weight:900;letter-spacing:-.03em}
+      .bc-muted{color:#667085}
+      .bc-command{display:flex;gap:8px;margin-top:14px}
+      .bc-command input{flex:1;padding:14px 15px;border:1px solid #cfd5df;border-radius:12px;font-size:16px}
+      .bc-command button{padding:14px 18px;border:0;border-radius:12px;font-weight:800;cursor:pointer}
+      .bc-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+      .bc-stat{padding:14px;border-radius:14px;background:#f7f8fa}
+      .bc-stat b{display:block;font-size:28px}
+      .bc-grid{display:grid;grid-template-columns:1.4fr .6fr;gap:16px}
+      .bc-item{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:start;padding:14px 0;border-bottom:1px solid #edf0f4}
+      .bc-item:last-child{border-bottom:0}
+      .bc-dot{width:12px;height:12px;border-radius:50%;margin-top:6px;background:#111}
+      .bc-level{font-size:12px;font-weight:900;border:1px solid #d9dee7;border-radius:999px;padding:5px 9px;white-space:nowrap}
+      .bc-links{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+      .bc-link{display:block;text-decoration:none;color:inherit;padding:14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff}
+      .bc-link b{display:block;margin-bottom:4px}
+      .bc-section-title{font-size:20px;font-weight:900;margin:0 0 8px}
+      .bc-footer-note{margin-top:16px;font-size:12px;color:#667085}
+      @media(max-width:900px){
+        .bc-hero,.bc-grid{grid-template-columns:1fr}
+        .bc-stats{grid-template-columns:1fr 1fr 1fr}
+      }
+      @media(max-width:640px){
+        .bc-home{padding:10px}
+        .bc-topbar{align-items:flex-start;flex-direction:column}
+        .bc-big{font-size:32px}
+        .bc-stats{grid-template-columns:1fr}
+        .bc-links{grid-template-columns:1fr}
+        .bc-item{grid-template-columns:auto 1fr}
+        .bc-level{grid-column:2}
+      }
+    </style>
+    """
+
+    attention = [
+        ("Storefront cannot start", "DO_NOT_START", "Resolve open RFI and confirm material release", "Storefront"),
+        ("AHU-1 delivery threatens startup", "CRITICAL", "Confirm vendor recovery plan", "HVAC"),
+        ("Lighting approval overdue", "HIGH", "Escalate design review", "Electrical"),
+        ("CO-12 price needs review", "REVIEW", "Validate price and time impact", "General"),
+    ]
+
+    items_html = ""
+    for title, level, action, trade in attention:
+        items_html += (
+            '<div class="bc-item">'
+            '<span class="bc-dot"></span>'
+            f'<div><b>{esc(title)}</b><div class="bc-muted" style="font-size:13px;margin-top:4px">{esc(trade)} · Next: {esc(action)}</div></div>'
+            f'<span class="bc-level">{esc(level)}</span>'
+            '</div>'
+        )
+
+    quick_links = [
+        ("Today", "What needs attention now", "/workspace-v417?area=TODAY"),
+        ("Project Brain", "One connected project view", "/workspace-v417?area=PROJECT_BRAIN"),
+        ("Field", "Readiness, manpower, look-ahead", "/workspace-v417?area=FIELD"),
+        ("Money", "Cost exposure and changes", "/workspace-v417?area=MONEY"),
+        ("Preconstruction", "Scope, bids, buyout", "/workspace-v417?area=PRECONSTRUCTION"),
+        ("Company", "Portfolio, users, controls", "/workspace-v417?area=COMPANY"),
+    ]
+    links_html = "".join(
+        f'<a class="bc-link" href="{href}"><b>{esc(label)}</b><span class="bc-muted" style="font-size:13px">{esc(desc)}</span></a>'
+        for label, desc, href in quick_links
+    )
+
+    body = (
+        css
+        + '<div class="bc-home">'
+        + '<div class="bc-topbar">'
+        + '<div><div class="bc-brand">BuildCommand AI</div><div class="bc-muted">Downtown Office</div></div>'
+        + '<select class="bc-project"><option>Downtown Office</option><option>Hospital Renovation</option></select>'
+        + '</div>'
+
+        + '<div class="bc-hero">'
+        + '<div class="bc-card">'
+        + '<div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em">Good morning</div>'
+        + '<div class="bc-big">Here’s what matters today.</div>'
+        + '<div class="bc-muted">BuildCommand has already pulled together your biggest field, schedule, procurement, and cost risks.</div>'
+        + '<form class="bc-command" action="/project-v419" method="get">'
+        + '<input name="q" placeholder="Ask BuildCommand: What can start? What is late? What is costing us money?">'
+        + '<button type="submit">Ask</button>'
+        + '</form>'
+        + '</div>'
+
+        + '<div class="bc-card">'
+        + '<div class="bc-section-title">Project pulse</div>'
+        + '<div class="bc-stats">'
+        + '<div class="bc-stat"><span class="bc-muted">Needs attention</span><b>7</b></div>'
+        + '<div class="bc-stat"><span class="bc-muted">Do not start</span><b>1</b></div>'
+        + '<div class="bc-stat"><span class="bc-muted">My work</span><b>4</b></div>'
+        + '</div>'
+        + '<div class="bc-footer-note">Pilot 1.0 internal regression: '
+        + f'{health["previous_passed"]}/{health["previous_total"]} verified.</div>'
+        + '</div>'
+        + '</div>'
+
+        + '<div class="bc-grid">'
+        + '<div class="bc-card">'
+        + '<div class="bc-section-title">Needs your attention</div>'
+        + '<div class="bc-muted" style="margin-bottom:4px">Highest-impact items first.</div>'
+        + items_html
+        + '<div style="margin-top:14px"><a href="/cockpit-v418">Open full project cockpit →</a></div>'
+        + '</div>'
+
+        + '<div>'
+        + '<div class="bc-card" style="margin-bottom:16px">'
+        + '<div class="bc-section-title">Go where you need</div>'
+        + '<div class="bc-links">' + links_html + '</div>'
+        + '</div>'
+        + '<div class="bc-card">'
+        + '<div class="bc-section-title">My day</div>'
+        + '<div style="padding:8px 0"><b>4</b> assigned items</div>'
+        + '<div style="padding:8px 0"><b>2</b> unread updates</div>'
+        + '<div style="padding:8px 0"><b>1</b> decision waiting</div>'
+        + '<div style="margin-top:10px"><a href="/cockpit-v418">View My Work →</a></div>'
+        + '</div>'
+        + '</div>'
+        + '</div>'
+        + '</div>'
+    )
+    return shell("BuildCommand AI — Alternate Home", body)
