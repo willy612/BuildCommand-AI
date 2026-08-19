@@ -28409,7 +28409,7 @@ body{{
 body:before{{
   content:"";position:fixed;inset:0;z-index:-2;
   background:
-    linear-gradient(rgba(247,249,252,.90),rgba(247,249,252,.90)),
+    linear-gradient(rgba(247,249,252,.72),rgba(247,249,252,.72)),
     repeating-linear-gradient(
       to bottom,
       #b22234 0%,#b22234 7.69%,
@@ -28420,8 +28420,8 @@ body:after{{
   content:"★ ★ ★ ★ ★\\A★ ★ ★ ★ ★\\A★ ★ ★ ★ ★\\A★ ★ ★ ★ ★";
   white-space:pre;position:fixed;left:0;top:0;z-index:-1;
   width:40vw;height:53.8vh;min-width:300px;max-width:620px;
-  padding:28px;color:rgba(255,255,255,.14);font-size:30px;line-height:1.8;letter-spacing:16px;
-  background:rgba(60,59,110,.10);overflow:hidden;
+  padding:28px;color:rgba(255,255,255,.42);font-size:30px;line-height:1.8;letter-spacing:16px;
+  background:rgba(60,59,110,.68);overflow:hidden;
 }}
 .wrap{{max-width:1280px;margin:auto;padding:22px}}
 .top{{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:22px}}
