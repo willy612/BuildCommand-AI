@@ -23069,9 +23069,9 @@ def _v392_long_lead_state(required_on_site, promised_date, submittal_status="", 
             score += 10
 
     score = min(100, score)
-    if score >= 70:
+    if score >= 75:
         level = "CRITICAL"
-    elif score >= 40:
+    elif score >= 50:
         level = "HIGH"
     elif score > 0:
         level = "WATCH"
@@ -23265,3 +23265,12 @@ def v392_procurement_page():
         f'</div>'
         + cards
     )
+
+
+# BuildCommand AI v392.1 maintenance note:
+# Procurement risk bands recalibrated:
+# - CRITICAL: 75+
+# - HIGH: 50-74
+# - WATCH: 1-49
+# - ON_TRACK: 0
+# Detection logic and blocker weights are unchanged.
