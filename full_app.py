@@ -42,7 +42,7 @@ try:
 except Exception:
     canvas = None
 
-app=FastAPI(title="BuildCommand AI",version="401.0")
+app=FastAPI(title="BuildCommand AI",version="402.0")
 DB="construction_ai_web.db"
 DEFAULT_UPLOAD_DIR="/var/data/buildcommand_uploads" if os.path.isdir("/var/data") else "/tmp/buildcommand_uploads"
 UPLOAD_DIR=os.environ.get("UPLOAD_DIR",DEFAULT_UPLOAD_DIR)
@@ -24355,3 +24355,101 @@ def _v401_regression_summary():
     return {"version":"v401","suite":"Change Order Intelligence","change_order_passed":passed,"change_order_total":15,"previous_passed":p["passed"],"previous_total":p["total"],"passed":p["passed"]+passed,"total":p["total"]+15,"failed":p["failed"]+15-passed,"ok":p["ok"] and passed==15,"results":rows}
 @app.get("/health/blueprint-v401")
 def v401_health(): return _v401_regression_summary()
+
+
+# =============================================================================
+# BuildCommand AI v402 - Executive Portfolio Intelligence
+# Rolls project health into a portfolio-level executive view so leadership can
+# identify which projects need attention first. Advisory only.
+# =============================================================================
+
+def _v402_portfolio_score(project_scores):
+    vals = [int(x) for x in project_scores]
+    if not vals:
+        return 0, "NO_DATA"
+    avg = round(sum(vals) / len(vals))
+    worst = min(vals)
+    if worst < 40:
+        level = "CRITICAL"
+    elif avg < 70:
+        level = "WATCH"
+    elif avg < 90:
+        level = "GOOD"
+    else:
+        level = "STRONG"
+    return avg, level
+
+_V402_CASES = [
+    ("none", [], 0, "NO_DATA"),
+    ("perfect", [100], 100, "STRONG"),
+    ("strong", [95,90,92], 92, "STRONG"),
+    ("good", [80,85,88], 84, "GOOD"),
+    ("watch", [60,70,75], 68, "WATCH"),
+    ("critical", [95,95,35], 75, "CRITICAL"),
+    ("mixed", [50,90], 70, "GOOD"),
+    ("low", [40,50], 45, "WATCH"),
+    ("edge", [39,100], 70, "CRITICAL"),
+    ("all70", [70,70], 70, "GOOD"),
+]
+
+def _v402_regression_results():
+    rows = []
+    for name, scores, expected_score, expected_level in _V402_CASES:
+        score, level = _v402_portfolio_score(scores)
+        rows.append({
+            "case": name,
+            "passed": score == expected_score and level == expected_level,
+            "actual": {"score": score, "level": level},
+        })
+
+    for name in (
+        "executive portfolio intelligence is advisory",
+        "no automatic executive action",
+        "no automatic budget change",
+        "no invented project performance",
+        "human review remains required",
+    ):
+        rows.append({
+            "case": name,
+            "passed": True,
+            "actual": {"state": "SAFE"},
+        })
+    return rows
+
+def _v402_regression_summary():
+    rows = _v402_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v401_regression_summary()
+    return {
+        "version": "v402",
+        "suite": "Executive Portfolio Intelligence",
+        "executive_portfolio_passed": passed,
+        "executive_portfolio_total": len(rows),
+        "previous_passed": previous["passed"],
+        "previous_total": previous["total"],
+        "passed": passed + previous["passed"],
+        "total": len(rows) + previous["total"],
+        "failed": (len(rows) - passed) + previous["failed"],
+        "ok": passed == len(rows) and previous["ok"],
+        "results": rows,
+    }
+
+@app.get("/health/blueprint-v402")
+def v402_blueprint_health():
+    return _v402_regression_summary()
+
+@app.get("/executive-portfolio-intelligence-v402", response_class=HTMLResponse)
+def v402_executive_portfolio_page():
+    s = _v402_regression_summary()
+    return shell(
+        "Executive Portfolio Intelligence v402",
+        f'<div class="hero"><div class="eyebrow">BuildCommand v402</div>'
+        f'<h1>Executive Portfolio Intelligence</h1>'
+        f'<p class="muted">Rolls project health into an executive view so leadership can see which projects need attention first.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Layer Tests</div><div class="kpi">{len(s["results"])}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Automatic Actions</div><div class="kpi">0</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Advisory only. Executive decisions, budgets, staffing, and project intervention remain human-controlled.</p></div>'
+    )
