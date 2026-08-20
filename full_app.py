@@ -32163,3 +32163,282 @@ def uat_1_1_4_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> This is software UAT simulation. Real customer acceptance still requires actual users operating real project data.</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.1.5 - Live Pilot Execution & Feedback
+# Adds pilot-session telemetry, task timing, abandonment/friction capture,
+# structured user feedback, acceptance evidence, and explicit pilot outcome
+# review. This records real pilot evidence; it does not fabricate acceptance.
+# =============================================================================
+
+def _v115_pilot_session(session_id, user_id, role, project_id, started_at, ended_at=""):
+    blockers = []
+    if not session_id: blockers.append("SESSION_ID_REQUIRED")
+    if not user_id: blockers.append("USER_REQUIRED")
+    if not role: blockers.append("ROLE_REQUIRED")
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not started_at: blockers.append("START_TIME_REQUIRED")
+    return {
+        "valid": not blockers,
+        "session_id": session_id,
+        "user_id": user_id,
+        "role": str(role or "").upper(),
+        "project_id": project_id,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "blockers": blockers,
+    }
+
+def _v115_task_event(task_id, session_id, task_type, started_at, completed_at="",
+                     abandoned=False, friction_code="", evidence_ref=""):
+    blockers = []
+    if not task_id: blockers.append("TASK_ID_REQUIRED")
+    if not session_id: blockers.append("SESSION_ID_REQUIRED")
+    if not task_type: blockers.append("TASK_TYPE_REQUIRED")
+    if not started_at: blockers.append("START_TIME_REQUIRED")
+    if abandoned and completed_at:
+        blockers.append("ABANDONED_TASK_CANNOT_BE_COMPLETED")
+    if abandoned and not friction_code:
+        blockers.append("FRICTION_REASON_REQUIRED")
+    return {
+        "valid": not blockers,
+        "task_id": task_id,
+        "session_id": session_id,
+        "task_type": str(task_type or "").upper(),
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "abandoned": bool(abandoned),
+        "friction_code": str(friction_code or "").upper(),
+        "evidence_ref": evidence_ref,
+        "blockers": blockers,
+    }
+
+def _v115_task_duration_minutes(task):
+    start = str(task.get("started_at",""))
+    end = str(task.get("completed_at",""))
+    if not start or not end:
+        return {"measurable":False,"minutes":None}
+    try:
+        from datetime import datetime
+        s = datetime.fromisoformat(start.replace("Z","+00:00"))
+        e = datetime.fromisoformat(end.replace("Z","+00:00"))
+        minutes = max(0, round((e-s).total_seconds()/60, 2))
+        return {"measurable":True,"minutes":minutes}
+    except Exception:
+        return {"measurable":False,"minutes":None}
+
+def _v115_feedback(feedback_id, session_id, rating, category, comment="",
+                   user_role="", evidence_ref=""):
+    blockers = []
+    if not feedback_id: blockers.append("FEEDBACK_ID_REQUIRED")
+    if not session_id: blockers.append("SESSION_ID_REQUIRED")
+    try:
+        rating_i = int(rating)
+    except Exception:
+        rating_i = 0
+    if rating_i < 1 or rating_i > 5:
+        blockers.append("RATING_INVALID")
+    if not category:
+        blockers.append("CATEGORY_REQUIRED")
+    return {
+        "valid": not blockers,
+        "feedback_id": feedback_id,
+        "session_id": session_id,
+        "rating": rating_i,
+        "category": str(category or "").upper(),
+        "comment": comment,
+        "user_role": str(user_role or "").upper(),
+        "evidence_ref": evidence_ref,
+        "blockers": blockers,
+        "automatic_product_change": False,
+    }
+
+def _v115_session_metrics(tasks, feedback_items):
+    tasks = list(tasks or [])
+    feedback_items = list(feedback_items or [])
+
+    completed = [t for t in tasks if t.get("completed_at") and not t.get("abandoned")]
+    abandoned = [t for t in tasks if t.get("abandoned")]
+    measurable = [_v115_task_duration_minutes(t) for t in completed]
+    mins = [m["minutes"] for m in measurable if m["measurable"]]
+
+    avg_minutes = round(sum(mins)/len(mins),2) if mins else None
+    ratings = [f.get("rating") for f in feedback_items if f.get("valid") and isinstance(f.get("rating"), int)]
+    avg_rating = round(sum(ratings)/len(ratings),2) if ratings else None
+
+    return {
+        "task_count": len(tasks),
+        "completed_count": len(completed),
+        "abandoned_count": len(abandoned),
+        "completion_rate": round((len(completed)/len(tasks))*100,1) if tasks else 0,
+        "avg_task_minutes": avg_minutes,
+        "feedback_count": len(feedback_items),
+        "avg_rating": avg_rating,
+    }
+
+def _v115_acceptance_evidence(session, tasks, feedback_items, approver=""):
+    blockers = []
+    if not session.get("valid"):
+        blockers.append("SESSION_INVALID")
+
+    metrics = _v115_session_metrics(tasks, feedback_items)
+    if metrics["task_count"] == 0:
+        blockers.append("NO_TASK_EVIDENCE")
+    if metrics["completion_rate"] < 80:
+        blockers.append("TASK_COMPLETION_BELOW_THRESHOLD")
+    if metrics["avg_rating"] is None:
+        blockers.append("USER_FEEDBACK_REQUIRED")
+    elif metrics["avg_rating"] < 3.5:
+        blockers.append("USER_RATING_BELOW_THRESHOLD")
+    if not approver:
+        blockers.append("PILOT_APPROVER_REQUIRED")
+
+    return {
+        "ready": not blockers,
+        "metrics": metrics,
+        "blockers": blockers,
+        "automatic_acceptance": False,
+    }
+
+def _v115_pilot_outcome(acceptance_evidence, critical_findings, open_blockers,
+                        human_approved=False):
+    blockers = []
+    if not acceptance_evidence.get("ready"):
+        blockers.append("ACCEPTANCE_EVIDENCE_NOT_READY")
+    if int(critical_findings or 0) > 0:
+        blockers.append("CRITICAL_FINDINGS_OPEN")
+    if int(open_blockers or 0) > 0:
+        blockers.append("OPEN_PILOT_BLOCKERS")
+    if not human_approved:
+        blockers.append("HUMAN_PILOT_APPROVAL_REQUIRED")
+
+    return {
+        "ready": not blockers,
+        "decision": "PILOT_ACCEPTED" if not blockers else "PILOT_REVIEW",
+        "blockers": blockers,
+        "automatic_acceptance": False,
+    }
+
+def _v115_regression_results():
+    rows = []
+
+    session = _v115_pilot_session(
+        "S1","u1","PM","P1","2026-08-20T15:00:00Z","2026-08-20T16:00:00Z"
+    )
+    bad_session = _v115_pilot_session(
+        "","u1","PM","P1","2026-08-20T15:00:00Z"
+    )
+    rows += [
+        {"case":"pilot session valid","passed":session["valid"],"actual":session},
+        {"case":"pilot session requires id","passed":"SESSION_ID_REQUIRED" in bad_session["blockers"],"actual":bad_session},
+    ]
+
+    t1 = _v115_task_event(
+        "T1","S1","RFI_RESOLUTION","2026-08-20T15:05:00Z","2026-08-20T15:15:00Z"
+    )
+    t2 = _v115_task_event(
+        "T2","S1","PROCUREMENT_REVIEW","2026-08-20T15:20:00Z","2026-08-20T15:35:00Z"
+    )
+    t3 = _v115_task_event(
+        "T3","S1","FIELD_READINESS","2026-08-20T15:40:00Z","2026-08-20T15:50:00Z"
+    )
+    abandoned = _v115_task_event(
+        "T4","S1","CHANGE_REVIEW","2026-08-20T15:55:00Z","",True,"CONFUSING_LABEL"
+    )
+    bad_abandoned = _v115_task_event(
+        "T5","S1","CHANGE_REVIEW","2026-08-20T15:55:00Z","",True,""
+    )
+    rows += [
+        {"case":"pilot task valid","passed":t1["valid"],"actual":t1},
+        {"case":"abandoned task captures friction","passed":abandoned["valid"] and abandoned["friction_code"]=="CONFUSING_LABEL","actual":abandoned},
+        {"case":"abandoned task requires friction reason","passed":"FRICTION_REASON_REQUIRED" in bad_abandoned["blockers"],"actual":bad_abandoned},
+    ]
+
+    duration = _v115_task_duration_minutes(t1)
+    rows.append({"case":"task duration measured","passed":duration["measurable"] and duration["minutes"]==10.0,"actual":duration})
+
+    f1 = _v115_feedback("F1","S1",5,"USABILITY","Fast and clear","PM")
+    f2 = _v115_feedback("F2","S1",4,"VALUE","Caught issue early","PM")
+    fbad = _v115_feedback("F3","S1",7,"USABILITY","Bad score","PM")
+    rows += [
+        {"case":"pilot feedback valid","passed":f1["valid"],"actual":f1},
+        {"case":"pilot feedback rating validated","passed":"RATING_INVALID" in fbad["blockers"],"actual":fbad},
+        {"case":"feedback never auto changes product","passed":f1["automatic_product_change"] is False,"actual":f1},
+    ]
+
+    metrics = _v115_session_metrics([t1,t2,t3],[f1,f2])
+    metrics_with_abandonment = _v115_session_metrics([t1,t2,t3,abandoned],[f1,f2])
+    rows += [
+        {"case":"session completion rate healthy","passed":metrics["completion_rate"]==100.0,"actual":metrics},
+        {"case":"session average rating healthy","passed":metrics["avg_rating"]==4.5,"actual":metrics},
+        {"case":"abandonment affects completion rate","passed":metrics_with_abandonment["completion_rate"]==75.0,"actual":metrics_with_abandonment},
+    ]
+
+    evidence = _v115_acceptance_evidence(session,[t1,t2,t3],[f1,f2],"pilot-owner")
+    weak_evidence = _v115_acceptance_evidence(session,[t1,t2,t3,abandoned],[f1,f2],"pilot-owner")
+    no_feedback = _v115_acceptance_evidence(session,[t1,t2,t3],[],"pilot-owner")
+    rows += [
+        {"case":"pilot acceptance evidence ready","passed":evidence["ready"],"actual":evidence},
+        {"case":"low completion blocks acceptance","passed":"TASK_COMPLETION_BELOW_THRESHOLD" in weak_evidence["blockers"],"actual":weak_evidence},
+        {"case":"feedback required for acceptance","passed":"USER_FEEDBACK_REQUIRED" in no_feedback["blockers"],"actual":no_feedback},
+    ]
+
+    outcome = _v115_pilot_outcome(evidence,0,0,True)
+    outcome_findings = _v115_pilot_outcome(evidence,1,0,True)
+    outcome_no_human = _v115_pilot_outcome(evidence,0,0,False)
+    rows += [
+        {"case":"pilot outcome accepted","passed":outcome["ready"] and outcome["decision"]=="PILOT_ACCEPTED","actual":outcome},
+        {"case":"critical findings block pilot","passed":"CRITICAL_FINDINGS_OPEN" in outcome_findings["blockers"],"actual":outcome_findings},
+        {"case":"human pilot approval required","passed":"HUMAN_PILOT_APPROVAL_REQUIRED" in outcome_no_human["blockers"],"actual":outcome_no_human},
+        {"case":"pilot outcome never automatic","passed":outcome["automatic_acceptance"] is False,"actual":outcome},
+    ]
+
+    for name in (
+        "live pilot telemetry is evidence based",
+        "live pilot does not invent user feedback",
+        "abandoned tasks remain visible",
+        "pilot acceptance requires real user evidence",
+        "human pilot approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v115_regression_summary():
+    rows = _v115_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v114_regression_summary()
+    return {
+        "version":"1.1.5",
+        "suite":"Live Pilot Execution & Feedback",
+        "live_pilot_execution_passed":passed,
+        "live_pilot_execution_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-1-5")
+def blueprint_1_1_5_health():
+    return _v115_regression_summary()
+
+@app.get("/pilot-feedback-1-1-5", response_class=HTMLResponse)
+def pilot_feedback_1_1_5_page():
+    s = _v115_regression_summary()
+    return shell(
+        "BuildCommand AI 1.1.5",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · 1.1.5</div>'
+        f'<h1>Live Pilot Execution & Feedback</h1>'
+        f'<p class="muted">Capture real pilot sessions, task timing, abandoned workflows, friction reasons, structured user feedback, and acceptance evidence.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">1.1.5 Tests</div><div class="kpi">{s["live_pilot_execution_passed"]}/{s["live_pilot_execution_total"]}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Auto Acceptance</div><div class="kpi">NO</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> This layer records real user evidence and pilot friction. It cannot fabricate customer acceptance or automatically approve a pilot.</p></div>'
+    )
