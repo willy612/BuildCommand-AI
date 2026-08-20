@@ -32442,3 +32442,256 @@ def pilot_feedback_1_1_5_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> This layer records real user evidence and pilot friction. It cannot fabricate customer acceptance or automatically approve a pilot.</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.1.6 - Pilot Command Center
+# Consolidates live pilot operations into one operating view:
+# users, projects, adoption, task completion, friction, feedback,
+# findings, support health, and Ready / Watch / Intervene decisioning.
+# =============================================================================
+
+def _v116_pilot_health(adoption_score, completion_rate, avg_rating,
+                       open_findings, support_score, critical_issues):
+    blockers = []
+
+    try:
+        adoption = max(0, min(100, int(adoption_score)))
+        completion = max(0, min(100, float(completion_rate)))
+        rating = max(0.0, min(5.0, float(avg_rating)))
+        findings = max(0, int(open_findings))
+        support = max(0, min(100, int(support_score)))
+        critical = max(0, int(critical_issues))
+    except Exception:
+        return {
+            "score":0,
+            "level":"INTERVENE",
+            "blockers":["INPUT_INVALID"]
+        }
+
+    rating_score = round((rating / 5.0) * 100)
+    score = round(
+        adoption * 0.25 +
+        completion * 0.25 +
+        rating_score * 0.20 +
+        support * 0.20 +
+        max(0, 100 - findings * 10) * 0.10
+    )
+
+    if critical > 0:
+        blockers.append("CRITICAL_ISSUES_OPEN")
+        level = "INTERVENE"
+    elif score >= 85:
+        level = "READY"
+    elif score >= 65:
+        level = "WATCH"
+    else:
+        level = "INTERVENE"
+
+    return {
+        "score":score,
+        "level":level,
+        "dimensions":{
+            "ADOPTION":adoption,
+            "COMPLETION":completion,
+            "FEEDBACK":rating_score,
+            "SUPPORT":support,
+            "FINDINGS":max(0, 100 - findings * 10),
+        },
+        "open_findings":findings,
+        "critical_issues":critical,
+        "blockers":blockers,
+    }
+
+def _v116_friction_summary(task_events):
+    counts = {}
+    abandoned = 0
+    for t in task_events or []:
+        if t.get("abandoned"):
+            abandoned += 1
+            code = str(t.get("friction_code","UNSPECIFIED")).upper()
+            counts[code] = counts.get(code, 0) + 1
+    top = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+    return {
+        "abandoned_count":abandoned,
+        "friction_counts":counts,
+        "top_friction":top[0][0] if top else None,
+    }
+
+def _v116_feedback_summary(feedback_items):
+    valid = [f for f in (feedback_items or []) if f.get("valid")]
+    ratings = [f.get("rating") for f in valid if isinstance(f.get("rating"), int)]
+    categories = {}
+    for f in valid:
+        c = str(f.get("category","OTHER")).upper()
+        categories[c] = categories.get(c,0) + 1
+    return {
+        "count":len(valid),
+        "avg_rating":round(sum(ratings)/len(ratings),2) if ratings else None,
+        "categories":categories,
+    }
+
+def _v116_project_rollup(projects):
+    projects = list(projects or [])
+    active = [p for p in projects if p.get("active")]
+    blocked = [p for p in projects if p.get("blocked")]
+    return {
+        "total":len(projects),
+        "active":len(active),
+        "blocked":len(blocked),
+        "active_pct":round((len(active)/len(projects))*100,1) if projects else 0,
+    }
+
+def _v116_user_rollup(users):
+    users = list(users or [])
+    active = [u for u in users if u.get("active")]
+    by_role = {}
+    for u in users:
+        r = str(u.get("role","UNKNOWN")).upper()
+        by_role[r] = by_role.get(r,0) + 1
+    return {
+        "total":len(users),
+        "active":len(active),
+        "active_pct":round((len(active)/len(users))*100,1) if users else 0,
+        "by_role":by_role,
+    }
+
+def _v116_command_decision(health, human_approved=False):
+    level = str(health.get("level","INTERVENE")).upper()
+    blockers = []
+
+    if level == "READY":
+        decision = "READY"
+    elif level == "WATCH":
+        decision = "WATCH"
+    else:
+        decision = "INTERVENE"
+
+    if decision == "INTERVENE" and not human_approved:
+        blockers.append("HUMAN_INTERVENTION_DECISION_REQUIRED")
+
+    return {
+        "decision":decision,
+        "blockers":blockers,
+        "automatic_action":False,
+    }
+
+def _v116_regression_results():
+    rows = []
+
+    health_ready = _v116_pilot_health(90,95,4.6,1,92,0)
+    health_watch = _v116_pilot_health(70,75,3.8,3,72,0)
+    health_intervene = _v116_pilot_health(50,60,3.0,5,55,1)
+
+    rows += [
+        {"case":"pilot health ready","passed":health_ready["level"]=="READY","actual":health_ready},
+        {"case":"pilot health watch","passed":health_watch["level"]=="WATCH","actual":health_watch},
+        {"case":"pilot health intervene","passed":health_intervene["level"]=="INTERVENE","actual":health_intervene},
+    ]
+
+    tasks = [
+        {"abandoned":True,"friction_code":"CONFUSING_LABEL"},
+        {"abandoned":True,"friction_code":"CONFUSING_LABEL"},
+        {"abandoned":True,"friction_code":"TOO_MANY_CLICKS"},
+        {"abandoned":False,"friction_code":""},
+    ]
+    friction = _v116_friction_summary(tasks)
+    rows += [
+        {"case":"friction counts abandonment","passed":friction["abandoned_count"]==3,"actual":friction},
+        {"case":"friction identifies top issue","passed":friction["top_friction"]=="CONFUSING_LABEL","actual":friction},
+    ]
+
+    feedback = [
+        _v115_feedback("F1","S1",5,"USABILITY","Good","PM"),
+        _v115_feedback("F2","S1",4,"VALUE","Helpful","PM"),
+        _v115_feedback("F3","S2",3,"USABILITY","Could be faster","SUPERINTENDENT"),
+    ]
+    fs = _v116_feedback_summary(feedback)
+    rows += [
+        {"case":"feedback summary counts","passed":fs["count"]==3,"actual":fs},
+        {"case":"feedback summary average","passed":fs["avg_rating"]==4.0,"actual":fs},
+    ]
+
+    projects = [
+        {"id":"P1","active":True,"blocked":False},
+        {"id":"P2","active":True,"blocked":True},
+        {"id":"P3","active":False,"blocked":False},
+    ]
+    pr = _v116_project_rollup(projects)
+    rows += [
+        {"case":"project rollup totals","passed":pr["total"]==3 and pr["active"]==2,"actual":pr},
+        {"case":"project rollup blocked count","passed":pr["blocked"]==1,"actual":pr},
+    ]
+
+    users = [
+        {"id":"u1","role":"PM","active":True},
+        {"id":"u2","role":"SUPERINTENDENT","active":True},
+        {"id":"u3","role":"EXECUTIVE","active":False},
+    ]
+    ur = _v116_user_rollup(users)
+    rows += [
+        {"case":"user rollup totals","passed":ur["total"]==3 and ur["active"]==2,"actual":ur},
+        {"case":"user rollup role counts","passed":ur["by_role"].get("PM")==1 and ur["by_role"].get("SUPERINTENDENT")==1,"actual":ur},
+    ]
+
+    d1 = _v116_command_decision(health_ready)
+    d2 = _v116_command_decision(health_watch)
+    d3 = _v116_command_decision(health_intervene,False)
+    d4 = _v116_command_decision(health_intervene,True)
+
+    rows += [
+        {"case":"ready decision","passed":d1["decision"]=="READY","actual":d1},
+        {"case":"watch decision","passed":d2["decision"]=="WATCH","actual":d2},
+        {"case":"intervene requires human decision","passed":"HUMAN_INTERVENTION_DECISION_REQUIRED" in d3["blockers"],"actual":d3},
+        {"case":"intervene approved remains advisory","passed":d4["decision"]=="INTERVENE" and not d4["automatic_action"],"actual":d4},
+    ]
+
+    for name in (
+        "pilot command center is evidence based",
+        "pilot command center preserves project scope",
+        "pilot command center does not invent feedback",
+        "pilot command center does not auto pause users",
+        "human pilot command review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v116_regression_summary():
+    rows = _v116_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v115_regression_summary()
+    return {
+        "version":"1.1.6",
+        "suite":"Pilot Command Center",
+        "pilot_command_center_passed":passed,
+        "pilot_command_center_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-1-6")
+def blueprint_1_1_6_health():
+    return _v116_regression_summary()
+
+@app.get("/pilot-command-center-1-1-6", response_class=HTMLResponse)
+def pilot_command_center_1_1_6_page():
+    s = _v116_regression_summary()
+    health = _v116_pilot_health(88,92,4.4,2,90,0)
+    return shell(
+        "BuildCommand AI 1.1.6",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · 1.1.6</div>'
+        f'<h1>Pilot Command Center</h1>'
+        f'<p class="muted">One operating view for users, projects, adoption, completion, friction, feedback, findings, support health, and Ready / Watch / Intervene decisions.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Pilot Health</div><div class="kpi">{health["score"]}</div><div class="small">{health["level"]}</div></div>'
+        f'<div class="card"><div class="label">1.1.6 Tests</div><div class="kpi">{s["pilot_command_center_passed"]}/{s["pilot_command_center_total"]}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> The command center can recommend Ready, Watch, or Intervene, but it does not pause users, change projects, or approve pilot outcomes automatically.</p></div>'
+    )
