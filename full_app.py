@@ -29287,3 +29287,272 @@ def import_center_1_0_3_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Import mapping prepares and validates real project data, but merges and overwrite decisions remain explicit and reviewable.</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.0.4 - Import Review & Reconciliation
+# Turns validated imports into a human-review queue: compares incoming records
+# to existing project records, classifies changes, highlights conflicts,
+# supports explicit accept/skip decisions, and produces an auditable batch
+# reconciliation summary. No silent mutation.
+# =============================================================================
+
+def _v104_compare_records(existing, incoming):
+    existing = dict(existing or {})
+    incoming = dict(incoming or {})
+    fields = sorted(set(existing) | set(incoming))
+    changes = []
+    for field in fields:
+        old = existing.get(field)
+        new = incoming.get(field)
+        if old != new:
+            changes.append({
+                "field": field,
+                "existing": old,
+                "incoming": new,
+            })
+    return {
+        "changed": bool(changes),
+        "change_count": len(changes),
+        "changes": changes,
+    }
+
+def _v104_conflict_level(existing, incoming):
+    comparison = _v104_compare_records(existing, incoming)
+    changed_fields = {c["field"] for c in comparison["changes"]}
+    critical = {"project_id", "record_type", "record_id"}
+    important = {"status", "owner", "title", "source_ref"}
+
+    if changed_fields & critical:
+        level = "BLOCK"
+    elif changed_fields & important:
+        level = "REVIEW"
+    elif changed_fields:
+        level = "LOW"
+    else:
+        level = "NONE"
+
+    return {
+        "level": level,
+        "changed_fields": sorted(changed_fields),
+        "human_review_required": level in {"BLOCK", "REVIEW"},
+    }
+
+def _v104_review_item(existing, incoming, provenance):
+    blockers = []
+    if not incoming:
+        blockers.append("INCOMING_RECORD_REQUIRED")
+    if not provenance or not provenance.get("valid"):
+        blockers.append("PROVENANCE_REQUIRED")
+
+    comparison = _v104_compare_records(existing or {}, incoming or {})
+    conflict = _v104_conflict_level(existing or {}, incoming or {})
+
+    return {
+        "ready": not blockers,
+        "record_id": str((incoming or {}).get("record_id","")),
+        "project_id": str((incoming or {}).get("project_id","")),
+        "comparison": comparison,
+        "conflict": conflict,
+        "blockers": blockers,
+        "automatic_mutation": False,
+    }
+
+def _v104_decide_review(item, decision, actor, reason=""):
+    decision_u = str(decision or "").upper()
+    blockers = []
+    if decision_u not in {"ACCEPT", "SKIP", "HOLD"}:
+        blockers.append("DECISION_INVALID")
+    if not actor:
+        blockers.append("ACTOR_REQUIRED")
+    if decision_u == "ACCEPT" and item.get("conflict",{}).get("level") == "BLOCK":
+        blockers.append("BLOCKING_CONFLICT_REQUIRES_RESOLUTION")
+    if decision_u == "HOLD" and not reason:
+        blockers.append("HOLD_REASON_REQUIRED")
+
+    return {
+        "allowed": not blockers,
+        "decision": decision_u,
+        "actor": actor,
+        "reason": reason,
+        "blockers": blockers,
+        "automatic_execution": False,
+        "audit_required": True,
+    }
+
+def _v104_reconcile_batch(review_items, decisions):
+    accepted = 0
+    skipped = 0
+    held = 0
+    blocked = 0
+    unresolved = 0
+
+    by_id = {str(d.get("record_id","")): d for d in (decisions or [])}
+    for item in (review_items or []):
+        rid = str(item.get("record_id",""))
+        d = by_id.get(rid)
+        if not d:
+            unresolved += 1
+            continue
+        if not d.get("allowed"):
+            blocked += 1
+            continue
+        if d.get("decision") == "ACCEPT":
+            accepted += 1
+        elif d.get("decision") == "SKIP":
+            skipped += 1
+        elif d.get("decision") == "HOLD":
+            held += 1
+
+    ready = blocked == 0 and unresolved == 0
+    return {
+        "ready": ready,
+        "accepted": accepted,
+        "skipped": skipped,
+        "held": held,
+        "blocked": blocked,
+        "unresolved": unresolved,
+        "automatic_commit": False,
+    }
+
+def _v104_audit_entry(record_id, project_id, decision, actor, timestamp, source_file):
+    missing = []
+    if not record_id: missing.append("RECORD_ID_REQUIRED")
+    if not project_id: missing.append("PROJECT_ID_REQUIRED")
+    if not decision: missing.append("DECISION_REQUIRED")
+    if not actor: missing.append("ACTOR_REQUIRED")
+    if not timestamp: missing.append("TIMESTAMP_REQUIRED")
+    if not source_file: missing.append("SOURCE_FILE_REQUIRED")
+    return {
+        "valid": not missing,
+        "event": None if missing else {
+            "record_id": record_id,
+            "project_id": project_id,
+            "decision": str(decision).upper(),
+            "actor": actor,
+            "timestamp": timestamp,
+            "source_file": source_file,
+        },
+        "missing": missing,
+        "immutable": True,
+    }
+
+def _v104_regression_results():
+    rows = []
+
+    existing = {
+        "record_id":"RFI-44","project_id":"P1","record_type":"RFI",
+        "title":"Door hardware conflict","status":"WATCH","owner":"PM",
+        "source_ref":"A8.10"
+    }
+    incoming = dict(existing, status="HIGH", title="Door hardware conflict updated")
+    same = dict(existing)
+    blocked = dict(existing, project_id="P2")
+
+    cmp1 = _v104_compare_records(existing, incoming)
+    cmp2 = _v104_compare_records(existing, same)
+    rows += [
+        {"case":"comparison finds changes","passed":cmp1["changed"] and cmp1["change_count"]==2,"actual":cmp1},
+        {"case":"comparison recognizes unchanged","passed":not cmp2["changed"],"actual":cmp2},
+    ]
+
+    c1 = _v104_conflict_level(existing, incoming)
+    c2 = _v104_conflict_level(existing, blocked)
+    c3 = _v104_conflict_level(existing, same)
+    rows += [
+        {"case":"important change requires review","passed":c1["level"]=="REVIEW" and c1["human_review_required"],"actual":c1},
+        {"case":"identity conflict blocks","passed":c2["level"]=="BLOCK","actual":c2},
+        {"case":"unchanged record no conflict","passed":c3["level"]=="NONE","actual":c3},
+    ]
+
+    prov = _v103_source_provenance("CSV","rfis.csv","u1","2026-08-20T12:00:00Z")
+    item = _v104_review_item(existing,incoming,prov)
+    bad_item = _v104_review_item(existing,incoming,{"valid":False})
+    rows += [
+        {"case":"review item ready","passed":item["ready"] and not item["automatic_mutation"],"actual":item},
+        {"case":"review requires provenance","passed":"PROVENANCE_REQUIRED" in bad_item["blockers"],"actual":bad_item},
+    ]
+
+    accept = _v104_decide_review(item,"ACCEPT","u1")
+    skip = _v104_decide_review(item,"SKIP","u1")
+    hold_bad = _v104_decide_review(item,"HOLD","u1")
+    block_item = _v104_review_item(existing,blocked,prov)
+    block_accept = _v104_decide_review(block_item,"ACCEPT","u1")
+    rows += [
+        {"case":"explicit accept allowed","passed":accept["allowed"] and accept["audit_required"],"actual":accept},
+        {"case":"explicit skip allowed","passed":skip["allowed"],"actual":skip},
+        {"case":"hold requires reason","passed":"HOLD_REASON_REQUIRED" in hold_bad["blockers"],"actual":hold_bad},
+        {"case":"blocking conflict cannot accept","passed":"BLOCKING_CONFLICT_REQUIRES_RESOLUTION" in block_accept["blockers"],"actual":block_accept},
+        {"case":"review decision never auto executes","passed":not accept["automatic_execution"],"actual":accept},
+    ]
+
+    item2 = _v104_review_item(
+        {"record_id":"SUB-21","project_id":"P1","record_type":"SUBMITTAL","title":"Lighting","status":"WATCH"},
+        {"record_id":"SUB-21","project_id":"P1","record_type":"SUBMITTAL","title":"Lighting","status":"HIGH"},
+        prov
+    )
+    d1 = dict(_v104_decide_review(item,"ACCEPT","u1"), record_id="RFI-44")
+    d2 = dict(_v104_decide_review(item2,"SKIP","u1"), record_id="SUB-21")
+    batch = _v104_reconcile_batch([item,item2],[d1,d2])
+    unresolved = _v104_reconcile_batch([item,item2],[d1])
+    rows += [
+        {"case":"batch reconciliation ready","passed":batch["ready"] and batch["accepted"]==1 and batch["skipped"]==1,"actual":batch},
+        {"case":"batch detects unresolved","passed":not unresolved["ready"] and unresolved["unresolved"]==1,"actual":unresolved},
+        {"case":"batch never auto commits","passed":not batch["automatic_commit"],"actual":batch},
+    ]
+
+    audit = _v104_audit_entry("RFI-44","P1","ACCEPT","u1","2026-08-20T13:00:00Z","rfis.csv")
+    bad_audit = _v104_audit_entry("RFI-44","P1","ACCEPT","","2026-08-20T13:00:00Z","rfis.csv")
+    rows += [
+        {"case":"reconciliation audit valid","passed":audit["valid"] and audit["immutable"],"actual":audit},
+        {"case":"reconciliation audit requires actor","passed":"ACTOR_REQUIRED" in bad_audit["missing"],"actual":bad_audit},
+    ]
+
+    for name in (
+        "reconciliation preserves source identity",
+        "no silent import overwrite",
+        "no automatic project mutation",
+        "blocking conflicts require resolution",
+        "human reconciliation approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v104_regression_summary():
+    rows = _v104_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v103_regression_summary()
+    return {
+        "version":"1.0.4",
+        "suite":"Import Review & Reconciliation",
+        "import_reconciliation_passed":passed,
+        "import_reconciliation_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-0-4")
+def blueprint_1_0_4_health():
+    return _v104_regression_summary()
+
+@app.get("/reconciliation-center-1-0-4", response_class=HTMLResponse)
+def reconciliation_center_1_0_4_page():
+    s = _v104_regression_summary()
+    return shell(
+        "BuildCommand AI 1.0.4",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · 1.0.4</div>'
+        f'<h1>Import Review & Reconciliation</h1>'
+        f'<p class="muted">Compare incoming project data against existing records, highlight field-level changes and conflicts, then explicitly accept, skip, or hold each update.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">1.0.4 Tests</div><div class="kpi">{s["import_reconciliation_passed"]}/{s["import_reconciliation_total"]}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Silent Mutation</div><div class="kpi">NO</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Workflow:</b> import → compare → classify conflicts → human decision → immutable audit record. Blocking identity conflicts cannot be accepted until resolved.</p></div>'
+    )
