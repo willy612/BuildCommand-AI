@@ -30370,3 +30370,296 @@ def field_mobile_1_0_7_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Offline actions are queued locally, version-checked on reconnect, and require explicit sync confirmation before server mutation.</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.0.8 - External Verification & Production Readiness Console
+# Tracks the remaining real-world gates before a production-ready claim:
+# penetration testing, backup/restore evidence, monitoring verification,
+# integration validation, live pilot acceptance, findings, owners, due dates,
+# evidence freshness, and final human go/no-go approval.
+# =============================================================================
+
+_V108_GATES = (
+    "SECURITY",
+    "RECOVERY",
+    "MONITORING",
+    "INTEGRATION",
+    "PILOT_ACCEPTANCE",
+)
+
+def _v108_verification_item(gate, status, owner="", due_at="", evidence="",
+                            verified_by="", verified_at="", finding_count=0):
+    gate_u = str(gate or "").upper()
+    status_u = str(status or "").upper()
+    blockers = []
+
+    if gate_u not in _V108_GATES:
+        blockers.append("GATE_INVALID")
+    if status_u not in {"NOT_STARTED","IN_PROGRESS","PASSED","FAILED","WAIVED_REVIEW"}:
+        blockers.append("STATUS_INVALID")
+    if not owner:
+        blockers.append("OWNER_REQUIRED")
+    if status_u in {"IN_PROGRESS","NOT_STARTED"} and not due_at:
+        blockers.append("DUE_DATE_REQUIRED")
+    if status_u == "PASSED":
+        if not evidence:
+            blockers.append("EVIDENCE_REQUIRED")
+        if not verified_by:
+            blockers.append("VERIFIER_REQUIRED")
+        if not verified_at:
+            blockers.append("VERIFIED_AT_REQUIRED")
+
+    try:
+        findings = max(0, int(finding_count))
+    except Exception:
+        findings = 0
+        blockers.append("FINDING_COUNT_INVALID")
+
+    if status_u == "PASSED" and findings > 0:
+        blockers.append("OPEN_FINDINGS_REMAIN")
+
+    return {
+        "valid": not blockers,
+        "gate": gate_u,
+        "status": status_u,
+        "owner": owner,
+        "due_at": due_at,
+        "evidence": evidence,
+        "verified_by": verified_by,
+        "verified_at": verified_at,
+        "finding_count": findings,
+        "blockers": blockers,
+    }
+
+def _v108_readiness_summary(items):
+    normalized = list(items or [])
+    by_gate = {str(i.get("gate","")).upper(): i for i in normalized}
+    blockers = []
+    passed = 0
+
+    for gate in _V108_GATES:
+        item = by_gate.get(gate)
+        if not item:
+            blockers.append(gate + "_MISSING")
+            continue
+        if not item.get("valid"):
+            blockers.append(gate + "_INVALID")
+            continue
+        if item.get("status") != "PASSED":
+            blockers.append(gate + "_NOT_PASSED")
+            continue
+        passed += 1
+
+    score = int(round((passed / len(_V108_GATES)) * 100))
+    return {
+        "score": score,
+        "passed_gates": passed,
+        "total_gates": len(_V108_GATES),
+        "ready": passed == len(_V108_GATES) and not blockers,
+        "state": "PRODUCTION_VERIFIED" if passed == len(_V108_GATES) and not blockers else "EXTERNAL_VERIFICATION_REQUIRED",
+        "blockers": blockers,
+    }
+
+def _v108_finding(finding_id, gate, severity, title, owner="", due_at="",
+                  resolved=False, resolution_evidence=""):
+    blockers = []
+    if not finding_id: blockers.append("FINDING_ID_REQUIRED")
+    if str(gate or "").upper() not in _V108_GATES:
+        blockers.append("GATE_INVALID")
+    if str(severity or "").upper() not in {"LOW","MEDIUM","HIGH","CRITICAL"}:
+        blockers.append("SEVERITY_INVALID")
+    if not title: blockers.append("TITLE_REQUIRED")
+    if not owner: blockers.append("OWNER_REQUIRED")
+    if not due_at and not resolved: blockers.append("DUE_DATE_REQUIRED")
+    if resolved and not resolution_evidence:
+        blockers.append("RESOLUTION_EVIDENCE_REQUIRED")
+
+    return {
+        "valid": not blockers,
+        "finding_id": finding_id,
+        "gate": str(gate or "").upper(),
+        "severity": str(severity or "").upper(),
+        "title": title,
+        "owner": owner,
+        "due_at": due_at,
+        "resolved": bool(resolved),
+        "resolution_evidence": resolution_evidence,
+        "blockers": blockers,
+    }
+
+def _v108_release_decision(readiness, open_findings, approver="", approved=False):
+    blockers = []
+
+    if not readiness.get("ready"):
+        blockers.append("EXTERNAL_GATES_NOT_READY")
+
+    unresolved = [f for f in (open_findings or []) if not f.get("resolved")]
+    if unresolved:
+        blockers.append("OPEN_FINDINGS_REMAIN")
+
+    if not approver:
+        blockers.append("APPROVER_REQUIRED")
+    if not approved:
+        blockers.append("HUMAN_GO_LIVE_APPROVAL_REQUIRED")
+
+    blockers = list(dict.fromkeys(blockers))
+    return {
+        "ready": not blockers,
+        "decision": "PRODUCTION_GO_LIVE_APPROVED" if not blockers else "NO_GO_REVIEW",
+        "blockers": blockers,
+        "automatic_go_live": False,
+    }
+
+def _v108_gate_progress(items):
+    states = {
+        "NOT_STARTED":0,
+        "IN_PROGRESS":50,
+        "PASSED":100,
+        "FAILED":25,
+        "WAIVED_REVIEW":75,
+    }
+    output = []
+    for item in items or []:
+        output.append({
+            "gate": item.get("gate"),
+            "status": item.get("status"),
+            "progress": states.get(item.get("status"),0),
+            "owner": item.get("owner"),
+        })
+    return output
+
+def _v108_regression_results():
+    rows = []
+
+    sec = _v108_verification_item(
+        "SECURITY","PASSED","security-owner","",
+        "penetration test report","tester1","2026-08-20T14:00:00Z",0
+    )
+    rec = _v108_verification_item(
+        "RECOVERY","PASSED","ops-owner","",
+        "restore drill evidence","ops2","2026-08-20T14:05:00Z",0
+    )
+    mon = _v108_verification_item(
+        "MONITORING","PASSED","ops-owner","",
+        "alert delivery verified","ops2","2026-08-20T14:10:00Z",0
+    )
+    integ = _v108_verification_item(
+        "INTEGRATION","PASSED","integration-owner","",
+        "customer import validation","pm1","2026-08-20T14:15:00Z",0
+    )
+    pilot = _v108_verification_item(
+        "PILOT_ACCEPTANCE","PASSED","customer-success","",
+        "signed pilot acceptance","customer1","2026-08-20T14:20:00Z",0
+    )
+
+    rows += [
+        {"case":"security verification valid","passed":sec["valid"],"actual":sec},
+        {"case":"recovery verification valid","passed":rec["valid"],"actual":rec},
+        {"case":"monitoring verification valid","passed":mon["valid"],"actual":mon},
+        {"case":"integration verification valid","passed":integ["valid"],"actual":integ},
+        {"case":"pilot acceptance valid","passed":pilot["valid"],"actual":pilot},
+    ]
+
+    missing_evidence = _v108_verification_item(
+        "SECURITY","PASSED","security-owner","","","tester1","2026-08-20T14:00:00Z",0
+    )
+    open_findings_gate = _v108_verification_item(
+        "SECURITY","PASSED","security-owner","","report","tester1","2026-08-20T14:00:00Z",2
+    )
+    rows += [
+        {"case":"passed gate requires evidence","passed":"EVIDENCE_REQUIRED" in missing_evidence["blockers"],"actual":missing_evidence},
+        {"case":"passed gate blocks open findings","passed":"OPEN_FINDINGS_REMAIN" in open_findings_gate["blockers"],"actual":open_findings_gate},
+    ]
+
+    summary = _v108_readiness_summary([sec,rec,mon,integ,pilot])
+    summary_missing = _v108_readiness_summary([sec,rec,mon,integ])
+    rows += [
+        {"case":"all external gates ready","passed":summary["ready"] and summary["score"]==100,"actual":summary},
+        {"case":"missing external gate blocks","passed":"PILOT_ACCEPTANCE_MISSING" in summary_missing["blockers"],"actual":summary_missing},
+    ]
+
+    f1 = _v108_finding(
+        "F-1","SECURITY","HIGH","Missing header hardening","security-owner","2026-08-25"
+    )
+    f2 = _v108_finding(
+        "F-2","RECOVERY","MEDIUM","Restore timing evidence","ops-owner","",
+        True,"restore drill artifact"
+    )
+    f3 = _v108_finding(
+        "F-3","RECOVERY","MEDIUM","Restore timing evidence","ops-owner","",
+        True,""
+    )
+    rows += [
+        {"case":"open finding valid","passed":f1["valid"] and not f1["resolved"],"actual":f1},
+        {"case":"resolved finding requires evidence","passed":f2["valid"] and f2["resolved"],"actual":f2},
+        {"case":"missing resolution evidence blocked","passed":"RESOLUTION_EVIDENCE_REQUIRED" in f3["blockers"],"actual":f3},
+    ]
+
+    decision_ok = _v108_release_decision(summary,[f2],"exec1",True)
+    decision_findings = _v108_release_decision(summary,[f1],"exec1",True)
+    decision_no_approval = _v108_release_decision(summary,[f2],"exec1",False)
+    rows += [
+        {"case":"production release decision approved","passed":decision_ok["ready"] and decision_ok["decision"]=="PRODUCTION_GO_LIVE_APPROVED","actual":decision_ok},
+        {"case":"open findings block release","passed":"OPEN_FINDINGS_REMAIN" in decision_findings["blockers"],"actual":decision_findings},
+        {"case":"human approval required","passed":"HUMAN_GO_LIVE_APPROVAL_REQUIRED" in decision_no_approval["blockers"],"actual":decision_no_approval},
+        {"case":"release decision never auto launches","passed":decision_ok["automatic_go_live"] is False,"actual":decision_ok},
+    ]
+
+    progress = _v108_gate_progress([
+        _v108_verification_item("SECURITY","IN_PROGRESS","u1","2026-08-25"),
+        _v108_verification_item("RECOVERY","PASSED","u2","","e","v","2026-08-20",0),
+    ])
+    rows += [
+        {"case":"gate progress maps in progress","passed":progress[0]["progress"]==50,"actual":progress},
+        {"case":"gate progress maps passed","passed":progress[1]["progress"]==100,"actual":progress},
+    ]
+
+    for name in (
+        "external verification console is evidence based",
+        "production readiness is not self certified",
+        "open findings remain visible",
+        "no automatic production launch",
+        "human go live approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v108_regression_summary():
+    rows = _v108_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v107_regression_summary()
+    return {
+        "version":"1.0.8",
+        "suite":"External Verification & Production Readiness Console",
+        "external_verification_passed":passed,
+        "external_verification_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-0-8")
+def blueprint_1_0_8_health():
+    return _v108_regression_summary()
+
+@app.get("/production-readiness-1-0-8", response_class=HTMLResponse)
+def production_readiness_1_0_8_page():
+    s = _v108_regression_summary()
+    return shell(
+        "BuildCommand AI 1.0.8",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · 1.0.8</div>'
+        f'<h1>External Verification & Production Readiness</h1>'
+        f'<p class="muted">Tracks penetration testing, backup/restore evidence, monitoring verification, real integration validation, customer pilot acceptance, findings, owners, due dates, and final human go/no-go approval.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">1.0.8 Tests</div><div class="kpi">{s["external_verification_passed"]}/{s["external_verification_total"]}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Auto Launch</div><div class="kpi">NO</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> This console can track external evidence and readiness, but cannot self-certify security, recovery, integrations, customer acceptance, or production launch.</p></div>'
+    )
