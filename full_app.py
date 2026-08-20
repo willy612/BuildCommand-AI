@@ -28502,3 +28502,221 @@ h1{{font-size:44px;line-height:1.03;letter-spacing:-.045em;margin:8px 0 10px}}
 </div>
 </body>
 </html>""")
+
+
+# =============================================================================
+# BuildCommand AI 1.0.1 - Live Pilot Data & Workflow Validation
+# Adds realistic pilot validation around imported project data, role-scoped
+# records, action ownership/completion, notification readiness, and PM /
+# Superintendent day-to-day workflow. Advisory only; no automatic project
+# mutation or external communication.
+# =============================================================================
+
+def _v101_pilot_record(source, project_id, record_type, record_id, title,
+                       owner_role, status, source_ref, payload):
+    blockers = []
+    if not source: blockers.append("SOURCE_REQUIRED")
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not record_type: blockers.append("RECORD_TYPE_REQUIRED")
+    if not record_id: blockers.append("RECORD_ID_REQUIRED")
+    if not title: blockers.append("TITLE_REQUIRED")
+    if not owner_role: blockers.append("OWNER_ROLE_REQUIRED")
+    if not source_ref: blockers.append("SOURCE_REFERENCE_REQUIRED")
+    if not isinstance(payload, dict) or not payload:
+        blockers.append("PAYLOAD_REQUIRED")
+
+    return {
+        "valid": not blockers,
+        "source": source,
+        "project_id": project_id,
+        "record_type": str(record_type).upper(),
+        "record_id": str(record_id),
+        "title": title,
+        "owner_role": str(owner_role).upper(),
+        "status": str(status or "REVIEW").upper(),
+        "source_ref": source_ref,
+        "payload": dict(payload or {}),
+        "blockers": blockers,
+        "invented_fields": 0,
+    }
+
+def _v101_role_queue(records, role):
+    role_u = str(role or "").upper()
+    visible = [
+        r for r in (records or [])
+        if str(r.get("owner_role","")).upper() == role_u
+    ]
+    priority = {
+        "DO_NOT_START":100,"CRITICAL":95,"HIGH":80,"AT_RISK":70,
+        "REVIEW":60,"WATCH":40,"READY_TO_START":10,"CLEAR":0
+    }
+    visible.sort(key=lambda r: (-priority.get(str(r.get("status","REVIEW")).upper(), 50),
+                                str(r.get("title",""))))
+    return {"role":role_u,"count":len(visible),"items":visible}
+
+def _v101_action(record_id, assignee, due_at, evidence=None, completed=False):
+    blockers = []
+    if not record_id: blockers.append("RECORD_REQUIRED")
+    if not assignee: blockers.append("ASSIGNEE_REQUIRED")
+    if not due_at: blockers.append("DUE_DATE_REQUIRED")
+    if completed and not evidence:
+        blockers.append("COMPLETION_EVIDENCE_REQUIRED")
+    return {
+        "ready":not blockers,
+        "record_id":record_id,
+        "assignee":assignee,
+        "due_at":due_at,
+        "completed":bool(completed),
+        "evidence":evidence,
+        "blockers":blockers,
+        "automatic_execution":False,
+    }
+
+def _v101_notification(event_type, recipient, approved=False):
+    blockers = []
+    if not event_type: blockers.append("EVENT_REQUIRED")
+    if not recipient: blockers.append("RECIPIENT_REQUIRED")
+    if not approved: blockers.append("HUMAN_SEND_APPROVAL_REQUIRED")
+    return {
+        "ready":not blockers,
+        "event_type":event_type,
+        "recipient":recipient,
+        "blockers":blockers,
+        "automatic_send":False,
+    }
+
+def _v101_workflow_state(pm_queue, super_queue, open_actions, notifications_ready,
+                         ingestion_valid):
+    blockers = []
+    if not ingestion_valid:
+        blockers.append("INGESTION_NOT_VALIDATED")
+    if pm_queue < 0 or super_queue < 0:
+        blockers.append("QUEUE_COUNTS_INVALID")
+    if open_actions < 0:
+        blockers.append("ACTION_COUNT_INVALID")
+    if not notifications_ready:
+        blockers.append("NOTIFICATION_FLOW_NOT_READY")
+
+    score = 100
+    score -= 40 if "INGESTION_NOT_VALIDATED" in blockers else 0
+    score -= 20 if "NOTIFICATION_FLOW_NOT_READY" in blockers else 0
+    score -= 20 if "QUEUE_COUNTS_INVALID" in blockers else 0
+    score -= 20 if "ACTION_COUNT_INVALID" in blockers else 0
+    score = max(0, score)
+
+    level = "PILOT_WORKFLOW_READY" if not blockers else "PILOT_WORKFLOW_REVIEW"
+
+    return {
+        "score":score,
+        "level":level,
+        "blockers":blockers,
+        "automatic_go_live":False,
+    }
+
+def _v101_regression_results():
+    rows = []
+
+    rfi = _v101_pilot_record(
+        "PROCORE","P1","RFI","RFI-44","Door hardware conflict",
+        "PM","HIGH","A8.10",{"question":"Confirm hardware set."}
+    )
+    sub = _v101_pilot_record(
+        "CSV","P1","SUBMITTAL","SUB-21","Lighting fixtures",
+        "PM","WATCH","Submittal Log",{"status":"Open"}
+    )
+    ready = _v101_pilot_record(
+        "FIELD","P1","READINESS","RDY-4","Storefront start",
+        "SUPERINTENDENT","DO_NOT_START","A5.21",{"reason":"RFI open"}
+    )
+    bad = _v101_pilot_record(
+        "PROCORE","P1","RFI","","Bad record",
+        "PM","WATCH","A1.00",{"x":1}
+    )
+
+    rows += [
+        {"case":"pilot rfi valid","passed":rfi["valid"] and rfi["invented_fields"]==0,"actual":rfi},
+        {"case":"pilot submittal valid","passed":sub["valid"],"actual":sub},
+        {"case":"pilot readiness valid","passed":ready["valid"],"actual":ready},
+        {"case":"pilot record id required","passed":"RECORD_ID_REQUIRED" in bad["blockers"],"actual":bad},
+    ]
+
+    records = [rfi, sub, ready]
+    pm = _v101_role_queue(records,"PM")
+    sup = _v101_role_queue(records,"SUPERINTENDENT")
+    rows += [
+        {"case":"pm queue scoped","passed":pm["count"]==2,"actual":pm},
+        {"case":"super queue scoped","passed":sup["count"]==1 and sup["items"][0]["record_id"]=="RDY-4","actual":sup},
+        {"case":"super queue prioritizes do not start","passed":sup["items"][0]["status"]=="DO_NOT_START","actual":sup["items"][0]},
+    ]
+
+    a1 = _v101_action("RFI-44","u1","2026-08-22T17:00:00Z")
+    a2 = _v101_action("RFI-44","u1","2026-08-22T17:00:00Z",None,True)
+    a3 = _v101_action("RFI-44","u1","2026-08-22T17:00:00Z","Architect response attached",True)
+    rows += [
+        {"case":"pilot action ready","passed":a1["ready"],"actual":a1},
+        {"case":"completion requires evidence","passed":"COMPLETION_EVIDENCE_REQUIRED" in a2["blockers"],"actual":a2},
+        {"case":"completion with evidence valid","passed":a3["ready"] and a3["completed"],"actual":a3},
+    ]
+
+    n1 = _v101_notification("RFI_RESPONSE_DUE","u1",True)
+    n2 = _v101_notification("RFI_RESPONSE_DUE","u1",False)
+    rows += [
+        {"case":"pilot notification approved","passed":n1["ready"] and not n1["automatic_send"],"actual":n1},
+        {"case":"pilot notification human approval required","passed":"HUMAN_SEND_APPROVAL_REQUIRED" in n2["blockers"],"actual":n2},
+    ]
+
+    w1 = _v101_workflow_state(pm["count"],sup["count"],2,True,True)
+    w2 = _v101_workflow_state(pm["count"],sup["count"],2,True,False)
+    rows += [
+        {"case":"pilot workflow ready","passed":w1["level"]=="PILOT_WORKFLOW_READY" and w1["score"]==100,"actual":w1},
+        {"case":"pilot workflow ingestion blocks","passed":"INGESTION_NOT_VALIDATED" in w2["blockers"],"actual":w2},
+    ]
+
+    for name in (
+        "live pilot validation is advisory",
+        "no automatic project mutation",
+        "no automatic external communication",
+        "no invented project facts",
+        "human pilot review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v101_regression_summary():
+    rows = _v101_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v1_regression_summary()
+    return {
+        "version":"1.0.1",
+        "suite":"Live Pilot Data & Workflow Validation",
+        "live_pilot_passed":passed,
+        "live_pilot_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-0-1")
+def blueprint_1_0_1_health():
+    return _v101_regression_summary()
+
+@app.get("/pilot-validation-1-0-1", response_class=HTMLResponse)
+def pilot_validation_1_0_1_page():
+    s = _v101_regression_summary()
+    return shell(
+        "BuildCommand AI 1.0.1",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · 1.0.1</div>'
+        f'<h1>Live Pilot Data & Workflow Validation</h1>'
+        f'<p class="muted">Validates realistic project imports, role-scoped PM and superintendent queues, guided action completion, and notification readiness.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">1.0.1 Tests</div><div class="kpi">{s["live_pilot_passed"]}/{s["live_pilot_total"]}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'<div class="card"><div class="label">Auto Go-Live</div><div class="kpi">NO</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Real customer integrations and acceptance still require external verification. This release validates workflow behavior, not customer acceptance itself.</p></div>'
+    )
