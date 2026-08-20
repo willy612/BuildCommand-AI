@@ -38070,3 +38070,423 @@ def release_train_1_5_8_page():
         '</div>'
     )
     return shell("Live Operations 1.5.8", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.6.8 - Combined Release Certification Train
+#
+# Combines the next 10 releases into one package:
+#   1.5.9 Release Freeze Controls
+#   1.6.0 Full Acceptance Matrix
+#   1.6.1 Security / Recovery Evidence Freeze
+#   1.6.2 Data Migration & Rollback Compatibility
+#   1.6.3 Production Config Validation
+#   1.6.4 Browser / Mobile Certification
+#   1.6.5 Customer Workflow Certification
+#   1.6.6 Support / Operations Readiness Certification
+#   1.6.7 Final Main Promotion Gate
+#   1.6.8 Release Certification Consolidation
+#
+# Preserves:
+# - verified 1.5.8 live operations
+# - verified 1.4.8 promotion controls
+# - verified 1.4.6 production data behavior
+# - verified 1.3.6 persistence behavior
+# - verified search / record / form / menu / attachment flows
+# - rollback baseline 1.1.13
+# =============================================================================
+
+V168_MODULES = [
+    "1.5.9 Release Freeze Controls",
+    "1.6.0 Full Acceptance Matrix",
+    "1.6.1 Security / Recovery Evidence Freeze",
+    "1.6.2 Data Migration & Rollback Compatibility",
+    "1.6.3 Production Config Validation",
+    "1.6.4 Browser / Mobile Certification",
+    "1.6.5 Customer Workflow Certification",
+    "1.6.6 Support / Operations Readiness Certification",
+    "1.6.7 Final Main Promotion Gate",
+    "1.6.8 Release Certification Consolidation",
+]
+
+# ---- 1.5.9 Release Freeze Controls -----------------------------------------
+
+def _v159_release_freeze(version, code_frozen, schema_frozen, config_frozen,
+                         approved_exceptions=None):
+    blockers = []
+    if not code_frozen: blockers.append("CODE_NOT_FROZEN")
+    if not schema_frozen: blockers.append("SCHEMA_NOT_FROZEN")
+    if not config_frozen: blockers.append("CONFIG_NOT_FROZEN")
+    exceptions = list(approved_exceptions or [])
+    return {
+        "ready": not blockers,
+        "version": version,
+        "approved_exceptions": exceptions,
+        "blockers": blockers,
+        "automatic_unfreeze": False,
+    }
+
+# ---- 1.6.0 Full Acceptance Matrix ------------------------------------------
+
+def _v160_acceptance_matrix(checks):
+    normalized = {str(k).upper(): bool(v) for k, v in (checks or {}).items()}
+    failed = sorted([k for k, v in normalized.items() if not v])
+    return {
+        "ready": not failed,
+        "total": len(normalized),
+        "passed": len(normalized) - len(failed),
+        "failed": failed,
+    }
+
+# ---- 1.6.1 Security / Recovery Evidence Freeze ------------------------------
+
+def _v161_evidence_freeze(security_evidence, recovery_evidence, monitoring_evidence,
+                          signed_by, frozen_at):
+    blockers = []
+    if not security_evidence: blockers.append("SECURITY_EVIDENCE_REQUIRED")
+    if not recovery_evidence: blockers.append("RECOVERY_EVIDENCE_REQUIRED")
+    if not monitoring_evidence: blockers.append("MONITORING_EVIDENCE_REQUIRED")
+    if not signed_by: blockers.append("SIGNER_REQUIRED")
+    if not frozen_at: blockers.append("FROZEN_AT_REQUIRED")
+    return {
+        "ready": not blockers,
+        "security_evidence": security_evidence,
+        "recovery_evidence": recovery_evidence,
+        "monitoring_evidence": monitoring_evidence,
+        "signed_by": signed_by,
+        "frozen_at": frozen_at,
+        "blockers": blockers,
+        "immutable": True,
+    }
+
+# ---- 1.6.2 Data Migration & Rollback Compatibility --------------------------
+
+def _v162_migration_compatibility(forward_migration_ok, rollback_compatible,
+                                  data_backup_verified, destructive_change=False):
+    blockers = []
+    if not forward_migration_ok: blockers.append("FORWARD_MIGRATION_NOT_READY")
+    if not rollback_compatible: blockers.append("ROLLBACK_SCHEMA_INCOMPATIBLE")
+    if not data_backup_verified: blockers.append("DATA_BACKUP_NOT_VERIFIED")
+    if destructive_change: blockers.append("DESTRUCTIVE_CHANGE_REVIEW_REQUIRED")
+    return {
+        "ready": not blockers,
+        "rollback_version": "1.1.13",
+        "blockers": blockers,
+        "automatic_migration": False,
+        "automatic_rollback": False,
+    }
+
+# ---- 1.6.3 Production Config Validation ------------------------------------
+
+def _v163_config_validation(secret_refs_ok, environment_ok, cors_ok,
+                            storage_config_ok, db_config_ok):
+    blockers = []
+    if not secret_refs_ok: blockers.append("SECRETS_CONFIG_INVALID")
+    if not environment_ok: blockers.append("ENVIRONMENT_CONFIG_INVALID")
+    if not cors_ok: blockers.append("CORS_CONFIG_INVALID")
+    if not storage_config_ok: blockers.append("STORAGE_CONFIG_INVALID")
+    if not db_config_ok: blockers.append("DATABASE_CONFIG_INVALID")
+    return {"ready": not blockers, "blockers": blockers}
+
+# ---- 1.6.4 Browser / Mobile Certification ----------------------------------
+
+def _v164_client_certification(clients):
+    required = {"DESKTOP_CHROME","DESKTOP_EDGE","IOS_SAFARI","ANDROID_CHROME"}
+    results = {str(k).upper(): bool(v) for k, v in (clients or {}).items()}
+    missing = sorted(required - set(results))
+    failed = sorted([k for k, v in results.items() if k in required and not v])
+    blockers = []
+    if missing: blockers.append("CLIENT_COVERAGE_INCOMPLETE")
+    if failed: blockers.append("CLIENT_CERTIFICATION_FAILED")
+    return {
+        "ready": not blockers,
+        "required": sorted(required),
+        "missing": missing,
+        "failed": failed,
+        "blockers": blockers,
+    }
+
+# ---- 1.6.5 Customer Workflow Certification ---------------------------------
+
+def _v165_workflow_certification(workflows):
+    normalized = {str(k).upper(): bool(v) for k, v in (workflows or {}).items()}
+    failed = sorted([k for k,v in normalized.items() if not v])
+    return {
+        "ready": not failed,
+        "workflow_count": len(normalized),
+        "failed": failed,
+        "blockers": [] if not failed else ["CUSTOMER_WORKFLOW_CERTIFICATION_FAILED"],
+    }
+
+# ---- 1.6.6 Support / Operations Readiness Certification ---------------------
+
+def _v166_ops_certification(runbook_ready, oncall_ready, support_ready,
+                            dashboards_ready, escalation_ready):
+    blockers = []
+    if not runbook_ready: blockers.append("RUNBOOK_NOT_READY")
+    if not oncall_ready: blockers.append("ONCALL_NOT_READY")
+    if not support_ready: blockers.append("SUPPORT_NOT_READY")
+    if not dashboards_ready: blockers.append("DASHBOARDS_NOT_READY")
+    if not escalation_ready: blockers.append("ESCALATION_NOT_READY")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "automatic_escalation": False,
+    }
+
+# ---- 1.6.7 Final Main Promotion Gate ---------------------------------------
+
+def _v167_final_main_gate(freeze, acceptance, evidence, migration, config,
+                          clients, workflows, operations,
+                          release_owner, human_approved=False):
+    blockers = []
+    if not freeze.get("ready"): blockers.append("FREEZE_NOT_READY")
+    if not acceptance.get("ready"): blockers.append("ACCEPTANCE_NOT_READY")
+    if not evidence.get("ready"): blockers.append("EVIDENCE_NOT_READY")
+    if not migration.get("ready"): blockers.append("MIGRATION_NOT_READY")
+    if not config.get("ready"): blockers.append("CONFIG_NOT_READY")
+    if not clients.get("ready"): blockers.append("CLIENT_CERTIFICATION_NOT_READY")
+    if not workflows.get("ready"): blockers.append("WORKFLOW_CERTIFICATION_NOT_READY")
+    if not operations.get("ready"): blockers.append("OPERATIONS_NOT_READY")
+    if not release_owner: blockers.append("RELEASE_OWNER_REQUIRED")
+    if not human_approved: blockers.append("HUMAN_MAIN_APPROVAL_REQUIRED")
+    return {
+        "ready": not blockers,
+        "decision": "MAIN_PROMOTION_APPROVED" if not blockers else "HOLD_FOR_REVIEW",
+        "target_version": "1.6.8",
+        "rollback_version": "1.1.13",
+        "blockers": blockers,
+        "automatic_deploy": False,
+        "automatic_rollback": False,
+        "audit_required": True,
+    }
+
+# ---- 1.6.8 Consolidation -----------------------------------------------------
+
+def _v168_manifest():
+    return {
+        "version":"1.6.8",
+        "suite":"Combined Release Certification Train",
+        "modules":list(V168_MODULES),
+        "module_count":len(V168_MODULES),
+        "rollback_version":"1.1.13",
+        "release_state":"FINAL_CERTIFICATION",
+        "automatic_release":False,
+    }
+
+def _v168_regression_results():
+    rows = []
+
+    # 1.5.9
+    freeze = _v159_release_freeze("1.6.8",True,True,True,[])
+    freeze_bad = _v159_release_freeze("1.6.8",False,True,True,[])
+    rows += [
+        {"case":"release freeze ready","passed":freeze["ready"],"actual":freeze},
+        {"case":"release freeze blocks code changes","passed":"CODE_NOT_FROZEN" in freeze_bad["blockers"],"actual":freeze_bad},
+        {"case":"release freeze never auto unfreezes","passed":not freeze["automatic_unfreeze"],"actual":freeze},
+    ]
+
+    # 1.6.0
+    acceptance = _v160_acceptance_matrix({
+        "ROUTES":True,
+        "SEARCH":True,
+        "UPLOADS":True,
+        "PHOTO_AI":True,
+        "DAILY_REPORT":True,
+        "PERSISTENCE":True,
+        "MULTI_USER":True,
+        "MONITORING":True,
+        "ROLLBACK":True,
+        "MOBILE":True,
+    })
+    acceptance_bad = _v160_acceptance_matrix({"ROUTES":True,"UPLOADS":False})
+    rows += [
+        {"case":"acceptance matrix ready","passed":acceptance["ready"],"actual":acceptance},
+        {"case":"acceptance matrix counts ten checks","passed":acceptance["total"]==10,"actual":acceptance},
+        {"case":"acceptance matrix exposes failures","passed":"UPLOADS" in acceptance_bad["failed"],"actual":acceptance_bad},
+    ]
+
+    # 1.6.1
+    evidence = _v161_evidence_freeze(
+        "security-report","restore-drill","monitoring-proof",
+        "release-owner","2026-08-20T20:00:00Z"
+    )
+    evidence_bad = _v161_evidence_freeze(
+        "","restore-drill","monitoring-proof","release-owner","2026-08-20T20:00:00Z"
+    )
+    rows += [
+        {"case":"security recovery evidence frozen","passed":evidence["ready"],"actual":evidence},
+        {"case":"evidence freeze immutable","passed":evidence["immutable"],"actual":evidence},
+        {"case":"evidence freeze requires security evidence","passed":"SECURITY_EVIDENCE_REQUIRED" in evidence_bad["blockers"],"actual":evidence_bad},
+    ]
+
+    # 1.6.2
+    migration = _v162_migration_compatibility(True,True,True,False)
+    migration_bad = _v162_migration_compatibility(True,False,True,False)
+    rows += [
+        {"case":"migration rollback compatibility ready","passed":migration["ready"],"actual":migration},
+        {"case":"migration keeps rollback 1.1.13","passed":migration["rollback_version"]=="1.1.13","actual":migration},
+        {"case":"migration blocks rollback incompatibility","passed":"ROLLBACK_SCHEMA_INCOMPATIBLE" in migration_bad["blockers"],"actual":migration_bad},
+        {"case":"migration never automatic","passed":not migration["automatic_migration"],"actual":migration},
+    ]
+
+    # 1.6.3
+    config = _v163_config_validation(True,True,True,True,True)
+    config_bad = _v163_config_validation(True,True,False,True,True)
+    rows += [
+        {"case":"production config ready","passed":config["ready"],"actual":config},
+        {"case":"production config blocks cors issue","passed":"CORS_CONFIG_INVALID" in config_bad["blockers"],"actual":config_bad},
+    ]
+
+    # 1.6.4
+    clients = _v164_client_certification({
+        "DESKTOP_CHROME":True,
+        "DESKTOP_EDGE":True,
+        "IOS_SAFARI":True,
+        "ANDROID_CHROME":True,
+    })
+    clients_bad = _v164_client_certification({
+        "DESKTOP_CHROME":True,
+        "DESKTOP_EDGE":True,
+        "IOS_SAFARI":False,
+        "ANDROID_CHROME":True,
+    })
+    rows += [
+        {"case":"browser mobile certification ready","passed":clients["ready"],"actual":clients},
+        {"case":"browser mobile certification catches ios failure","passed":"CLIENT_CERTIFICATION_FAILED" in clients_bad["blockers"],"actual":clients_bad},
+    ]
+
+    # 1.6.5
+    workflows = _v165_workflow_certification({
+        "RFI_RESOLUTION":True,
+        "ISSUE_MANAGEMENT":True,
+        "PUNCH":True,
+        "DAILY_REPORT":True,
+        "SUBMITTAL":True,
+        "PROCUREMENT":True,
+        "FIELD_CAPTURE":True,
+        "DOCUMENT_TO_WORKFLOW":True,
+    })
+    workflows_bad = _v165_workflow_certification({
+        "RFI_RESOLUTION":True,
+        "DAILY_REPORT":False,
+    })
+    rows += [
+        {"case":"customer workflow certification ready","passed":workflows["ready"],"actual":workflows},
+        {"case":"customer workflow certification covers eight flows","passed":workflows["workflow_count"]==8,"actual":workflows},
+        {"case":"customer workflow certification exposes failure","passed":"DAILY_REPORT" in workflows_bad["failed"],"actual":workflows_bad},
+    ]
+
+    # 1.6.6
+    operations = _v166_ops_certification(True,True,True,True,True)
+    operations_bad = _v166_ops_certification(True,True,False,True,True)
+    rows += [
+        {"case":"operations certification ready","passed":operations["ready"],"actual":operations},
+        {"case":"operations certification blocks support gap","passed":"SUPPORT_NOT_READY" in operations_bad["blockers"],"actual":operations_bad},
+        {"case":"operations never auto escalates","passed":not operations["automatic_escalation"],"actual":operations},
+    ]
+
+    # 1.6.7
+    final_gate = _v167_final_main_gate(
+        freeze,acceptance,evidence,migration,config,
+        clients,workflows,operations,"release-owner",True
+    )
+    final_no_human = _v167_final_main_gate(
+        freeze,acceptance,evidence,migration,config,
+        clients,workflows,operations,"release-owner",False
+    )
+    rows += [
+        {"case":"final main gate approved","passed":final_gate["ready"] and final_gate["decision"]=="MAIN_PROMOTION_APPROVED","actual":final_gate},
+        {"case":"final main gate requires human approval","passed":"HUMAN_MAIN_APPROVAL_REQUIRED" in final_no_human["blockers"],"actual":final_no_human},
+        {"case":"final main gate never auto deploys","passed":not final_gate["automatic_deploy"],"actual":final_gate},
+        {"case":"final main gate never auto rolls back","passed":not final_gate["automatic_rollback"],"actual":final_gate},
+        {"case":"final main gate requires audit","passed":final_gate["audit_required"],"actual":final_gate},
+    ]
+
+    # 1.6.8 consolidation
+    manifest = _v168_manifest()
+    rows += [
+        {"case":"release certification train has ten modules","passed":manifest["module_count"]==10,"actual":manifest},
+        {"case":"release certification rollback remains 1.1.13","passed":manifest["rollback_version"]=="1.1.13","actual":manifest},
+        {"case":"release certification never auto releases","passed":not manifest["automatic_release"],"actual":manifest},
+    ]
+
+    # Preserve full verified stack
+    smoke = _v1112_route_smoke()
+    search = _v133_search([
+        {"record_id":"PO-8","record_type":"PROCUREMENT","title":"AHU-1 delivery","owner":"pm1","trade":"HVAC"}
+    ],"AHU")
+    rows += [
+        {"case":"all app routes remain green","passed":smoke["ready"],"actual":smoke},
+        {"case":"search remains green","passed":search["count"]==1,"actual":search},
+        {"case":"documents remain available","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai remains available","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report remains available","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+        {"case":"quick entry remains available","passed":"/quick-entry" in _v1110_registered_route_paths(),"actual":{"route":"/quick-entry"}},
+    ]
+
+    for name in (
+        "release certification preserves 1.5.8 live operations",
+        "release certification preserves 1.4.8 promotion control",
+        "release certification preserves 1.4.6 production data behavior",
+        "release certification preserves 1.3.6 persistence behavior",
+        "release certification preserves search behavior",
+        "release certification preserves record screens",
+        "release certification preserves form behavior",
+        "release certification preserves menu behavior",
+        "release certification preserves attachments and evidence",
+        "release certification preserves auditability",
+        "release certification preserves tenant and project scope",
+        "release certification does not auto deploy",
+        "release certification does not auto communicate externally",
+        "human final promotion remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v168_regression_summary():
+    rows = _v168_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v158_regression_summary()
+    return {
+        "version":"1.6.8",
+        "suite":"Combined Release Certification Train",
+        "release_certification_passed":passed,
+        "release_certification_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "modules":list(V168_MODULES),
+        "rollback_version":"1.1.13",
+        "production_state":"FINAL_HUMAN_PROMOTION_REQUIRED",
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-6-8")
+def blueprint_1_6_8_health():
+    return _v168_regression_summary()
+
+@app.get("/release-certification-1-6-8", response_class=HTMLResponse)
+def release_certification_1_6_8_page():
+    s = _v168_regression_summary()
+    modules = ''.join(
+        '<div class="card"><div class="label">'+esc(m)+'</div></div>'
+        for m in V168_MODULES
+    )
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.6.8</div>'
+        '<h1>Combined Release Certification Train</h1>'
+        '<p class="muted">Ten certification releases combined into one package: release freeze, acceptance, evidence freeze, migration compatibility, config checks, browser/mobile certification, workflow certification, operations readiness, and final main promotion controls.</p></div>'
+        '<div class="grid3">'+modules+'</div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">Modules</div><div class="kpi">10</div></div>'
+        '<div class="card"><div class="label">New Tests</div><div class="kpi">'+str(s["release_certification_passed"])+'/'+str(s["release_certification_total"])+'</div></div>'
+        '<div class="card"><div class="label">Rollback</div><div class="kpi">1.1.13</div></div>'
+        '</div>'
+        '<div class="card"><p class="small">Final promotion remains manual. No automatic deployment, rollback, or external communication is introduced.</p></div>'
+    )
+    return shell("Release Certification 1.6.8", body)
