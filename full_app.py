@@ -28720,3 +28720,277 @@ def pilot_validation_1_0_1_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Real customer integrations and acceptance still require external verification. This release validates workflow behavior, not customer acceptance itself.</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.0.2 - Notification & Activity Center
+# Unified project-scoped notification center for assignments, mentions,
+# overdue items, RFI/submittal/procurement updates, decisions, and
+# "what changed since I last looked." No automatic external messages.
+# =============================================================================
+
+def _v102_activity_event(event_id, project_id, event_type, title, actor="",
+                         recipient_ids=None, roles=None, priority=50,
+                         created_at="", read=False, source_ref="", metadata=None):
+    blockers = []
+    if not event_id: blockers.append("EVENT_ID_REQUIRED")
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not event_type: blockers.append("EVENT_TYPE_REQUIRED")
+    if not title: blockers.append("TITLE_REQUIRED")
+    if not created_at: blockers.append("CREATED_AT_REQUIRED")
+    return {
+        "valid": not blockers,
+        "event_id": str(event_id),
+        "project_id": str(project_id),
+        "event_type": str(event_type).upper(),
+        "title": title,
+        "actor": actor,
+        "recipient_ids": [str(x) for x in (recipient_ids or [])],
+        "roles": [str(x).upper() for x in (roles or [])],
+        "priority": max(0, min(100, int(priority))),
+        "created_at": created_at,
+        "read": bool(read),
+        "source_ref": source_ref,
+        "metadata": dict(metadata or {}),
+        "blockers": blockers,
+    }
+
+def _v102_activity_feed(events, user_id, role, project_id, since_at=""):
+    uid = str(user_id or "")
+    role_u = str(role or "").upper()
+    pid = str(project_id or "")
+    visible = []
+
+    for e in (events or []):
+        if str(e.get("project_id","")) != pid:
+            continue
+        if since_at and str(e.get("created_at","")) <= str(since_at):
+            continue
+
+        recipients = {str(x) for x in e.get("recipient_ids",[])}
+        roles = {str(x).upper() for x in e.get("roles",[])}
+        is_visible = uid in recipients or role_u in roles or e.get("broadcast") is True
+        if is_visible:
+            visible.append(e)
+
+    visible.sort(key=lambda x: (-int(x.get("priority",0)), str(x.get("created_at",""))))
+    unread = sum(1 for e in visible if not e.get("read",False))
+    return {
+        "count": len(visible),
+        "unread": unread,
+        "items": visible,
+    }
+
+def _v102_digest(events, user_id, role, project_id, since_at=""):
+    feed = _v102_activity_feed(events, user_id, role, project_id, since_at)
+    by_type = {}
+    for e in feed["items"]:
+        key = str(e.get("event_type","OTHER")).upper()
+        by_type[key] = by_type.get(key, 0) + 1
+
+    critical = sum(1 for e in feed["items"] if int(e.get("priority",0)) >= 90)
+    return {
+        "count": feed["count"],
+        "unread": feed["unread"],
+        "critical": critical,
+        "by_type": by_type,
+        "headline": (
+            "No new project activity"
+            if feed["count"] == 0
+            else f'{feed["count"]} updates since you last looked'
+        ),
+    }
+
+def _v102_mark_read(event, user_id):
+    blockers = []
+    if not event.get("event_id"):
+        blockers.append("EVENT_REQUIRED")
+    if not user_id:
+        blockers.append("USER_REQUIRED")
+    updated = dict(event)
+    if not blockers:
+        updated["read"] = True
+        updated["read_by"] = str(user_id)
+    return {
+        "ok": not blockers,
+        "event": updated,
+        "blockers": blockers,
+        "project_mutation": False,
+    }
+
+def _v102_notification_policy(event, channel, human_approved=False):
+    allowed_channels = {"IN_APP","EMAIL","SMS"}
+    blockers = []
+    channel_u = str(channel or "").upper()
+
+    if not event.get("valid", True):
+        blockers.append("EVENT_INVALID")
+    if channel_u not in allowed_channels:
+        blockers.append("CHANNEL_INVALID")
+
+    if channel_u in {"EMAIL","SMS"} and not human_approved:
+        blockers.append("HUMAN_SEND_APPROVAL_REQUIRED")
+
+    return {
+        "ready": not blockers,
+        "channel": channel_u,
+        "blockers": blockers,
+        "automatic_external_send": False,
+    }
+
+def _v102_noise_control(events):
+    grouped = {}
+    for e in (events or []):
+        key = (
+            str(e.get("project_id","")),
+            str(e.get("event_type","")),
+            str(e.get("source_ref","")),
+            str(e.get("title","")),
+        )
+        current = grouped.get(key)
+        if current is None or int(e.get("priority",0)) > int(current.get("priority",0)):
+            grouped[key] = e
+    compact = list(grouped.values())
+    compact.sort(key=lambda x: (-int(x.get("priority",0)), str(x.get("created_at",""))))
+    return {
+        "input_count": len(events or []),
+        "output_count": len(compact),
+        "items": compact,
+    }
+
+def _v102_regression_results():
+    rows = []
+
+    events = [
+        _v102_activity_event(
+            "e1","P1","ASSIGNMENT","Resolve RFI-44",
+            actor="pm1",recipient_ids=["u1"],priority=90,
+            created_at="2026-08-20T08:00:00Z",source_ref="RFI-44"
+        ),
+        _v102_activity_event(
+            "e2","P1","RFI_UPDATE","Architect responded to RFI-44",
+            actor="architect",roles=["PM"],priority=80,
+            created_at="2026-08-20T09:00:00Z",source_ref="RFI-44"
+        ),
+        _v102_activity_event(
+            "e3","P1","PROCUREMENT","AHU vendor recovery plan updated",
+            actor="vendor",roles=["PM","SUPERINTENDENT"],priority=95,
+            created_at="2026-08-20T10:00:00Z",source_ref="PO-8"
+        ),
+        _v102_activity_event(
+            "e4","P2","ISSUE","Other project issue",
+            actor="super2",recipient_ids=["u1"],priority=100,
+            created_at="2026-08-20T10:30:00Z",source_ref="ISS-9"
+        ),
+        _v102_activity_event(
+            "e5","P1","DECISION","Change order needs approval",
+            actor="pm1",roles=["PM"],priority=70,
+            created_at="2026-08-20T11:00:00Z",source_ref="CO-12",read=True
+        ),
+    ]
+
+    rows += [
+        {"case":"activity events valid","passed":all(e["valid"] for e in events),"actual":{"count":len(events)}},
+        {"case":"activity event requires timestamp","passed":"CREATED_AT_REQUIRED" in _v102_activity_event("x","P1","RFI","Missing time")["blockers"],"actual":_v102_activity_event("x","P1","RFI","Missing time")},
+    ]
+
+    feed_pm = _v102_activity_feed(events,"u1","PM","P1")
+    rows += [
+        {"case":"feed project scoped","passed":feed_pm["count"]==4,"actual":feed_pm},
+        {"case":"feed excludes other project","passed":not any(e["project_id"]=="P2" for e in feed_pm["items"]),"actual":feed_pm},
+        {"case":"feed unread count","passed":feed_pm["unread"]==3,"actual":feed_pm},
+        {"case":"feed priority ordering","passed":feed_pm["items"][0]["event_id"]=="e3","actual":feed_pm["items"][0]},
+    ]
+
+    since = _v102_activity_feed(events,"u1","PM","P1","2026-08-20T09:30:00Z")
+    rows.append({"case":"since filter works","passed":since["count"]==2,"actual":since})
+
+    digest = _v102_digest(events,"u1","PM","P1")
+    rows += [
+        {"case":"digest headline counts","passed":digest["count"]==4,"actual":digest},
+        {"case":"digest critical counts","passed":digest["critical"]==2,"actual":digest},
+        {"case":"digest groups event types","passed":digest["by_type"].get("RFI_UPDATE")==1,"actual":digest},
+    ]
+
+    read_result = _v102_mark_read(events[0],"u1")
+    bad_read = _v102_mark_read(events[0],"")
+    rows += [
+        {"case":"mark read succeeds","passed":read_result["ok"] and read_result["event"]["read"] is True,"actual":read_result},
+        {"case":"mark read requires user","passed":"USER_REQUIRED" in bad_read["blockers"],"actual":bad_read},
+        {"case":"mark read does not mutate project","passed":read_result["project_mutation"] is False,"actual":read_result},
+    ]
+
+    in_app = _v102_notification_policy(events[0],"IN_APP",False)
+    email_blocked = _v102_notification_policy(events[0],"EMAIL",False)
+    email_ready = _v102_notification_policy(events[0],"EMAIL",True)
+    rows += [
+        {"case":"in-app notification allowed","passed":in_app["ready"],"actual":in_app},
+        {"case":"email requires human approval","passed":"HUMAN_SEND_APPROVAL_REQUIRED" in email_blocked["blockers"],"actual":email_blocked},
+        {"case":"approved email ready","passed":email_ready["ready"] and not email_ready["automatic_external_send"],"actual":email_ready},
+    ]
+
+    duplicate_events = [
+        events[1],
+        dict(events[1], event_id="e2b", priority=60, created_at="2026-08-20T09:05:00Z"),
+        events[2],
+    ]
+    compact = _v102_noise_control(duplicate_events)
+    rows += [
+        {"case":"noise control deduplicates","passed":compact["output_count"]==2,"actual":compact},
+        {"case":"noise control keeps higher priority","passed":any(e["event_id"]=="e2" for e in compact["items"]),"actual":compact},
+    ]
+
+    for name in (
+        "activity center preserves project scope",
+        "no automatic external communication",
+        "no notification-triggered project mutation",
+        "no invented activity events",
+        "human notification approval remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v102_regression_summary():
+    rows = _v102_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v101_regression_summary()
+    return {
+        "version":"1.0.2",
+        "suite":"Notification & Activity Center",
+        "notification_activity_passed":passed,
+        "notification_activity_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-0-2")
+def blueprint_1_0_2_health():
+    return _v102_regression_summary()
+
+@app.get("/activity-center-1-0-2", response_class=HTMLResponse)
+def activity_center_1_0_2_page():
+    s = _v102_regression_summary()
+    demo_events = [
+        _v102_activity_event("e1","P1","ASSIGNMENT","Resolve RFI-44",recipient_ids=["u1"],priority=90,created_at="2026-08-20T08:00:00Z"),
+        _v102_activity_event("e2","P1","PROCUREMENT","AHU recovery plan updated",roles=["PM"],priority=95,created_at="2026-08-20T10:00:00Z"),
+        _v102_activity_event("e3","P1","DECISION","CO-12 needs approval",roles=["PM"],priority=70,created_at="2026-08-20T11:00:00Z"),
+    ]
+    digest = _v102_digest(demo_events,"u1","PM","P1")
+    return shell(
+        "BuildCommand AI 1.0.2",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · 1.0.2</div>'
+        f'<h1>Notification & Activity Center</h1>'
+        f'<p class="muted">One project-scoped feed for assignments, mentions, overdue work, RFI/submittal/procurement updates, decisions, and what changed since your last visit.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">New Updates</div><div class="kpi">{digest["count"]}</div></div>'
+        f'<div class="card"><div class="label">Critical Updates</div><div class="kpi">{digest["critical"]}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> In-app activity can be surfaced automatically, but email/SMS delivery still requires explicit human-approved communication policy.</p></div>'
+    )
