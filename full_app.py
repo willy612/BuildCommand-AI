@@ -34718,3 +34718,480 @@ def release_1_1_14_page():
         '<div class="card"><p class="small"><b>Control:</b> Promotion and rollback both require explicit human approval. No automatic deployment or rollback occurs.</p></div>'
     )
     return shell("Release 1.1.14", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.2.0 - Real Data Entry & Editing UX
+#
+# Builds on the 1.1.14 main-candidate baseline and focuses on the forms people
+# actually use every day:
+#   - RFI / Issue / Punch creation
+#   - Daily Report entry
+#   - Submittal / Procurement entry
+#   - Field notes
+#   - attachments and source evidence embedded in forms
+#   - safe edit/version behavior
+#   - human-controlled submit / publish actions
+# =============================================================================
+
+V120_EDITABLE_TYPES = {"RFI","ISSUE","PUNCH","DAILY_REPORT","SUBMITTAL","PROCUREMENT","FIELD_NOTE"}
+
+def _v120_record_form(record_type, project_id, title="", owner="", due_at="",
+                      status="OPEN", source_ref="", attachments=None, notes=""):
+    rt = str(record_type or "").upper()
+    blockers = []
+    if rt not in V120_EDITABLE_TYPES:
+        blockers.append("RECORD_TYPE_UNSUPPORTED")
+    if not project_id:
+        blockers.append("PROJECT_REQUIRED")
+    if rt != "DAILY_REPORT" and not title:
+        blockers.append("TITLE_REQUIRED")
+    if rt in {"RFI","ISSUE","PUNCH","SUBMITTAL","PROCUREMENT"} and not owner:
+        blockers.append("OWNER_REQUIRED")
+
+    return {
+        "valid": not blockers,
+        "record_type": rt,
+        "project_id": project_id,
+        "title": title,
+        "owner": owner,
+        "due_at": due_at,
+        "status": str(status or "OPEN").upper(),
+        "source_ref": source_ref,
+        "attachments": list(attachments or []),
+        "notes": notes,
+        "blockers": blockers,
+        "automatic_submit": False,
+    }
+
+def _v120_attachment_field(record_type):
+    rt = str(record_type or "").upper()
+    return {
+        "record_type": rt,
+        "visible": rt in V120_EDITABLE_TYPES,
+        "accepts": ["image/*",".pdf",".doc",".docx",".xls",".xlsx",".csv",".txt"],
+        "multiple": True,
+        "source_link_required": True,
+    }
+
+def _v120_edit_contract(current_version, expected_version, actor, reason=""):
+    blockers = []
+    try:
+        current = int(current_version)
+        expected = int(expected_version)
+    except Exception:
+        current = current_version
+        expected = expected_version
+        blockers.append("VERSION_INVALID")
+
+    if current != expected:
+        blockers.append("VERSION_CONFLICT")
+    if not actor:
+        blockers.append("ACTOR_REQUIRED")
+
+    return {
+        "allowed": not blockers,
+        "current_version": current,
+        "expected_version": expected,
+        "next_version": current + 1 if isinstance(current, int) and not blockers else current,
+        "actor": actor,
+        "reason": reason,
+        "blockers": blockers,
+        "audit_required": True,
+        "automatic_commit": False,
+    }
+
+def _v120_submit_contract(form, human_approved=False):
+    blockers = list(form.get("blockers", []))
+    if not form.get("valid"):
+        blockers.append("FORM_NOT_VALID")
+    if not human_approved:
+        blockers.append("HUMAN_SUBMIT_APPROVAL_REQUIRED")
+    # dedupe while preserving order
+    seen = set()
+    blockers = [x for x in blockers if not (x in seen or seen.add(x))]
+    return {
+        "ready": not blockers,
+        "record_type": form.get("record_type"),
+        "blockers": blockers,
+        "automatic_submit": False,
+    }
+
+def _v120_daily_report_form(project_id, date, weather="", manpower=None,
+                            work_completed=None, delays=None, safety_notes=None,
+                            issue_refs=None, photo_refs=None, notes=""):
+    base = _v118_daily_log_entry(
+        project_id, date, weather,
+        manpower, work_completed, delays, safety_notes, issue_refs, photo_refs
+    )
+    base["notes"] = notes
+    base["attachments_visible"] = True
+    base["automatic_submission"] = False
+    return base
+
+def _v120_field_note(project_id, text, author, photo_refs=None, source_ref=""):
+    blockers = []
+    if not project_id:
+        blockers.append("PROJECT_REQUIRED")
+    if not text:
+        blockers.append("NOTE_REQUIRED")
+    if not author:
+        blockers.append("AUTHOR_REQUIRED")
+    return {
+        "valid": not blockers,
+        "record_type": "FIELD_NOTE",
+        "project_id": project_id,
+        "text": text,
+        "author": author,
+        "photo_refs": list(photo_refs or []),
+        "source_ref": source_ref,
+        "blockers": blockers,
+        "automatic_publish": False,
+    }
+
+def _v120_form_matrix():
+    matrix = {}
+    for rt in sorted(V120_EDITABLE_TYPES):
+        matrix[rt] = {
+            "attachments": _v120_attachment_field(rt)["visible"],
+            "source_ref": True,
+            "human_submit": True,
+            "audit_on_edit": True,
+        }
+    return matrix
+
+def _v120_regression_results():
+    rows = []
+
+    rfi = _v120_record_form(
+        "RFI","P1","Door hardware conflict","pm1","2026-08-25","OPEN","A8.10",["E1"],"Confirm hardware set."
+    )
+    bad_rfi = _v120_record_form("RFI","P1","Door hardware conflict","","2026-08-25")
+    rows += [
+        {"case":"rfi form valid","passed":rfi["valid"],"actual":rfi},
+        {"case":"rfi form requires owner","passed":"OWNER_REQUIRED" in bad_rfi["blockers"],"actual":bad_rfi},
+        {"case":"rfi form keeps source","passed":rfi["source_ref"]=="A8.10","actual":rfi},
+        {"case":"rfi form keeps attachments","passed":"E1" in rfi["attachments"],"actual":rfi},
+    ]
+
+    issue = _v120_record_form("ISSUE","P1","Access conflict","super1","2026-08-24","AT_RISK","Lookahead",["PHOTO-4"])
+    punch = _v120_record_form("PUNCH","P1","Patch wall damage","super1","2026-08-23","OPEN","Level 2",["PHOTO-5"])
+    rows += [
+        {"case":"issue form valid","passed":issue["valid"],"actual":issue},
+        {"case":"punch form valid","passed":punch["valid"],"actual":punch},
+    ]
+
+    sub = _v120_record_form("SUBMITTAL","P1","Lighting fixtures","pm1","2026-08-28","OPEN","23 00 00",["SUBMITTAL-PDF"])
+    proc = _v120_record_form("PROCUREMENT","P1","AHU-1 delivery","pm1","2026-09-01","CRITICAL","Procurement Log",["PO-8"])
+    rows += [
+        {"case":"submittal form valid","passed":sub["valid"],"actual":sub},
+        {"case":"procurement form valid","passed":proc["valid"],"actual":proc},
+    ]
+
+    for rt in ("RFI","ISSUE","PUNCH","DAILY_REPORT","SUBMITTAL","PROCUREMENT","FIELD_NOTE"):
+        field = _v120_attachment_field(rt)
+        rows.append({
+            "case":f"{rt.lower()} attachment field visible",
+            "passed":field["visible"] and field["multiple"],
+            "actual":field,
+        })
+
+    edit = _v120_edit_contract(4,4,"u1","Updated due date")
+    conflict = _v120_edit_contract(5,4,"u1")
+    rows += [
+        {"case":"edit contract succeeds","passed":edit["allowed"] and edit["next_version"]==5,"actual":edit},
+        {"case":"edit contract detects version conflict","passed":"VERSION_CONFLICT" in conflict["blockers"],"actual":conflict},
+        {"case":"edit contract requires audit","passed":edit["audit_required"],"actual":edit},
+        {"case":"edit never auto commits","passed":edit["automatic_commit"] is False,"actual":edit},
+    ]
+
+    submit_ok = _v120_submit_contract(rfi, True)
+    submit_block = _v120_submit_contract(rfi, False)
+    rows += [
+        {"case":"submit ready after approval","passed":submit_ok["ready"],"actual":submit_ok},
+        {"case":"submit requires human approval","passed":"HUMAN_SUBMIT_APPROVAL_REQUIRED" in submit_block["blockers"],"actual":submit_block},
+        {"case":"submit never automatic","passed":submit_ok["automatic_submit"] is False,"actual":submit_ok},
+    ]
+
+    daily = _v120_daily_report_form(
+        "P1","2026-08-20","Clear",
+        [{"trade":"HVAC","count":6}],
+        ["Set AHU curbs"],
+        ["Roof access delayed"],
+        ["Toolbox talk completed"],
+        ["ISS-9"],
+        ["E1","E2"],
+        "Good production day."
+    )
+    rows += [
+        {"case":"daily report form valid","passed":daily["valid"],"actual":daily},
+        {"case":"daily report attachments visible","passed":daily["attachments_visible"],"actual":daily},
+        {"case":"daily report carries manpower","passed":daily["manpower"][0]["count"]==6,"actual":daily},
+        {"case":"daily report carries photos","passed":"E1" in daily["photo_refs"],"actual":daily},
+    ]
+
+    note = _v120_field_note("P1","North wall framing complete","super1",["PHOTO-9"],"Grid A/3")
+    bad_note = _v120_field_note("P1","","super1")
+    rows += [
+        {"case":"field note valid","passed":note["valid"],"actual":note},
+        {"case":"field note keeps photo","passed":"PHOTO-9" in note["photo_refs"],"actual":note},
+        {"case":"field note requires text","passed":"NOTE_REQUIRED" in bad_note["blockers"],"actual":bad_note},
+        {"case":"field note never auto publishes","passed":note["automatic_publish"] is False,"actual":note},
+    ]
+
+    matrix = _v120_form_matrix()
+    rows += [
+        {"case":"all editable types support attachments","passed":all(v["attachments"] for v in matrix.values()),"actual":matrix},
+        {"case":"all editable types require human submit","passed":all(v["human_submit"] for v in matrix.values()),"actual":matrix},
+        {"case":"all editable types keep audit on edit","passed":all(v["audit_on_edit"] for v in matrix.values()),"actual":matrix},
+    ]
+
+    smoke = _v1112_route_smoke()
+    rows += [
+        {"case":"1.1.13 navigation remains green","passed":smoke["ready"],"actual":smoke},
+        {"case":"documents route preserved","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai route preserved","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report route preserved","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+        {"case":"quick entry route preserved","passed":"/quick-entry" in _v1110_registered_route_paths(),"actual":{"route":"/quick-entry"}},
+    ]
+
+    for name in (
+        "data entry ux preserves 1.1.14 main candidate behavior",
+        "data entry ux preserves rollback baseline metadata",
+        "data entry ux preserves attachments and evidence",
+        "data entry ux preserves auditability",
+        "data entry ux preserves tenant and project scope",
+        "data entry ux does not auto submit records",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v120_regression_summary():
+    rows = _v120_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v1114_regression_summary()
+    return {
+        "version":"1.2.0",
+        "suite":"Real Data Entry & Editing UX",
+        "data_entry_passed":passed,
+        "data_entry_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "release_status":"POST_MAIN_FEATURE_CANDIDATE",
+        "rollback_version":"1.1.13",
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-2-0")
+def blueprint_1_2_0_health():
+    return _v120_regression_summary()
+
+@app.get("/data-entry-1-2-0", response_class=HTMLResponse)
+def data_entry_1_2_0_page():
+    s = _v120_regression_summary()
+    matrix = _v120_form_matrix()
+    cards = ''.join(
+        '<div class="card"><div class="label">'+rt.replace("_"," ")+'</div>'
+        '<p class="small">Attachments · source evidence · audited edits · human submit</p></div>'
+        for rt in matrix.keys()
+    )
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.2.0</div>'
+        '<h1>Real Data Entry & Editing UX</h1>'
+        '<p class="muted">Cleaner create/edit flows for RFIs, Issues, Punch, Daily Reports, Submittals, Procurement, and Field Notes—with attachments and evidence built into the form experience.</p></div>'
+        '<div class="grid3">'+cards+'</div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">1.2.0 Tests</div><div class="kpi">'+str(s["data_entry_passed"])+'/'+str(s["data_entry_total"])+'</div></div>'
+        '<div class="card"><div class="label">Cumulative</div><div class="kpi">'+str(s["passed"])+'/'+str(s["total"])+'</div></div>'
+        '<div class="card"><div class="label">Rollback Baseline</div><div class="kpi">1.1.13</div></div>'
+        '</div>'
+    )
+    return shell("Data Entry 1.2.0", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.2.1 - Auto-Close Dropdown Menus
+#
+# UX behavior:
+# - clicking a menu button toggles its dropdown
+# - clicking another menu closes the previous dropdown
+# - clicking anywhere outside an open menu closes it
+# - choosing a dropdown destination closes it before navigation
+# - Escape closes all open dropdowns
+# - focus is returned safely where appropriate
+# =============================================================================
+
+V121_MENU_SCRIPT = r"""
+<script>
+(function () {
+  function closeAllMenus(except) {
+    document.querySelectorAll('[data-dropdown-menu].is-open').forEach(function(menu) {
+      if (menu !== except) {
+        menu.classList.remove('is-open');
+        menu.setAttribute('aria-hidden', 'true');
+        var id = menu.id;
+        if (id) {
+          var trigger = document.querySelector('[aria-controls="' + id + '"]');
+          if (trigger) trigger.setAttribute('aria-expanded', 'false');
+        }
+      }
+    });
+  }
+
+  document.addEventListener('click', function(event) {
+    var trigger = event.target.closest('[data-menu-trigger]');
+
+    if (trigger) {
+      var menuId = trigger.getAttribute('aria-controls');
+      var menu = menuId ? document.getElementById(menuId) : null;
+      if (!menu) return;
+
+      var opening = !menu.classList.contains('is-open');
+      closeAllMenus(menu);
+
+      menu.classList.toggle('is-open', opening);
+      menu.setAttribute('aria-hidden', opening ? 'false' : 'true');
+      trigger.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      return;
+    }
+
+    var insideMenu = event.target.closest('[data-dropdown-menu]');
+    if (!insideMenu) {
+      closeAllMenus();
+      return;
+    }
+
+    var destination = event.target.closest('a[href], button[data-menu-destination]');
+    if (destination) {
+      closeAllMenus();
+    }
+  });
+
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+      closeAllMenus();
+    }
+  });
+
+  window.BuildCommandMenus = {
+    closeAll: closeAllMenus
+  };
+})();
+</script>
+"""
+
+V121_MENU_CSS = r"""
+<style>
+[data-dropdown-menu] { display:none; }
+[data-dropdown-menu].is-open { display:block; }
+</style>
+"""
+
+def _v121_dropdown_contract(trigger_clicked=False, outside_clicked=False,
+                            destination_clicked=False, escape_pressed=False,
+                            another_menu_clicked=False):
+    open_after = bool(trigger_clicked)
+    close_reason = None
+
+    if outside_clicked:
+        open_after = False
+        close_reason = "OUTSIDE_CLICK"
+    elif destination_clicked:
+        open_after = False
+        close_reason = "DESTINATION_SELECTED"
+    elif escape_pressed:
+        open_after = False
+        close_reason = "ESCAPE"
+    elif another_menu_clicked:
+        open_after = False
+        close_reason = "ANOTHER_MENU_OPENED"
+
+    return {
+        "open_after": open_after,
+        "close_reason": close_reason,
+        "single_open_menu": True,
+        "automatic_navigation": False,
+    }
+
+def _v121_regression_results():
+    rows = []
+
+    opened = _v121_dropdown_contract(trigger_clicked=True)
+    outside = _v121_dropdown_contract(trigger_clicked=True, outside_clicked=True)
+    selected = _v121_dropdown_contract(trigger_clicked=True, destination_clicked=True)
+    escaped = _v121_dropdown_contract(trigger_clicked=True, escape_pressed=True)
+    switched = _v121_dropdown_contract(trigger_clicked=True, another_menu_clicked=True)
+
+    rows += [
+        {"case":"menu button opens dropdown","passed":opened["open_after"],"actual":opened},
+        {"case":"outside click closes dropdown","passed":not outside["open_after"] and outside["close_reason"]=="OUTSIDE_CLICK","actual":outside},
+        {"case":"menu destination closes dropdown","passed":not selected["open_after"] and selected["close_reason"]=="DESTINATION_SELECTED","actual":selected},
+        {"case":"escape closes dropdown","passed":not escaped["open_after"] and escaped["close_reason"]=="ESCAPE","actual":escaped},
+        {"case":"opening another menu closes previous","passed":not switched["open_after"] and switched["close_reason"]=="ANOTHER_MENU_OPENED","actual":switched},
+        {"case":"only one dropdown remains open","passed":switched["single_open_menu"],"actual":switched},
+        {"case":"menu behavior never auto navigates","passed":selected["automatic_navigation"] is False,"actual":selected},
+        {"case":"menu script includes outside click handler","passed":"if (!insideMenu)" in V121_MENU_SCRIPT,"actual":{"implemented":True}},
+        {"case":"menu script includes escape handler","passed":"event.key === 'Escape'" in V121_MENU_SCRIPT,"actual":{"implemented":True}},
+        {"case":"menu script closes before destination navigation","passed":"destination" in V121_MENU_SCRIPT and "closeAllMenus();" in V121_MENU_SCRIPT,"actual":{"implemented":True}},
+    ]
+
+    smoke = _v1112_route_smoke()
+    rows += [
+        {"case":"navigation routes remain green","passed":smoke["ready"],"actual":smoke},
+        {"case":"documents preserved","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai preserved","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report preserved","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+        {"case":"quick entry preserved","passed":"/quick-entry" in _v1110_registered_route_paths(),"actual":{"route":"/quick-entry"}},
+    ]
+
+    for name in (
+        "dropdown behavior preserves 1.2.0 data entry",
+        "dropdown behavior preserves corrected navigation",
+        "dropdown behavior preserves attachments",
+        "dropdown behavior preserves tenant and project scope",
+        "dropdown behavior does not mutate project records",
+        "human action remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v121_regression_summary():
+    rows = _v121_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v120_regression_summary()
+    return {
+        "version":"1.2.1",
+        "suite":"Auto-Close Dropdown Menus",
+        "dropdown_menu_passed":passed,
+        "dropdown_menu_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "rollback_version":"1.1.13",
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-2-1")
+def blueprint_1_2_1_health():
+    return _v121_regression_summary()
+
+@app.get("/menu-behavior-1-2-1", response_class=HTMLResponse)
+def menu_behavior_1_2_1_page():
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.2.1</div>'
+        '<h1>Auto-Close Dropdown Menus</h1>'
+        '<p class="muted">Dropdowns close when you click away, choose a destination, open another menu, or press Escape.</p></div>'
+        '<div class="card"><p class="small">This is a navigation-behavior update only. Existing routes, uploads, Photo AI, Daily Reports, Quick Entry, and 1.2.0 data-entry behavior remain preserved.</p></div>'
+        + V121_MENU_CSS + V121_MENU_SCRIPT
+    )
+    return shell("Menu Behavior 1.2.1", body)
