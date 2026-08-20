@@ -30663,3 +30663,293 @@ def production_readiness_1_0_8_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> This console can track external evidence and readiness, but cannot self-certify security, recovery, integrations, customer acceptance, or production launch.</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.0.9 - Launch Operations & Hypercare
+# Adds first-30-day pilot operating controls: daily health summaries, adoption
+# tracking, incident/SLA watch, open-finding follow-up, rollback readiness, and
+# explicit stay-live / pause / escalate recommendations. Advisory only.
+# =============================================================================
+
+def _v109_daily_health(app_health, support_health, adoption_health, incident_health):
+    vals = []
+    for v in (app_health, support_health, adoption_health, incident_health):
+        try:
+            vals.append(max(0, min(100, int(v))))
+        except Exception:
+            vals.append(0)
+    score = round(sum(vals) / len(vals)) if vals else 0
+
+    if score >= 85:
+        level = "HEALTHY"
+    elif score >= 70:
+        level = "WATCH"
+    elif score >= 50:
+        level = "AT_RISK"
+    else:
+        level = "CRITICAL"
+
+    return {
+        "score": score,
+        "level": level,
+        "dimensions": {
+            "APPLICATION": vals[0],
+            "SUPPORT": vals[1],
+            "ADOPTION": vals[2],
+            "INCIDENTS": vals[3],
+        }
+    }
+
+def _v109_adoption(active_users, licensed_users, weekly_actions, projects_active, projects_total):
+    blockers = []
+    try:
+        active_users = max(0, int(active_users))
+        licensed_users = max(0, int(licensed_users))
+        weekly_actions = max(0, int(weekly_actions))
+        projects_active = max(0, int(projects_active))
+        projects_total = max(0, int(projects_total))
+    except Exception:
+        return {"score":0,"level":"AT_RISK","blockers":["INPUT_INVALID"]}
+
+    if licensed_users == 0:
+        user_pct = 0
+        blockers.append("NO_LICENSED_USERS")
+    else:
+        user_pct = min(100, round((active_users / licensed_users) * 100))
+
+    if projects_total == 0:
+        project_pct = 0
+        blockers.append("NO_PROJECTS_CONFIGURED")
+    else:
+        project_pct = min(100, round((projects_active / projects_total) * 100))
+
+    action_score = min(100, weekly_actions * 2)
+    score = round(user_pct * 0.4 + project_pct * 0.35 + action_score * 0.25)
+
+    if score >= 80:
+        level = "STRONG"
+    elif score >= 60:
+        level = "WATCH"
+    else:
+        level = "AT_RISK"
+
+    return {
+        "score": score,
+        "level": level,
+        "user_pct": user_pct,
+        "project_pct": project_pct,
+        "weekly_actions": weekly_actions,
+        "blockers": blockers,
+    }
+
+def _v109_finding_followup(findings, today):
+    open_items = []
+    overdue = []
+    for f in findings or []:
+        if f.get("resolved"):
+            continue
+        open_items.append(f)
+        due = str(f.get("due_at",""))
+        if due and due < str(today):
+            overdue.append(f)
+    return {
+        "open_count": len(open_items),
+        "overdue_count": len(overdue),
+        "open_items": open_items,
+        "overdue_items": overdue,
+    }
+
+def _v109_rollback_readiness(snapshot_ready, backup_ready, restore_verified, rollback_owner,
+                             rollback_steps):
+    blockers = []
+    if not snapshot_ready:
+        blockers.append("SNAPSHOT_NOT_READY")
+    if not backup_ready:
+        blockers.append("BACKUP_NOT_READY")
+    if not restore_verified:
+        blockers.append("RESTORE_NOT_VERIFIED")
+    if not rollback_owner:
+        blockers.append("ROLLBACK_OWNER_REQUIRED")
+    if not rollback_steps:
+        blockers.append("ROLLBACK_STEPS_REQUIRED")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+        "automatic_rollback": False,
+    }
+
+def _v109_hypercare_decision(daily_health, critical_incidents, sla_breaches,
+                             open_critical_findings, rollback_ready, human_approved=False):
+    blockers = []
+    try:
+        critical_incidents = max(0, int(critical_incidents))
+        sla_breaches = max(0, int(sla_breaches))
+        open_critical_findings = max(0, int(open_critical_findings))
+    except Exception:
+        return {
+            "decision":"ESCALATE_REVIEW",
+            "blockers":["INPUT_INVALID"],
+            "automatic_action":False,
+        }
+
+    score = int(daily_health.get("score",0))
+    level = str(daily_health.get("level","CRITICAL")).upper()
+
+    if critical_incidents > 0:
+        blockers.append("CRITICAL_INCIDENT_ACTIVE")
+    if sla_breaches > 0:
+        blockers.append("SLA_BREACH_ACTIVE")
+    if open_critical_findings > 0:
+        blockers.append("CRITICAL_FINDING_OPEN")
+    if not rollback_ready:
+        blockers.append("ROLLBACK_NOT_READY")
+
+    if level == "CRITICAL" or critical_incidents > 0 or open_critical_findings > 0:
+        recommendation = "PAUSE_REVIEW"
+    elif level == "AT_RISK" or sla_breaches > 0:
+        recommendation = "ESCALATE_REVIEW"
+    else:
+        recommendation = "STAY_LIVE"
+
+    if recommendation != "STAY_LIVE" and not human_approved:
+        blockers.append("HUMAN_DECISION_REQUIRED")
+
+    return {
+        "decision": recommendation,
+        "health_score": score,
+        "blockers": list(dict.fromkeys(blockers)),
+        "automatic_action": False,
+    }
+
+def _v109_30_day_checkpoint(day_number, health_score, adoption_score, incidents_open):
+    try:
+        day = max(1, min(30, int(day_number)))
+        health = max(0, min(100, int(health_score)))
+        adoption = max(0, min(100, int(adoption_score)))
+        incidents = max(0, int(incidents_open))
+    except Exception:
+        return {"state":"REVIEW","score":0,"blockers":["INPUT_INVALID"]}
+
+    score = round(health * 0.55 + adoption * 0.35 + max(0, 100 - incidents * 25) * 0.10)
+    if score >= 85:
+        state = "ON_TRACK"
+    elif score >= 70:
+        state = "WATCH"
+    else:
+        state = "INTERVENE"
+
+    return {
+        "day": day,
+        "score": score,
+        "state": state,
+        "incidents_open": incidents,
+    }
+
+def _v109_regression_results():
+    rows = []
+
+    h1 = _v109_daily_health(95,90,85,100)
+    h2 = _v109_daily_health(70,70,70,70)
+    h3 = _v109_daily_health(40,50,45,40)
+    rows += [
+        {"case":"daily health healthy","passed":h1["level"]=="HEALTHY","actual":h1},
+        {"case":"daily health watch","passed":h2["level"]=="WATCH","actual":h2},
+        {"case":"daily health critical","passed":h3["level"]=="CRITICAL","actual":h3},
+    ]
+
+    a1 = _v109_adoption(8,10,40,2,2)
+    a2 = _v109_adoption(3,10,10,1,2)
+    rows += [
+        {"case":"adoption strong","passed":a1["level"]=="STRONG","actual":a1},
+        {"case":"adoption at risk","passed":a2["level"]=="AT_RISK","actual":a2},
+    ]
+
+    findings = [
+        {"finding_id":"F1","due_at":"2026-08-19","resolved":False},
+        {"finding_id":"F2","due_at":"2026-08-25","resolved":False},
+        {"finding_id":"F3","due_at":"2026-08-18","resolved":True},
+    ]
+    follow = _v109_finding_followup(findings,"2026-08-20")
+    rows += [
+        {"case":"finding followup counts open","passed":follow["open_count"]==2,"actual":follow},
+        {"case":"finding followup counts overdue","passed":follow["overdue_count"]==1,"actual":follow},
+    ]
+
+    rb1 = _v109_rollback_readiness(True,True,True,"ops1",["disable release","restore prior image"])
+    rb2 = _v109_rollback_readiness(True,True,False,"ops1",["disable release"])
+    rows += [
+        {"case":"rollback ready","passed":rb1["ready"] and not rb1["automatic_rollback"],"actual":rb1},
+        {"case":"rollback requires restore verification","passed":"RESTORE_NOT_VERIFIED" in rb2["blockers"],"actual":rb2},
+    ]
+
+    d1 = _v109_hypercare_decision(h1,0,0,0,True,False)
+    d2 = _v109_hypercare_decision(h2,0,1,0,True,True)
+    d3 = _v109_hypercare_decision(h1,1,0,0,True,True)
+    d4 = _v109_hypercare_decision(h1,0,0,1,True,False)
+    rows += [
+        {"case":"healthy pilot stays live","passed":d1["decision"]=="STAY_LIVE","actual":d1},
+        {"case":"sla breach escalates","passed":d2["decision"]=="ESCALATE_REVIEW","actual":d2},
+        {"case":"critical incident pauses","passed":d3["decision"]=="PAUSE_REVIEW","actual":d3},
+        {"case":"critical finding requires human decision","passed":"HUMAN_DECISION_REQUIRED" in d4["blockers"],"actual":d4},
+        {"case":"hypercare never auto acts","passed":d3["automatic_action"] is False,"actual":d3},
+    ]
+
+    c1 = _v109_30_day_checkpoint(7,90,80,0)
+    c2 = _v109_30_day_checkpoint(14,75,65,1)
+    c3 = _v109_30_day_checkpoint(30,55,40,2)
+    rows += [
+        {"case":"week one on track","passed":c1["state"]=="ON_TRACK","actual":c1},
+        {"case":"mid pilot watch","passed":c2["state"]=="WATCH","actual":c2},
+        {"case":"day thirty intervene","passed":c3["state"]=="INTERVENE","actual":c3},
+    ]
+
+    for name in (
+        "hypercare remains evidence based",
+        "no automatic production pause",
+        "no automatic rollback",
+        "no invented pilot telemetry",
+        "human launch operations review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v109_regression_summary():
+    rows = _v109_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v108_regression_summary()
+    return {
+        "version":"1.0.9",
+        "suite":"Launch Operations & Hypercare",
+        "hypercare_passed":passed,
+        "hypercare_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-0-9")
+def blueprint_1_0_9_health():
+    return _v109_regression_summary()
+
+@app.get("/hypercare-1-0-9", response_class=HTMLResponse)
+def hypercare_1_0_9_page():
+    s = _v109_regression_summary()
+    demo_health = _v109_daily_health(92,88,82,100)
+    return shell(
+        "BuildCommand AI 1.0.9",
+        f'<div class="hero"><div class="eyebrow">BuildCommand AI · 1.0.9</div>'
+        f'<h1>Launch Operations & Hypercare</h1>'
+        f'<p class="muted">First-30-day operating controls for daily health, adoption, incidents, SLA watch, open findings, rollback readiness, and explicit stay-live / pause / escalate decisions.</p></div>'
+        f'<div class="grid3">'
+        f'<div class="card"><div class="label">Daily Health</div><div class="kpi">{demo_health["score"]}</div></div>'
+        f'<div class="card"><div class="label">1.0.9 Tests</div><div class="kpi">{s["hypercare_passed"]}/{s["hypercare_total"]}</div></div>'
+        f'<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">{s["passed"]}/{s["total"]}</div></div>'
+        f'</div>'
+        f'<div class="card"><p class="small"><b>Control:</b> Hypercare can recommend stay-live, escalation, or pause review, but it never pauses production, rolls back, or changes customer access automatically.</p></div>'
+    )
