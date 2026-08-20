@@ -913,7 +913,7 @@ document.addEventListener('keydown',function(e){{
 </head><body><div class="app">
 <header class="side">
   <div class="bc-header">
-    <div class="bc-brand-wrap"><div class="brand">BuildCommand AI</div><div class="company">{company_name}</div></div>
+    <div class="bc-brand-wrap"><div class="brand"><span>BuildCommand AI</span></div><div class="company">{company_name}</div></div>
     <div class="bc-nav-wrap">{nav}</div>
     <div class="bc-user-actions"><div class="bc-user-name">{display_name}</div><form method="post" action="/logout" class="bc-signout"><button type="submit">Sign Out</button></form></div>
   </div>
@@ -1013,69 +1013,9 @@ def _v37_link_card(title,desc,href,label="Open"):
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
-    """v372 lightweight BuildCommand cover page with Blueprint source-intelligence hardening."""
-    pid=project_id()
-    try:
-        p=db().execute("SELECT * FROM projects WHERE id=?",(pid,)).fetchone()
-        project_name=str(p["name"] if p and p["name"] else "Current Project")
-    except Exception:
-        project_name="Current Project"
+    """BuildCommand AI 1.0 primary homepage."""
+    return buildcommand_clean_home_1_0()
 
-    body = """
-    <style>
-    .bc370-cover{min-height:calc(100vh - 120px);display:flex;flex-direction:column;justify-content:center}
-    .bc370-hero{padding:52px 42px;border-radius:24px;background:linear-gradient(135deg,#111820 0%,#1e2a35 58%,#263847 100%);color:white;position:relative;overflow:hidden}
-    .bc370-kicker{font-size:11px;font-weight:850;letter-spacing:2px;opacity:.62;margin-bottom:14px}
-    .bc370-title{font-size:clamp(38px,6vw,74px);line-height:.94;letter-spacing:-2.5px;margin:0;max-width:920px}
-    .bc370-title span{display:block;opacity:.62;font-size:.45em;letter-spacing:.5px;margin-top:16px}
-    .bc370-copy{max-width:760px;font-size:17px;line-height:1.6;opacity:.78;margin:24px 0 30px}
-    .bc370-actions{display:flex;flex-wrap:wrap;gap:10px}
-    .bc370-actions a{display:inline-block;text-decoration:none;padding:12px 17px;border-radius:10px;font-weight:800}
-    .bc370-primary{background:white;color:#111820}.bc370-secondary{border:1px solid rgba(255,255,255,.24);color:white}
-    .bc370-project{margin-top:18px;font-size:12px;opacity:.6}
-    .bc370-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}
-    .bc370-launch{display:block;text-decoration:none;padding:20px;border:1px solid #e2e7ec;background:#fff;border-radius:15px;min-height:118px}
-    .bc370-launch:hover{transform:translateY(-2px);box-shadow:0 10px 28px rgba(0,0,0,.08)}
-    .bc370-launch b{display:block;font-size:16px;margin-bottom:7px}.bc370-launch span{font-size:12px;line-height:1.45;opacity:.65}
-    .bc370-bottom{display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:12px}
-    .bc370-command{padding:22px;border-radius:15px;border:1px solid #e2e7ec;background:#fff}.bc370-command h2{margin-top:0}
-    @media(max-width:1050px){.bc370-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    @media(max-width:650px){.bc370-hero{padding:34px 24px}.bc370-grid,.bc370-bottom{grid-template-columns:1fr}.bc370-title{letter-spacing:-1.5px}}
-    </style>
-    <div class="bc370-cover">
-      <section class="bc370-hero">
-        <div class="bc370-kicker">CONSTRUCTION OPERATION INTELLIGENCE SYSTEM</div>
-        <h1 class="bc370-title">BuildCommand AI<span>Command the project. Build with intelligence.</span></h1>
-        <p class="bc370-copy">One operating system connecting plans, scopes, field execution, project management, schedule, cost, safety, quality and construction intelligence.</p>
-        <div class="bc370-actions">
-          <a class="bc370-primary" href="/platform-369">Enter Command Center →</a>
-          <a class="bc370-secondary" href="/ask-buildcommand">Ask BuildCommand</a>
-          <a class="bc370-secondary" href="/blueprint-brain">Open Blueprint Brain</a>
-        </div>
-        <div class="bc370-project">ACTIVE PROJECT · __PROJECT__</div>
-      </section>
-      <section class="bc370-grid">
-        <a class="bc370-launch" href="/field-execution-4"><b>FIELD COMMAND</b><span>Daily priorities, trade readiness, production, constraints and handoffs.</span></a>
-        <a class="bc370-launch" href="/pm-command-4"><b>PM COMMAND</b><span>RFIs, submittals, decisions, coordination, procurement and changes.</span></a>
-        <a class="bc370-launch" href="/schedule-command-4"><b>SCHEDULE COMMAND</b><span>Look-aheads, sequence exposure, constraints and recovery intelligence.</span></a>
-        <a class="bc370-launch" href="/cost-command-4"><b>COST COMMAND</b><span>Known exposure, revisions, commercial risk and forecasting.</span></a>
-        <a class="bc370-launch" href="/blueprint-brain"><b>BLUEPRINT BRAIN</b><span>Read drawings and specifications and connect requirements to trades.</span></a>
-        <a class="bc370-launch" href="/knowledge-brain-2"><b>KNOWLEDGE BRAIN</b><span>Construction assemblies, trade ownership and cross-discipline reasoning.</span></a>
-        <a class="bc370-launch" href="/sqc-command"><b>SAFETY + QUALITY</b><span>Inspection readiness, QC checkpoints and project quality intelligence.</span></a>
-        <a class="bc370-launch" href="/autopilot"><b>PROJECT AUTOPILOT</b><span>What needs attention now, today, this week and next.</span></a>
-      </section>
-      <section class="bc370-bottom">
-        <div class="bc370-command">
-          <div class="bc370-kicker" style="color:#111820">BUILD COMMAND</div>
-          <h2>What do you need to know?</h2>
-          <p class="muted">Ask BuildCommand across the current project, or jump directly into the operating workspace you need.</p>
-          <div class="bc370-actions"><a class="bc370-primary" style="background:#111820;color:white" href="/ask-buildcommand">Ask BuildCommand →</a><a href="/platform-369">View all intelligence</a></div>
-        </div>
-        <div class="bc370-command"><div class="bc370-kicker" style="color:#111820">SYSTEM</div><h2>v372</h2><p class="muted">Lightweight cover page designed to open fast while keeping the intelligence engines behind the launch screen.</p></div>
-      </section>
-    </div>
-    """.replace("__PROJECT__",esc(project_name))
-    return shell("BuildCommand AI",body)
 
 @app.get("/build/analyze-project",response_class=HTMLResponse)
 def unified_analyze_project_page():
@@ -28443,3 +28383,122 @@ def buildcommand_alt_home():
         + '</div>'
     )
     return shell("BuildCommand AI — Alternate Home", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.0 - Clean Homepage + American Flag Background
+# Removes legacy visual duplication by providing a clean standalone home route.
+# =============================================================================
+
+@app.get("/home-1-0", response_class=HTMLResponse)
+def buildcommand_clean_home_1_0():
+    health = _v1_regression_summary()
+
+    return HTMLResponse(f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BuildCommand AI 1.0</title>
+<style>
+*{{box-sizing:border-box}}
+body{{
+  margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color:#172033;background:#f5f7fa;min-height:100vh;
+}}
+.wrap{{max-width:1280px;margin:auto;padding:22px}}
+.top{{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:22px}}
+.brand{{position:relative;display:inline-block;font-weight:950;font-size:23px;letter-spacing:-.03em;
+      padding:11px 18px 11px 64px;border-radius:12px;overflow:hidden;background:#fff;
+      box-shadow:0 2px 10px rgba(25,35,50,.06)}}
+.brand:before{{content:"";position:absolute;inset:0;z-index:0;opacity:.34;
+      background:repeating-linear-gradient(to bottom,#b22234 0,#b22234 7.69%,#fff 7.69%,#fff 15.38%)}}
+.brand:after{{content:"★ ★ ★\\A★ ★ ★";white-space:pre;position:absolute;left:0;top:0;z-index:1;
+      width:54px;height:100%;padding:5px 4px;background:#3c3b6e;color:#fff;font-size:9px;
+      line-height:1.55;letter-spacing:2px;text-align:center;opacity:.9}}
+.brand span{{position:relative;z-index:2}}
+.version{{font-size:12px;font-weight:850;color:#536071;margin-top:3px}}
+.project{{padding:10px 13px;border:1px solid #d6dce5;background:rgba(255,255,255,.92);border-radius:12px;font-weight:750}}
+.hero{{display:grid;grid-template-columns:1.4fr .6fr;gap:16px}}
+.card{{background:rgba(255,255,255,.94);border:1px solid rgba(214,220,229,.9);border-radius:18px;padding:20px;box-shadow:0 6px 24px rgba(25,35,50,.06);backdrop-filter:blur(5px)}}
+.eyebrow{{font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:#536071}}
+h1{{font-size:44px;line-height:1.03;letter-spacing:-.045em;margin:8px 0 10px}}
+.muted{{color:#687385}}
+.ask{{display:flex;gap:9px;margin-top:18px}}
+.ask input{{width:100%;padding:15px;border:1px solid #cfd6e0;border-radius:12px;font-size:16px;background:white}}
+.ask button{{padding:0 22px;border:0;border-radius:12px;background:#172033;color:white;font-weight:850}}
+.pulse{{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px}}
+.stat{{background:#f5f7fa;border-radius:13px;padding:13px}}
+.stat b{{display:block;font-size:28px;margin-top:3px}}
+.main{{display:grid;grid-template-columns:1.35fr .65fr;gap:16px;margin-top:16px}}
+.item{{padding:15px 0;border-bottom:1px solid #e8ebf0}}
+.item:last-child{{border-bottom:0}}
+.itemtop{{display:flex;justify-content:space-between;gap:12px}}
+.badge{{font-size:11px;font-weight:900;border:1px solid #d6dce5;border-radius:999px;padding:5px 8px;height:max-content}}
+.next{{font-size:13px;color:#687385;margin-top:5px}}
+.nav{{display:grid;grid-template-columns:1fr 1fr;gap:9px}}
+.nav a{{text-decoration:none;color:#172033;background:#fff;border:1px solid #e0e5ec;border-radius:13px;padding:14px}}
+.nav a b{{display:block;margin-bottom:3px}}
+.small{{font-size:12px;color:#687385}}
+@media(max-width:850px){{.hero,.main{{grid-template-columns:1fr}}h1{{font-size:35px}}}}
+@media(max-width:560px){{.wrap{{padding:12px}}.top{{align-items:flex-start;flex-direction:column}}.pulse{{grid-template-columns:1fr}}.nav{{grid-template-columns:1fr}}}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <div class="brand"><span>BuildCommand AI</span></div>
+      <div class="version">SYSTEM · 1.0 · {health["previous_passed"]}/{health["previous_total"]} VERIFIED</div>
+    </div>
+    <select class="project"><option>Downtown Office</option><option>Hospital Renovation</option></select>
+  </header>
+
+  <section class="hero">
+    <div class="card">
+      <div class="eyebrow">Today · Downtown Office</div>
+      <h1>Here’s what matters today.</h1>
+      <div class="muted">One clear view of what can start, what is slipping, what needs a decision, and where money is exposed.</div>
+      <form class="ask" action="/project-v419" method="get">
+        <input name="q" placeholder="Ask BuildCommand anything about this project…">
+        <button>Ask</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">Project pulse</div>
+      <div class="pulse">
+        <div class="stat"><span class="small">Attention</span><b>7</b></div>
+        <div class="stat"><span class="small">Do not start</span><b>1</b></div>
+        <div class="stat"><span class="small">My work</span><b>4</b></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="main">
+    <div class="card">
+      <div class="eyebrow">Priority queue</div>
+      <h2>Needs your attention</h2>
+      <div class="item"><div class="itemtop"><b>Storefront cannot start</b><span class="badge">DO NOT START</span></div><div class="next">Storefront · Resolve open RFI and confirm material release.</div></div>
+      <div class="item"><div class="itemtop"><b>AHU-1 delivery threatens startup</b><span class="badge">CRITICAL</span></div><div class="next">HVAC · Confirm vendor recovery plan.</div></div>
+      <div class="item"><div class="itemtop"><b>Lighting approval overdue</b><span class="badge">HIGH</span></div><div class="next">Electrical · Escalate design review.</div></div>
+      <div class="item"><div class="itemtop"><b>CO-12 price needs review</b><span class="badge">REVIEW</span></div><div class="next">General · Validate price and time impact.</div></div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">Workspace</div>
+      <h2>Go where you need</h2>
+      <div class="nav">
+        <a href="/workspace-v417?area=TODAY"><b>Today</b><span class="small">Daily priorities</span></a>
+        <a href="/workspace-v417?area=PROJECT_BRAIN"><b>Project Brain</b><span class="small">Connected project view</span></a>
+        <a href="/workspace-v417?area=FIELD"><b>Field</b><span class="small">Readiness & crews</span></a>
+        <a href="/workspace-v417?area=MONEY"><b>Money</b><span class="small">Cost & changes</span></a>
+        <a href="/workspace-v417?area=PRECONSTRUCTION"><b>Preconstruction</b><span class="small">Scope, bids & buyout</span></a>
+        <a href="/workspace-v417?area=COMPANY"><b>Company</b><span class="small">Portfolio & controls</span></a>
+      </div>
+      <div class="small" style="margin-top:15px">Legacy duplicate Build / Estimate / Manage navigation is intentionally omitted from this homepage.</div>
+    </div>
+  </section>
+</div>
+</body>
+</html>""")
