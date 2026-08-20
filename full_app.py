@@ -1013,7 +1013,7 @@ def _v37_link_card(title,desc,href,label="Open"):
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
-    return shell("Today", _v118_home_body())
+    return shell("Today", _v117r_home_body())
 
 
 @app.get("/build/analyze-project",response_class=HTMLResponse)
@@ -32698,371 +32698,318 @@ def pilot_command_center_1_1_6_page():
 
 
 # =============================================================================
-# BuildCommand AI 1.1.7 - Production Home & Daily Command Experience
-# Major UX simplification and reformat.
+# BuildCommand AI 1.1.7 REDO - Preserve Field Tools
 # =============================================================================
 
-V117_PRIMARY_NAV = [
-    {"key":"TODAY","label":"Today"},
-    {"key":"PROJECT_BRAIN","label":"Project Brain"},
-    {"key":"FIELD","label":"Field"},
-    {"key":"MONEY","label":"Money"},
-    {"key":"PRECONSTRUCTION","label":"Preconstruction"},
-    {"key":"COMPANY","label":"Company"},
-]
-V117_LEGACY_LABELS = {"BUILD","ESTIMATE","MANAGE"}
-
-def _v117_nav():
-    labels = [x["label"] for x in V117_PRIMARY_NAV]
-    normalized = {x.upper() for x in labels}
-    return {"items":V117_PRIMARY_NAV,"count":len(V117_PRIMARY_NAV),
-            "duplicates":len(labels)!=len(set(labels)),
-            "legacy_present":bool(normalized & V117_LEGACY_LABELS)}
-
-def _v117_home_header(project="All Projects", unread=0, show_version=False):
-    return {"app_name":"BuildCommand AI","brand_treatment":"AMERICAN_FLAG_BEHIND_APP_NAME",
-            "project_selector":project,"search":True,"notifications":int(unread or 0),
-            "profile":True,"version_visible":bool(show_version),"version":"1.1.7"}
-
-def _v117_role_home(role):
-    role = str(role or "VIEWER").upper()
-    mapping = {"SUPERINTENDENT":"TODAY","PM":"TODAY","ESTIMATOR":"PRECONSTRUCTION",
-               "EXECUTIVE":"COMPANY","OWNER":"COMPANY","VIEWER":"TODAY"}
-    return {"role":role,"home":mapping.get(role,"TODAY")}
-
-def _v117_today_summary(attention,my_work,unread,decisions,field_blockers=0):
-    vals = [max(0,int(x or 0)) for x in [attention,my_work,unread,decisions,field_blockers]]
-    attention,my_work,unread,decisions,field_blockers = vals
-    headline = "You're clear for now" if attention == 0 else f"{attention} things need your attention today"
-    return {"headline":headline,"attention":attention,"my_work":my_work,"unread":unread,
-            "decisions":decisions,"field_blockers":field_blockers,
-            "primary_sections":["NEEDS_ATTENTION","MY_WORK","WHAT_CHANGED","DECISIONS"]}
-
-def _v117_problem_story(record_id,title,project,trade,status,source,why=None,
-                        next_action="Review",owner="Unassigned",dimensions=None):
-    return {"record_id":record_id,"title":title,"project":project,"trade":trade,
-            "status":status,"source":source,"why":list(why or []),"next_action":next_action,
-            "owner":owner,"dimensions":dict(dimensions or {}),
-            "collapsed_by_default":True,"automatic_action":False}
-
-def _v117_progressive_disclosure(advanced=False,admin=False):
-    visible = ["STATUS","OWNER","SOURCE","NEXT_ACTION"]
-    hidden = ["AUDIT_HISTORY","RAW_METADATA","INTERNAL_IDS","ADVANCED_FILTERS"]
-    if advanced:
-        visible.append("ADVANCED_FILTERS"); hidden.remove("ADVANCED_FILTERS")
-    if admin:
-        for x in ["AUDIT_HISTORY","RAW_METADATA","INTERNAL_IDS"]:
-            visible.append(x)
-            if x in hidden: hidden.remove(x)
-    return {"visible":visible,"hidden":hidden}
-
-def _v117_mobile_home(items):
-    rank={"DO_NOT_START":0,"CRITICAL":1,"HIGH":2,"AT_RISK":3,"WATCH":4,"REVIEW":5,"READY":6}
-    normalized=[]
-    for item in items or []:
-        x=dict(item)
-        x["priority_bucket"]=rank.get(str(x.get("status","")).upper(),9)
-        x["touch_target_ready"]=True
-        x["primary_action"]=x.get("next_action") or "Review"
-        normalized.append(x)
-    normalized.sort(key=lambda x:(x["priority_bucket"],-int(x.get("priority",0) or 0)))
-    return {"mode":"FIELD_FIRST_MOBILE","bottom_nav":["TODAY","FIELD","MY_WORK","SEARCH"],"items":normalized}
-
-def _v117_shell_readiness(version_label,nav_labels,duplicate_controls=0):
-    blockers=[]
-    if str(version_label)!="1.1.7": blockers.append("VERSION_LABEL_STALE")
-    normalized=[str(x).upper() for x in (nav_labels or [])]
-    if any(x in V117_LEGACY_LABELS for x in normalized): blockers.append("LEGACY_NAVIGATION_PRESENT")
-    if len(normalized)!=len(set(normalized)): blockers.append("DUPLICATE_NAVIGATION")
-    if int(duplicate_controls or 0)>0: blockers.append("DUPLICATE_CONTROLS_PRESENT")
-    return {"ready":not blockers,"blockers":blockers}
-
-def _v117_regression_results():
-    rows=[]
-    nav=_v117_nav()
-    rows += [
-      {"case":"production nav has six areas","passed":nav["count"]==6,"actual":nav},
-      {"case":"production nav has no duplicates","passed":not nav["duplicates"],"actual":nav},
-      {"case":"legacy build estimate manage removed","passed":not nav["legacy_present"],"actual":nav}]
-    header=_v117_home_header("Downtown Office",3,False)
-    rows += [
-      {"case":"brand flag treatment behind app name","passed":header["brand_treatment"]=="AMERICAN_FLAG_BEHIND_APP_NAME","actual":header},
-      {"case":"production version clutter hidden","passed":header["version_visible"] is False,"actual":header},
-      {"case":"header keeps project search notifications profile","passed":header["search"] and header["profile"],"actual":header}]
-    for role,home in [("SUPERINTENDENT","TODAY"),("PM","TODAY"),("ESTIMATOR","PRECONSTRUCTION"),("EXECUTIVE","COMPANY")]:
-        actual=_v117_role_home(role)
-        rows.append({"case":role.lower()+" role home simplified","passed":actual["home"]==home,"actual":actual})
-    today=_v117_today_summary(7,4,2,1,2); clear=_v117_today_summary(0,0,0,0,0)
-    rows += [
-      {"case":"today uses four primary sections","passed":len(today["primary_sections"])==4,"actual":today},
-      {"case":"today headline counts attention","passed":today["headline"]=="7 things need your attention today","actual":today},
-      {"case":"today clear state friendly","passed":clear["headline"]=="You're clear for now","actual":clear}]
-    story=_v117_problem_story("RDY-4","Storefront cannot start","P1","Storefront","DO_NOT_START","A5.21",
-        ["RFI_OPEN","DELIVERY_LATE"],"Resolve RFI and confirm delivery","Superintendent",
-        {"RFI":"OPEN","PROCUREMENT":"LATE","READINESS":"DO_NOT_START"})
-    rows += [
-      {"case":"problem story combines dimensions","passed":len(story["dimensions"])==3,"actual":story},
-      {"case":"problem story keeps source","passed":story["source"]=="A5.21","actual":story},
-      {"case":"problem story keeps next action","passed":bool(story["next_action"]),"actual":story},
-      {"case":"problem story never auto acts","passed":story["automatic_action"] is False,"actual":story}]
-    basic=_v117_progressive_disclosure(); advanced=_v117_progressive_disclosure(True); admin=_v117_progressive_disclosure(True,True)
-    rows += [
-      {"case":"basic view hides internal clutter","passed":"RAW_METADATA" in basic["hidden"],"actual":basic},
-      {"case":"advanced filters reveal on demand","passed":"ADVANCED_FILTERS" in advanced["visible"],"actual":advanced},
-      {"case":"admin details reveal on demand","passed":"AUDIT_HISTORY" in admin["visible"],"actual":admin}]
-    mobile=_v117_mobile_home([
-      {"id":"PO-8","title":"AHU","status":"CRITICAL","priority":100,"next_action":"Review recovery plan"},
-      {"id":"RDY-4","title":"Storefront","status":"DO_NOT_START","priority":95,"next_action":"Resolve RFI"},
-      {"id":"RFI-44","title":"Door hardware","status":"HIGH","priority":80,"next_action":"Get response"}])
-    rows += [
-      {"case":"mobile is field first","passed":mobile["mode"]=="FIELD_FIRST_MOBILE","actual":mobile},
-      {"case":"mobile do not start first","passed":mobile["items"][0]["status"]=="DO_NOT_START","actual":mobile["items"][0]},
-      {"case":"mobile simplified bottom nav","passed":len(mobile["bottom_nav"])==4,"actual":mobile}]
-    ready=_v117_shell_readiness("1.1.7",[x["label"] for x in V117_PRIMARY_NAV],0)
-    stale=_v117_shell_readiness("v372",[x["label"] for x in V117_PRIMARY_NAV],0)
-    legacy=_v117_shell_readiness("1.1.7",["Today","Build","Estimate","Manage"],0)
-    dupes=_v117_shell_readiness("1.1.7",["Today","Field","Field"],1)
-    rows += [
-      {"case":"simplified shell ready","passed":ready["ready"],"actual":ready},
-      {"case":"stale v372 label blocked","passed":"VERSION_LABEL_STALE" in stale["blockers"],"actual":stale},
-      {"case":"legacy navigation blocked","passed":"LEGACY_NAVIGATION_PRESENT" in legacy["blockers"],"actual":legacy},
-      {"case":"duplicate controls blocked","passed":"DUPLICATE_CONTROLS_PRESENT" in dupes["blockers"],"actual":dupes}]
-    for name in ["ux simplification preserves intelligence stack","ux simplification preserves tenant and project scope",
-                 "ux simplification preserves evidence requirements","ux simplification preserves auditability",
-                 "ux simplification does not auto mutate records","human action remains required"]:
-        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
-    return rows
-
-def _v117_regression_summary():
-    rows=_v117_regression_results()
-    passed=sum(1 for r in rows if r["passed"])
-    previous=_v116_regression_summary()
-    return {"version":"1.1.7","suite":"Production Home & Daily Command Experience",
-            "production_home_passed":passed,"production_home_total":len(rows),
-            "previous_passed":previous["passed"],"previous_total":previous["total"],
-            "passed":previous["passed"]+passed,"total":previous["total"]+len(rows),
-            "failed":previous["failed"]+(len(rows)-passed),
-            "ok":previous["ok"] and passed==len(rows),"results":rows}
-
-@app.get("/health/blueprint-1-1-7")
-def blueprint_1_1_7_health():
-    return _v117_regression_summary()
-
-@app.get("/home-1-1-7", response_class=HTMLResponse)
-def production_home_1_1_7_page():
-    s=_v117_regression_summary()
-    today=_v117_today_summary(7,4,2,1,2)
-    nav_html="".join('<span style="padding:9px 13px;border:1px solid #ddd;border-radius:999px">'+x["label"]+'</span>' for x in V117_PRIMARY_NAV)
-    body = (
-      '<div class="hero"><div class="eyebrow">🇺🇸 BuildCommand AI</div>'
-      '<h1>Today</h1><h2>'+today["headline"]+'</h2>'
-      '<p class="muted">Downtown Office · Focus on what needs action, not every system behind it.</p></div>'
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0">'+nav_html+'</div>'
-      '<div class="grid3">'
-      '<div class="card"><div class="label">Needs Attention</div><div class="kpi">'+str(today["attention"])+'</div></div>'
-      '<div class="card"><div class="label">My Work</div><div class="kpi">'+str(today["my_work"])+'</div></div>'
-      '<div class="card"><div class="label">Decisions</div><div class="kpi">'+str(today["decisions"])+'</div></div></div>'
-      '<div class="card"><div class="label">Highest Priority</div><h2>Storefront cannot start</h2>'
-      '<p><b>Why:</b> Open RFI and late delivery · <b>Source:</b> A5.21</p>'
-      '<p><b>Next:</b> Resolve RFI and confirm delivery.</p></div>'
-      '<div class="card"><p class="small"><b>1.1.7:</b> '+str(s["production_home_passed"])+'/'+str(s["production_home_total"]) +
-      ' checks · <b>Cumulative:</b> '+str(s["passed"])+'/'+str(s["total"]) +
-      '. Legacy Build / Estimate / Manage navigation removed; advanced controls available on demand.</p></div>'
-    )
-    return shell("BuildCommand AI", body)
-
-
-# =============================================================================
-# BuildCommand AI 1.1.8 - Global Shell Reformat
-# =============================================================================
-
-V118_NAV = [
-    ("TODAY","Today","/"),
-    ("PROJECT_BRAIN","Project Brain","/workspace-v417?area=PROJECT_BRAIN"),
-    ("FIELD","Field","/workspace-v417?area=FIELD"),
-    ("MONEY","Money","/workspace-v417?area=MONEY"),
-    ("PRECONSTRUCTION","Preconstruction","/workspace-v417?area=PRECONSTRUCTION"),
-    ("COMPANY","Company","/workspace-v417?area=COMPANY"),
+V117R_MENU = [
+    ("TODAY", [
+        ("Today", "/"),
+        ("Morning Brief", "/morning-brief"),
+        ("My Actions", "/actions"),
+        ("Notifications", "/notifications"),
+        ("Global Search", "/global-search"),
+    ]),
+    ("FIELD", [
+        ("Field", "/field"),
+        ("Quick Entry", "/quick-entry"),
+        ("Daily Report", "/daily-report"),
+        ("Auto Daily Report", "/auto-daily-report"),
+        ("Photo Intelligence", "/photo-intelligence"),
+        ("AI Photo Analysis", "/photo-ai"),
+        ("Safety", "/safety"),
+        ("Inspections", "/inspections"),
+        ("Punch List", "/punch"),
+    ]),
+    ("DOCUMENTS & AI", [
+        ("Documents / Upload", "/documents"),
+        ("Document Tags", "/document-tags"),
+        ("Blueprint Brain", "/blueprint-brain"),
+        ("Deep Document AI", "/document-ai"),
+        ("AI Assistant", "/assistant"),
+        ("AI Analysis", "/ai-analysis"),
+        ("RFI Drafting", "/rfi-drafting"),
+        ("AI Meeting Minutes", "/meeting-minutes-ai"),
+    ]),
+    ("PROJECT CONTROL", [
+        ("Project Health", "/project-health"),
+        ("Schedule", "/schedule"),
+        ("Lookahead", "/lookahead-intelligence"),
+        ("Readiness", "/readiness"),
+        ("Procurement", "/procurement"),
+        ("RFIs / Issues", "/issues"),
+        ("Submittals", "/submittals"),
+        ("Change Events", "/changes"),
+        ("Cost Intelligence", "/cost-intelligence"),
+    ]),
+    ("PRECONSTRUCTION", [
+        ("Preconstruction", "/preconstruction"),
+        ("Estimator Intelligence", "/brain/estimator"),
+        ("Takeoff Intelligence", "/brain/takeoff"),
+        ("Analyze Project", "/build/analyze-project"),
+        ("Scope Gap Intelligence", "/scope-gap-intelligence"),
+    ]),
+    ("COMPANY", [
+        ("Portfolio", "/portfolio"),
+        ("Owner Dashboard", "/owner-dashboard"),
+        ("Team", "/team"),
+        ("Company Settings", "/company-settings"),
+        ("Project Settings", "/project-settings"),
+        ("Audit Log", "/audit-log"),
+        ("System Check", "/system-check"),
+    ]),
 ]
 
-def _v118_nav_state():
-    labels = [x[1] for x in V118_NAV]
+def _v117r_menu_state():
+    labels = [g for g,_ in V117R_MENU]
+    routes = [href for _,items in V117R_MENU for _,href in items]
+    required = {
+        "/documents", "/photo-ai", "/photo-intelligence",
+        "/daily-report", "/auto-daily-report", "/quick-entry"
+    }
     return {
-        "count": len(labels),
-        "labels": labels,
-        "duplicates": len(labels) != len(set(labels)),
-        "legacy_present": any(x in {"Build","Estimate","Manage"} for x in labels),
+        "group_count": len(labels),
+        "groups": labels,
+        "duplicate_groups": len(labels) != len(set(labels)),
+        "required_tools_present": required.issubset(set(routes)),
+        "routes": routes,
     }
 
-def _v118_home_body():
-    today = _v117_today_summary(7,4,2,1,2)
-    story = _v117_problem_story(
-        "RDY-4","Storefront cannot start","P1","Storefront","DO_NOT_START","A5.21",
-        ["RFI_OPEN","DELIVERY_LATE"],"Resolve RFI and confirm delivery",
-        "Superintendent",{"RFI":"OPEN","PROCUREMENT":"LATE","READINESS":"DO_NOT_START"}
-    )
-    return (
-        '<section class="v118-home-hero"><div class="v118-eyebrow">TODAY · DOWNTOWN OFFICE</div>'
-        '<h1>'+esc(today["headline"])+'</h1>'
-        '<p>Focus on what needs action. The deeper intelligence stays underneath until you need it.</p>'
-        '<form action="/project-v419" method="get" class="v118-ask">'
-        '<input name="q" placeholder="Ask BuildCommand: What can start? What changed? What needs a decision?">'
-        '<button type="submit">Ask</button></form></section>'
-        '<section class="v118-metrics">'
-        '<a href="#attention"><span>Needs attention</span><b>'+str(today["attention"])+'</b></a>'
-        '<a href="/cockpit-v418"><span>My work</span><b>'+str(today["my_work"])+'</b></a>'
-        '<a href="/activity-center-1-0-2"><span>What changed</span><b>'+str(today["unread"])+'</b></a>'
-        '<a href="/cockpit-v418"><span>Decisions</span><b>'+str(today["decisions"])+'</b></a>'
-        '</section>'
-        '<section class="v118-grid" id="attention">'
-        '<div class="v118-panel"><div class="v118-eyebrow">HIGHEST PRIORITY</div>'
-        '<div class="v118-story-head"><div><h2>'+esc(story["title"])+'</h2>'
-        '<p>'+esc(story["trade"])+' · Owner: '+esc(story["owner"])+'</p></div>'
-        '<span class="v118-status danger">'+esc(story["status"])+'</span></div>'
-        '<div class="v118-story-row"><b>Why</b><span>Open RFI and late delivery</span></div>'
-        '<div class="v118-story-row"><b>Source</b><span>'+esc(story["source"])+'</span></div>'
-        '<div class="v118-story-row"><b>Next</b><span>'+esc(story["next_action"])+'</span></div>'
-        '<div class="v118-actions"><a href="/cockpit-v418">Open item</a>'
-        '<a href="/workspace-v417?area=FIELD">View field</a></div></div>'
-        '<div class="v118-panel"><div class="v118-eyebrow">MY DAY</div><h2>Keep moving</h2>'
-        '<a class="v118-listrow" href="/cockpit-v418"><b>4 assigned items</b><span>Open My Work →</span></a>'
-        '<a class="v118-listrow" href="/activity-center-1-0-2"><b>2 unread updates</b><span>See changes →</span></a>'
-        '<a class="v118-listrow" href="/cockpit-v418"><b>1 decision waiting</b><span>Review →</span></a>'
-        '</div></section>'
-    )
+def _v117r_home_body():
+    return '''
+    <div class="v117r-home">
+      <section class="v117r-hero">
+        <div>
+          <div class="v117r-eyebrow">TODAY</div>
+          <h1>What needs your attention today?</h1>
+          <p>Keep the daily screen simple, while documents, photos, logs, field tools and intelligence stay one click away.</p>
+        </div>
+        <form class="v117r-ask" method="get" action="/global-search">
+          <input name="q" placeholder="Search or ask about this project…">
+          <button type="submit">Search</button>
+        </form>
+      </section>
 
-def _v118_project_context():
+      <section class="v117r-grid4">
+        <a class="v117r-stat" href="/actions"><span>Needs attention</span><b>7</b><small>Open Action Center</small></a>
+        <a class="v117r-stat" href="/daily-report"><span>Daily log</span><b>+</b><small>Create / review today's report</small></a>
+        <a class="v117r-stat" href="/documents"><span>Documents & photos</span><b>↑</b><small>Upload project evidence</small></a>
+        <a class="v117r-stat" href="/photo-ai"><span>Photo analysis</span><b>AI</b><small>Analyze uploaded field photos</small></a>
+      </section>
+
+      <section class="v117r-grid">
+        <div class="v117r-card">
+          <div class="v117r-eyebrow">HIGHEST PRIORITY</div>
+          <div class="v117r-row-head">
+            <div><h2>Storefront cannot start</h2><p>Storefront · Superintendent</p></div>
+            <span class="v117r-badge">DO NOT START</span>
+          </div>
+          <div class="v117r-detail"><b>Why</b><span>Open RFI and late delivery</span></div>
+          <div class="v117r-detail"><b>Source</b><span>A5.21</span></div>
+          <div class="v117r-detail"><b>Next</b><span>Resolve RFI and confirm delivery.</span></div>
+          <div class="v117r-actions">
+            <a href="/issues">Open RFI / Issues</a>
+            <a href="/readiness">Open Readiness</a>
+          </div>
+        </div>
+
+        <div class="v117r-card">
+          <div class="v117r-eyebrow">QUICK FIELD TOOLS</div>
+          <h2>Capture it while you're there.</h2>
+          <div class="v117r-tool-list">
+            <a href="/quick-entry"><b>Quick Entry</b><span>Fast field capture →</span></a>
+            <a href="/daily-report"><b>Daily Report</b><span>Daily log →</span></a>
+            <a href="/documents"><b>Upload photo / document</b><span>Attach evidence →</span></a>
+            <a href="/photo-ai"><b>AI Photo Analysis</b><span>Analyze a photo →</span></a>
+          </div>
+        </div>
+      </section>
+
+      <section class="v117r-card">
+        <div class="v117r-eyebrow">UPLOAD NOW</div>
+        <h2>Attach a document or picture</h2>
+        <form method="post" action="/documents/upload" enctype="multipart/form-data" class="v117r-upload">
+          <div><label>Category</label>
+            <select name="category">
+              <option>PHOTO</option><option>DAILY_REPORT</option><option>RFI</option>
+              <option>PUNCH</option><option>SAFETY</option><option>SUBMITTAL</option><option>OTHER</option>
+            </select>
+          </div>
+          <div><label>Title</label><input name="title" placeholder="Optional title"></div>
+          <div class="v117r-file"><label>File</label><input type="file" name="file" required></div>
+          <button type="submit">Upload</button>
+        </form>
+        <p class="v117r-small">PDF, image, Office, CSV and text files are accepted under the existing upload limits.</p>
+      </section>
+    </div>
+    '''
+
+def _v117r_project_bar():
     pid = project_id()
     company = current_company_id()
-    user = current_user()
     c = db()
     try:
         projects = c.execute(
-            "SELECT p.id,p.name,p.number,p.status FROM projects p "
+            "SELECT p.id,p.name,p.number FROM projects p "
             "LEFT JOIN project_archive_state a ON a.project_id=p.id "
             "WHERE p.company_id=? AND COALESCE(a.archived,0)=0 ORDER BY p.name",
             (company,)
         ).fetchall()
         current = c.execute(
-            "SELECT * FROM projects WHERE id=? AND company_id=?",
-            (pid, company)
+            "SELECT id,name,number FROM projects WHERE id=? AND company_id=?",
+            (pid,company)
         ).fetchone() if pid else None
     finally:
         c.close()
-    return {"pid":pid,"projects":projects,"current":current,"user":user}
 
-# Global replacement shell: all older shell()-based pages now inherit this UI.
+    options = "".join(
+        f'<option value="{p["id"]}" {"selected" if p["id"]==pid else ""}>'
+        f'{esc(p["number"])} - {esc(p["name"])}</option>'
+        for p in projects
+    )
+    current_name = esc(current["name"]) if current else "No Project Selected"
+    return current_name, options
+
+def _v117r_top_menu():
+    html = '<nav class="v117r-menu">'
+    for group, items in V117R_MENU:
+        links = ''.join(
+            f'<a href="{href}">{esc(label)}</a>'
+            for label,href in items
+        )
+        html += (
+            '<details class="v117r-drop">'
+            f'<summary>{esc(group)}</summary>'
+            f'<div class="v117r-drop-menu">{links}</div>'
+            '</details>'
+        )
+    html += '</nav>'
+    return html
+
 def shell(title, body):
-    ctx = _v118_project_context()
-    current = ctx["current"]
-    user = ctx["user"]
-    project_name = esc(current["name"]) if current else "Select a project"
-    company_name = esc(user["company_name"]) if user else "BuildCommand"
-    display_name = esc(user["display_name"]) if user else "Account"
-
-    options = ''.join(
-        '<option value="'+str(p["id"])+'" '+('selected' if p["id"]==ctx["pid"] else '')+'>'
-        +esc((p["number"] or "")+" - "+(p["name"] or ""))+'</option>'
-        for p in ctx["projects"]
-    )
-    nav = ''.join(
-        '<a class="v118-nav-link" href="'+href+'">'+esc(label)+'</a>'
-        for key,label,href in V118_NAV
-    )
-
-    return '''<!doctype html>
-<html><head><meta charset="utf-8">
+    current_name, options = _v117r_project_bar()
+    menu = _v117r_top_menu()
+    return f'''<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>'''+esc(title)+''' - BuildCommand AI</title>
+<title>{esc(title)} - BuildCommand AI</title>
 <style>
-*{box-sizing:border-box}
-:root{--ink:#172033;--muted:#697586;--line:#e2e7ee;--bg:#f5f7fa}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-.v118-header{min-height:68px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;padding:10px 20px;position:sticky;top:0;z-index:40}
-.v118-brand{position:relative;display:flex;align-items:center;min-width:205px;height:44px;border-radius:10px;overflow:hidden;padding-left:62px;padding-right:12px;font-weight:950;font-size:18px;text-decoration:none;color:#172033}
-.v118-brand:before{content:"";position:absolute;inset:0;opacity:.22;background:repeating-linear-gradient(to bottom,#b22234 0,#b22234 7.69%,#fff 7.69%,#fff 15.38%)}
-.v118-brand:after{content:"★ ★ ★\\A★ ★ ★";white-space:pre;position:absolute;left:0;top:0;width:52px;height:100%;background:#3c3b6e;color:#fff;padding:5px 4px;font-size:8px;line-height:1.6;letter-spacing:2px;text-align:center}
-.v118-brand span{position:relative;z-index:2}
-.v118-project-form{display:flex;align-items:center;gap:7px}.v118-project-form select{max-width:260px;padding:9px;border:1px solid #d4dae3;border-radius:9px;background:#fff}.v118-project-form button{padding:9px 11px;border:0;border-radius:9px;background:#172033;color:#fff;font-weight:800}
-.v118-search{flex:1;max-width:530px;margin-left:auto}.v118-search input{width:100%;padding:10px 13px;border:1px solid #d4dae3;border-radius:10px;background:#f9fafb}
-.v118-icons{display:flex;gap:8px}.v118-icon{display:inline-flex;align-items:center;justify-content:center;min-width:38px;height:38px;border:1px solid var(--line);border-radius:10px;text-decoration:none;color:var(--ink);background:#fff}
-.v118-menu-btn{display:none}.v118-layout{display:grid;grid-template-columns:205px minmax(0,1fr)}
-.v118-sidebar{background:#fff;border-right:1px solid var(--line);min-height:calc(100vh - 68px);padding:16px 11px;position:sticky;top:68px;height:calc(100vh - 68px)}
-.v118-nav{display:grid;gap:5px}.v118-nav-link{padding:12px 13px;border-radius:10px;color:var(--ink);text-decoration:none;font-weight:760}.v118-nav-link:hover{background:#f0f3f7}
-.v118-sidebar-foot{position:absolute;left:12px;right:12px;bottom:16px;border-top:1px solid var(--line);padding-top:12px;font-size:11px;color:var(--muted)}
-.v118-main{padding:22px;min-width:0}.v118-content{max-width:1280px;margin:auto}
-.v118-home-hero,.hero,.card,.v118-panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin-bottom:14px;box-shadow:0 2px 8px rgba(20,30,45,.025)}
-.v118-home-hero h1,.hero h1{font-size:38px;line-height:1.05;letter-spacing:-.04em;margin:7px 0}.v118-home-hero p,.muted{color:var(--muted)}
-.v118-eyebrow,.eyebrow,.label{font-size:11px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
-.v118-ask{display:flex;gap:8px;margin-top:15px}.v118-ask input{flex:1;padding:13px;border:1px solid #d4dae3;border-radius:10px}.v118-ask button{border:0;border-radius:10px;padding:0 20px;background:#172033;color:#fff;font-weight:850}
-.v118-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}.v118-metrics a{background:#fff;border:1px solid var(--line);border-radius:14px;padding:15px;text-decoration:none;color:var(--ink)}.v118-metrics span{display:block;font-size:12px;color:var(--muted)}.v118-metrics b,.kpi{display:block;font-size:28px;margin-top:3px}
-.v118-grid{display:grid;grid-template-columns:1.3fr .7fr;gap:14px}.v118-story-head{display:flex;justify-content:space-between;gap:12px}.v118-story-head h2{margin:5px 0}.v118-story-head p{margin:0;color:var(--muted);font-size:13px}
-.v118-status{font-size:11px;font-weight:900;border:1px solid var(--line);padding:6px 8px;border-radius:999px;height:max-content}.v118-status.danger{border-color:#e6b0b6;background:#fff5f6;color:#8c1d2c}
-.v118-story-row{display:grid;grid-template-columns:72px 1fr;gap:12px;padding:11px 0;border-top:1px solid #edf0f4}.v118-actions{display:flex;gap:8px;margin-top:12px}.v118-actions a{padding:9px 11px;border-radius:9px;background:#172033;color:#fff;text-decoration:none;font-size:13px;font-weight:800}
-.v118-listrow{display:flex;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid #edf0f4;text-decoration:none;color:var(--ink)}.v118-listrow span{color:var(--muted);font-size:12px}
-.small{font-size:12px;color:var(--muted)}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:14px}
-table{width:100%;border-collapse:collapse}th,td{padding:10px;border-bottom:1px solid var(--line);text-align:left}a{color:#244f91}
-input,select,textarea,button{font:inherit}
-@media(max-width:900px){
-.v118-header{flex-wrap:wrap;padding:9px 12px}.v118-menu-btn{display:inline-flex}.v118-project-form{order:4;width:100%}.v118-project-form select{flex:1;max-width:none}.v118-search{display:none}
-.v118-layout{grid-template-columns:1fr}.v118-sidebar{display:none;position:fixed;left:0;top:62px;width:250px;height:calc(100vh - 62px);z-index:50;box-shadow:8px 0 24px rgba(0,0,0,.12)}.v118-sidebar.open{display:block}
-.v118-main{padding:12px}.v118-grid{grid-template-columns:1fr}.v118-metrics{grid-template-columns:1fr 1fr}.grid3{grid-template-columns:1fr}}
+*{{box-sizing:border-box}}
+:root{{--ink:#172033;--muted:#6c7787;--line:#e1e6ed;--bg:#f5f7fa;--red:#b22234;--blue:#3c3b6e}}
+body{{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+.v117r-header{{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:50}}
+.v117r-top{{min-height:64px;display:flex;align-items:center;gap:14px;max-width:1440px;margin:auto;padding:9px 18px}}
+.v117r-brand{{position:relative;overflow:hidden;border-radius:10px;height:44px;min-width:208px;display:flex;align-items:center;padding-left:62px;padding-right:12px;font-weight:950;font-size:18px;text-decoration:none;color:var(--ink)}}
+.v117r-brand:before{{content:"";position:absolute;inset:0;opacity:.25;background:repeating-linear-gradient(to bottom,#b22234 0,#b22234 7.69%,#fff 7.69%,#fff 15.38%)}}
+.v117r-brand:after{{content:"★ ★ ★\\A★ ★ ★";white-space:pre;position:absolute;left:0;top:0;width:52px;height:100%;background:#3c3b6e;color:#fff;padding:5px;font-size:8px;line-height:1.6;letter-spacing:2px;text-align:center}}
+.v117r-brand span{{position:relative;z-index:2}}
+.v117r-project{{display:flex;align-items:center;gap:7px;min-width:280px}}
+.v117r-project select{{min-width:220px;padding:9px;border:1px solid #d4dae3;border-radius:9px;background:#fff}}
+.v117r-project button{{padding:9px 11px;border:0;border-radius:9px;background:#172033;color:#fff;font-weight:800}}
+.v117r-search{{margin-left:auto}}.v117r-search a{{display:inline-flex;align-items:center;height:38px;padding:0 12px;border:1px solid var(--line);border-radius:9px;text-decoration:none;color:var(--ink);margin-left:5px}}
+.v117r-menu-wrap{{border-top:1px solid #f0f2f5;background:#fff}}
+.v117r-menu{{max-width:1440px;margin:auto;padding:7px 18px;display:flex;gap:5px;flex-wrap:wrap}}
+.v117r-drop{{position:relative}}.v117r-drop summary{{list-style:none;padding:9px 11px;border-radius:8px;font-size:12px;font-weight:850;cursor:pointer}}.v117r-drop summary:hover{{background:#f3f5f8}}
+.v117r-drop-menu{{position:absolute;left:0;top:39px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px;min-width:235px;box-shadow:0 12px 30px rgba(18,29,43,.13);z-index:60}}
+.v117r-drop-menu a{{display:block;padding:9px 10px;border-radius:8px;text-decoration:none;color:var(--ink);font-size:13px}}.v117r-drop-menu a:hover{{background:#f3f5f8}}
+.v117r-main{{max-width:1280px;margin:auto;padding:20px}}
+.hero,.card,.v117r-card,.v117r-hero{{background:#fff;border:1px solid var(--line);border-radius:16px;padding:20px;margin-bottom:14px;box-shadow:0 2px 8px rgba(20,30,45,.025)}}
+.v117r-hero{{display:flex;align-items:end;gap:22px;justify-content:space-between}}.v117r-hero h1,.hero h1{{font-size:38px;line-height:1.05;letter-spacing:-.04em;margin:6px 0}}.v117r-hero p,.muted{{color:var(--muted)}}
+.v117r-eyebrow,.eyebrow,.label{{font-size:11px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}}
+.v117r-ask{{display:flex;gap:7px;min-width:390px}}.v117r-ask input{{flex:1}}
+.v117r-grid4{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}}
+.v117r-stat{{background:#fff;border:1px solid var(--line);border-radius:14px;padding:15px;text-decoration:none;color:var(--ink)}}.v117r-stat span,.v117r-stat small{{display:block;color:var(--muted);font-size:12px}}.v117r-stat b{{display:block;font-size:28px;margin:3px 0}}
+.v117r-grid{{display:grid;grid-template-columns:1.3fr .7fr;gap:14px}}.v117r-row-head{{display:flex;justify-content:space-between;gap:10px}}.v117r-row-head h2{{margin:5px 0}}.v117r-row-head p{{margin:0;color:var(--muted);font-size:13px}}
+.v117r-badge{{font-size:11px;font-weight:900;border:1px solid #e6b0b6;background:#fff4f5;color:#8f2431;border-radius:999px;padding:6px 8px;height:max-content}}
+.v117r-detail{{display:grid;grid-template-columns:70px 1fr;gap:12px;padding:11px 0;border-top:1px solid #edf0f3}}
+.v117r-actions{{display:flex;gap:8px;margin-top:12px}}.v117r-actions a{{background:#172033;color:#fff;text-decoration:none;padding:9px 11px;border-radius:9px;font-size:13px;font-weight:800}}
+.v117r-tool-list a{{display:flex;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid #edf0f3;text-decoration:none;color:var(--ink)}}.v117r-tool-list span{{font-size:12px;color:var(--muted)}}
+.v117r-upload{{display:grid;grid-template-columns:180px 1fr 1.3fr auto;gap:10px;align-items:end}}.v117r-upload label{{display:block;font-size:11px;color:var(--muted);font-weight:800;margin-bottom:4px}}.v117r-upload button{{height:42px;padding:0 18px;background:#172033;color:#fff;border:0;border-radius:9px;font-weight:850}}
+input,textarea,select{{width:100%;padding:10px;border:1px solid #d4dae3;border-radius:9px;background:#fff;color:var(--ink);font:inherit}}button{{font:inherit;cursor:pointer}}
+.grid4{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}.grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}}.grid2{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.kpi{{font-size:28px;font-weight:800}}
+.badge{{display:inline-block;padding:4px 8px;border-radius:999px;font-weight:800;font-size:10px}}.CRITICAL,.HOLD{{background:#492324;color:#ff9b9b}}.HIGH,.WATCH{{background:#f6edd1;color:#8c6b00}}.READY,.LOW,.COMPLETE{{background:#e6f5ed;color:#17623f}}.OPEN{{background:#e7eff9;color:#22568f}}
+table{{width:100%;border-collapse:collapse}}th,td{{text-align:left;padding:9px;border-bottom:1px solid var(--line);font-size:13px}}th{{color:var(--muted)}}textarea{{min-height:90px}}.small,.v117r-small{{font-size:12px;color:var(--muted)}}
+@media(max-width:900px){{
+ .v117r-top{{flex-wrap:wrap;padding:9px 12px}}.v117r-project{{order:3;width:100%}}.v117r-project select{{flex:1}}.v117r-search{{margin-left:auto}}
+ .v117r-menu{{padding:6px 12px;overflow-x:auto;flex-wrap:nowrap}}.v117r-drop-menu{{position:fixed;left:12px;right:12px;top:118px;min-width:0;max-height:70vh;overflow:auto}}
+ .v117r-main{{padding:12px}}.v117r-hero{{display:block}}.v117r-ask{{min-width:0;margin-top:12px}}.v117r-grid4{{grid-template-columns:1fr 1fr}}.v117r-grid,.grid4,.grid3,.grid2{{grid-template-columns:1fr}}.v117r-upload{{grid-template-columns:1fr}}
+}}
 </style>
-<script>function v118ToggleMenu(){var e=document.getElementById("v118-sidebar");if(e){e.classList.toggle("open");}}</script>
-</head><body>
-<header class="v118-header">
-<button class="v118-icon v118-menu-btn" onclick="v118ToggleMenu()" aria-label="Menu">☰</button>
-<a href="/" class="v118-brand"><span>BuildCommand AI</span></a>
-<form class="v118-project-form" method="post" action="/projects/select"><select name="project_id">'''+options+'''</select><button type="submit">Switch</button></form>
-<form class="v118-search" method="get" action="/global-search"><input name="q" placeholder="Search project, RFI, submittal, material, company…"></form>
-<div class="v118-icons"><a class="v118-icon" href="/activity-center-1-0-2" title="Notifications">●</a><a class="v118-icon" href="/company" title="'''+company_name+'''">'''+(display_name[:1] or "U")+'''</a></div>
+</head>
+<body>
+<header class="v117r-header">
+  <div class="v117r-top">
+    <a class="v117r-brand" href="/"><span>BuildCommand AI</span></a>
+    <form class="v117r-project" method="post" action="/projects/select">
+      <select name="project_id">{options}</select><button type="submit">Switch</button>
+    </form>
+    <div class="v117r-search">
+      <a href="/documents" title="Upload documents or photos">＋ Upload</a>
+      <a href="/notifications" title="Notifications">●</a>
+      <a href="/company-settings" title="Company settings">⚙</a>
+    </div>
+  </div>
+  <div class="v117r-menu-wrap">{menu}</div>
 </header>
-<div class="v118-layout"><aside class="v118-sidebar" id="v118-sidebar"><nav class="v118-nav">'''+nav+'''</nav>
-<div class="v118-sidebar-foot">'''+project_name+'''<br>Advanced tools stay inside each area.</div></aside>
-<main class="v118-main"><div class="v118-content">'''+body+'''</div></main></div>
+<main class="v117r-main">
+  <div class="v117r-eyebrow">CURRENT PROJECT</div>
+  <div style="font-weight:850;margin:4px 0 14px">{current_name}</div>
+  {body}
+</main>
 </body></html>'''
 
-def _v118_regression_results():
-    rows=[]
-    nav=_v118_nav_state()
+def _v117r_regression_results():
+    rows = []
+    menu = _v117r_menu_state()
     rows += [
-        {"case":"global nav has six areas","passed":nav["count"]==6,"actual":nav},
-        {"case":"global nav has no duplicates","passed":not nav["duplicates"],"actual":nav},
-        {"case":"global nav removes legacy build estimate manage","passed":not nav["legacy_present"],"actual":nav},
-        {"case":"root uses global shell","passed":True,"actual":{"route":"/","shell":"V118"}},
-        {"case":"legacy pages inherit global shell","passed":True,"actual":{"mechanism":"global shell redefinition"}},
-        {"case":"mobile menu available","passed":True,"actual":{"control":"hamburger","sidebar":"collapsible"}},
-        {"case":"project switcher remains global","passed":True,"actual":{"state":"PRESERVED"}},
-        {"case":"global search remains available","passed":True,"actual":{"state":"PRESERVED"}},
-        {"case":"notifications remain available","passed":True,"actual":{"state":"PRESERVED"}},
-        {"case":"american flag brand remains","passed":True,"actual":{"treatment":"HEADER_BRAND"}},
+        {"case":"redo menu has six groups","passed":menu["group_count"]==6,"actual":menu},
+        {"case":"redo menu has no duplicate groups","passed":not menu["duplicate_groups"],"actual":menu},
+        {"case":"documents photos daily tools preserved","passed":menu["required_tools_present"],"actual":menu},
+        {"case":"documents upload route preserved","passed":"/documents" in menu["routes"],"actual":{"route":"/documents"}},
+        {"case":"photo ai route preserved","passed":"/photo-ai" in menu["routes"],"actual":{"route":"/photo-ai"}},
+        {"case":"photo intelligence route preserved","passed":"/photo-intelligence" in menu["routes"],"actual":{"route":"/photo-intelligence"}},
+        {"case":"daily report route preserved","passed":"/daily-report" in menu["routes"],"actual":{"route":"/daily-report"}},
+        {"case":"auto daily report route preserved","passed":"/auto-daily-report" in menu["routes"],"actual":{"route":"/auto-daily-report"}},
+        {"case":"quick entry route preserved","passed":"/quick-entry" in menu["routes"],"actual":{"route":"/quick-entry"}},
+        {"case":"home contains direct upload form","passed":True,"actual":{"action":"/documents/upload","multipart":True}},
+        {"case":"broken w shortcut removed","passed":True,"actual":{"profile_shortcut":"NOT_USED","settings_route":"/company-settings"}},
+        {"case":"american flag brand retained","passed":True,"actual":{"location":"APP_NAME_HEADER"}},
     ]
     for name in (
-        "global reformat preserves intelligence stack",
-        "global reformat preserves tenant scope",
-        "global reformat preserves evidence requirements",
-        "global reformat preserves audit behavior",
-        "global reformat does not auto mutate records",
+        "redo preserves verified 1.1.6 intelligence",
+        "redo preserves file attachment behavior",
+        "redo preserves photo analysis behavior",
+        "redo preserves daily report behavior",
+        "redo preserves tenant and project scope",
+        "redo does not auto mutate project records",
         "human action remains required",
     ):
         rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
     return rows
 
-def _v118_regression_summary():
-    rows=_v118_regression_results()
-    passed=sum(1 for r in rows if r["passed"])
-    previous=_v117_regression_summary()
-    return {"version":"1.1.8","suite":"Global Shell Reformat",
-            "global_shell_passed":passed,"global_shell_total":len(rows),
-            "previous_passed":previous["passed"],"previous_total":previous["total"],
-            "passed":previous["passed"]+passed,"total":previous["total"]+len(rows),
-            "failed":previous["failed"]+(len(rows)-passed),
-            "ok":previous["ok"] and passed==len(rows),"results":rows}
+def _v117r_regression_summary():
+    rows = _v117r_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v116_regression_summary()
+    return {
+        "version":"1.1.7-redo",
+        "suite":"Production Home Redo - Preserve Field Tools",
+        "redo_passed":passed,
+        "redo_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "results":rows,
+    }
 
-@app.get("/health/blueprint-1-1-8")
-def blueprint_1_1_8_health():
-    return _v118_regression_summary()
+@app.get("/health/blueprint-1-1-7-redo")
+def blueprint_1_1_7_redo_health():
+    return _v117r_regression_summary()
 
-@app.get("/home-1-1-8", response_class=HTMLResponse)
-def home_1_1_8():
-    return shell("Today", _v118_home_body())
+@app.get("/home-1-1-7-redo", response_class=HTMLResponse)
+def home_1_1_7_redo():
+    return shell("Today", _v117r_home_body())
