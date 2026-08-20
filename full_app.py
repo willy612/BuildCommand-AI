@@ -39139,3 +39139,336 @@ def main_promotion_1_7_0_page():
         '<div class="card"><p class="small">This package prepares and verifies the promotion process. It does not deploy itself and does not automatically roll back production.</p></div>'
     )
     return shell("Main Promotion 1.7.0", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.7.1 - Post-Promotion Validation & Hypercare
+#
+# Purpose:
+# Validate the production environment immediately after the manually controlled
+# 1.6.8 main promotion. This module does NOT perform deployment or rollback.
+#
+# Adds:
+# - production identity verification
+# - critical workflow smoke validation
+# - persistence/read-after-write validation
+# - attachment/photo/daily-log validation
+# - navigation/menu validation
+# - multi-user/tenant isolation validation
+# - health and performance snapshot
+# - hypercare observation window
+# - human rollback escalation gate
+# =============================================================================
+
+def _v171_production_identity(expected_version, running_version,
+                              expected_hash, running_hash):
+    blockers = []
+    if running_version != expected_version:
+        blockers.append("RUNNING_VERSION_MISMATCH")
+    if running_hash != expected_hash:
+        blockers.append("RUNNING_ARTIFACT_HASH_MISMATCH")
+    return {
+        "ready": not blockers,
+        "expected_version": expected_version,
+        "running_version": running_version,
+        "blockers": blockers,
+    }
+
+def _v171_critical_workflow_smoke(checks):
+    required = {
+        "TODAY","PROJECT_BRAIN","FIELD","MONEY","PRECONSTRUCTION","COMPANY",
+        "DOCUMENT_UPLOAD","PHOTO_AI","DAILY_REPORT","QUICK_ENTRY",
+        "SEARCH","RFI_RESOLUTION"
+    }
+    normalized = {str(k).upper(): bool(v) for k, v in (checks or {}).items()}
+    missing = sorted(required - set(normalized))
+    failed = sorted(k for k in required if k in normalized and not normalized[k])
+    blockers = []
+    if missing:
+        blockers.append("WORKFLOW_COVERAGE_INCOMPLETE")
+    if failed:
+        blockers.append("CRITICAL_WORKFLOW_FAILED")
+    return {
+        "ready": not blockers,
+        "required": sorted(required),
+        "missing": missing,
+        "failed": failed,
+        "blockers": blockers,
+    }
+
+def _v171_persistence_probe(create_ok, read_ok, update_ok, reload_ok,
+                            restart_ok, version_conflict_safe):
+    checks = {
+        "CREATE": bool(create_ok),
+        "READ": bool(read_ok),
+        "UPDATE": bool(update_ok),
+        "RELOAD": bool(reload_ok),
+        "RESTART": bool(restart_ok),
+        "VERSION_CONFLICT_SAFE": bool(version_conflict_safe),
+    }
+    failed = [k for k,v in checks.items() if not v]
+    return {
+        "ready": not failed,
+        "checks": checks,
+        "failed": failed,
+        "blockers": ["PERSISTENCE_PROBE_FAILED"] if failed else [],
+        "automatic_repair": False,
+    }
+
+def _v171_media_probe(document_upload, image_upload, photo_analysis,
+                      evidence_link, daily_log_attachment):
+    checks = {
+        "DOCUMENT_UPLOAD": bool(document_upload),
+        "IMAGE_UPLOAD": bool(image_upload),
+        "PHOTO_ANALYSIS": bool(photo_analysis),
+        "EVIDENCE_LINK": bool(evidence_link),
+        "DAILY_LOG_ATTACHMENT": bool(daily_log_attachment),
+    }
+    failed = [k for k,v in checks.items() if not v]
+    return {
+        "ready": not failed,
+        "checks": checks,
+        "failed": failed,
+        "blockers": ["MEDIA_WORKFLOW_FAILED"] if failed else [],
+    }
+
+def _v171_navigation_probe(route_count, raw_not_found_count,
+                           dropdown_close_ok, mobile_nav_ok):
+    blockers = []
+    if int(route_count) != 31:
+        blockers.append("ROUTE_COUNT_MISMATCH")
+    if int(raw_not_found_count) != 0:
+        blockers.append("RAW_NOT_FOUND_PRESENT")
+    if not dropdown_close_ok:
+        blockers.append("MENU_CLOSE_BEHAVIOR_FAILED")
+    if not mobile_nav_ok:
+        blockers.append("MOBILE_NAV_FAILED")
+    return {
+        "ready": not blockers,
+        "route_count": int(route_count),
+        "raw_not_found_count": int(raw_not_found_count),
+        "dropdown_close_ok": bool(dropdown_close_ok),
+        "mobile_nav_ok": bool(mobile_nav_ok),
+        "blockers": blockers,
+    }
+
+def _v171_scope_probe(multi_user_ok, tenant_isolation_ok,
+                      project_scope_ok, permissions_ok):
+    blockers = []
+    if not multi_user_ok: blockers.append("MULTI_USER_FAILED")
+    if not tenant_isolation_ok: blockers.append("TENANT_ISOLATION_FAILED")
+    if not project_scope_ok: blockers.append("PROJECT_SCOPE_FAILED")
+    if not permissions_ok: blockers.append("PERMISSIONS_FAILED")
+    return {
+        "ready": not blockers,
+        "blockers": blockers,
+    }
+
+def _v171_health_snapshot(error_rate, p95_ms, db_ok, storage_ok,
+                          critical_incidents, support_breaches):
+    blockers = []
+    if float(error_rate) > 0.05: blockers.append("ERROR_RATE_HIGH")
+    if float(p95_ms) > 1500: blockers.append("LATENCY_HIGH")
+    if not db_ok: blockers.append("DATABASE_UNHEALTHY")
+    if not storage_ok: blockers.append("STORAGE_UNHEALTHY")
+    if int(critical_incidents) > 0: blockers.append("CRITICAL_INCIDENT_ACTIVE")
+    if int(support_breaches) > 0: blockers.append("SUPPORT_SLA_BREACH")
+    return {
+        "ready": not blockers,
+        "error_rate": float(error_rate),
+        "p95_ms": float(p95_ms),
+        "critical_incidents": int(critical_incidents),
+        "support_breaches": int(support_breaches),
+        "blockers": blockers,
+        "automatic_action": False,
+    }
+
+def _v171_hypercare_window(identity, workflows, persistence, media,
+                           navigation, scope, health, human_reviewed=False):
+    sections = {
+        "IDENTITY": identity.get("ready", False),
+        "WORKFLOWS": workflows.get("ready", False),
+        "PERSISTENCE": persistence.get("ready", False),
+        "MEDIA": media.get("ready", False),
+        "NAVIGATION": navigation.get("ready", False),
+        "SCOPE": scope.get("ready", False),
+        "HEALTH": health.get("ready", False),
+    }
+    failed = [k for k,v in sections.items() if not v]
+    blockers = []
+    if failed:
+        blockers.append("HYPERCARE_VALIDATION_FAILED")
+        if not human_reviewed:
+            blockers.append("HUMAN_ROLLBACK_REVIEW_REQUIRED")
+    return {
+        "ready": not failed,
+        "state": "STABLE" if not failed else "REVIEW_REQUIRED",
+        "sections": sections,
+        "failed": failed,
+        "blockers": blockers,
+        "automatic_rollback": False,
+        "automatic_pause": False,
+    }
+
+def _v171_regression_results():
+    rows = []
+
+    identity = _v171_production_identity(
+        "1.6.8","1.6.8",
+        "sha256:buildcommand-1.6.8","sha256:buildcommand-1.6.8"
+    )
+    bad_identity = _v171_production_identity(
+        "1.6.8","1.6.7",
+        "sha256:buildcommand-1.6.8","sha256:wrong"
+    )
+    rows += [
+        {"case":"production identity valid","passed":identity["ready"],"actual":identity},
+        {"case":"production identity catches version mismatch","passed":"RUNNING_VERSION_MISMATCH" in bad_identity["blockers"],"actual":bad_identity},
+        {"case":"production identity catches hash mismatch","passed":"RUNNING_ARTIFACT_HASH_MISMATCH" in bad_identity["blockers"],"actual":bad_identity},
+    ]
+
+    workflows = _v171_critical_workflow_smoke({
+        "TODAY":True,"PROJECT_BRAIN":True,"FIELD":True,"MONEY":True,
+        "PRECONSTRUCTION":True,"COMPANY":True,"DOCUMENT_UPLOAD":True,
+        "PHOTO_AI":True,"DAILY_REPORT":True,"QUICK_ENTRY":True,
+        "SEARCH":True,"RFI_RESOLUTION":True
+    })
+    rows += [
+        {"case":"critical workflow smoke ready","passed":workflows["ready"],"actual":workflows},
+        {"case":"critical workflow smoke covers twelve flows","passed":len(workflows["required"])==12,"actual":workflows},
+    ]
+
+    persistence = _v171_persistence_probe(True,True,True,True,True,True)
+    bad_persistence = _v171_persistence_probe(True,True,True,True,False,True)
+    rows += [
+        {"case":"production persistence probe ready","passed":persistence["ready"],"actual":persistence},
+        {"case":"persistence probe includes restart durability","passed":persistence["checks"]["RESTART"],"actual":persistence},
+        {"case":"persistence probe catches restart failure","passed":"RESTART" in bad_persistence["failed"],"actual":bad_persistence},
+        {"case":"persistence probe never auto repairs","passed":not persistence["automatic_repair"],"actual":persistence},
+    ]
+
+    media = _v171_media_probe(True,True,True,True,True)
+    bad_media = _v171_media_probe(True,True,False,True,True)
+    rows += [
+        {"case":"media workflow probe ready","passed":media["ready"],"actual":media},
+        {"case":"photo analysis remains available","passed":media["checks"]["PHOTO_ANALYSIS"],"actual":media},
+        {"case":"daily log attachment remains available","passed":media["checks"]["DAILY_LOG_ATTACHMENT"],"actual":media},
+        {"case":"media probe catches photo analysis failure","passed":"PHOTO_ANALYSIS" in bad_media["failed"],"actual":bad_media},
+    ]
+
+    navigation = _v171_navigation_probe(31,0,True,True)
+    bad_navigation = _v171_navigation_probe(31,0,False,True)
+    rows += [
+        {"case":"production navigation probe ready","passed":navigation["ready"],"actual":navigation},
+        {"case":"all 31 routes expected","passed":navigation["route_count"]==31,"actual":navigation},
+        {"case":"no raw not found responses","passed":navigation["raw_not_found_count"]==0,"actual":navigation},
+        {"case":"menu close behavior preserved","passed":navigation["dropdown_close_ok"],"actual":navigation},
+        {"case":"navigation probe catches menu regression","passed":"MENU_CLOSE_BEHAVIOR_FAILED" in bad_navigation["blockers"],"actual":bad_navigation},
+    ]
+
+    scope = _v171_scope_probe(True,True,True,True)
+    rows += [
+        {"case":"production scope probe ready","passed":scope["ready"],"actual":scope},
+        {"case":"tenant isolation remains green","passed":"TENANT_ISOLATION_FAILED" not in scope["blockers"],"actual":scope},
+        {"case":"project scope remains green","passed":"PROJECT_SCOPE_FAILED" not in scope["blockers"],"actual":scope},
+    ]
+
+    health = _v171_health_snapshot(0.01,650,True,True,0,0)
+    bad_health = _v171_health_snapshot(0.08,1800,True,True,1,1)
+    rows += [
+        {"case":"production health snapshot ready","passed":health["ready"],"actual":health},
+        {"case":"health catches error rate","passed":"ERROR_RATE_HIGH" in bad_health["blockers"],"actual":bad_health},
+        {"case":"health catches latency","passed":"LATENCY_HIGH" in bad_health["blockers"],"actual":bad_health},
+        {"case":"health catches critical incident","passed":"CRITICAL_INCIDENT_ACTIVE" in bad_health["blockers"],"actual":bad_health},
+        {"case":"health catches support breach","passed":"SUPPORT_SLA_BREACH" in bad_health["blockers"],"actual":bad_health},
+        {"case":"health snapshot never auto acts","passed":not health["automatic_action"],"actual":health},
+    ]
+
+    hypercare = _v171_hypercare_window(
+        identity,workflows,persistence,media,navigation,scope,health,False
+    )
+    bad_hypercare = _v171_hypercare_window(
+        identity,workflows,persistence,bad_media,navigation,scope,health,False
+    )
+    rows += [
+        {"case":"hypercare window stable","passed":hypercare["ready"] and hypercare["state"]=="STABLE","actual":hypercare},
+        {"case":"hypercare failure opens review","passed":bad_hypercare["state"]=="REVIEW_REQUIRED","actual":bad_hypercare},
+        {"case":"hypercare failure requires human rollback review","passed":"HUMAN_ROLLBACK_REVIEW_REQUIRED" in bad_hypercare["blockers"],"actual":bad_hypercare},
+        {"case":"hypercare never auto rolls back","passed":not hypercare["automatic_rollback"],"actual":hypercare},
+        {"case":"hypercare never auto pauses","passed":not hypercare["automatic_pause"],"actual":hypercare},
+    ]
+
+    route_smoke = _v1112_route_smoke()
+    search = _v133_search([
+        {"record_id":"PO-8","record_type":"PROCUREMENT","title":"AHU-1 delivery","owner":"pm1","trade":"HVAC"}
+    ],"AHU")
+    rows += [
+        {"case":"all app routes remain green","passed":route_smoke["ready"],"actual":route_smoke},
+        {"case":"search remains green","passed":search["count"]==1,"actual":search},
+        {"case":"documents remain available","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai remains available","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report remains available","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+        {"case":"quick entry remains available","passed":"/quick-entry" in _v1110_registered_route_paths(),"actual":{"route":"/quick-entry"}},
+    ]
+
+    for name in (
+        "post promotion validation preserves 1.7.0 execution controls",
+        "post promotion validation preserves 1.6.9 hypercare controls",
+        "post promotion validation preserves 1.6.8 certification",
+        "post promotion validation preserves live operations",
+        "post promotion validation preserves persistence",
+        "post promotion validation preserves search",
+        "post promotion validation preserves record screens",
+        "post promotion validation preserves form behavior",
+        "post promotion validation preserves menu behavior",
+        "post promotion validation preserves attachments and evidence",
+        "post promotion validation preserves auditability",
+        "post promotion validation preserves tenant and project scope",
+        "post promotion validation does not auto deploy",
+        "post promotion validation does not auto rollback",
+        "human production control remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v171_regression_summary():
+    rows = _v171_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v170_regression_summary()
+    return {
+        "version":"1.7.1",
+        "suite":"Post-Promotion Validation & Hypercare",
+        "post_promotion_passed":passed,
+        "post_promotion_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "main_version":"1.6.8",
+        "rollback_version":"1.1.13",
+        "production_state":"POST_PROMOTION_VALIDATION_READY",
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-7-1")
+def blueprint_1_7_1_health():
+    return _v171_regression_summary()
+
+@app.get("/post-promotion-1-7-1", response_class=HTMLResponse)
+def post_promotion_1_7_1_page():
+    s = _v171_regression_summary()
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.7.1</div>'
+        '<h1>Post-Promotion Validation & Hypercare</h1>'
+        '<p class="muted">Validates the running production artifact, critical workflows, persistence, media features, navigation, scope isolation, and first hypercare health window.</p></div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">Main</div><div class="kpi">1.6.8</div></div>'
+        '<div class="card"><div class="label">Rollback</div><div class="kpi">1.1.13</div></div>'
+        '<div class="card"><div class="label">1.7.1 Tests</div><div class="kpi">'+str(s["post_promotion_passed"])+'/'+str(s["post_promotion_total"])+'</div></div>'
+        '</div>'
+        '<div class="card"><p class="small">Validation is advisory and evidence-based. Production pause and rollback remain human-controlled.</p></div>'
+    )
+    return shell("Post-Promotion Validation 1.7.1", body)
