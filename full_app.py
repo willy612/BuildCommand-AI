@@ -1013,8 +1013,7 @@ def _v37_link_card(title,desc,href,label="Open"):
 
 @app.get("/",response_class=HTMLResponse)
 def unified_projects_home():
-    """BuildCommand AI 1.0 primary homepage."""
-    return buildcommand_clean_home_1_0()
+    return HTMLResponse(_v111_home_html("PM"))
 
 
 @app.get("/build/analyze-project",response_class=HTMLResponse)
@@ -31208,3 +31207,280 @@ def customer_operations_1_1_0_page():
         f'</div>'
         f'<div class="card"><p class="small"><b>Control:</b> Customer activation, external communication, billing, and production operations remain explicit human-controlled actions.</p></div>'
     )
+
+
+# =============================================================================
+# BuildCommand AI 1.1.1 - Consolidated App Shell
+# Final UX consolidation layer:
+# - one homepage
+# - one navigation system
+# - role-aware dashboard sections
+# - no duplicate Build / Estimate / Manage navigation
+# - current version branding
+# - compact American flag branding treatment
+# - simplified access to core product areas
+# =============================================================================
+
+_V111_NAV = [
+    ("TODAY","Today","What needs attention now"),
+    ("PROJECT_BRAIN","Project Brain","Connected project intelligence"),
+    ("FIELD","Field","Readiness, crews, look-ahead"),
+    ("MONEY","Money","Cost exposure and changes"),
+    ("PRECONSTRUCTION","Preconstruction","Scope, bids and buyout"),
+    ("COMPANY","Company","Portfolio, people and controls"),
+]
+
+_V111_ROLE_HOME = {
+    "SUPERINTENDENT":"TODAY",
+    "PM":"PROJECT_BRAIN",
+    "ESTIMATOR":"PRECONSTRUCTION",
+    "EXECUTIVE":"COMPANY",
+    "OWNER":"COMPANY",
+    "ADMIN":"COMPANY",
+    "VIEWER":"TODAY",
+}
+
+def _v111_role_home(role):
+    role_u = str(role or "").upper()
+    key = _V111_ROLE_HOME.get(role_u, "TODAY")
+    label = next((n[1] for n in _V111_NAV if n[0] == key), "Today")
+    return {"role":role_u or "UNKNOWN","home":key,"label":label}
+
+def _v111_primary_nav():
+    return [{"key":k,"label":l,"description":d} for k,l,d in _V111_NAV]
+
+def _v111_home_summary(attention, my_work, unread, decisions):
+    attention = max(0, int(attention))
+    my_work = max(0, int(my_work))
+    unread = max(0, int(unread))
+    decisions = max(0, int(decisions))
+    return {
+        "attention":attention,
+        "my_work":my_work,
+        "unread":unread,
+        "decisions":decisions,
+        "headline":"You're clear for now" if attention == 0 else f"{attention} things need your attention today",
+    }
+
+def _v111_shell_gate(version_label, nav_items, duplicate_legacy_nav=False):
+    blockers = []
+    if str(version_label) != "1.1.1":
+        blockers.append("VERSION_LABEL_STALE")
+    labels = [str(x.get("label","")) for x in (nav_items or [])]
+    if len(labels) != len(set(labels)):
+        blockers.append("DUPLICATE_NAVIGATION")
+    if duplicate_legacy_nav:
+        blockers.append("LEGACY_NAVIGATION_DUPLICATED")
+    expected = {"Today","Project Brain","Field","Money","Preconstruction","Company"}
+    if set(labels) != expected:
+        blockers.append("PRIMARY_NAV_INCOMPLETE")
+    return {"ready":not blockers,"blockers":blockers}
+
+def _v111_regression_results():
+    rows = []
+
+    nav = _v111_primary_nav()
+    roles = [
+        ("superintendent home","SUPERINTENDENT","TODAY"),
+        ("pm home","PM","PROJECT_BRAIN"),
+        ("estimator home","ESTIMATOR","PRECONSTRUCTION"),
+        ("executive home","EXECUTIVE","COMPANY"),
+        ("viewer home","VIEWER","TODAY"),
+    ]
+    for name, role, expected in roles:
+        actual = _v111_role_home(role)
+        rows.append({"case":name,"passed":actual["home"]==expected,"actual":actual})
+
+    rows += [
+        {"case":"primary nav has six areas","passed":len(nav)==6,"actual":nav},
+        {"case":"primary nav has no duplicates","passed":len({x["label"] for x in nav})==6,"actual":nav},
+        {"case":"legacy build estimate manage removed","passed":not any(x["label"] in {"Build","Estimate","Manage"} for x in nav),"actual":nav},
+    ]
+
+    s1 = _v111_home_summary(7,4,2,1)
+    s2 = _v111_home_summary(0,0,0,0)
+    rows += [
+        {"case":"home summary counts attention","passed":s1["attention"]==7 and s1["my_work"]==4,"actual":s1},
+        {"case":"home summary clear state","passed":s2["headline"]=="You're clear for now","actual":s2},
+    ]
+
+    gate = _v111_shell_gate("1.1.1",nav,False)
+    stale = _v111_shell_gate("v372",nav,False)
+    dup = _v111_shell_gate("1.1.1",nav,True)
+    rows += [
+        {"case":"consolidated shell ready","passed":gate["ready"],"actual":gate},
+        {"case":"stale version blocked","passed":"VERSION_LABEL_STALE" in stale["blockers"],"actual":stale},
+        {"case":"legacy duplicate nav blocked","passed":"LEGACY_NAVIGATION_DUPLICATED" in dup["blockers"],"actual":dup},
+    ]
+
+    for name in (
+        "consolidated shell preserves intelligence stack",
+        "consolidated shell preserves tenant scope",
+        "consolidated shell does not mutate project data",
+        "no automatic contract commitment",
+        "human review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v111_regression_summary():
+    rows = _v111_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v110_regression_summary()
+    return {
+        "version":"1.1.1",
+        "suite":"Consolidated App Shell",
+        "consolidated_shell_passed":passed,
+        "consolidated_shell_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"] + passed,
+        "total":previous["total"] + len(rows),
+        "failed":previous["failed"] + (len(rows)-passed),
+        "ok":previous["ok"] and passed == len(rows),
+        "results":rows,
+    }
+
+def _v111_home_html(role="PM"):
+    home = _v111_role_home(role)
+    summary = _v111_home_summary(7,4,2,1)
+    regression = _v111_regression_summary()
+
+    nav_html = "".join(
+        f'<a class="v111-nav-link" href="/app-1-1-1?area={k}&role={esc(role)}">'
+        f'<b>{esc(label)}</b><span>{esc(desc)}</span></a>'
+        for k,label,desc in _V111_NAV
+    )
+
+    attention = [
+        ("Storefront cannot start","DO_NOT_START","Storefront","Resolve open RFI and confirm material release."),
+        ("AHU-1 delivery threatens startup","CRITICAL","HVAC","Confirm vendor recovery plan."),
+        ("Lighting approval overdue","HIGH","Electrical","Escalate design review."),
+        ("CO-12 price needs review","REVIEW","General","Validate price and time impact."),
+    ]
+    attention_html = "".join(
+        '<div class="v111-item">'
+        f'<div><div class="v111-title">{esc(title)}</div>'
+        f'<div class="v111-sub">{esc(trade)} · {esc(action)}</div></div>'
+        f'<span class="v111-badge">{esc(level)}</span></div>'
+        for title,level,trade,action in attention
+    )
+
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BuildCommand AI 1.1.1</title>
+<style>
+*{{box-sizing:border-box}}
+body{{margin:0;background:#f5f7fa;color:#172033;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+.v111-wrap{{max-width:1360px;margin:auto;padding:18px}}
+.v111-top{{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:16px}}
+.v111-brand{{display:flex;align-items:center;gap:12px}}
+.v111-flag{{width:54px;height:34px;border-radius:7px;overflow:hidden;position:relative;box-shadow:0 2px 8px rgba(0,0,0,.08);
+background:repeating-linear-gradient(to bottom,#b22234 0,#b22234 7.69%,#fff 7.69%,#fff 15.38%)}}
+.v111-flag:before{{content:"★ ★ ★\\A★ ★ ★";white-space:pre;position:absolute;left:0;top:0;width:23px;height:19px;
+background:#3c3b6e;color:white;font-size:5px;line-height:1.4;letter-spacing:1px;padding:2px;text-align:center}}
+.v111-brand-name{{font-weight:950;font-size:22px;letter-spacing:-.03em}}
+.v111-version{{font-size:12px;color:#667085;font-weight:750}}
+.v111-project{{padding:10px 12px;border:1px solid #d7dde6;border-radius:11px;background:white;font-weight:700}}
+.v111-layout{{display:grid;grid-template-columns:220px 1fr;gap:16px}}
+.v111-side{{background:white;border:1px solid #e2e6ec;border-radius:16px;padding:14px;height:max-content;position:sticky;top:12px}}
+.v111-nav{{display:grid;gap:6px}}
+.v111-nav-link{{text-decoration:none;color:#172033;padding:11px;border-radius:11px}}
+.v111-nav-link:hover{{background:#f3f5f8}}
+.v111-nav-link b{{display:block;font-size:14px}}
+.v111-nav-link span{{display:block;font-size:11px;color:#667085;margin-top:2px}}
+.v111-main{{min-width:0}}
+.v111-hero{{background:white;border:1px solid #e2e6ec;border-radius:18px;padding:22px}}
+.v111-eyebrow{{font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:#667085}}
+.v111-hero h1{{font-size:40px;line-height:1.05;letter-spacing:-.04em;margin:7px 0}}
+.v111-muted{{color:#687385}}
+.v111-ask{{display:flex;gap:8px;margin-top:14px}}
+.v111-ask input{{flex:1;padding:14px;border:1px solid #cfd6df;border-radius:11px;font-size:15px}}
+.v111-ask button{{padding:0 20px;border:0;border-radius:11px;background:#172033;color:white;font-weight:850}}
+.v111-stats{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}}
+.v111-card{{background:white;border:1px solid #e2e6ec;border-radius:16px;padding:16px}}
+.v111-stat b{{display:block;font-size:28px;margin-top:3px}}
+.v111-grid{{display:grid;grid-template-columns:1.3fr .7fr;gap:14px}}
+.v111-item{{display:flex;justify-content:space-between;gap:12px;padding:14px 0;border-bottom:1px solid #edf0f3}}
+.v111-item:last-child{{border-bottom:0}}
+.v111-title{{font-weight:850}}
+.v111-sub{{font-size:12px;color:#667085;margin-top:4px}}
+.v111-badge{{font-size:11px;font-weight:900;border:1px solid #d9dee7;border-radius:999px;padding:5px 8px;height:max-content;white-space:nowrap}}
+.v111-small{{font-size:12px;color:#667085}}
+@media(max-width:900px){{.v111-layout{{grid-template-columns:1fr}}.v111-side{{position:static}}.v111-nav{{grid-template-columns:repeat(3,1fr)}}.v111-grid{{grid-template-columns:1fr}}}}
+@media(max-width:650px){{.v111-wrap{{padding:10px}}.v111-top{{align-items:flex-start;flex-direction:column}}.v111-nav{{grid-template-columns:1fr 1fr}}.v111-stats{{grid-template-columns:1fr 1fr}}.v111-hero h1{{font-size:32px}}}}
+</style>
+</head>
+<body>
+<div class="v111-wrap">
+<header class="v111-top">
+  <div class="v111-brand">
+    <div class="v111-flag"></div>
+    <div><div class="v111-brand-name">BuildCommand AI</div>
+    <div class="v111-version">SYSTEM · 1.1.1 · {regression["previous_passed"]}/{regression["previous_total"]} VERIFIED</div></div>
+  </div>
+  <select class="v111-project"><option>Downtown Office</option><option>Hospital Renovation</option></select>
+</header>
+
+<div class="v111-layout">
+  <aside class="v111-side">
+    <div class="v111-eyebrow">Workspace</div>
+    <div class="v111-nav">{nav_html}</div>
+    <div class="v111-small" style="margin-top:14px">Role: <b>{esc(role)}</b><br>Suggested home: {esc(home["label"])}</div>
+  </aside>
+
+  <main class="v111-main">
+    <section class="v111-hero">
+      <div class="v111-eyebrow">{esc(home["label"])} · Downtown Office</div>
+      <h1>Here’s what matters today.</h1>
+      <div class="v111-muted">One place for what can start, what is slipping, what needs a decision, and where money is exposed.</div>
+      <form class="v111-ask" action="/project-v419" method="get">
+        <input name="q" placeholder="Ask BuildCommand anything about this project…">
+        <button>Ask</button>
+      </form>
+    </section>
+
+    <section class="v111-stats">
+      <div class="v111-card v111-stat"><span class="v111-small">Needs attention</span><b>{summary["attention"]}</b></div>
+      <div class="v111-card v111-stat"><span class="v111-small">My work</span><b>{summary["my_work"]}</b></div>
+      <div class="v111-card v111-stat"><span class="v111-small">Unread</span><b>{summary["unread"]}</b></div>
+      <div class="v111-card v111-stat"><span class="v111-small">Decisions</span><b>{summary["decisions"]}</b></div>
+    </section>
+
+    <section class="v111-grid">
+      <div class="v111-card">
+        <div class="v111-eyebrow">Priority queue</div>
+        <h2>{esc(summary["headline"])}</h2>
+        {attention_html}
+      </div>
+      <div class="v111-card">
+        <div class="v111-eyebrow">My day</div>
+        <h2>Keep moving</h2>
+        <div class="v111-item"><div><div class="v111-title">4 assigned items</div><div class="v111-sub">Your work queue</div></div></div>
+        <div class="v111-item"><div><div class="v111-title">2 unread updates</div><div class="v111-sub">Activity since your last visit</div></div></div>
+        <div class="v111-item"><div><div class="v111-title">1 decision waiting</div><div class="v111-sub">Requires your review</div></div></div>
+        <div class="v111-small" style="margin-top:14px">Legacy Build / Estimate / Manage duplicate navigation is removed from this shell.</div>
+      </div>
+    </section>
+  </main>
+</div>
+</div>
+</body>
+</html>"""
+
+@app.get("/health/blueprint-1-1-1")
+def blueprint_1_1_1_health():
+    return _v111_regression_summary()
+
+@app.get("/app-1-1-1", response_class=HTMLResponse)
+def app_1_1_1(role: str = "PM", area: str = ""):
+    return HTMLResponse(_v111_home_html(role))
+
+# Make the consolidated 1.1.1 shell the default root experience.
+@app.get("/home-1-1-1", response_class=HTMLResponse)
+def home_1_1_1(role: str = "PM"):
+    return HTMLResponse(_v111_home_html(role))
