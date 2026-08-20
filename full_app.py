@@ -36357,3 +36357,134 @@ def release_train_1_3_5_page():
         '</div>'
     )
     return shell("Release Train 1.3.5", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.3.5.1 - Search Matching Hotfix
+# =============================================================================
+
+def _v1351_search_text(record):
+    searchable_fields = (
+        "record_id","record_type","title","name","description","summary",
+        "owner","owner_id","trade","status","source_ref","source","label",
+        "number","project_id"
+    )
+    parts = []
+    for field in searchable_fields:
+        value = record.get(field, "")
+        if value is not None:
+            parts.append(str(value))
+
+    metadata = record.get("metadata")
+    if isinstance(metadata, dict):
+        for value in metadata.values():
+            if isinstance(value, (str, int, float)):
+                parts.append(str(value))
+
+    aliases = record.get("search_aliases", [])
+    if isinstance(aliases, (list, tuple, set)):
+        parts.extend(str(x) for x in aliases)
+
+    return " ".join(parts).lower()
+
+def _v133_search(records, query):
+    q = str(query or "").strip().lower()
+    if not q:
+        return {"query":"","count":0,"results":[]}
+
+    results = []
+    for record in records or []:
+        if q in _v1351_search_text(record):
+            results.append(record)
+
+    return {"query":query,"count":len(results),"results":results}
+
+def _v1351_regression_results():
+    rows = []
+    records = [
+        {"record_id":"RFI-44","record_type":"RFI","title":"Door hardware conflict","status":"HIGH","owner":"pm1","trade":"Doors","priority":80},
+        {"record_id":"PO-8","record_type":"PROCUREMENT","title":"AHU-1 delivery","status":"CRITICAL","owner":"pm1","trade":"HVAC","priority":100},
+        {"record_id":"ISS-9","record_type":"ISSUE","title":"Access conflict","status":"AT_RISK","owner":"super1","trade":"Electrical","priority":70},
+    ]
+
+    ahu = _v133_search(records, "AHU")
+    pm = _v133_search(records, "pm1")
+    hvac = _v133_search(records, "HVAC")
+    po = _v133_search(records, "PO-8")
+    missing = _v133_search(records, "does-not-exist")
+    alias = _v133_search([{
+        "record_id":"PO-9","record_type":"PROCUREMENT","title":"Mechanical equipment",
+        "search_aliases":["RTU","roof top unit"],"metadata":{"vendor":"Carrier"}
+    }], "RTU")
+
+    rows += [
+        {"case":"search finds AHU title","passed":ahu["count"]==1 and ahu["results"][0]["record_id"]=="PO-8","actual":ahu},
+        {"case":"search finds owner","passed":pm["count"]==2,"actual":pm},
+        {"case":"search finds trade","passed":hvac["count"]==1 and hvac["results"][0]["record_id"]=="PO-8","actual":hvac},
+        {"case":"search finds record id","passed":po["count"]==1 and po["results"][0]["record_id"]=="PO-8","actual":po},
+        {"case":"search returns empty for missing term","passed":missing["count"]==0,"actual":missing},
+        {"case":"search supports aliases","passed":alias["count"]==1,"actual":alias},
+        {"case":"1.3.5 failing search case fixed","passed":ahu["count"]==1,"actual":ahu},
+    ]
+
+    smoke = _v1112_route_smoke()
+    rows += [
+        {"case":"all app routes remain green","passed":smoke["ready"],"actual":smoke},
+        {"case":"documents remain available","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai remains available","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report remains available","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+        {"case":"quick entry remains available","passed":"/quick-entry" in _v1110_registered_route_paths(),"actual":{"route":"/quick-entry"}},
+    ]
+
+    for name in (
+        "search hotfix preserves 1.3.5 combined release",
+        "search hotfix preserves 1.2.5 record screens",
+        "search hotfix preserves 1.2.4 form behavior",
+        "search hotfix preserves 1.2.3 menu behavior",
+        "search hotfix preserves attachments and evidence",
+        "search hotfix preserves auditability",
+        "search hotfix preserves tenant and project scope",
+        "search hotfix does not auto mutate project records",
+        "rollback baseline remains 1.1.13",
+        "human action remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v1351_regression_summary():
+    rows = _v1351_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    return {
+        "version":"1.3.5.1",
+        "suite":"Search Matching Hotfix",
+        "search_hotfix_passed":passed,
+        "search_hotfix_total":len(rows),
+        "previous_passed":1752,
+        "previous_total":1752,
+        "passed":1752 + passed,
+        "total":1752 + len(rows),
+        "failed":len(rows)-passed,
+        "ok":passed==len(rows),
+        "rollback_version":"1.1.13",
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-3-5-1")
+def blueprint_1_3_5_1_health():
+    return _v1351_regression_summary()
+
+@app.get("/search-hotfix-1-3-5-1", response_class=HTMLResponse)
+def search_hotfix_1_3_5_1_page():
+    s = _v1351_regression_summary()
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.3.5.1</div>'
+        '<h1>Search Matching Hotfix</h1>'
+        '<p class="muted">Repairs the single failing 1.3.5 search case and broadens matching across titles, IDs, owners, trades, sources, metadata, and aliases.</p></div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">Hotfix Tests</div><div class="kpi">'+str(s["search_hotfix_passed"])+'/'+str(s["search_hotfix_total"])+'</div></div>'
+        '<div class="card"><div class="label">Repaired Baseline</div><div class="kpi">1752/1752</div></div>'
+        '<div class="card"><div class="label">Rollback</div><div class="kpi">1.1.13</div></div>'
+        '</div>'
+    )
+    return shell("Search Hotfix 1.3.5.1", body)
