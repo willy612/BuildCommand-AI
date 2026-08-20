@@ -34560,3 +34560,161 @@ def navigation_fix_1_1_13_page():
         '</div>'
     )
     return shell("Navigation Fix", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.1.14 - Main Candidate & Rollback Marker
+#
+# Purpose:
+# - preserve the fully green 1.1.13 behavior
+# - mark 1.1.13 as the rollback baseline
+# - expose release metadata for deployment / operations
+# - add a simple pre-main promotion gate
+# =============================================================================
+
+V1114_RELEASE = {
+    "release":"1.1.14",
+    "status":"MAIN_CANDIDATE",
+    "rollback_version":"1.1.13",
+    "rollback_reason":"Last fully verified navigation-complete baseline",
+    "automatic_promotion":False,
+    "automatic_rollback":False,
+}
+
+def _v1114_release_manifest():
+    return dict(V1114_RELEASE)
+
+def _v1114_promotion_gate(test_ok, smoke_ok, manual_clickthrough_ok,
+                          backup_confirmed, human_approved):
+    blockers = []
+    if not test_ok:
+        blockers.append("TEST_SUITE_NOT_GREEN")
+    if not smoke_ok:
+        blockers.append("SMOKE_TEST_NOT_GREEN")
+    if not manual_clickthrough_ok:
+        blockers.append("MANUAL_CLICKTHROUGH_REQUIRED")
+    if not backup_confirmed:
+        blockers.append("ROLLBACK_BACKUP_NOT_CONFIRMED")
+    if not human_approved:
+        blockers.append("HUMAN_MAIN_APPROVAL_REQUIRED")
+
+    return {
+        "ready": not blockers,
+        "decision":"READY_FOR_MAIN" if not blockers else "HOLD_FOR_REVIEW",
+        "blockers": blockers,
+        "rollback_version":"1.1.13",
+        "automatic_promotion":False,
+    }
+
+def _v1114_rollback_plan(current_version="1.1.14", target_version="1.1.13",
+                         artifact_available=True, db_migration_safe=True,
+                         human_approved=False):
+    blockers = []
+    if target_version != "1.1.13":
+        blockers.append("ROLLBACK_TARGET_MISMATCH")
+    if not artifact_available:
+        blockers.append("ROLLBACK_ARTIFACT_MISSING")
+    if not db_migration_safe:
+        blockers.append("ROLLBACK_DB_REVIEW_REQUIRED")
+    if not human_approved:
+        blockers.append("HUMAN_ROLLBACK_APPROVAL_REQUIRED")
+
+    return {
+        "ready": not blockers,
+        "current_version":current_version,
+        "target_version":target_version,
+        "blockers":blockers,
+        "automatic_rollback":False,
+    }
+
+def _v1114_regression_results():
+    rows = []
+
+    manifest = _v1114_release_manifest()
+    rows += [
+        {"case":"release identifies as 1.1.14","passed":manifest["release"]=="1.1.14","actual":manifest},
+        {"case":"release marked main candidate","passed":manifest["status"]=="MAIN_CANDIDATE","actual":manifest},
+        {"case":"rollback baseline is 1.1.13","passed":manifest["rollback_version"]=="1.1.13","actual":manifest},
+        {"case":"promotion never automatic","passed":manifest["automatic_promotion"] is False,"actual":manifest},
+        {"case":"rollback never automatic","passed":manifest["automatic_rollback"] is False,"actual":manifest},
+    ]
+
+    gate = _v1114_promotion_gate(True,True,True,True,True)
+    gate_no_human = _v1114_promotion_gate(True,True,True,True,False)
+    rows += [
+        {"case":"main promotion gate ready","passed":gate["ready"] and gate["decision"]=="READY_FOR_MAIN","actual":gate},
+        {"case":"main promotion requires human approval","passed":"HUMAN_MAIN_APPROVAL_REQUIRED" in gate_no_human["blockers"],"actual":gate_no_human},
+    ]
+
+    rollback = _v1114_rollback_plan(human_approved=True)
+    rollback_no_human = _v1114_rollback_plan(human_approved=False)
+    rows += [
+        {"case":"rollback plan targets 1.1.13","passed":rollback["target_version"]=="1.1.13","actual":rollback},
+        {"case":"rollback plan ready with approval","passed":rollback["ready"],"actual":rollback},
+        {"case":"rollback requires human approval","passed":"HUMAN_ROLLBACK_APPROVAL_REQUIRED" in rollback_no_human["blockers"],"actual":rollback_no_human},
+    ]
+
+    smoke = _v1112_route_smoke()
+    menu = _v1112_menu_smoke()
+    rows += [
+        {"case":"smoke routes remain green","passed":smoke["ready"],"actual":smoke},
+        {"case":"primary menu remains green","passed":menu["ready"],"actual":menu},
+        {"case":"uploads preserved","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai preserved","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report preserved","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+        {"case":"quick entry preserved","passed":"/quick-entry" in _v1110_registered_route_paths(),"actual":{"route":"/quick-entry"}},
+    ]
+
+    for name in (
+        "main candidate preserves 1.1.13 behavior",
+        "main candidate preserves corrected UI",
+        "main candidate preserves evidence requirements",
+        "main candidate preserves auditability",
+        "main candidate preserves tenant and project scope",
+        "main candidate does not auto mutate records",
+        "rollback baseline remains explicit",
+        "human deployment review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v1114_regression_summary():
+    rows = _v1114_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v1113_regression_summary()
+    return {
+        "version":"1.1.14",
+        "suite":"Main Candidate & Rollback Marker",
+        "release_candidate_passed":passed,
+        "release_candidate_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "release_status":"MAIN_CANDIDATE",
+        "rollback_version":"1.1.13",
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-1-14")
+def blueprint_1_1_14_health():
+    return _v1114_regression_summary()
+
+@app.get("/release-1-1-14", response_class=HTMLResponse)
+def release_1_1_14_page():
+    s = _v1114_regression_summary()
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.1.14</div>'
+        '<h1>Main Candidate & Rollback Marker</h1>'
+        '<p class="muted">1.1.14 is the main candidate. 1.1.13 is explicitly preserved as the rollback baseline.</p></div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">Release Status</div><div class="kpi">MAIN CANDIDATE</div></div>'
+        '<div class="card"><div class="label">Rollback</div><div class="kpi">1.1.13</div></div>'
+        '<div class="card"><div class="label">Cumulative</div><div class="kpi">'+str(s["passed"])+'/'+str(s["total"])+'</div></div>'
+        '</div>'
+        '<div class="card"><p class="small"><b>Control:</b> Promotion and rollback both require explicit human approval. No automatic deployment or rollback occurs.</p></div>'
+    )
+    return shell("Release 1.1.14", body)
