@@ -913,7 +913,7 @@ document.addEventListener('keydown',function(e){{
 </head><body><div class="app">
 <header class="side">
   <div class="bc-header">
-    <div class="bc-brand-wrap"><div class="brand">BuildCommand AI</div><div class="company">{company_name}</div></div>
+    <div class="bc-brand-wrap"><div class="brand"><span>BuildCommand AI</span></div><div class="company">{company_name}</div></div>
     <div class="bc-nav-wrap">{nav}</div>
     <div class="bc-user-actions"><div class="bc-user-name">{display_name}</div><form method="post" action="/logout" class="bc-signout"><button type="submit">Sign Out</button></form></div>
   </div>
@@ -28406,26 +28406,17 @@ body{{
   margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   color:#172033;background:#f5f7fa;min-height:100vh;
 }}
-body:before{{
-  content:"";position:fixed;inset:0;z-index:-2;
-  background:
-    linear-gradient(rgba(247,249,252,.72),rgba(247,249,252,.72)),
-    repeating-linear-gradient(
-      to bottom,
-      #b22234 0%,#b22234 7.69%,
-      #fff 7.69%,#fff 15.38%
-    );
-}}
-body:after{{
-  content:"★ ★ ★ ★ ★\\A★ ★ ★ ★ ★\\A★ ★ ★ ★ ★\\A★ ★ ★ ★ ★";
-  white-space:pre;position:fixed;left:0;top:0;z-index:-1;
-  width:40vw;height:53.8vh;min-width:300px;max-width:620px;
-  padding:28px;color:rgba(255,255,255,.42);font-size:30px;line-height:1.8;letter-spacing:16px;
-  background:rgba(60,59,110,.68);overflow:hidden;
-}}
 .wrap{{max-width:1280px;margin:auto;padding:22px}}
 .top{{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:22px}}
-.brand{{font-weight:950;font-size:23px;letter-spacing:-.03em}}
+.brand{{position:relative;display:inline-block;font-weight:950;font-size:23px;letter-spacing:-.03em;
+      padding:11px 18px 11px 64px;border-radius:12px;overflow:hidden;background:#fff;
+      box-shadow:0 2px 10px rgba(25,35,50,.06)}}
+.brand:before{{content:"";position:absolute;inset:0;z-index:0;opacity:.34;
+      background:repeating-linear-gradient(to bottom,#b22234 0,#b22234 7.69%,#fff 7.69%,#fff 15.38%)}}
+.brand:after{{content:"★ ★ ★\\A★ ★ ★";white-space:pre;position:absolute;left:0;top:0;z-index:1;
+      width:54px;height:100%;padding:5px 4px;background:#3c3b6e;color:#fff;font-size:9px;
+      line-height:1.55;letter-spacing:2px;text-align:center;opacity:.9}}
+.brand span{{position:relative;z-index:2}}
 .version{{font-size:12px;font-weight:850;color:#536071;margin-top:3px}}
 .project{{padding:10px 13px;border:1px solid #d6dce5;background:rgba(255,255,255,.92);border-radius:12px;font-weight:750}}
 .hero{{display:grid;grid-template-columns:1.4fr .6fr;gap:16px}}
@@ -28457,7 +28448,7 @@ h1{{font-size:44px;line-height:1.03;letter-spacing:-.045em;margin:8px 0 10px}}
 <div class="wrap">
   <header class="top">
     <div>
-      <div class="brand">BuildCommand AI</div>
+      <div class="brand"><span>BuildCommand AI</span></div>
       <div class="version">SYSTEM · 1.0 · {health["previous_passed"]}/{health["previous_total"]} VERIFIED</div>
     </div>
     <select class="project"><option>Downtown Office</option><option>Hospital Renovation</option></select>
