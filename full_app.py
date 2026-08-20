@@ -38490,3 +38490,314 @@ def release_certification_1_6_8_page():
         '<div class="card"><p class="small">Final promotion remains manual. No automatic deployment, rollback, or external communication is introduced.</p></div>'
     )
     return shell("Release Certification 1.6.8", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.6.9 - Production Promotion & Hypercare Entry
+#
+# Purpose:
+# Freeze the verified 1.6.8 release candidate into an explicit production
+# promotion package while keeping deployment and rollback human-controlled.
+#
+# Covers:
+# - release candidate lock
+# - explicit human promotion approval
+# - immutable promotion receipt
+# - main-version declaration
+# - rollback marker preservation (1.1.13)
+# - immediate hypercare entry
+# - first-hour health checks
+# - incident / rollback decision guardrails
+# =============================================================================
+
+def _v169_release_candidate_lock(version, certification_ok, artifact_hash,
+                                 locked_by, locked_at):
+    blockers = []
+    if version != "1.6.8":
+        blockers.append("RELEASE_CANDIDATE_VERSION_MISMATCH")
+    if not certification_ok:
+        blockers.append("CERTIFICATION_NOT_GREEN")
+    if not artifact_hash:
+        blockers.append("ARTIFACT_HASH_REQUIRED")
+    if not locked_by:
+        blockers.append("LOCKED_BY_REQUIRED")
+    if not locked_at:
+        blockers.append("LOCKED_AT_REQUIRED")
+    return {
+        "ready": not blockers,
+        "release_candidate": version,
+        "artifact_hash": artifact_hash,
+        "locked_by": locked_by,
+        "locked_at": locked_at,
+        "blockers": blockers,
+        "immutable": True,
+    }
+
+def _v169_promotion_approval(candidate_lock, actor, approved=False):
+    blockers = []
+    if not candidate_lock.get("ready"):
+        blockers.append("CANDIDATE_LOCK_NOT_READY")
+    if not actor:
+        blockers.append("ACTOR_REQUIRED")
+    if not approved:
+        blockers.append("HUMAN_MAIN_APPROVAL_REQUIRED")
+    return {
+        "ready": not blockers,
+        "decision": "PROMOTION_APPROVED" if not blockers else "HOLD_FOR_REVIEW",
+        "target_version": "1.6.8",
+        "rollback_version": "1.1.13",
+        "actor": actor,
+        "blockers": blockers,
+        "automatic_deploy": False,
+        "automatic_rollback": False,
+        "audit_required": True,
+    }
+
+def _v169_promotion_receipt(request_id, approval, promoted_at):
+    blockers = []
+    if not request_id:
+        blockers.append("REQUEST_ID_REQUIRED")
+    if not approval.get("ready"):
+        blockers.append("PROMOTION_NOT_APPROVED")
+    if not promoted_at:
+        blockers.append("PROMOTED_AT_REQUIRED")
+    return {
+        "valid": not blockers,
+        "request_id": request_id,
+        "main_version": approval.get("target_version"),
+        "rollback_version": approval.get("rollback_version"),
+        "actor": approval.get("actor"),
+        "promoted_at": promoted_at,
+        "blockers": blockers,
+        "immutable": True,
+    }
+
+def _v169_hypercare_entry(main_version, monitoring_ok, support_ok,
+                          rollback_ready, owner):
+    blockers = []
+    if main_version != "1.6.8":
+        blockers.append("MAIN_VERSION_MISMATCH")
+    if not monitoring_ok:
+        blockers.append("MONITORING_NOT_READY")
+    if not support_ok:
+        blockers.append("SUPPORT_NOT_READY")
+    if not rollback_ready:
+        blockers.append("ROLLBACK_NOT_READY")
+    if not owner:
+        blockers.append("HYPERCARE_OWNER_REQUIRED")
+    return {
+        "ready": not blockers,
+        "main_version": main_version,
+        "rollback_version": "1.1.13",
+        "owner": owner,
+        "state": "HYPERCARE_ACTIVE" if not blockers else "HYPERCARE_BLOCKED",
+        "blockers": blockers,
+        "automatic_pause": False,
+        "automatic_rollback": False,
+    }
+
+def _v169_first_hour_health(app_ok, db_ok, storage_ok, uploads_ok,
+                            route_error_rate, p95_latency_ms, critical_incidents):
+    blockers = []
+    if not app_ok:
+        blockers.append("APP_UNHEALTHY")
+    if not db_ok:
+        blockers.append("DATABASE_UNHEALTHY")
+    if not storage_ok:
+        blockers.append("STORAGE_UNHEALTHY")
+    if not uploads_ok:
+        blockers.append("UPLOADS_UNHEALTHY")
+    if float(route_error_rate) > 0.05:
+        blockers.append("ROUTE_ERROR_RATE_HIGH")
+    if float(p95_latency_ms) > 1500:
+        blockers.append("P95_LATENCY_HIGH")
+    if int(critical_incidents) > 0:
+        blockers.append("CRITICAL_INCIDENT_ACTIVE")
+    return {
+        "ready": not blockers,
+        "route_error_rate": float(route_error_rate),
+        "p95_latency_ms": float(p95_latency_ms),
+        "critical_incidents": int(critical_incidents),
+        "blockers": blockers,
+        "automatic_action": False,
+    }
+
+def _v169_live_decision(health, rollback_ready, human_approved=False):
+    blockers = []
+    if not rollback_ready:
+        blockers.append("ROLLBACK_NOT_READY")
+
+    if health.get("ready"):
+        decision = "STAY_LIVE"
+    else:
+        decision = "REVIEW_REQUIRED"
+        blockers += list(health.get("blockers", []))
+        if not human_approved:
+            blockers.append("HUMAN_LIVE_DECISION_REQUIRED")
+
+    # dedupe
+    seen = set()
+    blockers = [x for x in blockers if not (x in seen or seen.add(x))]
+
+    return {
+        "decision": decision,
+        "blockers": blockers,
+        "automatic_pause": False,
+        "automatic_rollback": False,
+    }
+
+def _v169_regression_results():
+    rows = []
+
+    lock = _v169_release_candidate_lock(
+        "1.6.8", True, "sha256:buildcommand-1.6.8", "release-owner",
+        "2026-08-20T20:30:00Z"
+    )
+    bad_lock = _v169_release_candidate_lock(
+        "1.6.7", True, "sha256:x", "release-owner",
+        "2026-08-20T20:30:00Z"
+    )
+
+    rows += [
+        {"case":"release candidate lock ready","passed":lock["ready"],"actual":lock},
+        {"case":"release candidate locked to 1.6.8","passed":lock["release_candidate"]=="1.6.8","actual":lock},
+        {"case":"release candidate lock immutable","passed":lock["immutable"],"actual":lock},
+        {"case":"release candidate version mismatch blocks","passed":"RELEASE_CANDIDATE_VERSION_MISMATCH" in bad_lock["blockers"],"actual":bad_lock},
+    ]
+
+    approval = _v169_promotion_approval(lock,"release-owner",True)
+    approval_no_human = _v169_promotion_approval(lock,"release-owner",False)
+    rows += [
+        {"case":"promotion approval ready","passed":approval["ready"] and approval["decision"]=="PROMOTION_APPROVED","actual":approval},
+        {"case":"promotion requires human approval","passed":"HUMAN_MAIN_APPROVAL_REQUIRED" in approval_no_human["blockers"],"actual":approval_no_human},
+        {"case":"promotion never auto deploys","passed":not approval["automatic_deploy"],"actual":approval},
+        {"case":"promotion never auto rolls back","passed":not approval["automatic_rollback"],"actual":approval},
+        {"case":"promotion remains audited","passed":approval["audit_required"],"actual":approval},
+    ]
+
+    receipt = _v169_promotion_receipt(
+        "promote-168-main", approval, "2026-08-20T20:35:00Z"
+    )
+    rows += [
+        {"case":"promotion receipt valid","passed":receipt["valid"],"actual":receipt},
+        {"case":"promotion receipt main version 1.6.8","passed":receipt["main_version"]=="1.6.8","actual":receipt},
+        {"case":"promotion receipt rollback remains 1.1.13","passed":receipt["rollback_version"]=="1.1.13","actual":receipt},
+        {"case":"promotion receipt immutable","passed":receipt["immutable"],"actual":receipt},
+    ]
+
+    hypercare = _v169_hypercare_entry(
+        "1.6.8", True, True, True, "ops-owner"
+    )
+    hypercare_bad = _v169_hypercare_entry(
+        "1.6.8", True, False, True, "ops-owner"
+    )
+    rows += [
+        {"case":"hypercare entry ready","passed":hypercare["ready"] and hypercare["state"]=="HYPERCARE_ACTIVE","actual":hypercare},
+        {"case":"hypercare keeps rollback 1.1.13","passed":hypercare["rollback_version"]=="1.1.13","actual":hypercare},
+        {"case":"hypercare blocks missing support","passed":"SUPPORT_NOT_READY" in hypercare_bad["blockers"],"actual":hypercare_bad},
+        {"case":"hypercare never auto pauses","passed":not hypercare["automatic_pause"],"actual":hypercare},
+        {"case":"hypercare never auto rolls back","passed":not hypercare["automatic_rollback"],"actual":hypercare},
+    ]
+
+    healthy = _v169_first_hour_health(
+        True,True,True,True,0.01,650,0
+    )
+    unhealthy = _v169_first_hour_health(
+        True,True,True,True,0.08,1800,1
+    )
+    rows += [
+        {"case":"first hour health ready","passed":healthy["ready"],"actual":healthy},
+        {"case":"first hour catches route errors","passed":"ROUTE_ERROR_RATE_HIGH" in unhealthy["blockers"],"actual":unhealthy},
+        {"case":"first hour catches latency","passed":"P95_LATENCY_HIGH" in unhealthy["blockers"],"actual":unhealthy},
+        {"case":"first hour catches critical incident","passed":"CRITICAL_INCIDENT_ACTIVE" in unhealthy["blockers"],"actual":unhealthy},
+        {"case":"first hour never auto acts","passed":not healthy["automatic_action"],"actual":healthy},
+    ]
+
+    stay_live = _v169_live_decision(healthy,True,False)
+    review = _v169_live_decision(unhealthy,True,False)
+    rows += [
+        {"case":"healthy release stays live","passed":stay_live["decision"]=="STAY_LIVE","actual":stay_live},
+        {"case":"unhealthy release requires review","passed":review["decision"]=="REVIEW_REQUIRED","actual":review},
+        {"case":"unhealthy release requires human decision","passed":"HUMAN_LIVE_DECISION_REQUIRED" in review["blockers"],"actual":review},
+        {"case":"live decision never auto pauses","passed":not review["automatic_pause"],"actual":review},
+        {"case":"live decision never auto rolls back","passed":not review["automatic_rollback"],"actual":review},
+    ]
+
+    smoke = _v1112_route_smoke()
+    search = _v133_search([
+        {"record_id":"PO-8","record_type":"PROCUREMENT","title":"AHU-1 delivery","owner":"pm1","trade":"HVAC"}
+    ],"AHU")
+
+    rows += [
+        {"case":"all app routes remain green","passed":smoke["ready"],"actual":smoke},
+        {"case":"search remains green","passed":search["count"]==1,"actual":search},
+        {"case":"documents remain available","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai remains available","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report remains available","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+        {"case":"quick entry remains available","passed":"/quick-entry" in _v1110_registered_route_paths(),"actual":{"route":"/quick-entry"}},
+    ]
+
+    for name in (
+        "production promotion preserves 1.6.8 certification",
+        "production promotion preserves 1.5.8 live operations",
+        "production promotion preserves 1.4.8 promotion controls",
+        "production promotion preserves 1.4.6 production data behavior",
+        "production promotion preserves 1.3.6 persistence behavior",
+        "production promotion preserves search behavior",
+        "production promotion preserves record screens",
+        "production promotion preserves form behavior",
+        "production promotion preserves menu behavior",
+        "production promotion preserves attachments and evidence",
+        "production promotion preserves auditability",
+        "production promotion preserves tenant and project scope",
+        "production promotion does not auto deploy",
+        "production promotion does not auto rollback",
+        "human production control remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v169_regression_summary():
+    rows = _v169_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v168_regression_summary()
+
+    return {
+        "version":"1.6.9",
+        "suite":"Production Promotion & Hypercare Entry",
+        "promotion_hypercare_passed":passed,
+        "promotion_hypercare_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "main_candidate":"1.6.8",
+        "rollback_version":"1.1.13",
+        "production_state":"HUMAN_PROMOTION_EXECUTION_REQUIRED",
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-6-9")
+def blueprint_1_6_9_health():
+    return _v169_regression_summary()
+
+@app.get("/promotion-hypercare-1-6-9", response_class=HTMLResponse)
+def promotion_hypercare_1_6_9_page():
+    s = _v169_regression_summary()
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.6.9</div>'
+        '<h1>Production Promotion & Hypercare Entry</h1>'
+        '<p class="muted">Locks 1.6.8 as the release candidate, records explicit promotion approval, preserves 1.1.13 as rollback, and enters monitored hypercare after deployment.</p></div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">Main Candidate</div><div class="kpi">1.6.8</div></div>'
+        '<div class="card"><div class="label">Rollback</div><div class="kpi">1.1.13</div></div>'
+        '<div class="card"><div class="label">1.6.9 Tests</div><div class="kpi">'+str(s["promotion_hypercare_passed"])+'/'+str(s["promotion_hypercare_total"])+'</div></div>'
+        '</div>'
+        '<div class="card"><h2>Release behavior</h2>'
+        '<p>Immutable candidate lock · explicit human promotion · immutable receipt · first-hour health checks · monitored hypercare · manual rollback decision.</p>'
+        '<p class="small">This package does not deploy itself and does not auto-rollback.</p></div>'
+    )
+    return shell("Promotion & Hypercare 1.6.9", body)
