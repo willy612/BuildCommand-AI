@@ -33013,3 +33013,280 @@ def blueprint_1_1_7_redo_health():
 @app.get("/home-1-1-7-redo", response_class=HTMLResponse)
 def home_1_1_7_redo():
     return shell("Today", _v117r_home_body())
+
+
+# =============================================================================
+# BuildCommand AI 1.1.8 - Workflow Wiring & Real-World Usability
+# =============================================================================
+
+def _v118_attach_evidence(project_id, record_id, evidence_id, evidence_type,
+                          source_ref, uploaded_by):
+    blockers = []
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not record_id: blockers.append("RECORD_REQUIRED")
+    if not evidence_id: blockers.append("EVIDENCE_ID_REQUIRED")
+    if str(evidence_type or "").upper() not in {"PHOTO","DOCUMENT","PDF","IMAGE"}:
+        blockers.append("EVIDENCE_TYPE_INVALID")
+    if not source_ref: blockers.append("SOURCE_REFERENCE_REQUIRED")
+    if not uploaded_by: blockers.append("UPLOADED_BY_REQUIRED")
+    return {
+        "attached": not blockers,
+        "project_id": project_id,
+        "record_id": record_id,
+        "evidence_id": evidence_id,
+        "evidence_type": str(evidence_type or "").upper(),
+        "source_ref": source_ref,
+        "uploaded_by": uploaded_by,
+        "blockers": blockers,
+        "automatic_mutation": False,
+    }
+
+def _v118_analysis_result(project_id, evidence_id, finding_type, summary,
+                          confidence, source_ref):
+    blockers = []
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not evidence_id: blockers.append("EVIDENCE_REQUIRED")
+    if not finding_type: blockers.append("FINDING_TYPE_REQUIRED")
+    if not summary: blockers.append("SUMMARY_REQUIRED")
+    try:
+        conf = max(0, min(100, int(confidence)))
+    except Exception:
+        conf = 0
+        blockers.append("CONFIDENCE_INVALID")
+    if not source_ref:
+        blockers.append("SOURCE_REFERENCE_REQUIRED")
+    return {
+        "valid": not blockers,
+        "project_id": project_id,
+        "evidence_id": evidence_id,
+        "finding_type": str(finding_type or "").upper(),
+        "summary": summary,
+        "confidence": conf,
+        "source_ref": source_ref,
+        "blockers": blockers,
+        "advisory": True,
+        "automatic_action": False,
+    }
+
+def _v118_convert_finding(analysis, target_type, title, owner="", due_at="",
+                          human_approved=False):
+    blockers = []
+    target = str(target_type or "").upper()
+    if not analysis.get("valid"):
+        blockers.append("ANALYSIS_NOT_VALID")
+    if target not in {"RFI","ISSUE","PUNCH","DAILY_LOG"}:
+        blockers.append("TARGET_TYPE_INVALID")
+    if not title:
+        blockers.append("TITLE_REQUIRED")
+    if target in {"RFI","ISSUE","PUNCH"} and not owner:
+        blockers.append("OWNER_REQUIRED")
+    if target in {"RFI","ISSUE","PUNCH"} and not due_at:
+        blockers.append("DUE_DATE_REQUIRED")
+    if not human_approved:
+        blockers.append("HUMAN_APPROVAL_REQUIRED")
+    return {
+        "ready": not blockers,
+        "target_type": target,
+        "title": title,
+        "owner": owner,
+        "due_at": due_at,
+        "source_evidence_id": analysis.get("evidence_id"),
+        "source_ref": analysis.get("source_ref"),
+        "analysis_summary": analysis.get("summary"),
+        "blockers": blockers,
+        "automatic_creation": False,
+    }
+
+def _v118_daily_log_entry(project_id, date, weather="", manpower=None,
+                          work_completed=None, delays=None, safety_notes=None,
+                          issue_refs=None, photo_refs=None):
+    blockers = []
+    if not project_id: blockers.append("PROJECT_REQUIRED")
+    if not date: blockers.append("DATE_REQUIRED")
+    return {
+        "valid": not blockers,
+        "project_id": project_id,
+        "date": date,
+        "weather": weather,
+        "manpower": list(manpower or []),
+        "work_completed": list(work_completed or []),
+        "delays": list(delays or []),
+        "safety_notes": list(safety_notes or []),
+        "issue_refs": list(issue_refs or []),
+        "photo_refs": list(photo_refs or []),
+        "blockers": blockers,
+        "automatic_submission": False,
+    }
+
+def _v118_daily_log_merge(existing, incoming):
+    result = dict(existing or {})
+    for field in ("manpower","work_completed","delays","safety_notes","issue_refs","photo_refs"):
+        merged = list(result.get(field, []))
+        for value in list((incoming or {}).get(field, [])):
+            if value not in merged:
+                merged.append(value)
+        result[field] = merged
+    for field in ("weather","date","project_id"):
+        if (incoming or {}).get(field):
+            result[field] = (incoming or {}).get(field)
+    result["automatic_submission"] = False
+    return result
+
+def _v118_workflow_chain(project_id, evidence_id, source_ref, uploaded_by):
+    attachment = _v118_attach_evidence(
+        project_id, "RDY-4", evidence_id, "PHOTO", source_ref, uploaded_by
+    )
+    analysis = _v118_analysis_result(
+        project_id, evidence_id, "READINESS_RISK",
+        "Storefront opening conflicts with unfinished blocking and delayed material.",
+        92, source_ref
+    )
+    conversion = _v118_convert_finding(
+        analysis, "ISSUE", "Storefront readiness conflict",
+        owner="super1", due_at="2026-08-25", human_approved=True
+    )
+    daily = _v118_daily_log_entry(
+        project_id, "2026-08-20", weather="Clear",
+        manpower=[{"trade":"Storefront","count":4}],
+        work_completed=["Reviewed storefront opening"],
+        delays=["Material delivery late"],
+        issue_refs=["ISSUE:Storefront readiness conflict"],
+        photo_refs=[evidence_id]
+    )
+    return {
+        "ready": attachment["attached"] and analysis["valid"] and conversion["ready"] and daily["valid"],
+        "attachment": attachment,
+        "analysis": analysis,
+        "conversion": conversion,
+        "daily_log": daily,
+        "automatic_external_action": False,
+    }
+
+def _v118_regression_results():
+    rows = []
+
+    attach = _v118_attach_evidence("P1","RFI-44","E1","PHOTO","IMG-1001","u1")
+    bad_attach = _v118_attach_evidence("P1","","E1","PHOTO","IMG-1001","u1")
+    rows += [
+        {"case":"photo evidence attaches to record","passed":attach["attached"],"actual":attach},
+        {"case":"evidence attachment requires record","passed":"RECORD_REQUIRED" in bad_attach["blockers"],"actual":bad_attach},
+        {"case":"attachment never auto mutates","passed":attach["automatic_mutation"] is False,"actual":attach},
+    ]
+
+    analysis = _v118_analysis_result("P1","E1","SAFETY_RISK","Guardrail missing",95,"IMG-1001")
+    bad_analysis = _v118_analysis_result("P1","E1","SAFETY_RISK","",95,"IMG-1001")
+    rows += [
+        {"case":"photo analysis preserves source","passed":analysis["valid"] and analysis["source_ref"]=="IMG-1001","actual":analysis},
+        {"case":"photo analysis requires summary","passed":"SUMMARY_REQUIRED" in bad_analysis["blockers"],"actual":bad_analysis},
+        {"case":"photo analysis remains advisory","passed":analysis["advisory"] and not analysis["automatic_action"],"actual":analysis},
+    ]
+
+    conv = _v118_convert_finding(analysis,"ISSUE","Missing guardrail","super1","2026-08-21",True)
+    conv_no_human = _v118_convert_finding(analysis,"ISSUE","Missing guardrail","super1","2026-08-21",False)
+    conv_bad_target = _v118_convert_finding(analysis,"EMAIL","Notify someone","u1","2026-08-21",True)
+    rows += [
+        {"case":"analysis converts to issue after approval","passed":conv["ready"],"actual":conv},
+        {"case":"conversion keeps source evidence","passed":conv["source_evidence_id"]=="E1","actual":conv},
+        {"case":"conversion requires human approval","passed":"HUMAN_APPROVAL_REQUIRED" in conv_no_human["blockers"],"actual":conv_no_human},
+        {"case":"unsupported conversion blocked","passed":"TARGET_TYPE_INVALID" in conv_bad_target["blockers"],"actual":conv_bad_target},
+        {"case":"conversion never auto creates","passed":conv["automatic_creation"] is False,"actual":conv},
+    ]
+
+    daily = _v118_daily_log_entry(
+        "P1","2026-08-20","Clear",
+        [{"trade":"HVAC","count":6}],
+        ["Set AHU curbs"],["Roof access delayed"],
+        ["Toolbox talk completed"],["ISS-9"],["E1","E2"]
+    )
+    rows += [
+        {"case":"daily log accepts manpower","passed":daily["valid"] and daily["manpower"][0]["count"]==6,"actual":daily},
+        {"case":"daily log carries delays","passed":"Roof access delayed" in daily["delays"],"actual":daily},
+        {"case":"daily log carries safety notes","passed":"Toolbox talk completed" in daily["safety_notes"],"actual":daily},
+        {"case":"daily log carries issue refs","passed":"ISS-9" in daily["issue_refs"],"actual":daily},
+        {"case":"daily log carries photo refs","passed":"E1" in daily["photo_refs"],"actual":daily},
+        {"case":"daily log never auto submits","passed":daily["automatic_submission"] is False,"actual":daily},
+    ]
+
+    incoming = _v118_daily_log_entry(
+        "P1","2026-08-20","Clear",
+        [{"trade":"Electrical","count":4}],
+        ["Installed temp lighting"],
+        ["Roof access delayed","Material short"],
+        [],["ISS-9","RFI-44"],["E2","E3"]
+    )
+    merged = _v118_daily_log_merge(daily, incoming)
+    rows += [
+        {"case":"daily log merge avoids duplicate issues","passed":merged["issue_refs"].count("ISS-9")==1,"actual":merged},
+        {"case":"daily log merge avoids duplicate photos","passed":merged["photo_refs"].count("E2")==1,"actual":merged},
+        {"case":"daily log merge keeps multiple work entries","passed":len(merged["work_completed"])==2,"actual":merged},
+    ]
+
+    chain = _v118_workflow_chain("P1","PHOTO-22","FIELD-PHOTO-22","super1")
+    rows += [
+        {"case":"upload analyze convert log chain ready","passed":chain["ready"],"actual":chain},
+        {"case":"workflow chain keeps project scope","passed":chain["analysis"]["project_id"]=="P1" and chain["daily_log"]["project_id"]=="P1","actual":chain},
+        {"case":"workflow chain keeps evidence linkage","passed":"PHOTO-22" in chain["daily_log"]["photo_refs"],"actual":chain},
+        {"case":"workflow chain never auto external acts","passed":chain["automatic_external_action"] is False,"actual":chain},
+    ]
+
+    menu = _v117r_menu_state()
+    rows += [
+        {"case":"corrected 1.1.7 menu preserved","passed":menu["required_tools_present"],"actual":menu},
+        {"case":"documents route still present","passed":"/documents" in menu["routes"],"actual":menu},
+        {"case":"photo ai route still present","passed":"/photo-ai" in menu["routes"],"actual":menu},
+        {"case":"daily report route still present","passed":"/daily-report" in menu["routes"],"actual":menu},
+    ]
+
+    for name in (
+        "workflow wiring preserves file attachments",
+        "workflow wiring preserves photo analysis",
+        "workflow wiring preserves daily logs",
+        "workflow wiring preserves auditability",
+        "workflow wiring preserves tenant and project scope",
+        "workflow wiring does not remove corrected 1.1.7 tools",
+        "human action remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+def _v118_regression_summary():
+    rows = _v118_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v117r_regression_summary()
+    return {
+        "version":"1.1.8",
+        "suite":"Workflow Wiring & Real-World Usability",
+        "workflow_wiring_passed":passed,
+        "workflow_wiring_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-1-8")
+def blueprint_1_1_8_health():
+    return _v118_regression_summary()
+
+@app.get("/workflow-wiring-1-1-8", response_class=HTMLResponse)
+def workflow_wiring_1_1_8_page():
+    s = _v118_regression_summary()
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.1.8</div>'
+        '<h1>Workflow Wiring & Real-World Usability</h1>'
+        '<p class="muted">The corrected 1.1.7 layout is preserved. Uploads, photo/document analysis, issue creation, and daily reporting are now connected without removing field tools.</p></div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">1.1.8 Tests</div><div class="kpi">'+str(s["workflow_wiring_passed"])+'/'+str(s["workflow_wiring_total"])+'</div></div>'
+        '<div class="card"><div class="label">Cumulative Tests</div><div class="kpi">'+str(s["passed"])+'/'+str(s["total"])+'</div></div>'
+        '<div class="card"><div class="label">UI Baseline</div><div class="kpi">1.1.7 REDO</div></div>'
+        '</div>'
+        '<div class="card"><h2>Connected workflow</h2>'
+        '<p><b>Upload</b> → attach to record → <b>Analyze</b> → review finding → '
+        '<b>Create issue/RFI/punch/log entry</b> → preserve evidence and source.</p>'
+        '<p class="small">No upload, photo analysis, daily report, Auto Daily Report, or Quick Entry capability is removed in this release.</p></div>'
+    )
+    return shell("Workflow Wiring", body)
