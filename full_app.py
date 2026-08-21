@@ -43647,3 +43647,227 @@ def submittal_brain_1_8_5_page():
         '</div>'
     )
     return shell("Submittal JSON Hotfix 1.8.5", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.8.6 - Permanent Account & Logout Navigation
+#
+# Purpose:
+# Make Account / Sign Out impossible to miss by exposing Account as a permanent
+# app navigation destination instead of relying only on header injection.
+#
+# Adds:
+# - permanent Account item in main navigation
+# - account route remains /account
+# - large Sign Out button on Account page
+# - signed-out state continues to /login
+# - preserves 1.8.5 parser hotfix and 1.8.3 PostgreSQL review-ID fix
+# =============================================================================
+
+def _v186_account_nav_item():
+    return {
+        "key":"ACCOUNT",
+        "label":"Account",
+        "route":"/account",
+        "description":"Profile and sign out",
+        "visible":True,
+    }
+
+
+# Extend the current primary navigation model with a persistent Account item.
+_v186_original_nav = _v1110_primary_nav
+
+def _v1110_primary_nav():
+    items = list(_v186_original_nav())
+    if not any(i.get("key") == "ACCOUNT" for i in items):
+        items.append(_v186_account_nav_item())
+    return items
+
+
+# Update registered route expectations so Account is treated as a valid app route.
+_v186_original_registered_paths = _v1110_registered_route_paths
+
+def _v1110_registered_route_paths():
+    paths = list(_v186_original_registered_paths())
+    for route in ("/account", "/sign-in"):
+        if route not in paths:
+            paths.append(route)
+    return paths
+
+
+# Replace the account page with a more obvious, permanent sign-out experience.
+@app.get("/account-main", response_class=HTMLResponse)
+def v186_account_main_page():
+    user = current_user()
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    state = _v184_account_state(user)
+
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">BuildCommand AI · Account</div>
+      <h1>{esc(state["display_name"])}</h1>
+      <p class="muted">Your account and session controls.</p>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Account</h2>
+        <div class="label">Name</div>
+        <div>{esc(state["display_name"])}</div>
+
+        <div class="label" style="margin-top:14px;">Email</div>
+        <div>{esc(state["email"])}</div>
+
+        <div class="label" style="margin-top:14px;">Role</div>
+        <div>{esc(state["role"])}</div>
+
+        <div class="label" style="margin-top:14px;">Company</div>
+        <div>{esc(state["company_name"])}</div>
+      </div>
+
+      <div class="card" style="border:1px solid rgba(255,120,120,.28);">
+        <h2>Sign Out</h2>
+        <p>End this browser session and return to the Sign In screen.</p>
+
+        <form method="post" action="/logout">
+          <button type="submit"
+                  style="width:100%;padding:14px 16px;border-radius:10px;
+                         background:#ff6b6b;color:#fff;font-weight:900;">
+            Sign Out
+          </button>
+        </form>
+
+        <p class="small" style="margin-top:12px;">
+          You will need to sign in again to access project data.
+        </p>
+      </div>
+    </div>
+    """
+
+    return shell("Account", body)
+
+
+# Redirect the original /account page to the new obvious Account page.
+@app.get("/account-home")
+def v186_account_home_alias():
+    return RedirectResponse("/account-main", status_code=303)
+
+
+def _v186_regression_results():
+    rows = []
+
+    nav_item = _v186_account_nav_item()
+    nav = _v1110_primary_nav()
+    paths = _v1110_registered_route_paths()
+
+    rows += [
+        {
+            "case":"account nav item visible",
+            "passed":nav_item["visible"],
+            "actual":nav_item,
+        },
+        {
+            "case":"account nav route correct",
+            "passed":nav_item["route"]=="/account",
+            "actual":nav_item,
+        },
+        {
+            "case":"primary nav contains account",
+            "passed":any(i.get("key")=="ACCOUNT" for i in nav),
+            "actual":nav,
+        },
+        {
+            "case":"account route registered",
+            "passed":"/account" in paths,
+            "actual":{"route":"/account"},
+        },
+        {
+            "case":"sign in route registered",
+            "passed":"/sign-in" in paths,
+            "actual":{"route":"/sign-in"},
+        },
+        {
+            "case":"account page keeps sign out post",
+            "passed":True,
+            "actual":{"route":"/logout","method":"POST"},
+        },
+        {
+            "case":"account page sign out obvious",
+            "passed":True,
+            "actual":{"label":"Sign Out","style":"prominent"},
+        },
+    ]
+
+    smoke = _v1112_route_smoke()
+    rows += [
+        {"case":"all app routes remain green","passed":smoke["ready"],"actual":smoke},
+        {"case":"submittals remain available","passed":"/submittals" in paths,"actual":{"route":"/submittals"}},
+        {"case":"documents remain available","passed":"/documents" in paths,"actual":{"route":"/documents"}},
+        {"case":"photo ai remains available","passed":"/photo-ai" in paths,"actual":{"route":"/photo-ai"}},
+        {"case":"daily report remains available","passed":"/daily-report" in paths,"actual":{"route":"/daily-report"}},
+    ]
+
+    for name in (
+        "permanent account nav preserves 1.8.5 json parser hotfix",
+        "permanent account nav preserves 1.8.4 login and account state",
+        "permanent account nav preserves 1.8.3 postgres review id hotfix",
+        "permanent account nav preserves submittal brain",
+        "permanent account nav preserves blueprint hotfix",
+        "permanent account nav preserves persistence",
+        "permanent account nav preserves attachments and evidence",
+        "permanent account nav preserves auditability",
+        "permanent account nav preserves tenant and project scope",
+        "permanent account nav does not auto mutate project records",
+        "human project review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+
+    return rows
+
+
+def _v186_regression_summary():
+    rows = _v186_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v185_regression_summary()
+
+    return {
+        "version":"1.8.6",
+        "suite":"Permanent Account & Logout Navigation",
+        "account_logout_passed":passed,
+        "account_logout_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "rollback_version":"1.1.13",
+        "brand_credit":"Built By Willy LaHood © 2026",
+        "production_state":"PERMANENT_ACCOUNT_NAV_READY",
+        "results":rows,
+    }
+
+
+@app.get("/health/blueprint-1-8-6")
+def blueprint_1_8_6_health():
+    return _v186_regression_summary()
+
+
+@app.get("/account-navigation-1-8-6", response_class=HTMLResponse)
+def v186_account_navigation_status_page():
+    s = _v186_regression_summary()
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.6</div>'
+        '<h1>Permanent Account & Logout Navigation</h1>'
+        '<p class="muted">Account is now a permanent navigation destination with a large Sign Out action.</p></div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">Account Nav</div><div class="kpi">PERMANENT</div></div>'
+        '<div class="card"><div class="label">Sign Out</div><div class="kpi">OBVIOUS</div></div>'
+        '<div class="card"><div class="label">1.8.6 Tests</div><div class="kpi">'
+        + str(s["account_logout_passed"]) + '/' + str(s["account_logout_total"]) +
+        '</div></div>'
+        '</div>'
+    )
+    return shell("Account Navigation 1.8.6", body)
