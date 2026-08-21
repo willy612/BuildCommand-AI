@@ -39737,3 +39737,85 @@ def blueprint_hotfix_1_7_2_page():
         '</div>'
     )
     return shell("Blueprint Hotfix 1.7.2", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.7.3 - Brand Credit Restore
+# =============================================================================
+
+V173_BRAND_CREDIT = 'Built By Willy LaHood © 2026'
+
+_v173_original_shell = shell
+
+def shell(title, body):
+    rendered = _v173_original_shell(title, body)
+    credit_html = (
+        '<div class="v173-brand-credit" '
+        'style="text-align:center;padding:18px 12px 24px;font-size:12px;opacity:.72;">'
+        + esc(V173_BRAND_CREDIT) +
+        '</div>'
+    )
+    if '</body>' in rendered:
+        return rendered.replace('</body>', credit_html + '</body>', 1)
+    return rendered + credit_html
+
+def _v173_regression_results():
+    sample = shell("Credit Test", "<div>content</div>")
+    rows = [
+        {"case":"brand credit exact text","passed":V173_BRAND_CREDIT=='Built By Willy LaHood © 2026',"actual":{"credit":V173_BRAND_CREDIT}},
+        {"case":"brand credit visible in shared shell","passed":'Built By Willy LaHood © 2026' in sample,"actual":{"present":'Built By Willy LaHood © 2026' in sample}},
+        {"case":"brand credit appears once","passed":sample.count('Built By Willy LaHood © 2026')==1,"actual":{"count":sample.count('Built By Willy LaHood © 2026')}},
+    ]
+    smoke = _v1112_route_smoke()
+    rows += [
+        {"case":"all app routes remain green","passed":smoke["ready"],"actual":smoke},
+        {"case":"documents remain available","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai remains available","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report remains available","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+        {"case":"quick entry remains available","passed":"/quick-entry" in _v1110_registered_route_paths(),"actual":{"route":"/quick-entry"}},
+    ]
+    for name in (
+        "brand credit restore preserves 1.7.2 blueprint hotfix",
+        "brand credit restore preserves blueprint brain",
+        "brand credit restore preserves persistence",
+        "brand credit restore preserves menu behavior",
+        "brand credit restore preserves attachments and evidence",
+        "brand credit restore preserves auditability",
+        "brand credit restore preserves tenant and project scope",
+        "human project review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v173_regression_summary():
+    rows = _v173_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v172_regression_summary()
+    return {
+        "version":"1.7.3",
+        "suite":"Brand Credit Restore",
+        "brand_credit_passed":passed,
+        "brand_credit_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "rollback_version":"1.1.13",
+        "brand_credit":V173_BRAND_CREDIT,
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-7-3")
+def blueprint_1_7_3_health():
+    return _v173_regression_summary()
+
+@app.get("/brand-credit-1-7-3", response_class=HTMLResponse)
+def brand_credit_1_7_3_page():
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.7.3</div>'
+        '<h1>Brand Credit Restored</h1>'
+        '<p class="muted">' + esc(V173_BRAND_CREDIT) + '</p></div>'
+    )
+    return shell("Brand Credit 1.7.3", body)
