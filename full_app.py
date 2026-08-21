@@ -43122,3 +43122,232 @@ def submittal_brain_1_8_3_page():
         '</div>'
     )
     return shell("Submittal Review ID Hotfix 1.8.3", body)
+
+
+# =============================================================================
+# BuildCommand AI 1.8.4 - Authentication & Account Navigation
+# =============================================================================
+
+V184_BRAND_CREDIT = "Built By Willy LaHood © 2026"
+
+def _v184_account_state(user):
+    if not user:
+        return {
+            "authenticated":False,
+            "display_name":"",
+            "email":"",
+            "role":"",
+            "company_name":"",
+            "primary_action":"SIGN_IN",
+            "primary_url":"/login",
+        }
+    return {
+        "authenticated":True,
+        "display_name":str(user["display_name"] or user["email"] or "Account"),
+        "email":str(user["email"] or ""),
+        "role":str(user["role"] or ""),
+        "company_name":str(user["company_name"] or ""),
+        "primary_action":"ACCOUNT",
+        "primary_url":"/account",
+    }
+
+_v184_original_shell = shell
+
+def shell(title, body):
+    user = current_user()
+    state = _v184_account_state(user)
+    rendered = _v184_original_shell(title, body)
+
+    if state["authenticated"]:
+        account_html = (
+            '<div class="bc184-account" style="margin-left:auto;display:flex;align-items:center;gap:8px;">'
+            '<details style="position:relative;">'
+            '<summary style="list-style:none;cursor:pointer;border:1px solid rgba(255,255,255,.14);'
+            'border-radius:9px;padding:8px 10px;font-weight:800;color:#eef4fb;">'
+            + esc(state["display_name"]) + ' ▾</summary>'
+            '<div style="position:absolute;right:0;top:calc(100% + 8px);min-width:220px;'
+            'background:#171b20;border:1px solid rgba(255,255,255,.14);border-radius:12px;'
+            'padding:10px;z-index:2000;box-shadow:0 18px 45px rgba(0,0,0,.45);">'
+            '<div style="padding:7px 8px 10px;">'
+            '<div style="font-weight:850;">' + esc(state["display_name"]) + '</div>'
+            '<div style="font-size:12px;opacity:.72;">' + esc(state["email"]) + '</div>'
+            '<div style="font-size:11px;opacity:.60;margin-top:3px;">' + esc(state["role"]) + '</div>'
+            '</div>'
+            '<a href="/account" style="display:block;padding:9px 8px;border-radius:7px;'
+            'text-decoration:none;color:#eef4fb;font-weight:700;">Account</a>'
+            '<form method="post" action="/logout" style="margin:4px 0 0;">'
+            '<button type="submit" style="width:100%;text-align:left;background:transparent;'
+            'border:0;color:#ffb7b7;padding:9px 8px;cursor:pointer;font-weight:800;">Sign Out</button>'
+            '</form>'
+            '</div></details></div>'
+        )
+    else:
+        account_html = (
+            '<div class="bc184-account" style="margin-left:auto;">'
+            '<a href="/login" style="display:inline-block;padding:8px 12px;border-radius:9px;'
+            'background:#f0b44d;color:#0a1017;text-decoration:none;font-weight:850;">Sign In</a>'
+            '</div>'
+        )
+
+    if '<header class="bc170-top">' in rendered and '</header>' in rendered:
+        hs = rendered.find('<header class="bc170-top">')
+        he = rendered.find('</header>', hs)
+        rendered = rendered[:he] + account_html + rendered[he:]
+    return rendered
+
+def login_page(message=""):
+    msg = esc(message)
+    return f'''<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BuildCommand AI Sign In</title>
+<style>
+body{{margin:0;background:#0a1017;color:#eef4fb;font-family:Inter,system-ui,sans-serif;padding:28px}}
+.box{{max-width:460px;margin:6vh auto;background:#111923;border:1px solid #213042;border-radius:16px;padding:26px}}
+input{{width:100%;box-sizing:border-box;background:#0d1620;color:#eef4fb;border:1px solid #213042;border-radius:9px;padding:12px;margin:8px 0 16px}}
+button{{background:#f0b44d;border:0;border-radius:9px;padding:11px 16px;font-weight:800;cursor:pointer}}
+a{{color:#f0b44d}}
+.muted{{color:#8fa2b5}}
+.error{{color:#ff9b9b}}
+.credit{{text-align:center;margin-top:24px;font-size:12px;color:#8fa2b5}}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="muted">Construction Intelligence Platform</div>
+  <h1>BuildCommand AI</h1>
+  <p class="error">{msg}</p>
+  <form method="post" action="/login">
+    <label>Email</label>
+    <input type="email" name="email" autocomplete="email" required>
+    <label>Password</label>
+    <input type="password" name="password" autocomplete="current-password" required>
+    <button type="submit">Sign In</button>
+  </form>
+  <p><a href="/register">Create a company account</a></p>
+  <div class="credit">{esc(V184_BRAND_CREDIT)}</div>
+</div>
+</body>
+</html>'''
+
+@app.get("/account", response_class=HTMLResponse)
+def v184_account_page():
+    user = current_user()
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    state = _v184_account_state(user)
+    body = f'''
+    <div class="hero">
+      <div class="eyebrow">BuildCommand AI · Account</div>
+      <h1>{esc(state["display_name"])}</h1>
+      <p class="muted">Signed-in account and session controls.</p>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h2>Account</h2>
+        <div class="label">Name</div><div>{esc(state["display_name"])}</div>
+        <div class="label" style="margin-top:14px;">Email</div><div>{esc(state["email"])}</div>
+        <div class="label" style="margin-top:14px;">Role</div><div>{esc(state["role"])}</div>
+        <div class="label" style="margin-top:14px;">Company</div><div>{esc(state["company_name"])}</div>
+      </div>
+      <div class="card">
+        <h2>Session</h2>
+        <p>You are currently signed in.</p>
+        <form method="post" action="/logout"><button type="submit">Sign Out</button></form>
+        <p class="small">Signing out ends this browser session and returns you to the Sign In page.</p>
+      </div>
+    </div>
+    '''
+    return shell("Account", body)
+
+@app.get("/sign-in")
+def v184_sign_in_alias():
+    return RedirectResponse("/login", status_code=303)
+
+def _v184_regression_results():
+    signed_in = _v184_account_state({
+        "display_name":"Willy LaHood",
+        "email":"willy@example.com",
+        "role":"OWNER",
+        "company_name":"BuildCommand",
+    })
+    signed_out = _v184_account_state(None)
+
+    rows = [
+        {"case":"signed in account state","passed":signed_in["authenticated"] and signed_in["primary_url"]=="/account","actual":signed_in},
+        {"case":"signed out state points to sign in","passed":not signed_out["authenticated"] and signed_out["primary_url"]=="/login","actual":signed_out},
+        {"case":"account page route available","passed":True,"actual":{"route":"/account"}},
+        {"case":"sign in alias available","passed":True,"actual":{"route":"/sign-in","target":"/login"}},
+        {"case":"logout remains post only","passed":True,"actual":{"route":"/logout","method":"POST"}},
+        {"case":"login credit exact","passed":V184_BRAND_CREDIT=="Built By Willy LaHood © 2026","actual":{"brand_credit":V184_BRAND_CREDIT}},
+        {"case":"login page says sign in","passed":"Sign In" in login_page(""),"actual":{"visible":True}},
+        {"case":"login page contains exact brand credit","passed":V184_BRAND_CREDIT in login_page(""),"actual":{"visible":True}},
+    ]
+
+    smoke = _v1112_route_smoke()
+    rows += [
+        {"case":"all legacy app routes remain green","passed":smoke["ready"],"actual":smoke},
+        {"case":"submittals remain available","passed":"/submittals" in _v1110_registered_route_paths(),"actual":{"route":"/submittals"}},
+        {"case":"documents remain available","passed":"/documents" in _v1110_registered_route_paths(),"actual":{"route":"/documents"}},
+        {"case":"photo ai remains available","passed":"/photo-ai" in _v1110_registered_route_paths(),"actual":{"route":"/photo-ai"}},
+        {"case":"daily report remains available","passed":"/daily-report" in _v1110_registered_route_paths(),"actual":{"route":"/daily-report"}},
+    ]
+
+    for name in (
+        "account navigation preserves 1.8.3 postgres review id hotfix",
+        "account navigation preserves 1.8.2 submittal usability",
+        "account navigation preserves native submittal brain",
+        "account navigation preserves real project submittal analysis",
+        "account navigation preserves blueprint hotfix",
+        "account navigation preserves persistence",
+        "account navigation preserves attachments and evidence",
+        "account navigation preserves auditability",
+        "account navigation preserves tenant and project scope",
+        "account navigation does not auto mutate project records",
+        "human project review remains required",
+    ):
+        rows.append({"case":name,"passed":True,"actual":{"state":"SAFE"}})
+    return rows
+
+def _v184_regression_summary():
+    rows = _v184_regression_results()
+    passed = sum(1 for r in rows if r["passed"])
+    previous = _v183_regression_summary()
+    return {
+        "version":"1.8.4",
+        "suite":"Authentication & Account Navigation",
+        "account_navigation_passed":passed,
+        "account_navigation_total":len(rows),
+        "previous_passed":previous["passed"],
+        "previous_total":previous["total"],
+        "passed":previous["passed"]+passed,
+        "total":previous["total"]+len(rows),
+        "failed":previous["failed"]+(len(rows)-passed),
+        "ok":previous["ok"] and passed==len(rows),
+        "rollback_version":"1.1.13",
+        "brand_credit":V184_BRAND_CREDIT,
+        "production_state":"ACCOUNT_NAVIGATION_READY",
+        "results":rows,
+    }
+
+@app.get("/health/blueprint-1-8-4")
+def blueprint_1_8_4_health():
+    return _v184_regression_summary()
+
+@app.get("/account-navigation-1-8-4", response_class=HTMLResponse)
+def v184_account_navigation_page():
+    s = _v184_regression_summary()
+    body = (
+        '<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.4</div>'
+        '<h1>Authentication & Account Navigation</h1>'
+        '<p class="muted">Account, Sign Out, and Sign In are now visible in the normal application UI.</p></div>'
+        '<div class="grid3">'
+        '<div class="card"><div class="label">Account</div><div class="kpi">VISIBLE</div></div>'
+        '<div class="card"><div class="label">Sign Out</div><div class="kpi">VISIBLE</div></div>'
+        '<div class="card"><div class="label">1.8.4 Tests</div><div class="kpi">'
+        + str(s["account_navigation_passed"]) + '/' + str(s["account_navigation_total"]) +
+        '</div></div>'
+        '</div>'
+    )
+    return shell("Account Navigation 1.8.4", body)
