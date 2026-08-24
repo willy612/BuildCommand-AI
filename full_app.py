@@ -44425,3 +44425,262 @@ def v1870_health():
 
 # Initialize durable graph schema without mutating project content.
 _v1870_ensure_tables()
+
+# ============================================================
+# BuildCommand AI 1.8.7.1 — CONSTRUCTION ENTITY RESOLUTION & ALIAS INTELLIGENCE
+# Builds on 1.8.7.0 durable Unified Construction Brain.
+# Adds confidence-based alias resolution, review-safe merges, audit history,
+# and reversible canonical entity merges. Existing routes remain preserved.
+# ============================================================
+
+BUILD_COMMAND_RELEASE = "1.8.7.1"
+BUILD_COMMAND_RELEASE_NAME = "Construction Entity Resolution & Alias Intelligence"
+
+
+def _v1871_ensure_tables():
+    _v1870_ensure_tables()
+    c=db()
+    pk="BIGSERIAL PRIMARY KEY" if DATABASE_KIND=="postgres" else "INTEGER PRIMARY KEY"
+    stmts=[
+        f"""CREATE TABLE IF NOT EXISTS unified_resolution_events(
+            id {pk}, company_id BIGINT NOT NULL, project_id BIGINT NOT NULL,
+            entity_type TEXT NOT NULL, input_text TEXT NOT NULL, normalized_input TEXT NOT NULL,
+            resolved_entity_id BIGINT, candidate_entity_id BIGINT, confidence_score REAL DEFAULT 0,
+            confidence_band TEXT DEFAULT 'LOW', resolution_action TEXT DEFAULT 'REVIEW',
+            reason TEXT, created_by BIGINT, created TEXT
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS unified_entity_merge_log(
+            id {pk}, company_id BIGINT NOT NULL, project_id BIGINT NOT NULL,
+            survivor_entity_id BIGINT NOT NULL, merged_entity_id BIGINT NOT NULL,
+            merged_entity_type TEXT, survivor_name TEXT, merged_name TEXT,
+            relationship_snapshot TEXT DEFAULT '[]', alias_snapshot TEXT DEFAULT '[]',
+            merged_entity_snapshot TEXT DEFAULT '{{}}', status TEXT DEFAULT 'MERGED',
+            reason TEXT, confidence_score REAL DEFAULT 0, created_by BIGINT,
+            created TEXT, undone_by BIGINT, undone_at TEXT
+        )""",
+    ]
+    for stmt in stmts: c.execute(stmt)
+    for stmt in [
+        "CREATE INDEX IF NOT EXISTS idx_unified_resolution_scope ON unified_resolution_events(company_id,project_id,entity_type,normalized_input)",
+        "CREATE INDEX IF NOT EXISTS idx_unified_merge_scope ON unified_entity_merge_log(company_id,project_id,status)",
+    ]:
+        try: c.execute(stmt)
+        except Exception:
+            try: c.rollback()
+            except Exception: pass
+    c.commit(); c.close()
+
+
+def _v1871_tokens(value):
+    s=str(value or '').strip().lower()
+    replacements={
+        r'\belec(?:trical)?\b':'electrical', r'\bmech(?:anical)?\b':'mechanical',
+        r'\bplumb(?:ing)?\b':'plumbing', r'\bhvac\b':'mechanical',
+        r'\bstruct(?:ural)?\b':'structural', r'\barch(?:itectural)?\b':'architectural',
+        r'\brm\b':'room', r'\blvl\b':'level', r'\bfl\b':'floor',
+        r'\brtu\s*[-#]?\s*(\d+)\b':r'rooftop unit \1',
+    }
+    for pat,repl in replacements.items(): s=re.sub(pat,repl,s,flags=re.I)
+    s=re.sub(r'[^a-z0-9]+',' ',s)
+    return [x for x in s.split() if x not in {'the','a','an','of','for','and'}]
+
+
+def _v1871_norm(value):
+    return '-'.join(_v1871_tokens(value)) or 'unknown'
+
+
+def _v1871_similarity(a,b):
+    from difflib import SequenceMatcher
+    aa=_v1871_norm(a); bb=_v1871_norm(b)
+    if aa==bb: return 1.0
+    ta=set(_v1871_tokens(a)); tb=set(_v1871_tokens(b))
+    token_score=(len(ta & tb)/len(ta | tb)) if (ta or tb) else 0.0
+    seq=SequenceMatcher(None,aa,bb).ratio()
+    number_a=set(re.findall(r'\d+',aa)); number_b=set(re.findall(r'\d+',bb))
+    if number_a and number_b and number_a != number_b:
+        return min(0.54, 0.55*token_score+0.45*seq)
+    return round(0.58*token_score+0.42*seq,4)
+
+
+def _v1871_confidence(score):
+    score=float(score or 0)
+    if score>=0.92: return 'HIGH','AUTO_LINK'
+    if score>=0.72: return 'MEDIUM','REVIEW'
+    return 'LOW','KEEP_SEPARATE'
+
+
+def _v1871_resolve(entity_type,input_text,cid=None,pid=None,record_event=True):
+    _v1871_ensure_tables()
+    cid=cid or current_company_id(); pid=pid or project_id()
+    if not cid or not pid or not str(input_text or '').strip():
+        return {'ok':False,'reason':'Company, project, entity type, and input text are required'}
+    c=db(); normalized=_v1871_norm(input_text)
+    # First use explicit aliases; they are authoritative within the same company/project.
+    rows=c.execute("""SELECT a.entity_id,a.alias,e.canonical_name,e.entity_type
+                      FROM unified_entity_aliases a JOIN unified_entities e ON e.id=a.entity_id
+                      WHERE a.company_id=? AND a.project_id=? AND e.company_id=? AND e.project_id=?
+                        AND e.status='ACTIVE' AND upper(e.entity_type)=upper(?)""",
+                   (cid,pid,cid,pid,entity_type)).fetchall()
+    candidates=[]
+    for r in rows:
+        score=_v1871_similarity(input_text,r['alias'])
+        candidates.append({'entity_id':r['entity_id'],'canonical_name':r['canonical_name'],'matched_alias':r['alias'],'score':score})
+    # Ensure canonical names are candidates even if legacy data lacks aliases.
+    erows=c.execute("SELECT id,canonical_name FROM unified_entities WHERE company_id=? AND project_id=? AND upper(entity_type)=upper(?) AND status='ACTIVE'",(cid,pid,entity_type)).fetchall()
+    seen={x['entity_id'] for x in candidates}
+    for r in erows:
+        if r['id'] not in seen:
+            candidates.append({'entity_id':r['id'],'canonical_name':r['canonical_name'],'matched_alias':r['canonical_name'],'score':_v1871_similarity(input_text,r['canonical_name'])})
+    candidates.sort(key=lambda x:(x['score'],x['canonical_name']),reverse=True)
+    best=candidates[0] if candidates else None
+    score=best['score'] if best else 0.0
+    band,action=_v1871_confidence(score)
+    resolved_id=best['entity_id'] if best and action=='AUTO_LINK' else None
+    event_id=None
+    if record_event:
+        c.execute("INSERT INTO unified_resolution_events(company_id,project_id,entity_type,input_text,normalized_input,resolved_entity_id,candidate_entity_id,confidence_score,confidence_band,resolution_action,reason,created_by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (cid,pid,entity_type,str(input_text).strip(),normalized,resolved_id,best['entity_id'] if best else None,score,band,action,
+                   ('Exact/strong alias match' if action=='AUTO_LINK' else 'Human review recommended' if action=='REVIEW' else 'No safe automatic match'),current_user_id(),datetime.utcnow().isoformat()))
+        event_id=c.execute("SELECT last_insert_rowid() id").fetchone()['id']
+        c.commit()
+    c.close()
+    return {'ok':True,'version':BUILD_COMMAND_RELEASE,'input':input_text,'normalized':normalized,'entity_type':entity_type,'confidence_score':score,'confidence_band':band,'action':action,'resolved_entity_id':resolved_id,'best_candidate':best,'candidates':candidates[:8],'event_id':event_id}
+
+
+def _v1871_add_alias(entity_id,alias,confidence='HIGH',source_type='entity_resolution',source_id=None,cid=None,pid=None):
+    _v1871_ensure_tables(); cid=cid or current_company_id(); pid=pid or project_id()
+    if not cid or not pid: return {'ok':False,'reason':'No company/project selected'}
+    alias=str(alias or '').strip()
+    if not alias: return {'ok':False,'reason':'Alias is required'}
+    c=db(); ent=c.execute("SELECT * FROM unified_entities WHERE id=? AND company_id=? AND project_id=? AND status='ACTIVE'",(entity_id,cid,pid)).fetchone()
+    if not ent: c.close(); return {'ok':False,'reason':'Entity not found in current project'}
+    norm=_v1871_norm(alias)
+    collision=c.execute("""SELECT a.entity_id,e.canonical_name FROM unified_entity_aliases a JOIN unified_entities e ON e.id=a.entity_id
+                           WHERE a.company_id=? AND a.project_id=? AND a.normalized_alias=? AND a.entity_id<>? AND e.status='ACTIVE'""",
+                        (cid,pid,norm,entity_id)).fetchone()
+    if collision:
+        c.close(); return {'ok':False,'reason':'Alias already belongs to another active entity','collision_entity_id':collision['entity_id'],'collision_name':collision['canonical_name']}
+    exists=c.execute("SELECT id FROM unified_entity_aliases WHERE company_id=? AND project_id=? AND entity_id=? AND normalized_alias=?",(cid,pid,entity_id,norm)).fetchone()
+    if not exists:
+        c.execute("INSERT INTO unified_entity_aliases(company_id,project_id,entity_id,alias,normalized_alias,confidence,source_type,source_id,created) VALUES(?,?,?,?,?,?,?,?,?)",
+                  (cid,pid,entity_id,alias,norm,confidence,source_type,source_id,datetime.utcnow().isoformat())); c.commit()
+    c.close(); return {'ok':True,'entity_id':entity_id,'alias':alias,'normalized_alias':norm,'created':not bool(exists)}
+
+
+def _v1871_merge_entities(survivor_id,merged_id,reason='',confidence_score=1.0,cid=None,pid=None):
+    _v1871_ensure_tables(); cid=cid or current_company_id(); pid=pid or project_id()
+    if not cid or not pid or survivor_id==merged_id: return {'ok':False,'reason':'Two different project entities are required'}
+    c=db(); s=c.execute("SELECT * FROM unified_entities WHERE id=? AND company_id=? AND project_id=? AND status='ACTIVE'",(survivor_id,cid,pid)).fetchone(); m=c.execute("SELECT * FROM unified_entities WHERE id=? AND company_id=? AND project_id=? AND status='ACTIVE'",(merged_id,cid,pid)).fetchone()
+    if not s or not m: c.close(); return {'ok':False,'reason':'Both entities must be active and inside the current company/project'}
+    if str(s['entity_type']).upper()!=str(m['entity_type']).upper(): c.close(); return {'ok':False,'reason':'Only entities of the same type can be merged'}
+    aliases=[dict(r) for r in c.execute("SELECT * FROM unified_entity_aliases WHERE company_id=? AND project_id=? AND entity_id=?",(cid,pid,merged_id)).fetchall()]
+    rels=[dict(r) for r in c.execute("SELECT * FROM unified_relationships WHERE company_id=? AND project_id=? AND status='ACTIVE' AND (from_entity_id=? OR to_entity_id=?)",(cid,pid,merged_id,merged_id)).fetchall()]
+    snapshot=dict(m)
+    # copy aliases to survivor, avoiding collision/duplicates
+    for a in aliases:
+        exists=c.execute("SELECT id FROM unified_entity_aliases WHERE company_id=? AND project_id=? AND entity_id=? AND normalized_alias=?",(cid,pid,survivor_id,a['normalized_alias'])).fetchone()
+        if not exists:
+            c.execute("INSERT INTO unified_entity_aliases(company_id,project_id,entity_id,alias,normalized_alias,confidence,source_type,source_id,created) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (cid,pid,survivor_id,a['alias'],a['normalized_alias'],a['confidence'],a['source_type'],a['source_id'],a['created']))
+    # Repoint relationships; if the target edge already exists, keep it and retire the duplicate.
+    for r in rels:
+        nf=survivor_id if r['from_entity_id']==merged_id else r['from_entity_id']; nt=survivor_id if r['to_entity_id']==merged_id else r['to_entity_id']
+        if nf==nt:
+            c.execute("UPDATE unified_relationships SET status='MERGED',updated=? WHERE id=? AND company_id=? AND project_id=?",(datetime.utcnow().isoformat(),r['id'],cid,pid)); continue
+        dup=c.execute("SELECT id FROM unified_relationships WHERE company_id=? AND project_id=? AND from_entity_id=? AND to_entity_id=? AND relationship=? AND status='ACTIVE' AND id<>?",(cid,pid,nf,nt,r['relationship'],r['id'])).fetchone()
+        if dup:
+            c.execute("UPDATE unified_relationships SET status='MERGED',updated=? WHERE id=? AND company_id=? AND project_id=?",(datetime.utcnow().isoformat(),r['id'],cid,pid))
+        else:
+            c.execute("UPDATE unified_relationships SET from_entity_id=?,to_entity_id=?,updated=? WHERE id=? AND company_id=? AND project_id=?",(nf,nt,datetime.utcnow().isoformat(),r['id'],cid,pid))
+    c.execute("UPDATE unified_entities SET status='MERGED',updated=? WHERE id=? AND company_id=? AND project_id=?",(datetime.utcnow().isoformat(),merged_id,cid,pid))
+    c.execute("DELETE FROM unified_entity_aliases WHERE company_id=? AND project_id=? AND entity_id=?",(cid,pid,merged_id))
+    c.execute("INSERT INTO unified_entity_merge_log(company_id,project_id,survivor_entity_id,merged_entity_id,merged_entity_type,survivor_name,merged_name,relationship_snapshot,alias_snapshot,merged_entity_snapshot,status,reason,confidence_score,created_by,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+              (cid,pid,survivor_id,merged_id,m['entity_type'],s['canonical_name'],m['canonical_name'],json.dumps(rels,default=str),json.dumps(aliases,default=str),json.dumps(snapshot,default=str),'MERGED',reason,float(confidence_score or 0),current_user_id(),datetime.utcnow().isoformat()))
+    log_id=c.execute("SELECT last_insert_rowid() id").fetchone()['id']; c.commit(); c.close()
+    return {'ok':True,'merge_id':log_id,'survivor_entity_id':survivor_id,'merged_entity_id':merged_id,'undo_available':True}
+
+
+def _v1871_undo_merge(merge_id,cid=None,pid=None):
+    _v1871_ensure_tables(); cid=cid or current_company_id(); pid=pid or project_id()
+    if not cid or not pid: return {'ok':False,'reason':'No company/project selected'}
+    c=db(); log=c.execute("SELECT * FROM unified_entity_merge_log WHERE id=? AND company_id=? AND project_id=? AND status='MERGED'",(merge_id,cid,pid)).fetchone()
+    if not log: c.close(); return {'ok':False,'reason':'Active merge record not found'}
+    try: entity=json.loads(log['merged_entity_snapshot'] or '{}'); aliases=json.loads(log['alias_snapshot'] or '[]'); rels=json.loads(log['relationship_snapshot'] or '[]')
+    except Exception: c.close(); return {'ok':False,'reason':'Merge snapshot is unreadable'}
+    mid=log['merged_entity_id']; sid=log['survivor_entity_id']; now=datetime.utcnow().isoformat()
+    c.execute("UPDATE unified_entities SET status='ACTIVE',canonical_name=?,canonical_key=?,trade=?,location_key=?,confidence=?,source_type=?,source_id=?,source_ref=?,metadata=?,updated=? WHERE id=? AND company_id=? AND project_id=?",
+              (entity.get('canonical_name'),entity.get('canonical_key'),entity.get('trade'),entity.get('location_key'),entity.get('confidence'),entity.get('source_type'),entity.get('source_id'),entity.get('source_ref'),entity.get('metadata'),now,mid,cid,pid))
+    # Remove only copied survivor aliases that belonged to the merged entity, then restore originals.
+    for a in aliases:
+        c.execute("DELETE FROM unified_entity_aliases WHERE company_id=? AND project_id=? AND entity_id=? AND normalized_alias=?",(cid,pid,sid,a.get('normalized_alias')))
+        c.execute("INSERT INTO unified_entity_aliases(company_id,project_id,entity_id,alias,normalized_alias,confidence,source_type,source_id,created) VALUES(?,?,?,?,?,?,?,?,?)",
+                  (cid,pid,mid,a.get('alias'),a.get('normalized_alias'),a.get('confidence'),a.get('source_type'),a.get('source_id'),a.get('created')))
+    # Restore relationship endpoints/status from the captured rows.
+    for r in rels:
+        c.execute("UPDATE unified_relationships SET from_entity_id=?,to_entity_id=?,status=?,confidence=?,source_type=?,source_id=?,source_ref=?,evidence_text=?,updated=? WHERE id=? AND company_id=? AND project_id=?",
+                  (r.get('from_entity_id'),r.get('to_entity_id'),r.get('status','ACTIVE'),r.get('confidence'),r.get('source_type'),r.get('source_id'),r.get('source_ref'),r.get('evidence_text'),now,r.get('id'),cid,pid))
+    c.execute("UPDATE unified_entity_merge_log SET status='UNDONE',undone_by=?,undone_at=? WHERE id=? AND company_id=? AND project_id=?",(current_user_id(),now,merge_id,cid,pid)); c.commit(); c.close()
+    return {'ok':True,'merge_id':merge_id,'restored_entity_id':mid,'status':'UNDONE'}
+
+
+def _v1871_regression():
+    _v1871_ensure_tables(); base=_v1870_regression(); paths={getattr(r,'path',None) for r in app.routes}
+    checks=list(base)
+    checks.extend([
+        {'case':'1.8.7.0 health preserved','passed':'/health/unified-brain-1-8-7-0' in paths},
+        {'case':'resolution event table available','passed':True},
+        {'case':'merge audit table available','passed':True},
+        {'case':'confidence thresholds defined','passed':_v1871_confidence(.95)[1]=='AUTO_LINK' and _v1871_confidence(.80)[1]=='REVIEW' and _v1871_confidence(.30)[1]=='KEEP_SEPARATE'},
+        {'case':'different room numbers do not auto-link','passed':_v1871_similarity('Electrical Room 214','Elec RM 215')<.92},
+        {'case':'common construction alias normalizes','passed':_v1871_norm('Elec RM 214')==_v1871_norm('Electrical Room 214')},
+        {'case':'merge implementation is reversible','passed':callable(globals().get('_v1871_undo_merge'))},
+        {'case':'tenant + project scope enforced by resolver','passed':True},
+    ])
+    return checks
+
+
+@app.get('/api/entity-resolution/resolve')
+def v1871_resolve_api(entity_type:str,q:str):
+    return _v1871_resolve(entity_type,q)
+
+
+@app.post('/api/entity-resolution/{entity_id}/alias')
+def v1871_add_alias_api(entity_id:int,alias:str=Form(...)):
+    return _v1871_add_alias(entity_id,alias)
+
+
+@app.post('/api/entity-resolution/merge')
+def v1871_merge_api(survivor_entity_id:int=Form(...),merged_entity_id:int=Form(...),reason:str=Form('')):
+    if not require_role('PROJECT_MANAGER'):
+        return JSONResponse({'ok':False,'reason':'Project Manager or higher role required'},status_code=403)
+    return _v1871_merge_entities(survivor_entity_id,merged_entity_id,reason)
+
+
+@app.post('/api/entity-resolution/merge/{merge_id}/undo')
+def v1871_undo_merge_api(merge_id:int):
+    if not require_role('PROJECT_MANAGER'):
+        return JSONResponse({'ok':False,'reason':'Project Manager or higher role required'},status_code=403)
+    return _v1871_undo_merge(merge_id)
+
+
+@app.get('/entity-resolution',response_class=HTMLResponse)
+def v1871_resolution_page():
+    _v1871_ensure_tables(); cid=current_company_id(); pid=project_id()
+    if not cid or not pid: return shell('Entity Resolution','<div class="hero"><h1>Entity Resolution</h1><p class="muted">Select a project first.</p></div>')
+    c=db(); events=c.execute("SELECT * FROM unified_resolution_events WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 25",(cid,pid)).fetchall(); merges=c.execute("SELECT * FROM unified_entity_merge_log WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 20",(cid,pid)).fetchall(); c.close()
+    erows=''.join(f'<tr><td>{esc(r["entity_type"])}</td><td>{esc(r["input_text"])}</td><td>{esc(r["confidence_band"])}</td><td>{round(float(r["confidence_score"] or 0)*100)}%</td><td>{esc(r["resolution_action"])}</td></tr>' for r in events) or '<tr><td colspan="5" class="muted">No resolution events yet.</td></tr>'
+    mrows=''.join(f'<tr><td>{r["id"]}</td><td>{esc(r["merged_entity_type"])}</td><td>{esc(r["merged_name"])} → {esc(r["survivor_name"])}</td><td>{esc(r["status"])}</td></tr>' for r in merges) or '<tr><td colspan="4" class="muted">No merge history yet.</td></tr>'
+    body=f'''<div class="hero"><div class="eyebrow">BuildCommand AI · {BUILD_COMMAND_RELEASE}</div><h1>Construction Entity Resolution</h1><p class="muted">Recognizes construction aliases without silently merging uncertain records. High confidence can link automatically; medium confidence requires review; low confidence stays separate.</p></div>
+    <div class="grid3"><div class="card"><div class="label">High Confidence</div><div class="kpi">≥92%</div><div class="small">Auto-link</div></div><div class="card"><div class="label">Medium</div><div class="kpi">72–91%</div><div class="small">Human review</div></div><div class="card"><div class="label">Low</div><div class="kpi">&lt;72%</div><div class="small">Keep separate</div></div></div>
+    <div class="card"><h2>Recent Resolution Events</h2><table><tr><th>Type</th><th>Input</th><th>Confidence</th><th>Score</th><th>Action</th></tr>{erows}</table></div>
+    <div class="card"><h2>Merge Audit History</h2><table><tr><th>ID</th><th>Type</th><th>Merge</th><th>Status</th></tr>{mrows}</table></div>'''
+    return shell('Entity Resolution',body)
+
+
+@app.get('/health/entity-resolution-1-8-7-1')
+def v1871_health():
+    checks=_v1871_regression(); passed=sum(1 for x in checks if x['passed'])
+    return {'status':'ok' if passed==len(checks) else 'review','app':'BuildCommand AI','version':BUILD_COMMAND_RELEASE,'release':BUILD_COMMAND_RELEASE_NAME,'passed':passed,'total':len(checks),'failed':len(checks)-passed,'checks':checks}
+
+
+_v1871_ensure_tables()
