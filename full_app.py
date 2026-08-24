@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 1.8.17.3 self-extracting installer.
-Run: python BuildCommand_AI_1.8.17.3_Installer.py
-It creates ./BuildCommand_AI_1.8.17.3 with the complete modular application.
+"""BuildCommand AI 1.8.17.3 — Render-ready single-file bootstrap.
+Use directly as full_app.py with:
+uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
-import base64, io, zipfile, sys
+import base64, io, zipfile, sys, importlib.util, tempfile, os
 
 PAYLOAD = ''.join((
     'P)h>@6aWAK2mo?s7+umdWy>-E001)p000UA001s$X>@64Zf|mBi;pj;OioPBNR5xz=hD&xa)4w?5|>_TUKv+XX=YAJa(-@ZVqQvo'
@@ -6773,14 +6773,45 @@ PAYLOAD = ''.join((
     '1^@s60Av7U0FE610N*1B0000'
 ))
 
-def main():
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path('BuildCommand_AI_1.8.17.3')
-    target.mkdir(parents=True, exist_ok=True)
-    data = base64.b85decode(PAYLOAD.encode('ascii'))
-    with zipfile.ZipFile(io.BytesIO(data), 'r') as z:
-        z.extractall(target)
-    print(f'BuildCommand AI 1.8.17.3 created at: {target.resolve()}')
-    print('Start command: uvicorn full_app:app --host 0.0.0.0 --port $PORT')
 
-if __name__ == '__main__':
-    main()
+def _load_buildcommand_app():
+    # Extract the modular application into a writable runtime directory.
+    runtime_root = Path(os.environ.get("BUILDCOMMAND_RUNTIME_DIR", "/tmp/buildcommand_1_8_17_3_runtime"))
+    marker = runtime_root / ".ready"
+    expected = runtime_root / "full_app.py"
+    parts = runtime_root / "buildcommand_parts"
+    if not marker.exists() or not expected.exists() or not parts.exists():
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        data = base64.b85decode(PAYLOAD.encode("ascii"))
+        with zipfile.ZipFile(io.BytesIO(data), "r") as z:
+            z.extractall(runtime_root)
+        marker.write_text("1.8.17.3", encoding="utf-8")
+
+    # Load the extracted app under a different module name so we do not recurse
+    # back into this bootstrap file.
+    spec = importlib.util.spec_from_file_location("buildcommand_runtime_app", expected)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load extracted BuildCommand application")
+    module = importlib.util.module_from_spec(spec)
+    old_path = list(sys.path)
+    try:
+        sys.path.insert(0, str(runtime_root))
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = old_path
+    return module
+
+_runtime = _load_buildcommand_app()
+app = _runtime.app
+BUILD_COMMAND_RELEASE = getattr(_runtime, "BUILD_COMMAND_RELEASE", "1.8.17.3")
+BUILD_COMMAND_RELEASE_NAME = getattr(_runtime, "BUILD_COMMAND_RELEASE_NAME", "Render-ready single-file bootstrap")
+
+# Make the version visible to Uvicorn/FastAPI immediately.
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+if __name__ == "__main__":
+    print("BuildCommand AI", BUILD_COMMAND_RELEASE, "loaded successfully")
+    print("Run: uvicorn full_app:app --host 0.0.0.0 --port $PORT")
