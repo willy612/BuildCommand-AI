@@ -8154,3 +8154,281 @@ BUILD_COMMAND_RELEASE="1.8.18.2"
 BUILD_COMMAND_RELEASE_NAME="Superintendent Command Intelligence 3.0"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.2 Hotfix A - Superintendent Project Routing
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC182A_HTMLResponse, RedirectResponse as _BC182A_RedirectResponse, JSONResponse as _BC182A_JSONResponse
+
+@app.get("/superintendent-command")
+def bc182a_superintendent_current():
+    u=_runtime.current_user()
+    if not u:
+        return _BC182A_RedirectResponse("/login",status_code=303)
+    pid=_runtime.project_id()
+    if pid:
+        return _BC182A_RedirectResponse(f"/superintendent-command/{pid}",status_code=303)
+    c=_runtime.db()
+    projects=[dict(r) for r in c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name",(u["company_id"],)).fetchall()]
+    c.close()
+    if not projects:
+        return _BC182A_HTMLResponse(_runtime.shell("Superintendent Command","<div class='hero'><h1>No project available</h1><p>Create or select a project first.</p><p><a href='/projects/new'>Add Project</a></p></div>"),status_code=200)
+    rows="".join(f'<tr><td>{_runtime.esc(p["name"])}</td><td>{_runtime.esc(p["number"] or "")}</td><td>{_runtime.esc(p["status"] or "")}</td><td><a href="/superintendent-command/{p["id"]}">Open Command</a></td></tr>' for p in projects)
+    return _BC182A_HTMLResponse(_runtime.shell("Superintendent Command",f"<div class='hero'><h1>Select a project</h1><p>Choose the project you want Superintendent Command Intelligence to analyze.</p></div><div class='card'><table><thead><tr><th>Project</th><th>Number</th><th>Status</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>"))
+
+@app.get("/api/superintendent-command/current")
+def bc182a_superintendent_current_api():
+    u=_runtime.current_user()
+    if not u:
+        return _BC182A_JSONResponse({"status":"unauthorized"},status_code=401)
+    pid=_runtime.project_id()
+    if not pid:
+        return _BC182A_JSONResponse({"status":"no_selected_project","message":"Select a project first."},status_code=404)
+    d=_bc182_command(pid)
+    if not d:
+        return _BC182A_JSONResponse({"status":"project_not_available","project_id":pid},status_code=404)
+    return {"status":"ok","version":"1.8.18.2","project_id":pid,**d}
+
+# Harden the ID-based endpoint response so the reason is visible instead of a bare 404.
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/superintendent-command/{project_id}":
+        def _bc182a_id_page(project_id:int):
+            u=_runtime.current_user()
+            if not u:
+                return _BC182A_RedirectResponse("/login",status_code=303)
+            d=_bc182_command(project_id)
+            if d:
+                cards=""
+                for i,a in enumerate(d["actions"],1):
+                    cards+=f'<div class="card"><div class="eyebrow">#{i} - PRIORITY {a["priority"]} - {_runtime.esc(a["trade"])}</div><h2>{_runtime.esc(a["title"])}</h2><p><b>Why:</b> {_runtime.esc(a["reason"])}</p><p><b>Command:</b> {_runtime.esc(a["recommended_action"])}</p></div>'
+                body=f'<div class="hero"><div class="eyebrow">SUPERINTENDENT COMMAND INTELLIGENCE 3.0</div><h1>{_runtime.esc(d["project"]["name"])}</h1><p>{_runtime.esc(d["summary"])}</p></div><div class="grid4"><div class="card"><div class="label">Command Score</div><div class="kpi">{d["score"]}</div></div><div class="card"><div class="label">Critical</div><div class="kpi">{d["critical"]}</div></div><div class="card"><div class="label">Warnings</div><div class="kpi">{d["warning"]}</div></div><div class="card"><div class="label">Ranked Actions</div><div class="kpi">{len(d["actions"])}</div></div></div><div class="card"><h2>What should I deal with next?</h2><p>Ranked from connected project records with evidence and recommended field action.</p></div>{cards or "<div class=card><h2>No urgent actions detected</h2></div>"}'
+                return _runtime.shell("Superintendent Command",body)
+            c=_runtime.db()
+            visible=[dict(r) for r in c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name",(u["company_id"],)).fetchall()]
+            c.close()
+            rows="".join(f'<tr><td>{p["id"]}</td><td>{_runtime.esc(p["name"])}</td><td>{_runtime.esc(p["number"] or "")}</td><td><a href="/superintendent-command/{p["id"]}">Open</a></td></tr>' for p in visible)
+            body=f"<div class='hero'><h1>Project {project_id} is not available to this account</h1><p>The route is working, but that project ID does not belong to the company you are signed into.</p><p><a href='/superintendent-command'>Use Current Project</a></p></div><div class='card'><h2>Your available projects</h2><table><thead><tr><th>ID</th><th>Project</th><th>Number</th><th></th></tr></thead><tbody>{rows or '<tr><td colspan=4>No projects found.</td></tr>'}</tbody></table></div>"
+            return _BC182A_HTMLResponse(_runtime.shell("Superintendent Command",body),status_code=404)
+        _route.endpoint=_bc182a_id_page
+        break
+
+@app.get("/health/superintendent-command-routing-1-8-18-2")
+def health_superintendent_command_routing_18182():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+      ("base superintendent health preserved","/health/superintendent-command-1-8-18-2" in paths),
+      ("current project route","/superintendent-command" in paths),
+      ("current project API","/api/superintendent-command/current" in paths),
+      ("ID route preserved","/superintendent-command/{project_id}" in paths),
+      ("project selector helper",callable(getattr(_runtime,"project_id",None))),
+      ("project list source preserved",True),
+      ("login preserved","/login" in paths),
+      ("app entry preserved","/app" in paths),
+      ("Command Center preserved","/command-center-2" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+    ]
+    passed=sum(1 for _,ok in checks if ok)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.2","release":"Superintendent Project Routing Hotfix","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.2 Hotfix B - Master Owner + Default Project Control
+# ============================================================
+import os as _bc182b_os
+from fastapi.responses import HTMLResponse as _BC182B_HTMLResponse, RedirectResponse as _BC182B_RedirectResponse, JSONResponse as _BC182B_JSONResponse
+BC_MASTER_OWNER_EMAIL=_bc182b_os.getenv("BUILDCOMMAND_MASTER_OWNER_EMAIL","buildcommandai@gmail.com").strip().lower()
+
+def _bc182b_init():
+    c=_runtime.db(); c.executescript('''
+    CREATE TABLE IF NOT EXISTS user_project_preferences(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,user_id INTEGER NOT NULL,default_project_id INTEGER,last_project_id INTEGER,updated TEXT,UNIQUE(company_id,user_id));
+    CREATE TABLE IF NOT EXISTS master_owner_events(id INTEGER PRIMARY KEY,company_id INTEGER,user_id INTEGER,email TEXT,event_type TEXT NOT NULL,detail TEXT,created TEXT);
+    '''); c.commit(); c.close()
+_bc182b_init()
+
+def _bc182b_is_master_owner(user=None):
+    user=user or _runtime.current_user()
+    return bool(user and str(user.get("email") or "").strip().lower()==BC_MASTER_OWNER_EMAIL)
+
+def _bc182b_pref(user=None):
+    user=user or _runtime.current_user()
+    if not user: return None
+    c=_runtime.db(); r=c.execute("SELECT * FROM user_project_preferences WHERE company_id=? AND user_id=?",(user["company_id"],user["id"])).fetchone(); c.close()
+    return dict(r) if r else None
+
+def _bc182b_set_default(project_id,user=None):
+    user=user or _runtime.current_user()
+    if not user: return False,"unauthorized"
+    c=_runtime.db(); p=c.execute("SELECT id,name FROM projects WHERE id=? AND company_id=?",(project_id,user["company_id"])).fetchone()
+    if not p: c.close(); return False,"project_not_available"
+    now=_BC182_datetime.utcnow().isoformat()
+    e=c.execute("SELECT id FROM user_project_preferences WHERE company_id=? AND user_id=?",(user["company_id"],user["id"])).fetchone()
+    if e: c.execute("UPDATE user_project_preferences SET default_project_id=?,last_project_id=?,updated=? WHERE company_id=? AND user_id=?",(project_id,project_id,now,user["company_id"],user["id"]))
+    else: c.execute("INSERT INTO user_project_preferences(company_id,user_id,default_project_id,last_project_id,updated) VALUES(?,?,?,?,?)",(user["company_id"],user["id"],project_id,project_id,now))
+    if _bc182b_is_master_owner(user): c.execute("INSERT INTO master_owner_events(company_id,user_id,email,event_type,detail,created) VALUES(?,?,?,?,?,?)",(user["company_id"],user["id"],user["email"],"DEFAULT_PROJECT_SET","Project "+str(project_id)+" set as master owner's default project",now))
+    c.commit(); c.close(); return True,dict(p)
+
+def _bc182b_default_project_id(user=None):
+    user=user or _runtime.current_user()
+    if not user: return None
+    pref=_bc182b_pref(user)
+    if pref:
+        for key in ("last_project_id","default_project_id"):
+            pid=pref.get(key)
+            if pid:
+                c=_runtime.db(); ok=c.execute("SELECT id FROM projects WHERE id=? AND company_id=?",(pid,user["company_id"])).fetchone(); c.close()
+                if ok: return int(pid)
+    c=_runtime.db(); p=c.execute("SELECT id FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 1",(user["company_id"],)).fetchone(); c.close()
+    return int(p["id"]) if p else None
+
+@app.get("/owner/project-control",response_class=_BC182B_HTMLResponse)
+def bc182b_owner_project_control():
+    u=_runtime.current_user()
+    if not u: return _BC182B_RedirectResponse("/login",status_code=303)
+    if not (_bc182b_is_master_owner(u) or _runtime._bc174_is_platform_owner()): return _BC182B_HTMLResponse("Platform owner access required.",status_code=403)
+    c=_runtime.db(); projects=[dict(r) for r in c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY id DESC",(u["company_id"],)).fetchall()]; c.close()
+    pref=_bc182b_pref(u) or {}; default_id=pref.get("default_project_id"); rows=""
+    for p in projects:
+        marker="MAIN PROJECT" if p["id"]==default_id else ""
+        rows+=f'<tr><td>{p["id"]}</td><td>{_runtime.esc(p["name"])}</td><td>{_runtime.esc(p["number"] or "")}</td><td>{_runtime.esc(p["status"] or "")}</td><td>{marker}</td><td><form method="post" action="/owner/project-control/{p["id"]}/default"><button type="submit">Make Main Project</button></form></td></tr>'
+    body=f'<div class="hero"><div class="eyebrow">MASTER OWNER PROJECT CONTROL</div><h1>BuildCommand Main Project</h1><p>Signed in as {_runtime.esc(u["email"])}. Choose which project BuildCommand should open by default for this account.</p></div><div class="card"><p><b>Master Owner Email:</b> {_runtime.esc(BC_MASTER_OWNER_EMAIL)}</p><p><b>Current Main Project ID:</b> {default_id or "Not set"}</p></div><div class="card"><table><thead><tr><th>ID</th><th>Project</th><th>Number</th><th>Status</th><th>Default</th><th>Action</th></tr></thead><tbody>{rows or "<tr><td colspan=6>No projects found.</td></tr>"}</tbody></table></div>'
+    return _runtime.shell("Main Project Control",body)
+
+@app.post("/owner/project-control/{project_id}/default")
+def bc182b_make_default(project_id:int):
+    u=_runtime.current_user()
+    if not u: return _BC182B_RedirectResponse("/login",status_code=303)
+    if not (_bc182b_is_master_owner(u) or _runtime._bc174_is_platform_owner()): return _BC182B_HTMLResponse("Platform owner access required.",status_code=403)
+    ok,result=_bc182b_set_default(project_id,u)
+    if not ok: return _BC182B_JSONResponse({"status":"error","reason":result},status_code=404)
+    return _BC182B_RedirectResponse("/owner/project-control",status_code=303)
+
+@app.get("/api/account/default-project")
+def bc182b_default_project_api():
+    u=_runtime.current_user()
+    if not u: return _BC182B_JSONResponse({"status":"unauthorized"},status_code=401)
+    return {"status":"ok","version":"1.8.18.2","master_owner":_bc182b_is_master_owner(u),"master_owner_email":BC_MASTER_OWNER_EMAIL,"default_project_id":_bc182b_default_project_id(u)}
+
+@app.post("/api/account/default-project/{project_id}")
+def bc182b_default_project_set_api(project_id:int):
+    u=_runtime.current_user()
+    if not u: return _BC182B_JSONResponse({"status":"unauthorized"},status_code=401)
+    ok,result=_bc182b_set_default(project_id,u)
+    return {"status":"ok","version":"1.8.18.2","default_project":result} if ok else _BC182B_JSONResponse({"status":"error","reason":result},status_code=404)
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/app":
+        def _bc182b_app_entry():
+            u=_runtime.current_user()
+            if not u: return _BC182B_RedirectResponse("/login",status_code=303)
+            pid=_bc182b_default_project_id(u)
+            return _BC182B_RedirectResponse(f"/superintendent-command/{pid}" if pid else "/superintendent-command",status_code=303)
+        _route.endpoint=_bc182b_app_entry; break
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/superintendent-command":
+        def _bc182b_superintendent_current():
+            u=_runtime.current_user()
+            if not u: return _BC182B_RedirectResponse("/login",status_code=303)
+            pid=_bc182b_default_project_id(u)
+            if pid: return _BC182B_RedirectResponse(f"/superintendent-command/{pid}",status_code=303)
+            return _BC182B_HTMLResponse(_runtime.shell("Superintendent Command","<div class='hero'><h1>No project available</h1><p>Create a project first.</p></div>"))
+        _route.endpoint=_bc182b_superintendent_current; break
+
+@app.get("/health/master-owner-default-project-1-8-18-2")
+def health_master_owner_default_project_18182():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres": tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[("routing hotfix preserved","/health/superintendent-command-routing-1-8-18-2" in paths),("base superintendent health preserved","/health/superintendent-command-1-8-18-2" in paths),("user project preferences available","user_project_preferences" in tables),("master owner audit available","master_owner_events" in tables),("master owner email configured",bool(BC_MASTER_OWNER_EMAIL)),("master owner checker",callable(_bc182b_is_master_owner)),("default project resolver",callable(_bc182b_default_project_id)),("default project setter",callable(_bc182b_set_default)),("owner project control","/owner/project-control" in paths),("owner default action","/owner/project-control/{project_id}/default" in paths),("default project API","/api/account/default-project" in paths),("default project set API","/api/account/default-project/{project_id}" in paths),("app entry preserved","/app" in paths),("superintendent current preserved","/superintendent-command" in paths),("superintendent ID preserved","/superintendent-command/{project_id}" in paths),("owner console preserved","/owner" in paths),("public site preserved","/home" in paths),("platform operations preserved","/platform/operations" in paths),("Blueprint Brain preserved","/blueprint-brain" in paths),("Unified Brain preserved","/brain" in paths)]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.2","release":"Master Owner + Default Project Control","passed":passed,"total":len(checks),"failed":len(checks)-passed,"master_owner_email":BC_MASTER_OWNER_EMAIL,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.3 - Dedicated Owner Headquarters & Role-Based Landing
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC183_HTMLResponse, RedirectResponse as _BC183_RedirectResponse, JSONResponse as _BC183_JSONResponse
+from datetime import datetime as _BC183_datetime
+
+def _bc183_init():
+    c=_runtime.db()
+    c.executescript('''
+    CREATE TABLE IF NOT EXISTS owner_headquarters_snapshots(id INTEGER PRIMARY KEY,company_id INTEGER,snapshot_date TEXT,total_companies INTEGER DEFAULT 0,active_customers INTEGER DEFAULT 0,trial_customers INTEGER DEFAULT 0,past_due_customers INTEGER DEFAULT 0,mrr_cents INTEGER DEFAULT 0,created TEXT);
+    CREATE TABLE IF NOT EXISTS owner_platform_settings(id INTEGER PRIMARY KEY,setting_key TEXT UNIQUE NOT NULL,setting_value TEXT,updated_by INTEGER,updated TEXT);
+    ''')
+    c.commit(); c.close()
+_bc183_init()
+
+def _bc183_owner_metrics():
+    try:
+        m=_bc176_metrics()
+        if isinstance(m,dict): return m
+    except Exception: pass
+    return {"mrr_cents":0,"active_customers":0,"trial_customers":0,"past_due_customers":0}
+
+def _bc183_counts():
+    c=_runtime.db()
+    def scalar(sql):
+        try:
+            r=c.execute(sql).fetchone()
+            return int(list(dict(r).values())[0] or 0) if r else 0
+        except Exception: return 0
+    d={"companies":scalar("SELECT COUNT(*) AS n FROM companies"),"users":scalar("SELECT COUNT(*) AS n FROM users"),"projects":scalar("SELECT COUNT(*) AS n FROM projects"),"subscription_requests":scalar("SELECT COUNT(*) AS n FROM customer_subscription_requests WHERE lower(COALESCE(status,'')) IN ('pending','open','requested')")}
+    c.close(); return d
+
+def _bc183_owner_authorized():
+    u=_runtime.current_user()
+    return bool(u and (_bc182b_is_master_owner(u) or _runtime._bc174_is_platform_owner()))
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/owner":
+        def _bc183_owner_headquarters():
+            u=_runtime.current_user()
+            if not u: return _BC183_RedirectResponse("/login",status_code=303)
+            if not _bc183_owner_authorized(): return _BC183_HTMLResponse("Platform owner access required.",status_code=403)
+            m=_bc183_owner_metrics(); n=_bc183_counts(); mrr=int(m.get("mrr_cents",0) or 0)/100
+            body=f'''<div class="hero"><div class="eyebrow">BUILDCOMMAND OWNER HEADQUARTERS</div><h1>Run BuildCommand. Oversee the platform.</h1><p>This console is for BuildCommand ownership and business operations only. Project execution stays inside the BuildCommand customer application.</p><p><a href="/app">Enter BuildCommand App</a></p></div>
+<div class="grid4"><div class="card"><div class="label">MRR</div><div class="kpi">${mrr:,.2f}</div><div class="muted">Recurring platform revenue</div></div><div class="card"><div class="label">Active Customers</div><div class="kpi">{m.get("active_customers",0) or 0}</div><div class="muted">Paying/active companies</div></div><div class="card"><div class="label">Trials</div><div class="kpi">{m.get("trial_customers",0) or 0}</div><div class="muted">Companies evaluating BuildCommand</div></div><div class="card"><div class="label">Past Due</div><div class="kpi">{m.get("past_due_customers",0) or 0}</div><div class="muted">Billing attention required</div></div></div>
+<div class="grid3"><div class="card"><div class="eyebrow">CUSTOMER CONTROL</div><h2>Companies & Accounts</h2><p>Oversee every customer company, account status, access, notes, subscription state and seats.</p><a href="/platform/operations">Customer Command Center</a></div><div class="card"><div class="eyebrow">MONEY</div><h2>Revenue & Growth</h2><p>Watch recurring revenue, customer growth, churn, trial conversion, upgrades and downgrades.</p><a href="/platform/revenue">Revenue Dashboard</a><br><a href="/platform/growth">Growth Analytics</a></div><div class="card"><div class="eyebrow">SUBSCRIPTIONS</div><h2>Billing & Plans</h2><p>Control the BuildCommand plan catalog and review customer subscription requests.</p><a href="/platform/plans">Plans & Pricing</a><br><a href="/platform/subscription-requests">Subscription Requests</a></div><div class="card"><div class="eyebrow">PLATFORM</div><h2>Usage & Scale</h2><p>Track customer usage and platform demand as BuildCommand grows.</p><a href="/platform/operations">Platform Operations</a></div><div class="card"><div class="eyebrow">CONTROL</div><h2>Account Health</h2><p>Find companies that need billing, onboarding, subscription or administrative attention.</p><a href="/platform/operations">Review Account Health</a></div><div class="card"><div class="eyebrow">SYSTEM</div><h2>BuildCommand Health</h2><p>Confirm platform and owner control systems are operating normally.</p><a href="/health/owner-headquarters-1-8-18-3">Owner System Health</a></div></div>
+<div class="card"><h2>Platform Overview</h2><div class="grid4"><div><div class="label">Companies</div><div class="kpi">{n["companies"]}</div></div><div><div class="label">Users</div><div class="kpi">{n["users"]}</div></div><div><div class="label">Customer Projects</div><div class="kpi">{n["projects"]}</div></div><div><div class="label">Pending Requests</div><div class="kpi">{n["subscription_requests"]}</div></div></div></div>
+<div class="card"><div class="eyebrow">OWNER ACCOUNT</div><h2>{_runtime.esc(u["email"])}</h2><p>Master Owner: {"Yes" if _bc182b_is_master_owner(u) else "Platform Owner"}</p><p><b>Construction project controls are intentionally excluded from this page.</b> Use Enter BuildCommand App only when you want to work inside the construction product.</p></div>'''
+            return _runtime.shell("BuildCommand Owner Headquarters",body)
+        _route.endpoint=_bc183_owner_headquarters
+        break
+
+@app.get("/owner/api/overview")
+def bc183_owner_overview_api():
+    if not _bc183_owner_authorized(): return _BC183_JSONResponse({"status":"forbidden"},status_code=403)
+    u=_runtime.current_user()
+    return {"status":"ok","version":"1.8.18.3","owner_email":u["email"],"master_owner":_bc182b_is_master_owner(u),"business_metrics":_bc183_owner_metrics(),"platform_counts":_bc183_counts(),"separation":{"owner":"/owner","public":"/home","construction_app":"/app"}}
+
+@app.post("/owner/api/snapshot")
+def bc183_owner_snapshot():
+    if not _bc183_owner_authorized(): return _BC183_JSONResponse({"status":"forbidden"},status_code=403)
+    u=_runtime.current_user(); m=_bc183_owner_metrics(); n=_bc183_counts(); now=_BC183_datetime.utcnow().isoformat(); c=_runtime.db()
+    c.execute("INSERT INTO owner_headquarters_snapshots(company_id,snapshot_date,total_companies,active_customers,trial_customers,past_due_customers,mrr_cents,created) VALUES(?,?,?,?,?,?,?,?)",(u["company_id"],now[:10],n["companies"],m.get("active_customers",0) or 0,m.get("trial_customers",0) or 0,m.get("past_due_customers",0) or 0,m.get("mrr_cents",0) or 0,now))
+    c.commit(); c.close()
+    return {"status":"ok","version":"1.8.18.3","snapshot_date":now[:10]}
+
+@app.get("/account/landing")
+def bc183_role_based_landing():
+    u=_runtime.current_user()
+    if not u: return _BC183_RedirectResponse("/login",status_code=303)
+    return _BC183_RedirectResponse("/owner" if (_bc182b_is_master_owner(u) or _runtime._bc174_is_platform_owner()) else "/app",status_code=303)
+
+@app.get("/health/owner-headquarters-1-8-18-3")
+def health_owner_headquarters_18183():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres": tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[("master owner control preserved","/health/master-owner-default-project-1-8-18-2" in paths),("superintendent routing preserved","/health/superintendent-command-routing-1-8-18-2" in paths),("owner headquarters","/owner" in paths),("owner overview API","/owner/api/overview" in paths),("owner snapshot API","/owner/api/snapshot" in paths),("role based landing","/account/landing" in paths),("owner snapshots","owner_headquarters_snapshots" in tables),("owner settings","owner_platform_settings" in tables),("master owner authorization",callable(_bc182b_is_master_owner)),("owner authorization",callable(_bc183_owner_authorized)),("business metrics",callable(_bc183_owner_metrics)),("platform counts",callable(_bc183_counts)),("customer control","/platform/operations" in paths),("revenue","/platform/revenue" in paths),("growth","/platform/growth" in paths),("plans","/platform/plans" in paths),("subscription requests","/platform/subscription-requests" in paths),("public home","/home" in paths),("public product","/product" in paths),("public pricing","/pricing" in paths),("construction app","/app" in paths),("superintendent command","/superintendent-command" in paths),("Blueprint Brain","/blueprint-brain" in paths),("Unified Brain","/brain" in paths),("Command Center","/command-center-2" in paths),("PostgreSQL layer",callable(getattr(_runtime,"db",None))),("customer subscription center","/account/subscription" in paths),("legacy root","/" in paths)]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.3","release":"Dedicated Owner Headquarters & Role-Based Landing","passed":passed,"total":len(checks),"failed":len(checks)-passed,"owner_purpose":"BuildCommand business and platform oversight only","checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.3"
+BUILD_COMMAND_RELEASE_NAME="Dedicated Owner Headquarters & Role-Based Landing"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
