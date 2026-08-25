@@ -7713,3 +7713,169 @@ BUILD_COMMAND_RELEASE="1.8.17.9"
 BUILD_COMMAND_RELEASE_NAME="Customer Administration & Company Control"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.0 — Platform Operations & Customer Command Center
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC180_HTMLResponse, JSONResponse as _BC180_JSONResponse
+from datetime import datetime as _BC180_datetime
+
+def _bc180_init():
+    c=_runtime.db()
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS platform_account_health_snapshots(
+      id INTEGER PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      health_score INTEGER DEFAULT 100,
+      health_status TEXT DEFAULT 'HEALTHY',
+      warning_count INTEGER DEFAULT 0,
+      critical_count INTEGER DEFAULT 0,
+      detail TEXT,
+      created TEXT
+    );
+    CREATE TABLE IF NOT EXISTS platform_operations_events(
+      id INTEGER PRIMARY KEY,
+      company_id INTEGER,
+      event_type TEXT NOT NULL,
+      severity TEXT DEFAULT 'INFO',
+      title TEXT,
+      detail TEXT,
+      created TEXT
+    );
+    """)
+    c.commit(); c.close()
+_bc180_init()
+
+def _bc180_company_health(company_id):
+    d=_bc179_company(company_id)
+    if not d: return None
+    sub=d["subscription"]; usage=d["usage"]; warnings=[]; critical=[]
+    status=str(sub["status"] if sub else "NONE").upper()
+    if status in {"SUSPENDED","CANCELED"}: critical.append("Account access is "+status.lower())
+    elif status in {"PAST_DUE"}: critical.append("Subscription is past due")
+    elif status in {"TRIAL"}: warnings.append("Customer is still in trial")
+    if usage["seat_limit"] and usage["seat_pct"]>=100: critical.append("Seat limit reached")
+    elif usage["seat_limit"] and usage["seat_pct"]>=80: warnings.append("Seat usage above 80%")
+    if usage["project_limit"] and usage["project_pct"]>=100: critical.append("Project limit reached")
+    elif usage["project_limit"] and usage["project_pct"]>=80: warnings.append("Project usage above 80%")
+    if usage["ai_limit"] and usage["ai_pct"]>=100: critical.append("AI usage limit reached")
+    elif usage["ai_limit"] and usage["ai_pct"]>=80: warnings.append("AI usage above 80%")
+    if usage["storage_limit_gb"] and usage["storage_pct"]>=100: critical.append("Storage limit reached")
+    elif usage["storage_limit_gb"] and usage["storage_pct"]>=80: warnings.append("Storage above 80%")
+    score=max(0,100-len(warnings)*8-len(critical)*22)
+    health="CRITICAL" if critical else ("WATCH" if warnings else "HEALTHY")
+    return {"score":score,"status":health,"warnings":warnings,"critical":critical,"company":d["company"],
+            "subscription":sub,"usage":usage,"users":len(d["users"]),"projects":len(d["projects"])}
+
+def _bc180_operations():
+    c=_runtime.db()
+    companies=[dict(r) for r in c.execute("SELECT * FROM companies ORDER BY name").fetchall()]
+    c.close()
+    rows=[]
+    for co in companies:
+        h=_bc180_company_health(co["id"])
+        if h: rows.append(h)
+    return rows
+
+@app.get("/platform/operations", response_class=_BC180_HTMLResponse)
+def platform_operations_command_center(q:str=""):
+    if not _runtime._bc174_is_platform_owner(): return _BC180_HTMLResponse("Platform owner access required.",status_code=403)
+    rows=_bc180_operations()
+    if q:
+        needle=q.lower().strip()
+        rows=[r for r in rows if needle in str(r["company"]["name"]).lower() or needle in str(r["company"]["id"])]
+    healthy=sum(1 for r in rows if r["status"]=="HEALTHY"); watch=sum(1 for r in rows if r["status"]=="WATCH"); critical=sum(1 for r in rows if r["status"]=="CRITICAL")
+    m=_bc176_metrics()
+    trs=""
+    for r in sorted(rows,key=lambda x:(x["score"],str(x["company"]["name"]).lower())):
+        sub=r["subscription"] or {}
+        issue="; ".join(r["critical"]+r["warnings"]) or "No current warnings"
+        trs+=f'<tr><td><a href="/platform/company/{r["company"]["id"]}">{_runtime.esc(r["company"]["name"])}</a></td><td>{r["score"]}</td><td>{r["status"]}</td><td>{_runtime.esc(sub.get("plan_code","—"))}</td><td>{_runtime.esc(sub.get("status","—"))}</td><td>{r["users"]}</td><td>{r["projects"]}</td><td>{_runtime.esc(issue)}</td></tr>'
+    body=(
+      '<div class="hero"><div class="eyebrow">PLATFORM OWNER · OPERATIONS</div><h1>Customer Command Center</h1><p class="muted">Operate every BuildCommand customer from one screen. Accounts needing attention rise to the top automatically.</p></div>'
+      f'<div class="grid4"><div class="card"><div class="label">Customers</div><div class="kpi">{len(rows)}</div></div>'
+      f'<div class="card"><div class="label">Healthy</div><div class="kpi">{healthy}</div></div>'
+      f'<div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div>'
+      f'<div class="card"><div class="label">Critical</div><div class="kpi">{critical}</div></div></div>'
+      f'<div class="grid4"><div class="card"><div class="label">MRR</div><div class="kpi">${int(m["mrr_cents"] or 0)/100:,.2f}</div></div>'
+      f'<div class="card"><div class="label">Trials</div><div class="kpi">{m["trial_customers"]}</div></div>'
+      f'<div class="card"><div class="label">Past Due</div><div class="kpi">{m["past_due_customers"]}</div></div>'
+      f'<div class="card"><div class="label">Failed Payments</div><div class="kpi">{m["failed_payments"]}</div></div></div>'
+      '<div class="card"><form method="get" action="/platform/operations"><label>Search customers</label><input name="q" placeholder="Company name or ID"><button type="submit">Search</button></form></div>'
+      f'<div class="card"><h2>Account Health</h2><table><thead><tr><th>Company</th><th>Score</th><th>Health</th><th>Plan</th><th>Subscription</th><th>Users</th><th>Projects</th><th>Attention</th></tr></thead><tbody>{trs or "<tr><td colspan=8>No customers found.</td></tr>"}</tbody></table></div>'
+      '<div class="card"><h2>Platform Controls</h2><p><a href="/platform/revenue">Revenue</a> · <a href="/platform/growth">Growth</a> · <a href="/platform/customers">Customer Lifecycle</a> · <a href="/platform/subscription-requests">Subscription Requests</a> · <a href="/platform">Platform Owner</a></p></div>'
+    )
+    return _runtime.shell("Customer Command Center",body)
+
+@app.get("/api/platform/operations")
+def platform_operations_api():
+    if not _runtime._bc174_is_platform_owner(): return _BC180_JSONResponse({"status":"forbidden"},status_code=403)
+    rows=_bc180_operations()
+    return {"status":"ok","version":"1.8.18.0","customers":len(rows),
+            "healthy":sum(1 for r in rows if r["status"]=="HEALTHY"),
+            "watch":sum(1 for r in rows if r["status"]=="WATCH"),
+            "critical":sum(1 for r in rows if r["status"]=="CRITICAL"),"accounts":rows}
+
+@app.post("/api/platform/operations/snapshot")
+def platform_operations_snapshot():
+    if not _runtime._bc174_is_platform_owner(): return _BC180_JSONResponse({"status":"forbidden"},status_code=403)
+    rows=_bc180_operations(); now=_BC180_datetime.utcnow().isoformat(); c=_runtime.db()
+    for r in rows:
+        detail="; ".join(r["critical"]+r["warnings"])
+        c.execute("INSERT INTO platform_account_health_snapshots(company_id,health_score,health_status,warning_count,critical_count,detail,created) VALUES(?,?,?,?,?,?,?)",
+                  (r["company"]["id"],r["score"],r["status"],len(r["warnings"]),len(r["critical"]),detail,now))
+    c.commit(); c.close()
+    return {"status":"ok","version":"1.8.18.0","snapshots_created":len(rows),"created":now}
+
+@app.get("/api/platform/company/{company_id}/health")
+def platform_company_health_api(company_id:int):
+    if not _runtime._bc174_is_platform_owner(): return _BC180_JSONResponse({"status":"forbidden"},status_code=403)
+    h=_bc180_company_health(company_id)
+    if not h: return _BC180_JSONResponse({"status":"not_found"},status_code=404)
+    return {"status":"ok","version":"1.8.18.0",**h}
+
+@app.get("/health/platform-operations-1-8-18-0")
+def health_platform_operations_18180():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres":
+        tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[
+      ("1.8.17.9 customer admin health preserved","/health/customer-admin-1-8-17-9" in paths),
+      ("1.8.17.8 growth health preserved","/health/growth-analytics-1-8-17-8" in paths),
+      ("1.8.17.7 self-service health preserved","/health/subscription-self-service-1-8-17-7" in paths),
+      ("operations command center","/platform/operations" in paths),
+      ("operations API","/api/platform/operations" in paths),
+      ("operations snapshot API","/api/platform/operations/snapshot" in paths),
+      ("individual account health API","/api/platform/company/{company_id}/health" in paths),
+      ("account health snapshots available","platform_account_health_snapshots" in tables),
+      ("platform operations events available","platform_operations_events" in tables),
+      ("company health engine available",callable(_bc180_company_health)),
+      ("operations aggregator available",callable(_bc180_operations)),
+      ("platform owner authorization preserved",callable(getattr(_runtime,"_bc174_is_platform_owner",None))),
+      ("company control preserved","/platform/company/{company_id}" in paths),
+      ("revenue dashboard preserved","/platform/revenue" in paths),
+      ("growth dashboard preserved","/platform/growth" in paths),
+      ("customer lifecycle preserved","/platform/customers" in paths),
+      ("subscription request center preserved","/platform/subscription-requests" in paths),
+      ("customer self-service preserved","/account/subscription" in paths),
+      ("company subscriptions preserved","company_subscriptions" in tables),
+      ("usage metering preserved","platform_usage_monthly" in tables),
+      ("admin audit preserved","platform_admin_audit" in tables),
+      ("access enforcement preserved","access_enforcement_events" in tables),
+      ("Command Center 2 preserved","/command-center-2" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+      ("Unified Brain preserved","/brain" in paths),
+      ("legacy root preserved","/" in paths),
+    ]
+    passed=sum(1 for _,ok in checks if ok)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.0",
+      "release":"Platform Operations & Customer Command Center","passed":passed,"total":len(checks),"failed":len(checks)-passed,
+      "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.0"
+BUILD_COMMAND_RELEASE_NAME="Platform Operations & Customer Command Center"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
