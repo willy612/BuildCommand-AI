@@ -7035,7 +7035,7 @@ def _bc176_metrics():
         FROM platform_usage_monthly WHERE usage_month=?''',(month,)).fetchone()
     failed=c.execute('''SELECT COUNT(*) n FROM billing_events
         WHERE lower(COALESCE(status,'')) IN ('failed','past_due','unpaid')
-           OR instr(lower(COALESCE(event_type,'')),'payment_failed') > 0 ''').fetchone()["n"]
+           OR lower(COALESCE(event_type,'')) = 'payment_failed' ''').fetchone()["n"]
 
     customer_rows=c.execute('''SELECT co.id,co.name,
         (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) seats_used,
