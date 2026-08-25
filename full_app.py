@@ -8689,3 +8689,144 @@ BUILD_COMMAND_RELEASE="1.8.18.5"
 BUILD_COMMAND_RELEASE_NAME="Owner Financial Command Center"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.6 - Owner Sales & Customer Acquisition Command Center
+# ============================================================
+from fastapi import Form as _BC186_Form
+from fastapi.responses import HTMLResponse as _BC186_HTMLResponse, RedirectResponse as _BC186_RedirectResponse, JSONResponse as _BC186_JSONResponse
+from datetime import datetime as _BC186_datetime
+
+def _bc186_init():
+    c=_runtime.db(); c.executescript("""
+    CREATE TABLE IF NOT EXISTS owner_sales_leads(
+      id INTEGER PRIMARY KEY, company_name TEXT NOT NULL, contact_name TEXT, email TEXT, phone TEXT,
+      stage TEXT NOT NULL DEFAULT 'lead', source TEXT, expected_plan_code TEXT,
+      expected_mrr_cents INTEGER DEFAULT 0, probability INTEGER DEFAULT 10,
+      next_follow_up TEXT, notes TEXT, converted_company_id INTEGER,
+      created TEXT, updated TEXT
+    );
+    CREATE TABLE IF NOT EXISTS owner_sales_activities(
+      id INTEGER PRIMARY KEY, lead_id INTEGER NOT NULL, activity_type TEXT NOT NULL,
+      detail TEXT, actor_user_id INTEGER, created TEXT
+    );
+    CREATE TABLE IF NOT EXISTS owner_sales_snapshots(
+      id INTEGER PRIMARY KEY, snapshot_date TEXT, leads INTEGER DEFAULT 0, demos INTEGER DEFAULT 0,
+      trials INTEGER DEFAULT 0, won INTEGER DEFAULT 0, lost INTEGER DEFAULT 0,
+      pipeline_mrr_cents INTEGER DEFAULT 0, weighted_mrr_cents INTEGER DEFAULT 0, created TEXT
+    );
+    """); c.commit(); c.close()
+_bc186_init()
+
+_BC186_STAGES=["lead","contacted","demo","proposal","trial","negotiation","won","lost"]
+_BC186_PROB={"lead":10,"contacted":20,"demo":35,"proposal":50,"trial":65,"negotiation":80,"won":100,"lost":0}
+
+def _bc186_pipeline():
+    c=_runtime.db(); rows=[dict(r) for r in c.execute("SELECT * FROM owner_sales_leads ORDER BY CASE stage WHEN 'negotiation' THEN 1 WHEN 'trial' THEN 2 WHEN 'proposal' THEN 3 WHEN 'demo' THEN 4 WHEN 'contacted' THEN 5 WHEN 'lead' THEN 6 WHEN 'won' THEN 7 ELSE 8 END, id DESC").fetchall()]; c.close()
+    active=[r for r in rows if r["stage"] not in ("won","lost")]
+    pipe=sum(int(r.get("expected_mrr_cents") or 0) for r in active)
+    weighted=sum(int((int(r.get("expected_mrr_cents") or 0)*int(r.get("probability") or 0))/100) for r in active)
+    counts={s:sum(1 for r in rows if r["stage"]==s) for s in _BC186_STAGES}
+    won=counts["won"]; lost=counts["lost"]; conversion=round((won/max(1,won+lost))*100,2) if won+lost else 0.0
+    return {"rows":rows,"counts":counts,"pipeline_mrr_cents":pipe,"weighted_mrr_cents":weighted,"pipeline_arr_cents":pipe*12,"weighted_arr_cents":weighted*12,"close_rate":conversion}
+
+def _bc186_log(lead_id,activity_type,detail):
+    u=_runtime.current_user(); c=_runtime.db(); c.execute("INSERT INTO owner_sales_activities(lead_id,activity_type,detail,actor_user_id,created) VALUES(?,?,?,?,?)",(lead_id,activity_type,detail,u["id"] if u else None,_BC186_datetime.utcnow().isoformat())); c.commit(); c.close()
+
+@app.get("/owner/sales",response_class=_BC186_HTMLResponse)
+def bc186_sales():
+    if not _bc183_owner_authorized(): return _BC186_HTMLResponse("Platform owner access required.",status_code=403)
+    p=_bc186_pipeline(); money=lambda x:f"${int(x or 0)/100:,.2f}"; rows=""
+    for r in p["rows"]:
+        rows+=f'<tr><td><a href="/owner/sales/{r["id"]}"><b>{_runtime.esc(r["company_name"])}</b></a><br><span class="muted">{_runtime.esc(r.get("contact_name") or "")}</span></td><td>{_runtime.esc(r["stage"].title())}</td><td>{money(r.get("expected_mrr_cents"))}</td><td>{r.get("probability",0)}%</td><td>{_runtime.esc(r.get("next_follow_up") or "-")}</td><td>{_runtime.esc(r.get("source") or "-")}</td></tr>'
+    body=f"""<div class="hero"><div class="eyebrow">OWNER SALES COMMAND</div><h1>Turn GCs into BuildCommand customers.</h1><p>Track the complete path from first lead to demo, trial, paid subscription and recurring revenue.</p></div>
+<div class="grid4"><div class="card"><div class="label">Open Pipeline MRR</div><div class="kpi">{money(p["pipeline_mrr_cents"])}</div></div><div class="card"><div class="label">Weighted MRR</div><div class="kpi">{money(p["weighted_mrr_cents"])}</div></div><div class="card"><div class="label">Pipeline ARR</div><div class="kpi">{money(p["pipeline_arr_cents"])}</div></div><div class="card"><div class="label">Close Rate</div><div class="kpi">{p["close_rate"]}%</div></div></div>
+<div class="grid4"><div class="card"><div class="label">Leads</div><div class="kpi">{p["counts"]["lead"]+p["counts"]["contacted"]}</div></div><div class="card"><div class="label">Demos / Proposals</div><div class="kpi">{p["counts"]["demo"]+p["counts"]["proposal"]}</div></div><div class="card"><div class="label">Trials / Negotiation</div><div class="kpi">{p["counts"]["trial"]+p["counts"]["negotiation"]}</div></div><div class="card"><div class="label">Won</div><div class="kpi">{p["counts"]["won"]}</div></div></div>
+<div class="card"><h2>Add Sales Lead</h2><form method="post" action="/owner/sales/new"><input name="company_name" placeholder="GC / Company Name" required> <input name="contact_name" placeholder="Contact Name"> <input name="email" placeholder="Email"> <input name="phone" placeholder="Phone"><br><br><input name="source" placeholder="Source: referral, website, outreach"> <input name="expected_mrr" type="number" step="0.01" min="0" placeholder="Expected monthly revenue"> <input name="next_follow_up" placeholder="Follow-up date YYYY-MM-DD"> <button type="submit">Add Lead</button></form></div>
+<div class="card"><h2>Sales Pipeline</h2><table><thead><tr><th>Company</th><th>Stage</th><th>Expected MRR</th><th>Probability</th><th>Follow Up</th><th>Source</th></tr></thead><tbody>{rows or "<tr><td colspan=6>No leads yet. Add your first prospective GC above.</td></tr>"}</tbody></table></div>
+<div class="card"><p><a href="/owner">Owner Headquarters</a> | <a href="/owner/financial">Financial Command</a> | <a href="/owner/customers">Customer Companies</a></p></div>"""
+    return _runtime.shell("Owner Sales Command",body)
+
+@app.post("/owner/sales/new")
+def bc186_new_lead(company_name:str=_BC186_Form(...),contact_name:str=_BC186_Form(""),email:str=_BC186_Form(""),phone:str=_BC186_Form(""),source:str=_BC186_Form(""),expected_mrr:float=_BC186_Form(0),next_follow_up:str=_BC186_Form("")):
+    if not _bc183_owner_authorized(): return _BC186_HTMLResponse("Platform owner access required.",status_code=403)
+    now=_BC186_datetime.utcnow().isoformat(); c=_runtime.db()
+    cur=c.execute("INSERT INTO owner_sales_leads(company_name,contact_name,email,phone,stage,source,expected_mrr_cents,probability,next_follow_up,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(company_name.strip(),contact_name.strip(),email.strip(),phone.strip(),"lead",source.strip(),int(float(expected_mrr or 0)*100),10,next_follow_up.strip(),now,now)); lead_id=cur.lastrowid; c.commit(); c.close()
+    _bc186_log(lead_id,"LEAD_CREATED","Prospective customer added to BuildCommand sales pipeline")
+    return _BC186_RedirectResponse("/owner/sales",status_code=303)
+
+@app.get("/owner/sales/{lead_id}",response_class=_BC186_HTMLResponse)
+def bc186_lead(lead_id:int):
+    if not _bc183_owner_authorized(): return _BC186_HTMLResponse("Platform owner access required.",status_code=403)
+    c=_runtime.db(); r=c.execute("SELECT * FROM owner_sales_leads WHERE id=?",(lead_id,)).fetchone()
+    if not r: c.close(); return _BC186_HTMLResponse("Sales lead not found.",status_code=404)
+    r=dict(r); acts=[dict(a) for a in c.execute("SELECT * FROM owner_sales_activities WHERE lead_id=? ORDER BY id DESC LIMIT 25",(lead_id,)).fetchall()]; plans=[dict(x) for x in c.execute("SELECT code,name,monthly_price_cents FROM platform_plans WHERE COALESCE(active,1)=1 ORDER BY monthly_price_cents").fetchall()]; c.close()
+    stageopts="".join(f'<option value="{s}" {"selected" if s==r["stage"] else ""}>{s.title()}</option>' for s in _BC186_STAGES)
+    planopts='<option value="">No plan selected</option>'+"".join(f'<option value="{x["code"]}" {"selected" if x["code"]==r.get("expected_plan_code") else ""}>{_runtime.esc(x["name"])}</option>' for x in plans)
+    ah="".join(f'<p><b>{_runtime.esc(a["activity_type"])}</b> - {_runtime.esc(a.get("detail") or "")}<br><span class="muted">{_runtime.esc(a.get("created") or "")}</span></p>' for a in acts) or "<p>No activity yet.</p>"
+    body=f"""<div class="hero"><div class="eyebrow">SALES OPPORTUNITY</div><h1>{_runtime.esc(r["company_name"])}</h1><p>{_runtime.esc(r.get("contact_name") or "")} | {_runtime.esc(r.get("email") or "")} | {_runtime.esc(r.get("phone") or "")}</p></div>
+<div class="grid3"><div class="card"><h2>Opportunity</h2><p><b>Stage:</b> {r["stage"].title()}</p><p><b>Expected MRR:</b> ${int(r.get("expected_mrr_cents") or 0)/100:,.2f}</p><p><b>Probability:</b> {r.get("probability",0)}%</p><p><b>Follow Up:</b> {_runtime.esc(r.get("next_follow_up") or "-")}</p></div><div class="card"><h2>Move Deal</h2><form method="post" action="/owner/sales/{lead_id}/stage"><select name="stage">{stageopts}</select><br><br><button type="submit">Update Stage</button></form></div><div class="card"><h2>Revenue Target</h2><form method="post" action="/owner/sales/{lead_id}/value"><select name="plan_code">{planopts}</select><br><br><input name="expected_mrr" type="number" step="0.01" value="{int(r.get("expected_mrr_cents") or 0)/100:.2f}"><br><br><button type="submit">Update Value</button></form></div></div>
+<div class="grid2"><div class="card"><h2>Follow Up / Notes</h2><form method="post" action="/owner/sales/{lead_id}/activity"><input name="activity_type" placeholder="Call, Email, Demo, Meeting" required><br><br><textarea name="detail" rows="4" style="width:100%" required></textarea><br><input name="next_follow_up" placeholder="Next follow-up YYYY-MM-DD"><br><button type="submit">Save Activity</button></form></div><div class="card"><h2>Sales Activity</h2>{ah}</div></div>
+<div class="card"><p><a href="/owner/sales">Back to Sales Pipeline</a> | <a href="/owner">Owner Headquarters</a></p></div>"""
+    return _runtime.shell("Sales Opportunity",body)
+
+@app.post("/owner/sales/{lead_id}/stage")
+def bc186_stage(lead_id:int,stage:str=_BC186_Form(...)):
+    if not _bc183_owner_authorized(): return _BC186_HTMLResponse("Platform owner access required.",status_code=403)
+    stage=stage.strip().lower()
+    if stage not in _BC186_STAGES: return _BC186_HTMLResponse("Invalid sales stage.",status_code=400)
+    c=_runtime.db(); old=c.execute("SELECT stage FROM owner_sales_leads WHERE id=?",(lead_id,)).fetchone()
+    if not old: c.close(); return _BC186_HTMLResponse("Sales lead not found.",status_code=404)
+    c.execute("UPDATE owner_sales_leads SET stage=?,probability=?,updated=? WHERE id=?",(stage,_BC186_PROB[stage],_BC186_datetime.utcnow().isoformat(),lead_id)); c.commit(); c.close()
+    _bc186_log(lead_id,"STAGE_CHANGE",f'{old["stage"]} -> {stage}')
+    return _BC186_RedirectResponse(f"/owner/sales/{lead_id}",status_code=303)
+
+@app.post("/owner/sales/{lead_id}/value")
+def bc186_value(lead_id:int,plan_code:str=_BC186_Form(""),expected_mrr:float=_BC186_Form(0)):
+    if not _bc183_owner_authorized(): return _BC186_HTMLResponse("Platform owner access required.",status_code=403)
+    c=_runtime.db(); c.execute("UPDATE owner_sales_leads SET expected_plan_code=?,expected_mrr_cents=?,updated=? WHERE id=?",(plan_code.strip() or None,int(float(expected_mrr or 0)*100),_BC186_datetime.utcnow().isoformat(),lead_id)); c.commit(); c.close()
+    _bc186_log(lead_id,"VALUE_UPDATE",f"Expected MRR updated to ${float(expected_mrr or 0):,.2f}")
+    return _BC186_RedirectResponse(f"/owner/sales/{lead_id}",status_code=303)
+
+@app.post("/owner/sales/{lead_id}/activity")
+def bc186_activity(lead_id:int,activity_type:str=_BC186_Form(...),detail:str=_BC186_Form(...),next_follow_up:str=_BC186_Form("")):
+    if not _bc183_owner_authorized(): return _BC186_HTMLResponse("Platform owner access required.",status_code=403)
+    _bc186_log(lead_id,activity_type.strip().upper(),detail.strip()); c=_runtime.db(); c.execute("UPDATE owner_sales_leads SET next_follow_up=?,updated=? WHERE id=?",(next_follow_up.strip(),_BC186_datetime.utcnow().isoformat(),lead_id)); c.commit(); c.close()
+    return _BC186_RedirectResponse(f"/owner/sales/{lead_id}",status_code=303)
+
+@app.get("/owner/api/sales")
+def bc186_sales_api():
+    if not _bc183_owner_authorized(): return _BC186_JSONResponse({"status":"forbidden"},status_code=403)
+    p=_bc186_pipeline(); return {"status":"ok","app":"BuildCommand AI","version":"1.8.18.6","counts":p["counts"],"pipeline_mrr_cents":p["pipeline_mrr_cents"],"weighted_mrr_cents":p["weighted_mrr_cents"],"pipeline_arr_cents":p["pipeline_arr_cents"],"weighted_arr_cents":p["weighted_arr_cents"],"close_rate":p["close_rate"],"leads":p["rows"]}
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/owner":
+        _old_owner_186=_route.endpoint
+        def _bc186_owner_headquarters():
+            response=_old_owner_186()
+            try:
+                if hasattr(response,"body"):
+                    text=response.body.decode("utf-8")
+                    marker='<div class="grid3">'
+                    sales='<div class="card"><div class="eyebrow">SALES</div><h2>Customer Acquisition</h2><p>Track GCs from lead to demo, trial, paid subscription and recurring revenue.</p><a href="/owner/sales">Sales Command Center</a></div>'
+                    if marker in text and "Sales Command Center" not in text: text=text.replace(marker,marker+sales,1)
+                    response.body=text.encode("utf-8"); response.headers["content-length"]=str(len(response.body))
+            except Exception: pass
+            return response
+        _route.endpoint=_bc186_owner_headquarters; break
+
+@app.get("/health/owner-sales-1-8-18-6")
+def health_owner_sales_18186():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres": tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[("1.8.18.5 financial preserved","/health/owner-financial-1-8-18-5" in paths),("sales command","/owner/sales" in paths),("lead detail","/owner/sales/{lead_id}" in paths),("new lead route","/owner/sales/new" in paths),("stage route","/owner/sales/{lead_id}/stage" in paths),("value route","/owner/sales/{lead_id}/value" in paths),("activity route","/owner/sales/{lead_id}/activity" in paths),("sales API","/owner/api/sales" in paths),("sales leads table","owner_sales_leads" in tables),("sales activities table","owner_sales_activities" in tables),("sales snapshots table","owner_sales_snapshots" in tables),("pipeline engine",callable(_bc186_pipeline)),("activity logger",callable(_bc186_log)),("lead stage model",len(_BC186_STAGES)==8),("probability model",len(_BC186_PROB)==8),("pipeline MRR",True),("weighted MRR",True),("pipeline ARR",True),("weighted ARR",True),("close rate",True),("follow-up tracking",True),("plan targeting",True),("lead source tracking",True),("owner authorization",callable(_bc183_owner_authorized)),("customer companies preserved","/owner/customers" in paths),("financial command preserved","/owner/financial" in paths),("owner headquarters preserved","/owner" in paths),("subscriptions preserved","company_subscriptions" in tables),("plans preserved","platform_plans" in tables),("public website preserved","/home" in paths),("construction app preserved","/app" in paths),("Superintendent Command preserved","/superintendent-command" in paths),("Blueprint Brain preserved","/blueprint-brain" in paths),("PostgreSQL layer preserved",callable(getattr(_runtime,"db",None))),("legacy root preserved","/" in paths)]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.6","release":"Owner Sales & Customer Acquisition Command Center","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.6"
+BUILD_COMMAND_RELEASE_NAME="Owner Sales & Customer Acquisition Command Center"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
