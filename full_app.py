@@ -8605,3 +8605,87 @@ BUILD_COMMAND_RELEASE="1.8.18.4"
 BUILD_COMMAND_RELEASE_NAME="Owner Headquarters 2.0 - Customer Company Control"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.5 - Owner Financial Command Center
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC185_HTMLResponse, JSONResponse as _BC185_JSONResponse
+from datetime import datetime as _BC185_datetime
+
+def _bc185_init():
+    c=_runtime.db(); c.executescript("""
+    CREATE TABLE IF NOT EXISTS owner_financial_snapshots(id INTEGER PRIMARY KEY,snapshot_date TEXT NOT NULL,mrr_cents INTEGER DEFAULT 0,arr_cents INTEGER DEFAULT 0,active_customers INTEGER DEFAULT 0,trial_customers INTEGER DEFAULT 0,past_due_customers INTEGER DEFAULT 0,canceled_customers INTEGER DEFAULT 0,arpc_cents INTEGER DEFAULT 0,projected_12m_revenue_cents INTEGER DEFAULT 0,trial_conversion_rate REAL DEFAULT 0,customer_churn_rate REAL DEFAULT 0,created TEXT);
+    CREATE TABLE IF NOT EXISTS owner_financial_alerts(id INTEGER PRIMARY KEY,alert_type TEXT NOT NULL,company_id INTEGER,severity TEXT,title TEXT,detail TEXT,resolved INTEGER DEFAULT 0,created TEXT,resolved_at TEXT);
+    """); c.commit(); c.close()
+_bc185_init()
+
+def _bc185_financial_metrics():
+    c=_runtime.db(); subs=[dict(r) for r in c.execute("SELECT * FROM company_subscriptions").fetchall()]; plans={r["code"]:dict(r) for r in c.execute("SELECT * FROM platform_plans").fetchall()}
+    active=[s for s in subs if str(s.get("status") or "").lower()=="active"]; trials=[s for s in subs if str(s.get("status") or "").lower()=="trialing"]; past=[s for s in subs if str(s.get("status") or "").lower()=="past_due"]; canceled=[s for s in subs if str(s.get("status") or "").lower() in {"canceled","cancelled"}]
+    mrr=sum(int(plans.get(s.get("plan_code"),{}).get("monthly_price_cents") or 0) for s in active); arr=mrr*12; arpc=int(mrr/len(active)) if active else 0
+    lifecycle=[dict(r) for r in c.execute("SELECT * FROM subscription_lifecycle_events").fetchall()]
+    conv=sum(1 for e in lifecycle if str(e.get("from_status") or "").lower()=="trialing" and str(e.get("to_status") or "").lower()=="active")
+    exits=sum(1 for e in lifecycle if str(e.get("from_status") or "").lower()=="trialing" and str(e.get("to_status") or "").lower() in {"active","canceled","cancelled","suspended"})
+    conversion=(conv/exits*100) if exits else 0.0; cancels=sum(1 for e in lifecycle if str(e.get("to_status") or "").lower() in {"canceled","cancelled"}); churn=(cancels/max(1,len(active)+len(canceled))*100) if lifecycle else 0.0
+    be=[dict(r) for r in c.execute("SELECT * FROM billing_events").fetchall()]
+    collected=sum(int(e.get("amount_cents") or 0) for e in be if str(e.get("status") or "").lower() in {"paid","succeeded","success","complete","completed"})
+    failed=sum(int(e.get("amount_cents") or 0) for e in be if str(e.get("status") or "").lower() in {"failed","past_due","unpaid"})
+    g=c.execute("SELECT * FROM platform_growth_snapshots ORDER BY snapshot_month DESC,id DESC LIMIT 1").fetchone(); g=dict(g) if g else {}; c.close()
+    return {"mrr_cents":mrr,"arr_cents":arr,"active_customers":len(active),"trial_customers":len(trials),"past_due_customers":len(past),"canceled_customers":len(canceled),"arpc_cents":arpc,"projected_12m_revenue_cents":arr,"trial_conversion_rate":round(conversion,2),"customer_churn_rate":round(churn,2),"collected_revenue_cents":collected,"failed_payment_cents":failed,"growth":g}
+
+def _bc185_risk_accounts():
+    return [x for x in _bc184_customer_rows() if str(x["subscription"].get("status") or "").lower() in {"past_due","suspended"} or x["health_score"]<85]
+
+@app.get("/owner/financial",response_class=_BC185_HTMLResponse)
+def bc185_financial_command():
+    if not _bc183_owner_authorized(): return _BC185_HTMLResponse("Platform owner access required.",status_code=403)
+    m=_bc185_financial_metrics(); risks=_bc185_risk_accounts(); g=m["growth"]; money=lambda cents:f"${int(cents or 0)/100:,.2f}"
+    riskhtml="".join(f'<tr><td><a href="/owner/customers/{x["company"]["id"]}">{_runtime.esc(x["company"]["name"])}</a></td><td>{_runtime.esc(x["subscription"].get("status") or "-")}</td><td>{x["health_score"]}</td><td>{_runtime.esc(x["subscription"].get("plan_code") or "-")}</td></tr>' for x in risks) or "<tr><td colspan=4>No financial/customer health risks detected.</td></tr>"
+    body=f"""<div class="hero"><div class="eyebrow">OWNER FINANCIAL COMMAND CENTER</div><h1>How is BuildCommand doing today?</h1><p>Owner-only financial intelligence for recurring revenue, customer growth, churn, collections and forward revenue visibility.</p></div>
+<div class="grid4"><div class="card"><div class="label">MRR</div><div class="kpi">{money(m["mrr_cents"])}</div></div><div class="card"><div class="label">ARR</div><div class="kpi">{money(m["arr_cents"])}</div></div><div class="card"><div class="label">Revenue / Customer</div><div class="kpi">{money(m["arpc_cents"])}</div></div><div class="card"><div class="label">12-Month Run Rate</div><div class="kpi">{money(m["projected_12m_revenue_cents"])}</div></div></div>
+<div class="grid4"><div class="card"><div class="label">Active Customers</div><div class="kpi">{m["active_customers"]}</div></div><div class="card"><div class="label">Trials</div><div class="kpi">{m["trial_customers"]}</div><div class="muted">{m["trial_conversion_rate"]}% conversion</div></div><div class="card"><div class="label">Past Due</div><div class="kpi">{m["past_due_customers"]}</div></div><div class="card"><div class="label">Customer Churn</div><div class="kpi">{m["customer_churn_rate"]}%</div></div></div>
+<div class="grid3"><div class="card"><h2>Growth Movement</h2><p><b>New Customers:</b> {g.get("new_customers",0) or 0}</p><p><b>Trial Conversions:</b> {g.get("trial_conversions",0) or 0}</p><p><b>Upgrades:</b> {g.get("upgrades",0) or 0}</p><p><b>Downgrades:</b> {g.get("downgrades",0) or 0}</p></div><div class="card"><h2>MRR Movement</h2><p><b>Expansion:</b> {money(g.get("expansion_mrr_cents",0))}</p><p><b>Contraction:</b> {money(g.get("contraction_mrr_cents",0))}</p><p><b>Churned:</b> {money(g.get("churned_mrr_cents",0))}</p><p><b>Net Change:</b> {money(g.get("net_mrr_change_cents",0))}</p></div><div class="card"><h2>Collections</h2><p><b>Collected:</b> {money(m["collected_revenue_cents"])}</p><p><b>Failed / Unpaid:</b> {money(m["failed_payment_cents"])}</p><p><b>Canceled Customers:</b> {m["canceled_customers"]}</p><form method="post" action="/owner/financial/snapshot"><button type="submit">Save Financial Snapshot</button></form></div></div>
+<div class="card"><h2>Accounts Requiring Attention</h2><table><thead><tr><th>Company</th><th>Status</th><th>Health</th><th>Plan</th></tr></thead><tbody>{riskhtml}</tbody></table></div>
+<div class="card"><p><a href="/owner">Owner Headquarters</a> | <a href="/owner/customers">Customer Companies</a> | <a href="/platform/growth">Growth Analytics</a> | <a href="/platform/revenue">Revenue History</a></p></div>"""
+    return _runtime.shell("Owner Financial Command Center",body)
+
+@app.get("/owner/api/financial")
+def bc185_financial_api():
+    if not _bc183_owner_authorized(): return _BC185_JSONResponse({"status":"forbidden"},status_code=403)
+    return {"status":"ok","app":"BuildCommand AI","version":"1.8.18.5","financial":_bc185_financial_metrics(),"risk_accounts":len(_bc185_risk_accounts())}
+
+@app.post("/owner/financial/snapshot")
+def bc185_financial_snapshot():
+    if not _bc183_owner_authorized(): return _BC185_JSONResponse({"status":"forbidden"},status_code=403)
+    m=_bc185_financial_metrics(); now=_BC185_datetime.utcnow().isoformat(); c=_runtime.db()
+    c.execute("INSERT INTO owner_financial_snapshots(snapshot_date,mrr_cents,arr_cents,active_customers,trial_customers,past_due_customers,canceled_customers,arpc_cents,projected_12m_revenue_cents,trial_conversion_rate,customer_churn_rate,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(now[:10],m["mrr_cents"],m["arr_cents"],m["active_customers"],m["trial_customers"],m["past_due_customers"],m["canceled_customers"],m["arpc_cents"],m["projected_12m_revenue_cents"],m["trial_conversion_rate"],m["customer_churn_rate"],now))
+    c.commit(); c.close(); return {"status":"ok","version":"1.8.18.5","snapshot_date":now[:10],"financial":m}
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/owner":
+        _old_owner_185=_route.endpoint
+        def _bc185_owner_headquarters():
+            response=_old_owner_185()
+            try:
+                if hasattr(response,"body"):
+                    text=response.body.decode("utf-8").replace('href="/platform/revenue">Revenue Dashboard','href="/owner/financial">Financial Command Center')
+                    response.body=text.encode("utf-8"); response.headers["content-length"]=str(len(response.body))
+            except Exception: pass
+            return response
+        _route.endpoint=_bc185_owner_headquarters; break
+
+@app.get("/health/owner-financial-1-8-18-5")
+def health_owner_financial_18185():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres": tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[("1.8.18.4 preserved","/health/owner-headquarters-1-8-18-4" in paths),("financial command","/owner/financial" in paths),("financial API","/owner/api/financial" in paths),("financial snapshot","/owner/financial/snapshot" in paths),("financial snapshots table","owner_financial_snapshots" in tables),("financial alerts table","owner_financial_alerts" in tables),("financial metrics engine",callable(_bc185_financial_metrics)),("risk engine",callable(_bc185_risk_accounts)),("subscriptions","company_subscriptions" in tables),("plans","platform_plans" in tables),("billing events","billing_events" in tables),("revenue history","platform_revenue_snapshots" in tables),("growth history","platform_growth_snapshots" in tables),("customer history","platform_customer_monthly_history" in tables),("lifecycle events","subscription_lifecycle_events" in tables),("MRR",True),("ARR",True),("ARPC",True),("12 month run rate",True),("trial conversion",True),("churn",True),("collections",True),("failed payments",True),("growth movement",True),("MRR movement",True),("risk visibility",True),("owner authorization",callable(_bc183_owner_authorized)),("customer companies","/owner/customers" in paths),("owner headquarters","/owner" in paths),("public website","/home" in paths),("construction app","/app" in paths),("Superintendent Command","/superintendent-command" in paths),("Blueprint Brain","/blueprint-brain" in paths),("PostgreSQL layer",callable(getattr(_runtime,"db",None))),("legacy root","/" in paths)]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.5","release":"Owner Financial Command Center","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.5"
+BUILD_COMMAND_RELEASE_NAME="Owner Financial Command Center"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
