@@ -8432,3 +8432,176 @@ BUILD_COMMAND_RELEASE="1.8.18.3"
 BUILD_COMMAND_RELEASE_NAME="Dedicated Owner Headquarters & Role-Based Landing"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.4 - Owner Headquarters 2.0 / Customer Company Control
+# ============================================================
+from fastapi import Form as _BC184_Form
+from fastapi.responses import HTMLResponse as _BC184_HTMLResponse, RedirectResponse as _BC184_RedirectResponse, JSONResponse as _BC184_JSONResponse
+from datetime import datetime as _BC184_datetime
+
+def _bc184_init():
+    c=_runtime.db(); c.executescript('''
+    CREATE TABLE IF NOT EXISTS owner_customer_actions(
+      id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, actor_user_id INTEGER,
+      action TEXT NOT NULL, old_value TEXT, new_value TEXT, detail TEXT, created TEXT
+    );
+    CREATE TABLE IF NOT EXISTS owner_customer_health_snapshots(
+      id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, health_score INTEGER DEFAULT 100,
+      health_status TEXT, seats_used INTEGER DEFAULT 0, projects_used INTEGER DEFAULT 0,
+      ai_requests INTEGER DEFAULT 0, last_activity TEXT, created TEXT
+    );
+    '''); c.commit(); c.close()
+_bc184_init()
+
+def _bc184_customer_rows():
+    c=_runtime.db()
+    companies=[dict(r) for r in c.execute("SELECT * FROM companies ORDER BY name").fetchall()]
+    out=[]
+    for co in companies:
+        cid=co["id"]
+        sub=c.execute("SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",(cid,)).fetchone()
+        sub=dict(sub) if sub else {}
+        plan={}
+        if sub.get("plan_code"):
+            pr=c.execute("SELECT * FROM platform_plans WHERE code=?",(sub["plan_code"],)).fetchone()
+            plan=dict(pr) if pr else {}
+        seats=int(c.execute("SELECT COUNT(*) AS n FROM users WHERE company_id=?",(cid,)).fetchone()["n"])
+        projects=int(c.execute("SELECT COUNT(*) AS n FROM projects WHERE company_id=?",(cid,)).fetchone()["n"])
+        admin=c.execute("SELECT email,display_name,role FROM users WHERE company_id=? ORDER BY CASE WHEN lower(role) IN ('owner','admin') THEN 0 ELSE 1 END,id LIMIT 1",(cid,)).fetchone()
+        admin=dict(admin) if admin else {}
+        usage=c.execute("SELECT * FROM platform_usage_monthly WHERE company_id=? ORDER BY usage_month DESC LIMIT 1",(cid,)).fetchone()
+        usage=dict(usage) if usage else {}
+        activity=c.execute("SELECT MAX(created) AS last_activity FROM platform_usage_events WHERE company_id=?",(cid,)).fetchone()
+        last_activity=(activity["last_activity"] if activity else None) or sub.get("updated") or co.get("created")
+        seat_limit=sub.get("seat_limit_override") or plan.get("seat_limit") or 0
+        project_limit=sub.get("project_limit_override") or plan.get("project_limit") or 0
+        status=str(sub.get("status") or "unconfigured")
+        score=100
+        if status.lower() in ("past_due","past due"): score-=35
+        if status.lower() in ("suspended","canceled","cancelled"): score-=50
+        if seat_limit and seats>=int(seat_limit): score-=15
+        if project_limit and projects>=int(project_limit): score-=15
+        health="Healthy" if score>=85 else ("Watch" if score>=60 else "Action Required")
+        out.append({"company":co,"subscription":sub,"plan":plan,"seats":seats,"projects":projects,"admin":admin,"usage":usage,
+                    "last_activity":last_activity,"seat_limit":seat_limit,"project_limit":project_limit,"health_score":max(0,score),"health":health})
+    c.close(); return out
+
+def _bc184_company(company_id):
+    for row in _bc184_customer_rows():
+        if int(row["company"]["id"])==int(company_id): return row
+    return None
+
+def _bc184_log(company_id,action,old_value="",new_value="",detail=""):
+    u=_runtime.current_user(); now=_BC184_datetime.utcnow().isoformat(); c=_runtime.db()
+    c.execute("INSERT INTO owner_customer_actions(company_id,actor_user_id,action,old_value,new_value,detail,created) VALUES(?,?,?,?,?,?,?)",
+              (company_id,u["id"] if u else None,action,str(old_value or ""),str(new_value or ""),detail,now))
+    try: c.execute("INSERT INTO platform_company_control_events(company_id,actor_user_id,action,old_value,new_value,detail,created) VALUES(?,?,?,?,?,?,?)",(company_id,u["id"] if u else None,action,str(old_value or ""),str(new_value or ""),detail,now))
+    except Exception: pass
+    c.commit(); c.close()
+
+@app.get("/owner/customers",response_class=_BC184_HTMLResponse)
+def bc184_owner_customers():
+    if not _bc183_owner_authorized(): return _BC184_HTMLResponse("Platform owner access required.",status_code=403)
+    rows=_bc184_customer_rows(); trs=""
+    for x in rows:
+        co=x["company"]; sub=x["subscription"]; plan=x["plan"]; admin=x["admin"]
+        price=int(plan.get("monthly_price_cents") or 0)/100
+        trs+=f'<tr><td><b>{_runtime.esc(co["name"])}</b><br><span class="muted">{_runtime.esc(admin.get("email") or "No admin")}</span></td><td>{_runtime.esc(plan.get("name") or sub.get("plan_code") or "No plan")}</td><td>${price:,.2f}</td><td>{_runtime.esc(sub.get("status") or "Unconfigured")}</td><td>{x["seats"]}/{x["seat_limit"] or "-"}</td><td>{x["projects"]}/{x["project_limit"] or "-"}</td><td>{x["health"]} ({x["health_score"]})</td><td><a href="/owner/customers/{co["id"]}">Open Customer</a></td></tr>'
+    body=f'<div class="hero"><div class="eyebrow">OWNER HEADQUARTERS 2.0</div><h1>Customer Companies</h1><p>Control every company using BuildCommand from one owner-only business screen.</p></div><div class="card"><table><thead><tr><th>Company</th><th>Plan</th><th>Monthly</th><th>Status</th><th>Seats</th><th>Projects</th><th>Health</th><th></th></tr></thead><tbody>{trs or "<tr><td colspan=8>No customer companies found.</td></tr>"}</tbody></table></div><div class="card"><p><a href="/owner">Back to Owner Headquarters</a></p></div>'
+    return _runtime.shell("Customer Companies",body)
+
+@app.get("/owner/customers/{company_id}",response_class=_BC184_HTMLResponse)
+def bc184_owner_customer(company_id:int):
+    if not _bc183_owner_authorized(): return _BC184_HTMLResponse("Platform owner access required.",status_code=403)
+    x=_bc184_company(company_id)
+    if not x: return _BC184_HTMLResponse("Customer company not found.",status_code=404)
+    co=x["company"]; sub=x["subscription"]; plan=x["plan"]; admin=x["admin"]; usage=x["usage"]
+    c=_runtime.db(); plans=[dict(r) for r in c.execute("SELECT * FROM platform_plans WHERE COALESCE(active,1)=1 ORDER BY monthly_price_cents").fetchall()]; notes=[dict(r) for r in c.execute("SELECT * FROM platform_company_notes WHERE company_id=? ORDER BY id DESC LIMIT 10",(company_id,)).fetchall()]; events=[dict(r) for r in c.execute("SELECT * FROM owner_customer_actions WHERE company_id=? ORDER BY id DESC LIMIT 15",(company_id,)).fetchall()]; c.close()
+    opts="".join(f'<option value="{_runtime.esc(p["code"])}" {"selected" if p["code"]==sub.get("plan_code") else ""}>{_runtime.esc(p["name"])} - ${int(p.get("monthly_price_cents") or 0)/100:,.2f}/mo</option>' for p in plans)
+    notehtml="".join(f'<p>{_runtime.esc(n["note"])}<br><span class="muted">{_runtime.esc(n.get("created") or "")}</span></p>' for n in notes) or "<p>No owner notes yet.</p>"
+    eventhtml="".join(f'<p><b>{_runtime.esc(e["action"])}</b> {_runtime.esc(e.get("old_value") or "")} → {_runtime.esc(e.get("new_value") or "")}<br><span class="muted">{_runtime.esc(e.get("detail") or "")} {_runtime.esc(e.get("created") or "")}</span></p>' for e in events) or "<p>No owner actions yet.</p>"
+    price=int(plan.get("monthly_price_cents") or 0)/100
+    body=f'''<div class="hero"><div class="eyebrow">CUSTOMER CONTROL</div><h1>{_runtime.esc(co["name"])}</h1><p>{_runtime.esc(admin.get("email") or "No company admin")} · {_runtime.esc(sub.get("status") or "Unconfigured")}</p></div>
+<div class="grid4"><div class="card"><div class="label">Plan</div><div class="kpi">{_runtime.esc(plan.get("name") or sub.get("plan_code") or "-")}</div><div class="muted">${price:,.2f}/mo</div></div><div class="card"><div class="label">Seats</div><div class="kpi">{x["seats"]}/{x["seat_limit"] or "-"}</div></div><div class="card"><div class="label">Projects</div><div class="kpi">{x["projects"]}/{x["project_limit"] or "-"}</div></div><div class="card"><div class="label">Health</div><div class="kpi">{x["health_score"]}</div><div class="muted">{x["health"]}</div></div></div>
+<div class="grid3"><div class="card"><h2>Subscription Control</h2><form method="post" action="/owner/customers/{company_id}/plan"><label>Plan</label><br><select name="plan_code">{opts}</select><br><br><button type="submit">Change Plan</button></form><br><form method="post" action="/owner/customers/{company_id}/status"><select name="status"><option>active</option><option>trialing</option><option>past_due</option><option>suspended</option><option>canceled</option></select><br><br><button type="submit">Change Status</button></form></div>
+<div class="card"><h2>Usage</h2><p><b>AI Requests:</b> {usage.get("ai_requests",0) or 0}</p><p><b>Blueprint Runs:</b> {usage.get("blueprint_runs",0) or 0}</p><p><b>Document Uploads:</b> {usage.get("document_uploads",0) or 0}</p><p><b>Last Activity:</b> {_runtime.esc(x.get("last_activity") or "-")}</p></div>
+<div class="card"><h2>Limits</h2><p><b>Seat Limit:</b> {x["seat_limit"] or "Plan default/unlimited"}</p><p><b>Project Limit:</b> {x["project_limit"] or "Plan default/unlimited"}</p><p><b>Trial Ends:</b> {_runtime.esc(sub.get("trial_ends_at") or "-")}</p><p><b>Period Ends:</b> {_runtime.esc(sub.get("current_period_end") or "-")}</p></div></div>
+<div class="grid2"><div class="card"><h2>Owner Notes</h2><form method="post" action="/owner/customers/{company_id}/note"><textarea name="note" rows="4" style="width:100%" required></textarea><br><button type="submit">Add Owner Note</button></form>{notehtml}</div><div class="card"><h2>Owner Action History</h2>{eventhtml}</div></div>
+<div class="card"><p><a href="/owner/customers">All Customer Companies</a> · <a href="/owner">Owner Headquarters</a></p></div>'''
+    return _runtime.shell("Customer Control",body)
+
+@app.post("/owner/customers/{company_id}/plan")
+def bc184_change_plan(company_id:int,plan_code:str=_BC184_Form(...)):
+    if not _bc183_owner_authorized(): return _BC184_HTMLResponse("Platform owner access required.",status_code=403)
+    x=_bc184_company(company_id)
+    if not x: return _BC184_HTMLResponse("Customer company not found.",status_code=404)
+    c=_runtime.db(); p=c.execute("SELECT code FROM platform_plans WHERE code=? AND COALESCE(active,1)=1",(plan_code,)).fetchone()
+    if not p: c.close(); return _BC184_HTMLResponse("Plan not found.",status_code=404)
+    old=x["subscription"].get("plan_code") or ""
+    sub=c.execute("SELECT id FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",(company_id,)).fetchone(); now=_BC184_datetime.utcnow().isoformat()
+    if sub: c.execute("UPDATE company_subscriptions SET plan_code=?,updated=? WHERE id=?",(plan_code,now,sub["id"]))
+    else: c.execute("INSERT INTO company_subscriptions(company_id,plan_code,status,created,updated) VALUES(?,?,?,?,?)",(company_id,plan_code,"active",now,now))
+    c.commit(); c.close(); _bc184_log(company_id,"PLAN_CHANGE",old,plan_code,"Owner changed customer plan")
+    return _BC184_RedirectResponse(f"/owner/customers/{company_id}",status_code=303)
+
+@app.post("/owner/customers/{company_id}/status")
+def bc184_change_status(company_id:int,status:str=_BC184_Form(...)):
+    if not _bc183_owner_authorized(): return _BC184_HTMLResponse("Platform owner access required.",status_code=403)
+    allowed={"active","trialing","past_due","suspended","canceled"}
+    status=status.strip().lower()
+    if status not in allowed: return _BC184_HTMLResponse("Invalid subscription status.",status_code=400)
+    x=_bc184_company(company_id)
+    if not x: return _BC184_HTMLResponse("Customer company not found.",status_code=404)
+    old=x["subscription"].get("status") or ""; c=_runtime.db(); sub=c.execute("SELECT id FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",(company_id,)).fetchone(); now=_BC184_datetime.utcnow().isoformat()
+    if sub: c.execute("UPDATE company_subscriptions SET status=?,updated=? WHERE id=?",(status,now,sub["id"]))
+    else: c.execute("INSERT INTO company_subscriptions(company_id,plan_code,status,created,updated) VALUES(?,?,?,?,?)",(company_id,"starter",status,now,now))
+    c.commit(); c.close(); _bc184_log(company_id,"STATUS_CHANGE",old,status,"Owner changed customer subscription status")
+    return _BC184_RedirectResponse(f"/owner/customers/{company_id}",status_code=303)
+
+@app.post("/owner/customers/{company_id}/note")
+def bc184_add_note(company_id:int,note:str=_BC184_Form(...)):
+    if not _bc183_owner_authorized(): return _BC184_HTMLResponse("Platform owner access required.",status_code=403)
+    u=_runtime.current_user(); note=note.strip()
+    if not note: return _BC184_HTMLResponse("Note is required.",status_code=400)
+    c=_runtime.db(); c.execute("INSERT INTO platform_company_notes(company_id,actor_user_id,note,created) VALUES(?,?,?,?)",(company_id,u["id"],note,_BC184_datetime.utcnow().isoformat())); c.commit(); c.close()
+    _bc184_log(company_id,"OWNER_NOTE","","",note[:250])
+    return _BC184_RedirectResponse(f"/owner/customers/{company_id}",status_code=303)
+
+@app.get("/owner/api/customers")
+def bc184_customers_api():
+    if not _bc183_owner_authorized(): return _BC184_JSONResponse({"status":"forbidden"},status_code=403)
+    rows=_bc184_customer_rows()
+    return {"status":"ok","version":"1.8.18.4","customers":[{"company_id":x["company"]["id"],"company":x["company"]["name"],"admin_email":x["admin"].get("email"),"plan":x["subscription"].get("plan_code"),"subscription_status":x["subscription"].get("status"),"monthly_price_cents":x["plan"].get("monthly_price_cents",0),"seats_used":x["seats"],"seat_limit":x["seat_limit"],"projects_used":x["projects"],"project_limit":x["project_limit"],"health_score":x["health_score"],"health":x["health"],"last_activity":x["last_activity"]} for x in rows]}
+
+# Add Customer Companies as the primary control link on the owner headquarters.
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/owner":
+        _old_owner_184=_route.endpoint
+        def _bc184_owner_headquarters():
+            response=_old_owner_184()
+            try:
+                if hasattr(response,"body"):
+                    text=response.body.decode("utf-8")
+                    text=text.replace('href="/platform/operations">Customer Command Center','href="/owner/customers">Customer Companies')
+                    response.body=text.encode("utf-8"); response.headers["content-length"]=str(len(response.body))
+            except Exception: pass
+            return response
+        _route.endpoint=_bc184_owner_headquarters
+        break
+
+@app.get("/health/owner-headquarters-1-8-18-4")
+def health_owner_headquarters_18184():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres": tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[("1.8.18.3 owner headquarters preserved","/health/owner-headquarters-1-8-18-3" in paths),("customer companies page","/owner/customers" in paths),("customer detail page","/owner/customers/{company_id}" in paths),("customer API","/owner/api/customers" in paths),("plan control","/owner/customers/{company_id}/plan" in paths),("status control","/owner/customers/{company_id}/status" in paths),("owner note control","/owner/customers/{company_id}/note" in paths),("owner customer actions table","owner_customer_actions" in tables),("customer health snapshots table","owner_customer_health_snapshots" in tables),("customer aggregation engine",callable(_bc184_customer_rows)),("company lookup engine",callable(_bc184_company)),("owner audit logger",callable(_bc184_log)),("companies preserved","companies" in tables),("users preserved","users" in tables),("projects preserved","projects" in tables),("subscriptions preserved","company_subscriptions" in tables),("plans preserved","platform_plans" in tables),("usage monthly preserved","platform_usage_monthly" in tables),("usage events preserved","platform_usage_events" in tables),("company notes preserved","platform_company_notes" in tables),("company control audit preserved","platform_company_control_events" in tables),("owner authorization preserved",callable(_bc183_owner_authorized)),("owner headquarters preserved","/owner" in paths),("revenue preserved","/platform/revenue" in paths),("growth preserved","/platform/growth" in paths),("subscription requests preserved","/platform/subscription-requests" in paths),("public site preserved","/home" in paths),("construction app preserved","/app" in paths),("Superintendent Command preserved","/superintendent-command" in paths),("Blueprint Brain preserved","/blueprint-brain" in paths),("PostgreSQL layer preserved",callable(getattr(_runtime,"db",None))),("legacy root preserved","/" in paths)]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.4","release":"Owner Headquarters 2.0 - Customer Company Control","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.4"
+BUILD_COMMAND_RELEASE_NAME="Owner Headquarters 2.0 - Customer Company Control"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
