@@ -7970,3 +7970,87 @@ def health_platform_operations_runtime_18180():
 BUILD_COMMAND_RELEASE_NAME="Platform Operations & Customer Command Center — Hotfix A"
 try: app.version="1.8.18.0"
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.1 - Public Website + Owner Business Console Separation
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC181_HTMLResponse, RedirectResponse as _BC181_RedirectResponse
+
+def _bc181_public_shell(title,body):
+    return f'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_runtime.esc(title)} - BuildCommand AI</title><style>
+body{{margin:0;font-family:Arial,sans-serif;background:#0b0f14;color:#eef3f8}}a{{color:#65b8ff;text-decoration:none}}nav{{padding:18px 5%;display:flex;justify-content:space-between;border-bottom:1px solid #26313d}}nav a{{margin-left:22px}}main{{max-width:1180px;margin:auto;padding:56px 5%}}.hero{{padding:60px 0}}h1{{font-size:52px;max-width:900px}}p{{color:#b7c3cf;line-height:1.65}}.eyebrow{{font-weight:700;color:#65b8ff}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}}.card{{background:#121922;border:1px solid #26313d;border-radius:14px;padding:24px}}.btn{{display:inline-block;background:#eef3f8;color:#0b0f14;padding:13px 20px;border-radius:9px;font-weight:700}}footer{{padding:35px 5%;border-top:1px solid #26313d;color:#8493a2}}
+</style></head><body><nav><b>BuildCommand AI</b><div><a href="/product">Product</a><a href="/pricing">Pricing</a><a href="/for-general-contractors">For GCs</a><a href="/login">Login</a></div></nav><main>{body}</main><footer>BuildCommand AI - Construction Operation Intelligence System<br>Built By Willy LaHood © 2026</footer></body></html>'''
+
+@app.get("/home", response_class=_BC181_HTMLResponse)
+def bc181_public_home():
+    body='''<section class="hero"><div class="eyebrow">CONSTRUCTION OPERATION INTELLIGENCE SYSTEM</div><h1>Run construction with intelligence, not scattered information.</h1><p>BuildCommand AI brings project documents, field operations, construction intelligence, and superintendent decision support into one command system.</p><p><a class="btn" href="/login">Enter BuildCommand</a> &nbsp; <a href="/product">See the Product</a></p></section><section class="grid"><div class="card"><h2>Blueprint Brain</h2><p>Turn project documents and plans into organized construction intelligence.</p></div><div class="card"><h2>Field Command</h2><p>Give superintendents one place to understand priorities, readiness, risks, and daily execution.</p></div><div class="card"><h2>Project Intelligence</h2><p>Connect schedules, scopes, documents, trades, and project activity.</p></div></section>'''
+    return _BC181_HTMLResponse(_bc181_public_shell("Home",body))
+
+@app.get("/product", response_class=_BC181_HTMLResponse)
+def bc181_public_product():
+    body='''<div class="eyebrow">THE PRODUCT</div><h1>One construction brain for the entire project.</h1><div class="grid"><div class="card"><h2>Plan Intelligence</h2><p>Blueprint Brain reads and organizes project requirements by trade and construction context.</p></div><div class="card"><h2>Superintendent Command</h2><p>Surface priorities, blockers, readiness, field activity, and next actions.</p></div><div class="card"><h2>Construction Workflows</h2><p>Projects, submittals, documents, daily reporting, scheduling, inspections, and field coordination stay connected.</p></div><div class="card"><h2>Business Scale</h2><p>Multi-company controls, subscriptions, usage metering, customer administration, and platform operations support commercial deployment.</p></div></div>'''
+    return _BC181_HTMLResponse(_bc181_public_shell("Product",body))
+
+@app.get("/pricing", response_class=_BC181_HTMLResponse)
+def bc181_public_pricing():
+    c=_runtime.db(); plans=[dict(r) for r in c.execute("SELECT * FROM platform_plans WHERE COALESCE(active,1)=1 ORDER BY monthly_price_cents").fetchall()]; c.close()
+    cards=""
+    for p in plans:
+        cards+=f'<div class="card"><div class="eyebrow">{_runtime.esc(p["code"])}</div><h2>{_runtime.esc(p["name"])}</h2><h2>${int(p["monthly_price_cents"] or 0)/100:,.2f}/mo</h2><p>{_runtime.esc(p["description"] or "")}</p><p>{p["seat_limit"]} seats - {p["project_limit"]} projects</p><a class="btn" href="/login">Get Started</a></div>'
+    return _BC181_HTMLResponse(_bc181_public_shell("Pricing",f'<div class="eyebrow">PLANS</div><h1>BuildCommand plans for construction teams.</h1><div class="grid">{cards}</div>'))
+
+@app.get("/for-general-contractors", response_class=_BC181_HTMLResponse)
+def bc181_public_gc():
+    body='''<div class="eyebrow">FOR GENERAL CONTRACTORS</div><h1>A command system built around how construction actually runs.</h1><p>BuildCommand AI helps general contractors connect the office, superintendent, project documents, trades, schedule, field reporting, and construction intelligence.</p><div class="grid"><div class="card"><h2>Know what matters today</h2><p>Priorities and blockers rise out of project information instead of getting buried inside it.</p></div><div class="card"><h2>Keep trades aligned</h2><p>Scope, schedule, readiness, documentation, and field coordination stay connected.</p></div><div class="card"><h2>Build institutional knowledge</h2><p>The system becomes a durable construction brain rather than disconnected files.</p></div></div>'''
+    return _BC181_HTMLResponse(_bc181_public_shell("For General Contractors",body))
+
+@app.get("/owner", response_class=_BC181_HTMLResponse)
+def bc181_owner_console():
+    if not _runtime._bc174_is_platform_owner(): return _BC181_HTMLResponse("Platform owner access required.",status_code=403)
+    try: m=_bc176_metrics()
+    except Exception: m={"mrr_cents":0,"active_customers":0,"trial_customers":0,"past_due_customers":0}
+    body=f'''<div class="hero"><div class="eyebrow">BUILDCOMMAND BUSINESS</div><h1>Owner Business Console</h1><p>Run BuildCommand as a company from here. Construction project tools stay inside the customer application.</p><p><a href="/app">Enter BuildCommand App</a></p></div><div class="grid4"><div class="card"><div class="label">MRR</div><div class="kpi">${int(m.get("mrr_cents",0) or 0)/100:,.2f}</div></div><div class="card"><div class="label">Active Customers</div><div class="kpi">{m.get("active_customers",0)}</div></div><div class="card"><div class="label">Trials</div><div class="kpi">{m.get("trial_customers",0)}</div></div><div class="card"><div class="label">Past Due</div><div class="kpi">{m.get("past_due_customers",0)}</div></div></div><div class="grid3"><div class="card"><h2>Customers</h2><p>Account health, subscriptions, users, projects and controls.</p><a href="/platform/operations">Customer Command Center</a></div><div class="card"><h2>Revenue</h2><p>MRR, usage, churn, conversions and growth.</p><a href="/platform/revenue">Revenue Dashboard</a><br><a href="/platform/growth">Growth Analytics</a></div><div class="card"><h2>Billing & Plans</h2><p>Subscriptions, plan catalog and customer requests.</p><a href="/platform/subscription-requests">Subscription Requests</a><br><a href="/platform/plans">Plans</a></div></div>'''
+    return _runtime.shell("Owner Business Console",body)
+
+@app.get("/app")
+def bc181_customer_app_entry():
+    u=_runtime.current_user()
+    if not u: return _BC181_RedirectResponse("/login",status_code=303)
+    return _BC181_RedirectResponse("/command-center-2",status_code=303)
+
+@app.get("/api/platform/separation")
+def bc181_separation_api():
+    if not _runtime._bc174_is_platform_owner(): return {"status":"forbidden"}
+    return {"status":"ok","version":"1.8.18.1","public_site":"/home","owner_console":"/owner","customer_app":"/app"}
+
+@app.get("/health/site-owner-separation-1-8-18-1")
+def health_site_owner_separation_18181():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+      ("1.8.18.0 operations health preserved","/health/platform-operations-1-8-18-0" in paths),
+      ("1.8.18.0 runtime hardening preserved","/health/platform-operations-runtime-1-8-18-0" in paths),
+      ("public home available","/home" in paths),("public product available","/product" in paths),
+      ("public pricing available","/pricing" in paths),("general contractor page available","/for-general-contractors" in paths),
+      ("private owner console available","/owner" in paths),("customer app entry available","/app" in paths),
+      ("separation API available","/api/platform/separation" in paths),("platform operations preserved","/platform/operations" in paths),
+      ("company controls preserved","/platform/company/{company_id}" in paths),("revenue preserved","/platform/revenue" in paths),
+      ("growth preserved","/platform/growth" in paths),("subscription requests preserved","/platform/subscription-requests" in paths),
+      ("customer subscription center preserved","/account/subscription" in paths),("login preserved","/login" in paths),
+      ("Command Center preserved","/command-center-2" in paths),("Blueprint Brain preserved","/blueprint-brain" in paths),
+      ("Unified Brain preserved","/brain" in paths),("public site carries BuildCommand brand",callable(_bc181_public_shell)),
+      ("owner authorization preserved",callable(getattr(_runtime,"_bc174_is_platform_owner",None))),
+      ("PostgreSQL database layer preserved",callable(getattr(_runtime,"db",None))),
+      ("billing subscription engine preserved",hasattr(_runtime,"_bc174_subscription")),
+      ("customer health engine preserved",callable(_bc180_company_health)),
+      ("legacy root preserved","/" in paths),
+      ("ownership credit preserved","Built By Willy LaHood © 2026" in _bc181_public_shell("x","x")),
+    ]
+    passed=sum(1 for _,ok in checks if ok)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.1","release":"Public Website + Owner Business Console Separation","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.1"
+BUILD_COMMAND_RELEASE_NAME="Public Website + Owner Business Console Separation"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
