@@ -8054,3 +8054,103 @@ BUILD_COMMAND_RELEASE="1.8.18.1"
 BUILD_COMMAND_RELEASE_NAME="Public Website + Owner Business Console Separation"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+# BuildCommand AI 1.8.18.2 - Superintendent Command Intelligence 3.0
+from fastapi.responses import HTMLResponse as _BC182_HTMLResponse, JSONResponse as _BC182_JSONResponse
+from datetime import date as _BC182_date, datetime as _BC182_datetime
+
+def _bc182_init():
+    c=_runtime.db(); c.executescript("""
+    CREATE TABLE IF NOT EXISTS superintendent_command_snapshots(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,command_date TEXT NOT NULL,command_score INTEGER DEFAULT 100,critical_count INTEGER DEFAULT 0,warning_count INTEGER DEFAULT 0,action_count INTEGER DEFAULT 0,summary TEXT,created TEXT);
+    CREATE TABLE IF NOT EXISTS superintendent_command_actions(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,source_type TEXT,source_id INTEGER,priority INTEGER DEFAULT 50,trade TEXT,title TEXT NOT NULL,reason TEXT,recommended_action TEXT,due TEXT,status TEXT DEFAULT 'OPEN',created TEXT,updated TEXT);
+    """); c.commit(); c.close()
+_bc182_init()
+
+def _bc182_rows(c,sql,params=()):
+    try: return [dict(r) for r in c.execute(sql,params).fetchall()]
+    except Exception: return []
+
+def _bc182_command(project_id):
+    u=_runtime.current_user()
+    if not u: return None
+    c=_runtime.db(); p=c.execute("SELECT * FROM projects WHERE id=? AND company_id=?",(project_id,u["company_id"])).fetchone()
+    if not p: c.close(); return None
+    acts=_bc182_rows(c,"SELECT * FROM activities WHERE project_id=? ORDER BY start,name",(project_id,))
+    ready={r["activity_id"]:r for r in _bc182_rows(c,"SELECT * FROM activity_readiness WHERE project_id=?",(project_id,))}
+    issues=_bc182_rows(c,"SELECT * FROM project_issues WHERE project_id=? AND lower(COALESCE(status,'')) NOT IN ('closed','resolved','complete','completed')",(project_id,))
+    mr=_bc182_rows(c,"SELECT * FROM make_ready WHERE project_id=? AND lower(COALESCE(status,'')) NOT IN ('closed','complete','completed')",(project_id,))
+    subs=_bc182_rows(c,"SELECT * FROM submittals WHERE project_id=? AND lower(COALESCE(status,'')) NOT IN ('approved','closed','complete','completed')",(project_id,))
+    risks=_bc182_rows(c,"SELECT * FROM risks WHERE project_id=? ORDER BY score DESC",(project_id,))
+    ins=_bc182_rows(c,"SELECT * FROM inspections_tracker WHERE project_id=?",(project_id,))
+    fc=_bc182_rows(c,"SELECT * FROM bc_schedule_forecasts_v2 WHERE project_id=? ORDER BY id DESC",(project_id,))
+    daily=_bc182_rows(c,"SELECT * FROM daily_reports WHERE project_id=? ORDER BY report_date DESC LIMIT 5",(project_id,)); c.close()
+    today=_BC182_date.today().isoformat(); actions=[]
+    def add(pri,typ,sid,title,reason,cmd,trade="",due=""): actions.append({"priority":pri,"source_type":typ,"source_id":sid,"title":title,"reason":reason,"recommended_action":cmd,"trade":trade or "Project Team","due":due or ""})
+    for x in issues: add(95 if str(x.get("priority") or "").upper() in ("CRITICAL","URGENT","HIGH") else 78,"ISSUE",x.get("id"),x.get("title") or "Open project issue",x.get("description") or x.get("issue_type") or "Open issue requires resolution","Confirm owner, required decision, and closure path before affected work proceeds.",x.get("owner") or "",x.get("due") or "")
+    for x in mr: add(92 if str(x.get("priority") or "").upper() in ("CRITICAL","URGENT","HIGH") else 74,"MAKE_READY",x.get("id"),x.get("title") or "Make-ready constraint",x.get("reason") or "Activity is not fully ready","Clear the constraint and verify the activity is executable before releasing the crew.","",x.get("due") or "")
+    for a in acts:
+        r=ready.get(a["id"]); missing=[]
+        if r:
+            for key,label in (("drawings","drawings"),("material","material"),("manpower","manpower"),("predecessor","predecessor"),("access_ready","access"),("inspection","inspection"),("equipment","equipment")):
+                if str(r.get(key) or "").strip().lower() in ("no","not ready","missing","blocked","0","false"): missing.append(label)
+        if missing: add(88,"READINESS",a["id"],str(a["name"])+" is not ready","Missing/blocked: "+", ".join(missing),"Assign each missing prerequisite today and verify readiness before releasing the activity.",a.get("trade") or "",a.get("start") or "")
+    for x in risks:
+        sc=int(float(x.get("score") or 0))
+        if sc>=70: add(min(99,70+sc//4),"RISK",x.get("id"),"High-risk activity requires attention",x.get("explanation") or "Risk score "+str(sc),"Review the risk with the responsible trade and establish a dated mitigation action.")
+    for x in subs:
+        due=str(x.get("due_date") or "")
+        if due and due<=today: add(84,"SUBMITTAL",x.get("id"),"Overdue submittal: "+str(x.get("title") or "Untitled"),"Due "+due+"; status "+str(x.get("status") or "open"),"Escalate to the responsible party and confirm when approval will be available.",x.get("responsible_party") or "",due)
+    for x in fc:
+        delay=int(float(x.get("delay_days") or 0))
+        if delay>0: add(min(96,72+delay),"SCHEDULE",x.get("id"),"Schedule forecast shows "+str(delay)+" day delay",x.get("reason") or "Forecast finish is slipping","Identify the controlling constraint, recovery option, and responsible trade.")
+    for x in ins:
+        if str(x.get("result") or "").lower() in ("failed","fail","reinspection","re-inspection"): add(94,"INSPECTION",x.get("id"),"Failed inspection: "+str(x.get("inspection_type") or "Inspection"),x.get("notes") or "Correction/reinspection required","Assign corrections and schedule reinspection before dependent work proceeds.","",x.get("reinspection_date") or "")
+    if daily:
+        d=daily[0]
+        if str(d.get("delays") or "").strip(): add(82,"DAILY_REPORT",d.get("id"),"Recent daily report contains delays",d.get("delays"),"Verify whether the delay is active, assign ownership, and connect it to affected schedule work.","",d.get("report_date") or "")
+        if str(d.get("safety") or "").strip(): add(86,"SAFETY",d.get("id"),"Recent daily report contains a safety note",d.get("safety"),"Review the safety item and document corrective action before affected work continues.","",d.get("report_date") or "")
+    seen=set(); ranked=[]
+    for a in sorted(actions,key=lambda z:(-z["priority"],z["due"] or "9999")):
+        key=(a["title"],a["reason"])
+        if key not in seen: seen.add(key); ranked.append(a)
+    critical=sum(a["priority"]>=90 for a in ranked); warning=sum(75<=a["priority"]<90 for a in ranked); score=max(0,100-critical*12-warning*5)
+    summary=("No high-priority field constraints were detected from connected project records." if not ranked else (str(critical)+" critical item(s) need superintendent attention." if critical else str(len(ranked))+" active item(s) should be reviewed to protect project readiness and flow."))
+    return {"project":dict(p),"score":score,"critical":critical,"warning":warning,"summary":summary,"actions":ranked[:25],"signals":{"activities":len(acts),"open_issues":len(issues),"make_ready":len(mr),"open_submittals":len(subs),"risks":len(risks),"daily_reports":len(daily)}}
+
+@app.get("/superintendent-command/{project_id}",response_class=_BC182_HTMLResponse)
+def bc182_superintendent_command(project_id:int):
+    d=_bc182_command(project_id)
+    if not d: return _BC182_HTMLResponse("Project not found or access denied.",status_code=404)
+    cards=""
+    for i,a in enumerate(d["actions"],1):
+        cards+=f'<div class="card"><div class="eyebrow">#{i} - PRIORITY {a["priority"]} - {_runtime.esc(a["trade"])}</div><h2>{_runtime.esc(a["title"])}</h2><p><b>Why:</b> {_runtime.esc(a["reason"])}</p><p><b>Command:</b> {_runtime.esc(a["recommended_action"])}</p></div>'
+    body=f'<div class="hero"><div class="eyebrow">SUPERINTENDENT COMMAND INTELLIGENCE 3.0</div><h1>{_runtime.esc(d["project"]["name"])}</h1><p>{_runtime.esc(d["summary"])}</p></div><div class="grid4"><div class="card"><div class="label">Command Score</div><div class="kpi">{d["score"]}</div></div><div class="card"><div class="label">Critical</div><div class="kpi">{d["critical"]}</div></div><div class="card"><div class="label">Warnings</div><div class="kpi">{d["warning"]}</div></div><div class="card"><div class="label">Ranked Actions</div><div class="kpi">{len(d["actions"])}</div></div></div><div class="card"><h2>What should I deal with next?</h2><p>Ranked from connected project records with evidence and recommended field action.</p></div>{cards or "<div class=card><h2>No urgent actions detected</h2></div>"}'
+    return _runtime.shell("Superintendent Command",body)
+
+@app.get("/api/superintendent-command/{project_id}")
+def bc182_superintendent_command_api(project_id:int):
+    d=_bc182_command(project_id)
+    return {"status":"ok","version":"1.8.18.2",**d} if d else _BC182_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.post("/api/superintendent-command/{project_id}/snapshot")
+def bc182_snapshot(project_id:int):
+    d=_bc182_command(project_id)
+    if not d: return _BC182_JSONResponse({"status":"not_found"},status_code=404)
+    u=_runtime.current_user(); now=_BC182_datetime.utcnow().isoformat(); c=_runtime.db()
+    c.execute("INSERT INTO superintendent_command_snapshots(company_id,project_id,command_date,command_score,critical_count,warning_count,action_count,summary,created) VALUES(?,?,?,?,?,?,?,?,?)",(u["company_id"],project_id,_BC182_date.today().isoformat(),d["score"],d["critical"],d["warning"],len(d["actions"]),d["summary"],now)); c.commit(); c.close()
+    return {"status":"ok","version":"1.8.18.2","project_id":project_id,"command_score":d["score"],"actions":len(d["actions"])}
+
+@app.get("/health/superintendent-command-1-8-18-2")
+def health_superintendent_command_18182():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres": tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[("1.8.18.1 preserved","/health/site-owner-separation-1-8-18-1" in paths),("superintendent page","/superintendent-command/{project_id}" in paths),("command API","/api/superintendent-command/{project_id}" in paths),("snapshot API","/api/superintendent-command/{project_id}/snapshot" in paths),("snapshots table","superintendent_command_snapshots" in tables),("actions table","superintendent_command_actions" in tables),("engine",callable(_bc182_command)),("activities","activities" in tables),("readiness","activity_readiness" in tables),("make ready","make_ready" in tables),("issues","project_issues" in tables),("risks","risks" in tables),("submittals","submittals" in tables),("inspections","inspections_tracker" in tables),("forecasts","bc_schedule_forecasts_v2" in tables),("daily reports","daily_reports" in tables),("public home","/home" in paths),("owner console","/owner" in paths),("app entry","/app" in paths),("command center","/command-center-2" in paths),("Blueprint Brain","/blueprint-brain" in paths),("Unified Brain","/brain" in paths),("PostgreSQL layer",callable(getattr(_runtime,"db",None))),("platform operations","/platform/operations" in paths),("customer self service","/account/subscription" in paths),("legacy root","/" in paths)]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.2","release":"Superintendent Command Intelligence 3.0","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.2"
+BUILD_COMMAND_RELEASE_NAME="Superintendent Command Intelligence 3.0"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
