@@ -7879,3 +7879,94 @@ BUILD_COMMAND_RELEASE="1.8.18.0"
 BUILD_COMMAND_RELEASE_NAME="Platform Operations & Customer Command Center"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.0 Hotfix A — Operations Runtime Hardening
+# ============================================================
+def _bc180_safe_company_health(company_id):
+    try:
+        h=_bc180_company_health(company_id)
+        return h,None
+    except Exception as e:
+        return None,f"{type(e).__name__}: {e}"
+
+def _bc180_operations_safe():
+    c=_runtime.db()
+    companies=[dict(r) for r in c.execute("SELECT * FROM companies ORDER BY name").fetchall()]
+    c.close()
+    rows=[]; errors=[]
+    for co in companies:
+        h,err=_bc180_safe_company_health(co["id"])
+        if h:
+            rows.append(h)
+        else:
+            errors.append({"company_id":co["id"],"company_name":co.get("name",""),"error":err})
+            rows.append({
+              "score":0,"status":"CRITICAL",
+              "warnings":[],"critical":["Account health calculation error"],
+              "company":co,"subscription":None,
+              "usage":{"seat_limit":0,"project_limit":0,"ai_limit":0,"storage_limit_gb":0,
+                       "seat_pct":0,"project_pct":0,"ai_pct":0,"storage_pct":0,
+                       "ai_requests":0,"storage_bytes":0},
+              "users":0,"projects":0
+            })
+    return rows,errors
+
+# Replace original operations aggregator with safe version for all downstream callers.
+def _bc180_operations():
+    rows,_errors=_bc180_operations_safe()
+    return rows
+
+# Re-register /platform/operations after the original route.
+# FastAPI uses route order, so patch original endpoint in-place instead of adding duplicate.
+for _r in app.routes:
+    if getattr(_r,"path",None)=="/platform/operations":
+        def _bc180_platform_operations_hardened(q:str=""):
+            if not _runtime._bc174_is_platform_owner():
+                return _BC180_HTMLResponse("Platform owner access required.",status_code=403)
+            rows,errors=_bc180_operations_safe()
+            if q:
+                needle=q.lower().strip()
+                rows=[r for r in rows if needle in str(r["company"].get("name","")).lower() or needle in str(r["company"].get("id",""))]
+            healthy=sum(1 for r in rows if r["status"]=="HEALTHY")
+            watch=sum(1 for r in rows if r["status"]=="WATCH")
+            critical=sum(1 for r in rows if r["status"]=="CRITICAL")
+            try:
+                m=_bc176_metrics()
+            except Exception as e:
+                m={"mrr_cents":0,"trial_customers":0,"past_due_customers":0,"failed_payments":0}
+                errors.append({"company_id":None,"company_name":"Revenue metrics","error":f"{type(e).__name__}: {e}"})
+            trs=""
+            for r in sorted(rows,key=lambda x:(x.get("score",0),str(x.get("company",{}).get("name","")).lower())):
+                sub=r.get("subscription") or {}
+                co=r.get("company") or {}
+                issue="; ".join((r.get("critical") or [])+(r.get("warnings") or [])) or "No current warnings"
+                trs+=f'<tr><td><a href="/platform/company/{co.get("id","")}">{_runtime.esc(co.get("name",""))}</a></td><td>{r.get("score",0)}</td><td>{_runtime.esc(r.get("status",""))}</td><td>{_runtime.esc(sub.get("plan_code","—"))}</td><td>{_runtime.esc(sub.get("status","—"))}</td><td>{r.get("users",0)}</td><td>{r.get("projects",0)}</td><td>{_runtime.esc(issue)}</td></tr>'
+            err_html=""
+            if errors:
+                erows="".join(f'<tr><td>{_runtime.esc(e.get("company_name") or e.get("company_id") or "System")}</td><td>{_runtime.esc(e.get("error",""))}</td></tr>' for e in errors)
+                err_html=f'<div class="card CRITICAL"><h2>Diagnostics</h2><p>One or more records could not be fully calculated. The rest of the command center remains available.</p><table><tbody>{erows}</tbody></table></div>'
+            body=(
+              '<div class="hero"><div class="eyebrow">PLATFORM OWNER · OPERATIONS</div><h1>Customer Command Center</h1><p class="muted">Operate every BuildCommand customer from one screen. Accounts needing attention rise to the top automatically.</p></div>'
+              f'<div class="grid4"><div class="card"><div class="label">Customers</div><div class="kpi">{len(rows)}</div></div><div class="card"><div class="label">Healthy</div><div class="kpi">{healthy}</div></div><div class="card"><div class="label">Watch</div><div class="kpi">{watch}</div></div><div class="card"><div class="label">Critical</div><div class="kpi">{critical}</div></div></div>'
+              f'<div class="grid4"><div class="card"><div class="label">MRR</div><div class="kpi">${int(m.get("mrr_cents",0) or 0)/100:,.2f}</div></div><div class="card"><div class="label">Trials</div><div class="kpi">{m.get("trial_customers",0)}</div></div><div class="card"><div class="label">Past Due</div><div class="kpi">{m.get("past_due_customers",0)}</div></div><div class="card"><div class="label">Failed Payments</div><div class="kpi">{m.get("failed_payments",0)}</div></div></div>'
+              '<div class="card"><form method="get" action="/platform/operations"><label>Search customers</label><input name="q" placeholder="Company name or ID"><button type="submit">Search</button></form></div>'
+              f'<div class="card"><h2>Account Health</h2><table><thead><tr><th>Company</th><th>Score</th><th>Health</th><th>Plan</th><th>Subscription</th><th>Users</th><th>Projects</th><th>Attention</th></tr></thead><tbody>{trs or "<tr><td colspan=8>No customers found.</td></tr>"}</tbody></table></div>'
+              +err_html+
+              '<div class="card"><h2>Platform Controls</h2><p><a href="/platform/revenue">Revenue</a> · <a href="/platform/growth">Growth</a> · <a href="/platform/customers">Customer Lifecycle</a> · <a href="/platform/subscription-requests">Subscription Requests</a> · <a href="/platform">Platform Owner</a></p></div>'
+            )
+            return _runtime.shell("Customer Command Center",body)
+        _r.endpoint=_bc180_platform_operations_hardened
+        break
+
+@app.get("/health/platform-operations-runtime-1-8-18-0")
+def health_platform_operations_runtime_18180():
+    rows,errors=_bc180_operations_safe()
+    return {"status":"ok" if not errors else "degraded","app":"BuildCommand AI","version":"1.8.18.0",
+            "release":"Platform Operations Runtime Hardening","companies_checked":len(rows),
+            "errors":errors,"error_count":len(errors)}
+
+BUILD_COMMAND_RELEASE_NAME="Platform Operations & Customer Command Center — Hotfix A"
+try: app.version="1.8.18.0"
+except Exception: pass
