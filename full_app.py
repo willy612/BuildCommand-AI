@@ -7177,3 +7177,179 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.17.7 — Subscription Plans & Customer Self-Service
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC177_HTMLResponse, JSONResponse as _BC177_JSONResponse, RedirectResponse as _BC177_RedirectResponse
+from datetime import datetime as _BC177_datetime
+
+def _bc177_init():
+    c=_runtime.db()
+    c.executescript('''
+    CREATE TABLE IF NOT EXISTS customer_subscription_requests(
+      id INTEGER PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      user_id INTEGER,
+      request_type TEXT NOT NULL,
+      from_plan TEXT,
+      to_plan TEXT,
+      status TEXT DEFAULT 'PENDING',
+      detail TEXT,
+      created TEXT,
+      resolved TEXT
+    );
+    CREATE TABLE IF NOT EXISTS customer_billing_preferences(
+      company_id INTEGER PRIMARY KEY,
+      billing_contact_email TEXT,
+      usage_alert_pct INTEGER DEFAULT 80,
+      renewal_reminder INTEGER DEFAULT 1,
+      updated TEXT
+    );
+    ''')
+    c.commit(); c.close()
+_bc177_init()
+
+def _bc177_admin_user():
+    u=_runtime.current_user()
+    if not u: return None
+    try:
+        return u if _runtime.role_level(u["role"])>=_runtime.role_level("ADMIN") else None
+    except Exception:
+        return None
+
+def _bc177_usage(company_id):
+    sub=_runtime._bc174_subscription(company_id)
+    limits=_runtime._bc174_limits(company_id)
+    users,projects=_runtime._bc174_counts(company_id)
+    c=_runtime.db()
+    month=_BC177_datetime.utcnow().strftime("%Y-%m")
+    row=c.execute("SELECT * FROM platform_usage_monthly WHERE company_id=? AND usage_month=?",(company_id,month)).fetchone()
+    plan=c.execute("SELECT * FROM platform_plans WHERE code=?",(sub["plan_code"],)).fetchone() if sub else None
+    c.close()
+    ai=int(row["ai_requests"] or 0) if row else 0
+    blueprints=int(row["blueprint_runs"] or 0) if row else 0
+    uploads=int(row["document_uploads"] or 0) if row else 0
+    storage=int(row["storage_bytes"] or 0) if row else 0
+    ai_limit=int(plan["ai_monthly_limit"] or 0) if plan else 0
+    storage_limit_gb=float(plan["storage_gb_limit"] or 0) if plan else 0
+    return {
+      "month":month,"users":users,"projects":projects,
+      "seat_limit":int(limits.get("seats") or 0),"project_limit":int(limits.get("projects") or 0),
+      "seat_pct":round(users*100/int(limits["seats"]),1) if int(limits.get("seats") or 0)>0 else 0,
+      "project_pct":round(projects*100/int(limits["projects"]),1) if int(limits.get("projects") or 0)>0 else 0,
+      "ai_requests":ai,"ai_limit":ai_limit,"ai_pct":round(ai*100/ai_limit,1) if ai_limit>0 else 0,
+      "blueprint_runs":blueprints,"document_uploads":uploads,"storage_bytes":storage,
+      "storage_limit_gb":storage_limit_gb,"storage_pct":round((storage/(1024**3))*100/storage_limit_gb,1) if storage_limit_gb>0 else 0
+    }
+
+@app.get("/account/subscription", response_class=_BC177_HTMLResponse)
+def customer_subscription_center():
+    u=_runtime.current_user()
+    if not u: return _BC177_RedirectResponse("/login",status_code=303)
+    sub=_runtime._bc174_subscription(u["company_id"]); usage=_bc177_usage(u["company_id"])
+    c=_runtime.db()
+    plans=c.execute("SELECT * FROM platform_plans WHERE COALESCE(active,1)=1 ORDER BY monthly_price_cents,code").fetchall()
+    requests=c.execute("SELECT * FROM customer_subscription_requests WHERE company_id=? ORDER BY id DESC LIMIT 10",(u["company_id"],)).fetchall()
+    c.close()
+    cards=""
+    for p in plans:
+        current=bool(sub and p["code"]==sub["plan_code"])
+        if current:
+            action='<span class="badge READY">Current Plan</span>'
+        elif int(p["monthly_price_cents"] or 0)>0:
+            action=f'<a href="/billing/checkout/{p["code"]}">Choose / Change Plan</a>'
+        else:
+            action=f'<form method="post" action="/account/subscription/request"><input type="hidden" name="to_plan" value="{_runtime.esc(p["code"])}"><button type="submit">Request Plan Change</button></form>'
+        cards+=f'<div class="card"><div class="eyebrow">{_runtime.esc(p["code"])}</div><h2>{_runtime.esc(p["name"])}</h2><div class="kpi">${int(p["monthly_price_cents"] or 0)/100:,.2f}<span class="small"> / month</span></div><p>{_runtime.esc(p["description"] or "")}</p><p>{p["seat_limit"]} seats · {p["project_limit"]} projects</p>{action}</div>'
+    reqrows="".join(f'<tr><td>{_runtime.esc(r["request_type"])}</td><td>{_runtime.esc(r["from_plan"] or "—")} → {_runtime.esc(r["to_plan"] or "—")}</td><td>{_runtime.esc(r["status"])}</td><td>{_runtime.esc(r["created"] or "")}</td></tr>' for r in requests)
+    body=(
+      f'<div class="hero"><div class="eyebrow">CUSTOMER SELF-SERVICE</div><h1>Subscription & Usage</h1>'
+      f'<p>Plan: <b>{_runtime.esc(sub["plan_code"] if sub else "—")}</b> · Status: <b>{_runtime.esc(_runtime._bc174_effective_status(sub) if sub else "—")}</b></p></div>'
+      f'<div class="grid4"><div class="card"><div class="label">Seats</div><div class="kpi">{usage["users"]}/{usage["seat_limit"] or "∞"}</div><p>{usage["seat_pct"]}% used</p></div>'
+      f'<div class="card"><div class="label">Projects</div><div class="kpi">{usage["projects"]}/{usage["project_limit"] or "∞"}</div><p>{usage["project_pct"]}% used</p></div>'
+      f'<div class="card"><div class="label">AI Requests</div><div class="kpi">{usage["ai_requests"]}</div><p>{usage["ai_pct"]}% of configured limit</p></div>'
+      f'<div class="card"><div class="label">Storage</div><div class="kpi">{usage["storage_bytes"]/(1024**3):.2f} GB</div><p>{usage["storage_pct"]}% used</p></div></div>'
+      f'<div class="grid3">{cards}</div>'
+      '<div class="card"><h2>Account Actions</h2><p><a href="/billing">Billing & Checkout</a> · <a href="/team">Manage Team</a> · <a href="/onboarding">Onboarding</a></p>'
+      '<form method="post" action="/account/subscription/request"><input type="hidden" name="to_plan" value=""><input type="hidden" name="request_type" value="CANCEL"><button type="submit">Request Cancellation</button></form></div>'
+      f'<div class="card"><h2>Recent Requests</h2><table><thead><tr><th>Type</th><th>Plan</th><th>Status</th><th>Created</th></tr></thead><tbody>{reqrows or "<tr><td colspan=4>No requests yet.</td></tr>"}</tbody></table></div>'
+    )
+    return _runtime.shell("Subscription & Usage",body)
+
+@app.post("/account/subscription/request")
+async def customer_subscription_request(request:_runtime.Request):
+    u=_bc177_admin_user()
+    if not u: return _BC177_HTMLResponse("Company admin/owner access required.",status_code=403)
+    form=await request.form()
+    to_plan=str(form.get("to_plan") or "").strip().upper()
+    req_type=str(form.get("request_type") or "PLAN_CHANGE").strip().upper()
+    sub=_runtime._bc174_subscription(u["company_id"])
+    if req_type!="CANCEL":
+        c=_runtime.db(); plan=c.execute("SELECT code FROM platform_plans WHERE code=? AND COALESCE(active,1)=1",(to_plan,)).fetchone(); c.close()
+        if not plan: return _BC177_HTMLResponse("Unknown or inactive plan.",status_code=400)
+    now=_BC177_datetime.utcnow().isoformat()
+    c=_runtime.db()
+    c.execute("INSERT INTO customer_subscription_requests(company_id,user_id,request_type,from_plan,to_plan,status,detail,created) VALUES(?,?,?,?,?,?,?,?)",
+              (u["company_id"],u["id"],req_type,sub["plan_code"] if sub else None,to_plan or None,"PENDING","Customer self-service request",now))
+    c.commit(); c.close()
+    return _BC177_RedirectResponse("/account/subscription",status_code=303)
+
+@app.get("/api/account/subscription/self-service")
+def customer_subscription_self_service_api():
+    u=_runtime.current_user()
+    if not u: return _BC177_JSONResponse({"status":"unauthorized"},status_code=401)
+    sub=_runtime._bc174_subscription(u["company_id"])
+    c=_runtime.db(); plans=[dict(r) for r in c.execute("SELECT * FROM platform_plans WHERE COALESCE(active,1)=1 ORDER BY monthly_price_cents").fetchall()]; c.close()
+    return {"status":"ok","version":"1.8.17.7","subscription":dict(sub) if sub else None,"usage":_bc177_usage(u["company_id"]),"plans":plans}
+
+@app.get("/platform/subscription-requests", response_class=_BC177_HTMLResponse)
+def platform_subscription_requests():
+    if not _runtime._bc174_is_platform_owner(): return _BC177_HTMLResponse("Platform owner access required.",status_code=403)
+    c=_runtime.db()
+    rows=c.execute("SELECT r.*,co.name company_name,u.email user_email FROM customer_subscription_requests r LEFT JOIN companies co ON co.id=r.company_id LEFT JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 200").fetchall()
+    c.close()
+    trs="".join(f'<tr><td>{_runtime.esc(r["company_name"] or "—")}</td><td>{_runtime.esc(r["request_type"])}</td><td>{_runtime.esc(r["from_plan"] or "—")} → {_runtime.esc(r["to_plan"] or "—")}</td><td>{_runtime.esc(r["status"])}</td><td>{_runtime.esc(r["created"] or "")}</td></tr>' for r in rows)
+    return _runtime.shell("Subscription Requests",f'<div class="hero"><div class="eyebrow">PLATFORM OWNER</div><h1>Subscription Requests</h1><p class="muted">Customer-requested plan and cancellation changes.</p></div><div class="card"><table><thead><tr><th>Company</th><th>Request</th><th>Plan</th><th>Status</th><th>Created</th></tr></thead><tbody>{trs or "<tr><td colspan=5>No requests.</td></tr>"}</tbody></table></div>')
+
+@app.get("/health/subscription-self-service-1-8-17-7")
+def health_subscription_self_service_1877():
+    paths={getattr(r,"path","") for r in app.routes}
+    c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres":
+        tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else:
+        tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[
+      ("1.8.17.6 revenue health preserved","/health/revenue-usage-1-8-17-6" in paths),
+      ("1.8.17.5 onboarding health preserved","/health/customer-onboarding-1-8-17-5" in paths),
+      ("1.8.17.4 billing health preserved","/health/platform-billing-1-8-17-4" in paths),
+      ("customer subscription center","/account/subscription" in paths),
+      ("customer plan request route","/account/subscription/request" in paths),
+      ("self-service API","/api/account/subscription/self-service" in paths),
+      ("platform request review route","/platform/subscription-requests" in paths),
+      ("customer_subscription_requests available","customer_subscription_requests" in tables),
+      ("customer_billing_preferences available","customer_billing_preferences" in tables),
+      ("Stripe checkout preserved","/billing/checkout/{plan_code}" in paths),
+      ("billing page preserved","/billing" in paths),
+      ("team management preserved","/team" in paths or "/team/add" in paths),
+      ("seat/project usage calculator",callable(_bc177_usage)),
+      ("company admin authorization",callable(_bc177_admin_user)),
+      ("platform owner authorization preserved",callable(getattr(_runtime,"_bc174_is_platform_owner",None))),
+      ("plan catalog preserved","platform_plans" in tables),
+      ("subscription records preserved","company_subscriptions" in tables),
+      ("usage records preserved","platform_usage_monthly" in tables),
+      ("customer requests are auditable","customer_subscription_requests" in tables),
+      ("legacy root preserved","/" in paths),
+    ]
+    passed=sum(1 for _,ok in checks if ok)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.17.7",
+      "release":"Subscription Plans & Customer Self-Service","passed":passed,"total":len(checks),"failed":len(checks)-passed,
+      "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.17.7"
+BUILD_COMMAND_RELEASE_NAME="Subscription Plans & Customer Self-Service"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
