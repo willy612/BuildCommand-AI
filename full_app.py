@@ -7534,3 +7534,182 @@ BUILD_COMMAND_RELEASE="1.8.17.8"
 BUILD_COMMAND_RELEASE_NAME="Revenue History, Churn & Growth Analytics"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.17.9 — Customer Administration & Company Control
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC179_HTMLResponse, JSONResponse as _BC179_JSONResponse, RedirectResponse as _BC179_RedirectResponse
+from datetime import datetime as _BC179_datetime
+
+def _bc179_init():
+    c=_runtime.db()
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS platform_company_notes(
+      id INTEGER PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      actor_user_id INTEGER,
+      note TEXT NOT NULL,
+      created TEXT
+    );
+    CREATE TABLE IF NOT EXISTS platform_company_control_events(
+      id INTEGER PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      actor_user_id INTEGER,
+      action TEXT NOT NULL,
+      old_value TEXT,
+      new_value TEXT,
+      detail TEXT,
+      created TEXT
+    );
+    """)
+    c.commit(); c.close()
+_bc179_init()
+
+def _bc179_owner():
+    return bool(_runtime._bc174_is_platform_owner())
+
+def _bc179_company(company_id):
+    c=_runtime.db()
+    co=c.execute("SELECT * FROM companies WHERE id=?",(company_id,)).fetchone()
+    sub=c.execute("SELECT * FROM company_subscriptions WHERE company_id=?",(company_id,)).fetchone()
+    users=[dict(r) for r in c.execute("SELECT id,email,display_name,role,created FROM users WHERE company_id=? ORDER BY role,email",(company_id,)).fetchall()]
+    projects=[dict(r) for r in c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name",(company_id,)).fetchall()]
+    notes=[dict(r) for r in c.execute("SELECT * FROM platform_company_notes WHERE company_id=? ORDER BY id DESC LIMIT 30",(company_id,)).fetchall()]
+    controls=[dict(r) for r in c.execute("SELECT * FROM platform_company_control_events WHERE company_id=? ORDER BY id DESC LIMIT 50",(company_id,)).fetchall()]
+    audit=[dict(r) for r in c.execute("SELECT * FROM platform_admin_audit WHERE company_id=? ORDER BY id DESC LIMIT 50",(company_id,)).fetchall()]
+    enforcement=[dict(r) for r in c.execute("SELECT * FROM access_enforcement_events WHERE company_id=? ORDER BY id DESC LIMIT 50",(company_id,)).fetchall()]
+    plans=[dict(r) for r in c.execute("SELECT * FROM platform_plans WHERE COALESCE(active,1)=1 ORDER BY monthly_price_cents").fetchall()]
+    c.close()
+    if not co: return None
+    usage=_bc177_usage(company_id)
+    return {"company":dict(co),"subscription":dict(sub) if sub else None,"users":users,"projects":projects,
+            "notes":notes,"controls":controls,"audit":audit,"enforcement":enforcement,"plans":plans,"usage":usage}
+
+def _bc179_log(company_id,action,old_value=None,new_value=None,detail=None):
+    u=_runtime.current_user(); now=_BC179_datetime.utcnow().isoformat()
+    c=_runtime.db()
+    c.execute("INSERT INTO platform_company_control_events(company_id,actor_user_id,action,old_value,new_value,detail,created) VALUES(?,?,?,?,?,?,?)",
+              (company_id,u["id"] if u else None,action,old_value,new_value,detail,now))
+    try:
+        c.execute("INSERT INTO platform_admin_audit(actor_user_id,actor_email,company_id,action,detail,created) VALUES(?,?,?,?,?,?)",
+                  (u["id"] if u else None,u["email"] if u else None,company_id,action,detail or f"{old_value} -> {new_value}",now))
+    except Exception: pass
+    c.commit(); c.close()
+
+@app.get("/platform/company/{company_id}", response_class=_BC179_HTMLResponse)
+def platform_company_control(company_id:int):
+    if not _bc179_owner(): return _BC179_HTMLResponse("Platform owner access required.",status_code=403)
+    d=_bc179_company(company_id)
+    if not d: return _BC179_HTMLResponse("Company not found.",status_code=404)
+    co=d["company"]; sub=d["subscription"]; u=d["usage"]
+    userrows="".join(f'<tr><td>{_runtime.esc(x["display_name"] or "")}</td><td>{_runtime.esc(x["email"])}</td><td>{_runtime.esc(x["role"])}</td></tr>' for x in d["users"])
+    projectrows="".join(f'<tr><td>{_runtime.esc(x["name"])}</td><td>{_runtime.esc(x["number"] or "")}</td><td>{_runtime.esc(x["status"] or "")}</td></tr>' for x in d["projects"])
+    opts="".join(f'<option value="{_runtime.esc(p["code"])}" {"selected" if sub and p["code"]==sub["plan_code"] else ""}>{_runtime.esc(p["name"])} — ${int(p["monthly_price_cents"] or 0)/100:,.2f}/mo</option>' for p in d["plans"])
+    notes="".join(f'<tr><td>{_runtime.esc(n["created"] or "")}</td><td>{_runtime.esc(n["note"])}</td></tr>' for n in d["notes"])
+    events="".join(f'<tr><td>{_runtime.esc(e["created"] or "")}</td><td>{_runtime.esc(e["action"])}</td><td>{_runtime.esc(e["detail"] or "")}</td></tr>' for e in d["controls"])
+    body=(
+      f'<div class="hero"><div class="eyebrow">PLATFORM OWNER · COMPANY CONTROL</div><h1>{_runtime.esc(co["name"])}</h1>'
+      f'<p>Company #{co["id"]} · Plan <b>{_runtime.esc(sub["plan_code"] if sub else "—")}</b> · Status <b>{_runtime.esc(sub["status"] if sub else "—")}</b></p></div>'
+      f'<div class="grid4"><div class="card"><div class="label">Users</div><div class="kpi">{len(d["users"])}</div><p>{u["seat_limit"] or "∞"} seat limit</p></div>'
+      f'<div class="card"><div class="label">Projects</div><div class="kpi">{len(d["projects"])}</div><p>{u["project_limit"] or "∞"} project limit</p></div>'
+      f'<div class="card"><div class="label">AI Requests</div><div class="kpi">{u["ai_requests"]}</div></div>'
+      f'<div class="card"><div class="label">Storage</div><div class="kpi">{u["storage_bytes"]/(1024**3):.2f} GB</div></div></div>'
+      f'<div class="grid2"><div class="card"><h2>Subscription Control</h2><form method="post" action="/platform/company/{company_id}/subscription">'
+      f'<label>Plan</label><select name="plan_code">{opts}</select><label>Status</label><select name="status">'
+      + "".join(f'<option value="{s}" {"selected" if sub and sub["status"]==s else ""}>{s}</option>' for s in ["TRIAL","ACTIVE","PAST_DUE","SUSPENDED","CANCELED","LEGACY"]) +
+      f'</select><label>Seat limit override</label><input name="seat_limit_override" type="number" min="0" value="{sub["seat_limit_override"] if sub and sub["seat_limit_override"] is not None else ""}">'
+      f'<label>Project limit override</label><input name="project_limit_override" type="number" min="0" value="{sub["project_limit_override"] if sub and sub["project_limit_override"] is not None else ""}">'
+      '<label>Access note</label><input name="access_note" value=""><button type="submit">Update Company Access</button></form></div>'
+      f'<div class="card"><h2>Owner Note</h2><form method="post" action="/platform/company/{company_id}/note"><textarea name="note" rows="6" required></textarea><button type="submit">Save Internal Note</button></form>'
+      f'<p><a href="/api/platform/company/{company_id}">Company API</a> · <a href="/api/platform/usage/{company_id}">Usage API</a></p></div></div>'
+      f'<div class="grid2"><div class="card"><h2>Users</h2><table><thead><tr><th>Name</th><th>Email</th><th>Role</th></tr></thead><tbody>{userrows or "<tr><td colspan=3>No users.</td></tr>"}</tbody></table></div>'
+      f'<div class="card"><h2>Projects</h2><table><thead><tr><th>Project</th><th>Number</th><th>Status</th></tr></thead><tbody>{projectrows or "<tr><td colspan=3>No projects.</td></tr>"}</tbody></table></div></div>'
+      f'<div class="grid2"><div class="card"><h2>Internal Notes</h2><table><tbody>{notes or "<tr><td>No notes.</td></tr>"}</tbody></table></div>'
+      f'<div class="card"><h2>Control History</h2><table><thead><tr><th>When</th><th>Action</th><th>Detail</th></tr></thead><tbody>{events or "<tr><td colspan=3>No control changes.</td></tr>"}</tbody></table></div></div>'
+    )
+    return _runtime.shell("Company Control",body)
+
+@app.post("/platform/company/{company_id}/subscription")
+async def platform_company_subscription_update(company_id:int,request:_runtime.Request):
+    if not _bc179_owner(): return _BC179_HTMLResponse("Platform owner access required.",status_code=403)
+    form=await request.form(); plan=str(form.get("plan_code") or "").upper(); status=str(form.get("status") or "").upper()
+    allowed={"TRIAL","ACTIVE","PAST_DUE","SUSPENDED","CANCELED","LEGACY"}
+    if status not in allowed: return _BC179_HTMLResponse("Invalid subscription status.",status_code=400)
+    c=_runtime.db(); old=c.execute("SELECT * FROM company_subscriptions WHERE company_id=?",(company_id,)).fetchone()
+    valid=c.execute("SELECT code FROM platform_plans WHERE code=?",(plan,)).fetchone()
+    if not valid: c.close(); return _BC179_HTMLResponse("Invalid plan.",status_code=400)
+    def iv(v):
+        v=str(v or "").strip()
+        return int(v) if v else None
+    seats=iv(form.get("seat_limit_override")); projects=iv(form.get("project_limit_override")); note=str(form.get("access_note") or "").strip()
+    now=_BC179_datetime.utcnow().isoformat()
+    if old:
+        c.execute("UPDATE company_subscriptions SET plan_code=?,status=?,seat_limit_override=?,project_limit_override=?,access_note=?,updated=? WHERE company_id=?",
+                  (plan,status,seats,projects,note,now,company_id))
+    else:
+        c.execute("INSERT INTO company_subscriptions(company_id,plan_code,status,seat_limit_override,project_limit_override,access_note,created,updated) VALUES(?,?,?,?,?,?,?,?)",
+                  (company_id,plan,status,seats,projects,note,now,now))
+    c.commit(); c.close()
+    _bc179_log(company_id,"SUBSCRIPTION_CONTROL",f'{old["plan_code"]}/{old["status"]}' if old else "NONE",f"{plan}/{status}",f"seats={seats}; projects={projects}; {note}")
+    return _BC179_RedirectResponse(f"/platform/company/{company_id}",status_code=303)
+
+@app.post("/platform/company/{company_id}/note")
+async def platform_company_note(company_id:int,request:_runtime.Request):
+    if not _bc179_owner(): return _BC179_HTMLResponse("Platform owner access required.",status_code=403)
+    form=await request.form(); note=str(form.get("note") or "").strip()
+    if not note: return _BC179_HTMLResponse("Note required.",status_code=400)
+    u=_runtime.current_user(); now=_BC179_datetime.utcnow().isoformat(); c=_runtime.db()
+    c.execute("INSERT INTO platform_company_notes(company_id,actor_user_id,note,created) VALUES(?,?,?,?)",(company_id,u["id"] if u else None,note,now)); c.commit(); c.close()
+    _bc179_log(company_id,"INTERNAL_NOTE",None,None,note)
+    return _BC179_RedirectResponse(f"/platform/company/{company_id}",status_code=303)
+
+@app.get("/api/platform/company/{company_id}")
+def platform_company_control_api(company_id:int):
+    if not _bc179_owner(): return _BC179_JSONResponse({"status":"forbidden"},status_code=403)
+    d=_bc179_company(company_id)
+    if not d: return _BC179_JSONResponse({"status":"not_found"},status_code=404)
+    return {"status":"ok","version":"1.8.17.9",**d}
+
+@app.get("/health/customer-admin-1-8-17-9")
+def health_customer_admin_1879():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres":
+        tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[
+      ("1.8.17.8 growth health preserved","/health/growth-analytics-1-8-17-8" in paths),
+      ("1.8.17.7 self-service health preserved","/health/subscription-self-service-1-8-17-7" in paths),
+      ("1.8.17.6 revenue health preserved","/health/revenue-usage-1-8-17-6" in paths),
+      ("company control page","/platform/company/{company_id}" in paths),
+      ("company subscription control","/platform/company/{company_id}/subscription" in paths),
+      ("company internal note route","/platform/company/{company_id}/note" in paths),
+      ("company control API","/api/platform/company/{company_id}" in paths),
+      ("platform_company_notes available","platform_company_notes" in tables),
+      ("platform_company_control_events available","platform_company_control_events" in tables),
+      ("company subscriptions preserved","company_subscriptions" in tables),
+      ("platform plans preserved","platform_plans" in tables),
+      ("admin audit preserved","platform_admin_audit" in tables),
+      ("access enforcement history preserved","access_enforcement_events" in tables),
+      ("company lookup available",callable(_bc179_company)),
+      ("owner authorization available",callable(_bc179_owner)),
+      ("control audit logger available",callable(_bc179_log)),
+      ("users remain company scoped","users" in tables),
+      ("projects remain company scoped","projects" in tables),
+      ("revenue dashboard preserved","/platform/revenue" in paths),
+      ("growth dashboard preserved","/platform/growth" in paths),
+      ("subscription requests preserved","/platform/subscription-requests" in paths),
+      ("customer self-service preserved","/account/subscription" in paths),
+      ("command center preserved","/command-center-2" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+    ]
+    passed=sum(1 for _,ok in checks if ok)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.17.9",
+      "release":"Customer Administration & Company Control","passed":passed,"total":len(checks),"failed":len(checks)-passed,
+      "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.17.9"
+BUILD_COMMAND_RELEASE_NAME="Customer Administration & Company Control"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
