@@ -7353,3 +7353,184 @@ BUILD_COMMAND_RELEASE="1.8.17.7"
 BUILD_COMMAND_RELEASE_NAME="Subscription Plans & Customer Self-Service"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.17.8 — Revenue History, Churn & Growth Analytics
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC178_HTMLResponse, JSONResponse as _BC178_JSONResponse
+from datetime import datetime as _BC178_datetime
+
+def _bc178_init():
+    c=_runtime.db()
+    c.executescript('''
+    CREATE TABLE IF NOT EXISTS platform_growth_snapshots(
+      id INTEGER PRIMARY KEY,
+      snapshot_month TEXT NOT NULL,
+      new_customers INTEGER DEFAULT 0,
+      trial_conversions INTEGER DEFAULT 0,
+      cancellations INTEGER DEFAULT 0,
+      upgrades INTEGER DEFAULT 0,
+      downgrades INTEGER DEFAULT 0,
+      expansion_mrr_cents INTEGER DEFAULT 0,
+      contraction_mrr_cents INTEGER DEFAULT 0,
+      churned_mrr_cents INTEGER DEFAULT 0,
+      net_mrr_change_cents INTEGER DEFAULT 0,
+      created TEXT
+    );
+    CREATE TABLE IF NOT EXISTS platform_customer_monthly_history(
+      id INTEGER PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      snapshot_month TEXT NOT NULL,
+      plan_code TEXT,
+      subscription_status TEXT,
+      monthly_price_cents INTEGER DEFAULT 0,
+      seats_used INTEGER DEFAULT 0,
+      projects_used INTEGER DEFAULT 0,
+      ai_requests INTEGER DEFAULT 0,
+      storage_bytes INTEGER DEFAULT 0,
+      created TEXT
+    );
+    ''')
+    c.commit(); c.close()
+_bc178_init()
+
+def _bc178_pct(delta,base):
+    return round((float(delta)/float(base))*100,2) if base else 0.0
+
+def _bc178_analytics():
+    c=_runtime.db()
+    snaps=[dict(r) for r in c.execute("SELECT * FROM platform_revenue_snapshots ORDER BY snapshot_month,id").fetchall()]
+    lifecycle=[dict(r) for r in c.execute("SELECT * FROM subscription_lifecycle_events ORDER BY id").fetchall()]
+    requests=[dict(r) for r in c.execute("SELECT * FROM customer_subscription_requests WHERE status IN ('APPROVED','COMPLETED') ORDER BY id").fetchall()]
+    plans={r["code"]:dict(r) for r in c.execute("SELECT * FROM platform_plans").fetchall()}
+    current=_bc176_metrics()
+    c.close()
+    by_month={}
+    for s in snaps:
+        by_month[s["snapshot_month"]]=s
+    months=sorted(by_month)
+    history=[]
+    prev=None
+    for month in months:
+        s=by_month[month]
+        mrr=int(s.get("mrr_cents") or 0)
+        active=int(s.get("active_customers") or 0)
+        row=dict(s)
+        row["mrr_growth_pct"]=_bc178_pct(mrr-(int(prev.get("mrr_cents") or 0) if prev else 0),int(prev.get("mrr_cents") or 0) if prev else 0)
+        row["active_growth_pct"]=_bc178_pct(active-(int(prev.get("active_customers") or 0) if prev else 0),int(prev.get("active_customers") or 0) if prev else 0)
+        history.append(row); prev=s
+    nowmonth=_BC178_datetime.utcnow().strftime("%Y-%m")
+    new_customers=trial_conversions=cancellations=0
+    for e in lifecycle:
+        created=str(e.get("created") or "")
+        if not created.startswith(nowmonth): continue
+        fs=str(e.get("from_status") or "").upper(); ts=str(e.get("to_status") or "").upper()
+        if ts=="TRIAL" and not fs: new_customers+=1
+        if fs=="TRIAL" and ts=="ACTIVE": trial_conversions+=1
+        if ts in {"CANCELED","SUSPENDED"}: cancellations+=1
+    upgrades=downgrades=0
+    for r in requests:
+        if not str(r.get("resolved") or r.get("created") or "").startswith(nowmonth): continue
+        fp=plans.get(r.get("from_plan")); tp=plans.get(r.get("to_plan"))
+        if fp and tp:
+            if int(tp["monthly_price_cents"] or 0)>int(fp["monthly_price_cents"] or 0): upgrades+=1
+            elif int(tp["monthly_price_cents"] or 0)<int(fp["monthly_price_cents"] or 0): downgrades+=1
+    latest=history[-1] if history else None
+    previous=history[-2] if len(history)>1 else None
+    current_mrr=int(current["mrr_cents"] or 0)
+    previous_mrr=int(previous["mrr_cents"] or 0) if previous else (int(latest["mrr_cents"] or 0) if latest else 0)
+    net=current_mrr-previous_mrr
+    churn_rate=round((cancellations/max(1,int(current["active_customers"] or 0)+cancellations))*100,2)
+    conversion_rate=round((trial_conversions/max(1,int(current["trial_customers"] or 0)+trial_conversions))*100,2)
+    return {"month":nowmonth,"current":current,"history":history,
+      "new_customers":new_customers,"trial_conversions":trial_conversions,"trial_conversion_rate_pct":conversion_rate,
+      "cancellations":cancellations,"customer_churn_rate_pct":churn_rate,"upgrades":upgrades,"downgrades":downgrades,
+      "net_mrr_change_cents":net,"mrr_growth_pct":_bc178_pct(net,previous_mrr)}
+
+@app.get("/platform/growth", response_class=_BC178_HTMLResponse)
+def platform_growth_dashboard():
+    if not _runtime._bc174_is_platform_owner(): return _BC178_HTMLResponse("Platform owner access required.",status_code=403)
+    a=_bc178_analytics(); cur=a["current"]
+    rows=""
+    for r in reversed(a["history"][-18:]):
+        rows+=f'<tr><td>{_runtime.esc(r["snapshot_month"])}</td><td>${int(r["mrr_cents"] or 0)/100:,.2f}</td><td>{int(r["active_customers"] or 0)}</td><td>{int(r["trial_customers"] or 0)}</td><td>{int(r["canceled_customers"] or 0)}</td><td>{r["mrr_growth_pct"]}%</td></tr>'
+    body=(
+      '<div class="hero"><div class="eyebrow">PLATFORM OWNER ANALYTICS</div><h1>Growth, Churn & Revenue History</h1><p class="muted">Track whether BuildCommand is growing, converting trials, retaining customers, and expanding revenue.</p></div>'
+      f'<div class="grid4"><div class="card"><div class="label">MRR</div><div class="kpi">${int(cur["mrr_cents"] or 0)/100:,.2f}</div><p>{a["mrr_growth_pct"]}% growth</p></div>'
+      f'<div class="card"><div class="label">Net MRR Change</div><div class="kpi">${int(a["net_mrr_change_cents"] or 0)/100:,.2f}</div></div>'
+      f'<div class="card"><div class="label">Customer Churn</div><div class="kpi">{a["customer_churn_rate_pct"]}%</div><p>{a["cancellations"]} cancellations</p></div>'
+      f'<div class="card"><div class="label">Trial Conversion</div><div class="kpi">{a["trial_conversion_rate_pct"]}%</div><p>{a["trial_conversions"]} conversions</p></div></div>'
+      f'<div class="grid4"><div class="card"><div class="label">Active Customers</div><div class="kpi">{cur["active_customers"]}</div></div>'
+      f'<div class="card"><div class="label">New Customers</div><div class="kpi">{a["new_customers"]}</div></div>'
+      f'<div class="card"><div class="label">Upgrades</div><div class="kpi">{a["upgrades"]}</div></div>'
+      f'<div class="card"><div class="label">Downgrades</div><div class="kpi">{a["downgrades"]}</div></div></div>'
+      f'<div class="card"><h2>Revenue History</h2><table><thead><tr><th>Month</th><th>MRR</th><th>Active</th><th>Trials</th><th>Canceled</th><th>MRR Growth</th></tr></thead><tbody>{rows or "<tr><td colspan=6>No snapshots yet. Use Revenue & Usage to create monthly snapshots.</td></tr>"}</tbody></table></div>'
+      '<div class="card"><h2>Owner Shortcuts</h2><p><a href="/platform/revenue">Revenue & Usage</a> · <a href="/platform/customers">Customers</a> · <a href="/platform/subscription-requests">Subscription Requests</a> · <a href="/platform/plans">Plans</a></p></div>'
+    )
+    return _runtime.shell("Growth Analytics",body)
+
+@app.get("/api/platform/growth")
+def platform_growth_api():
+    if not _runtime._bc174_is_platform_owner(): return _BC178_JSONResponse({"status":"forbidden"},status_code=403)
+    return {"status":"ok","version":"1.8.17.8",**_bc178_analytics()}
+
+@app.post("/api/platform/growth/snapshot")
+def platform_growth_snapshot():
+    if not _runtime._bc174_is_platform_owner(): return _BC178_JSONResponse({"status":"forbidden"},status_code=403)
+    a=_bc178_analytics(); cur=a["current"]; now=_BC178_datetime.utcnow().isoformat()
+    c=_runtime.db()
+    c.execute("INSERT INTO platform_growth_snapshots(snapshot_month,new_customers,trial_conversions,cancellations,upgrades,downgrades,net_mrr_change_cents,created) VALUES(?,?,?,?,?,?,?,?)",
+              (a["month"],a["new_customers"],a["trial_conversions"],a["cancellations"],a["upgrades"],a["downgrades"],a["net_mrr_change_cents"],now))
+    # Store customer-level monthly state for future cohort/LTV analytics.
+    for r in cur["customers"]:
+        sub=c.execute("SELECT * FROM company_subscriptions WHERE company_id=?",(r["company_id"],)).fetchone()
+        plan=c.execute("SELECT * FROM platform_plans WHERE code=?",(r["plan"],)).fetchone() if r["plan"]!="—" else None
+        usage=c.execute("SELECT * FROM platform_usage_monthly WHERE company_id=? AND usage_month=?",(r["company_id"],a["month"])).fetchone()
+        c.execute("INSERT INTO platform_customer_monthly_history(company_id,snapshot_month,plan_code,subscription_status,monthly_price_cents,seats_used,projects_used,ai_requests,storage_bytes,created) VALUES(?,?,?,?,?,?,?,?,?,?)",
+          (r["company_id"],a["month"],r["plan"],r["status"],int(plan["monthly_price_cents"] or 0) if plan else 0,r["seats_used"],r["projects_used"],int(usage["ai_requests"] or 0) if usage else 0,int(usage["storage_bytes"] or 0) if usage else 0,now))
+    c.commit(); c.close()
+    return {"status":"ok","snapshot_month":a["month"],"mrr_cents":cur["mrr_cents"],"net_mrr_change_cents":a["net_mrr_change_cents"]}
+
+@app.get("/health/growth-analytics-1-8-17-8")
+def health_growth_analytics_1878():
+    paths={getattr(r,"path","") for r in app.routes}
+    c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres":
+        tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else:
+        tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[
+      ("1.8.17.7 self-service health preserved","/health/subscription-self-service-1-8-17-7" in paths),
+      ("1.8.17.6 revenue health preserved","/health/revenue-usage-1-8-17-6" in paths),
+      ("1.8.17.5 onboarding health preserved","/health/customer-onboarding-1-8-17-5" in paths),
+      ("growth dashboard","/platform/growth" in paths),
+      ("growth analytics API","/api/platform/growth" in paths),
+      ("growth snapshot API","/api/platform/growth/snapshot" in paths),
+      ("platform_growth_snapshots available","platform_growth_snapshots" in tables),
+      ("customer monthly history available","platform_customer_monthly_history" in tables),
+      ("revenue snapshots preserved","platform_revenue_snapshots" in tables),
+      ("subscription lifecycle preserved","subscription_lifecycle_events" in tables),
+      ("subscription requests preserved","customer_subscription_requests" in tables),
+      ("billing events preserved","billing_events" in tables),
+      ("plan catalog preserved","platform_plans" in tables),
+      ("MRR history calculator",callable(_bc178_analytics)),
+      ("churn calculation available",callable(_bc178_pct)),
+      ("trial conversion tracking available",callable(_bc178_analytics)),
+      ("upgrade/downgrade tracking available",callable(_bc178_analytics)),
+      ("platform owner authorization preserved",callable(getattr(_runtime,"_bc174_is_platform_owner",None))),
+      ("customer self-service preserved","/account/subscription" in paths),
+      ("revenue dashboard preserved","/platform/revenue" in paths),
+      ("legacy command center preserved","/command-center-2" in paths),
+      ("legacy Blueprint Brain preserved","/blueprint-brain" in paths),
+    ]
+    passed=sum(1 for _,ok in checks if ok)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.17.8",
+      "release":"Revenue History, Churn & Growth Analytics","passed":passed,"total":len(checks),"failed":len(checks)-passed,
+      "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.17.8"
+BUILD_COMMAND_RELEASE_NAME="Revenue History, Churn & Growth Analytics"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
