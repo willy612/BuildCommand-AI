@@ -8830,3 +8830,178 @@ BUILD_COMMAND_RELEASE="1.8.18.6"
 BUILD_COMMAND_RELEASE_NAME="Owner Sales & Customer Acquisition Command Center"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.7 - Construction App Cleanup & Owner Portal Separation
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC187_HTMLResponse, RedirectResponse as _BC187_RedirectResponse, JSONResponse as _BC187_JSONResponse
+
+BC187_OWNER_UI_REMOVED=True
+
+_BC187_OWNER_UI_PATHS={"/owner","/owner/customers","/owner/financial","/owner/sales","/owner/project-control"}
+_BC187_OWNER_UI_PREFIXES=("/owner/customers/","/owner/sales/","/owner/project-control/")
+
+def _bc187_owner_ui_disabled():
+    body="<div class='hero'><div class='eyebrow'>BUILDCOMMAND</div><h1>Owner portal separated from the construction app.</h1><p>Owner and business controls are being preserved for a separate connected owner portal.</p><p><a href='/app'>Return to BuildCommand App</a></p></div>"
+    return _BC187_HTMLResponse(_runtime.shell("Owner Portal Separation",body),status_code=404)
+
+for _route in app.routes:
+    _path=getattr(_route,"path","")
+    if _path in _BC187_OWNER_UI_PATHS or any(_path.startswith(p) for p in _BC187_OWNER_UI_PREFIXES):
+        if _path.startswith("/owner/api/") or _path.startswith("/health/"):
+            continue
+        _route.endpoint=_bc187_owner_ui_disabled
+
+_bc187_original_shell=_runtime.shell
+
+def _bc187_clean_shell(title,body):
+    html=_bc187_original_shell(title,body)
+    import re as _bc187_re
+    patterns=[
+      r'<a\b[^>]*href=["\']/owner(?:/[^"\']*)?["\'][^>]*>.*?</a>',
+      r'<a\b[^>]*href=["\']/platform(?:/[^"\']*)?["\'][^>]*>.*?</a>',
+      r'<a\b[^>]*href=["\']/billing(?:/[^"\']*)?["\'][^>]*>.*?</a>',
+      r'<a\b[^>]*href=["\']/account/subscription(?:/[^"\']*)?["\'][^>]*>.*?</a>'
+    ]
+    for pattern in patterns:
+        html=_bc187_re.sub(pattern,"",html,flags=_bc187_re.I|_bc187_re.S)
+    return html
+
+_runtime.shell=_bc187_clean_shell
+
+def _bc187_project_id():
+    u=_runtime.current_user()
+    if not u: return None
+    try:
+        pid=_bc182b_default_project_id(u)
+        if pid: return int(pid)
+    except Exception: pass
+    try:
+        pid=_runtime.project_id()
+        if pid: return int(pid)
+    except Exception: pass
+    c=_runtime.db()
+    try:
+        r=c.execute("SELECT id FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 1",(u["company_id"],)).fetchone()
+        return int(r["id"]) if r else None
+    finally:
+        c.close()
+
+def _bc187_has_route(path):
+    return path in {getattr(r,"path","") for r in app.routes}
+
+def _bc187_card(path,label,description):
+    if not _bc187_has_route(path): return ""
+    return f'<div class="card"><h2>{_runtime.esc(label)}</h2><p>{_runtime.esc(description)}</p><a href="{path}">Open</a></div>'
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/app":
+        def _bc187_app_home():
+            u=_runtime.current_user()
+            if not u:
+                return _BC187_RedirectResponse("/login",status_code=303)
+            pid=_bc187_project_id()
+            c=_runtime.db()
+            try:
+                project=c.execute("SELECT id,name,number,status FROM projects WHERE id=? AND company_id=?",(pid,u["company_id"])).fetchone() if pid else None
+                projects=[dict(r) for r in c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name",(u["company_id"],)).fetchall()]
+            finally:
+                c.close()
+            if not project and projects:
+                project=projects[0]; pid=project["id"]
+            if not project:
+                return _runtime.shell("BuildCommand App","<div class='hero'><div class='eyebrow'>BUILDCOMMAND CONSTRUCTION APP</div><h1>No project selected.</h1><p>Create a project to begin.</p><p><a href='/projects/new'>Create Project</a></p></div>")
+            cards=""
+            cards+=_bc187_card(f"/superintendent-command/{pid}","Superintendent Command","Daily priorities, blockers, readiness, risks, and recommended field actions.")
+            cards+=_bc187_card("/blueprint-brain","Blueprint Brain","Read and organize plans, scopes, trades, and project requirements.")
+            cards+=_bc187_card("/submittals","Submittals","Track project submittals and approvals.")
+            cards+=_bc187_card("/documents","Documents","Access and manage project documents.")
+            cards+=_bc187_card("/daily-report","Daily Reports","Capture progress, manpower, delays, safety, and tomorrow's plan.")
+            cards+=_bc187_card("/knowledge-graph","Project Intelligence","Connect construction entities, relationships, and project knowledge.")
+            opts="".join(
+                f'<option value="{p["id"]}" {"selected" if int(p["id"])==int(pid) else ""}>{_runtime.esc(p["name"])}</option>'
+                for p in projects
+            )
+            body=(
+              f'<div class="hero"><div class="eyebrow">BUILDCOMMAND CONSTRUCTION APP</div><h1>{_runtime.esc(project["name"])}</h1>'
+              f'<p>{_runtime.esc(project["number"] or "")} {_runtime.esc(project["status"] or "")}</p>'
+              '<p>Construction tools only. Business-owner controls are intentionally separated.</p></div>'
+              f'<div class="card"><h2>Project</h2><form method="post" action="/app/select-project"><select name="project_id">{opts}</select> <button type="submit">Switch Project</button></form></div>'
+              f'<div class="grid3">{cards}</div>'
+              '<div class="card"><h2>Account</h2><p><a href="/account">Account & Sign Out</a></p></div>'
+            )
+            return _runtime.shell("BuildCommand App",body)
+        _route.endpoint=_bc187_app_home
+        break
+
+@app.post("/app/select-project")
+async def bc187_select_project(request:_runtime.Request):
+    u=_runtime.current_user()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    form=await request.form()
+    try: pid=int(form.get("project_id"))
+    except Exception: return _BC187_HTMLResponse("Invalid project.",status_code=400)
+    ok,_=_bc182b_set_default(pid,u)
+    if not ok: return _BC187_HTMLResponse("Project not available to this account.",status_code=404)
+    return _BC187_RedirectResponse("/app",status_code=303)
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/account/landing":
+        def _bc187_account_landing():
+            if not _runtime.current_user(): return _BC187_RedirectResponse("/login",status_code=303)
+            return _BC187_RedirectResponse("/app",status_code=303)
+        _route.endpoint=_bc187_account_landing
+        break
+
+@app.get("/api/app/cleanup-status")
+def bc187_cleanup_status():
+    return {"status":"ok","app":"BuildCommand AI","version":"1.8.18.7","construction_app":"/app","owner_business_ui_removed":True,"owner_backend_preserved":True,"future_owner_portal":"separate connected portal"}
+
+@app.get("/health/app-cleanup-1-8-18-7")
+def health_app_cleanup_18187():
+    paths={getattr(r,"path","") for r in app.routes}
+    c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres":
+        tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else:
+        tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[
+      ("1.8.18.6 backend preserved","/health/owner-sales-1-8-18-6" in paths),
+      ("construction app route","/app" in paths),
+      ("project switch route","/app/select-project" in paths),
+      ("cleanup status API","/api/app/cleanup-status" in paths),
+      ("role landing preserved","/account/landing" in paths),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Documents preserved","/documents" in paths),
+      ("Daily Reports preserved","/daily-report" in paths),
+      ("Project Intelligence preserved","/knowledge-graph" in paths),
+      ("Account preserved","/account" in paths),
+      ("projects preserved","projects" in tables),
+      ("default project preferences preserved","user_project_preferences" in tables),
+      ("owner customer backend preserved","owner_customer_actions" in tables),
+      ("owner financial backend preserved","owner_financial_snapshots" in tables),
+      ("owner sales backend preserved","owner_sales_leads" in tables),
+      ("subscriptions backend preserved","company_subscriptions" in tables),
+      ("billing backend preserved","billing_events" in tables),
+      ("plans backend preserved","platform_plans" in tables),
+      ("usage backend preserved","platform_usage_monthly" in tables),
+      ("owner overview API preserved","/owner/api/overview" in paths),
+      ("customer API preserved","/owner/api/customers" in paths),
+      ("financial API preserved","/owner/api/financial" in paths),
+      ("sales API preserved","/owner/api/sales" in paths),
+      ("public site preserved","/home" in paths),
+      ("public pricing preserved","/pricing" in paths),
+      ("PostgreSQL layer preserved",callable(getattr(_runtime,"db",None))),
+      ("legacy root preserved","/" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.7","release":"Construction App Cleanup & Owner Portal Separation","passed":passed,"total":len(checks),"failed":len(checks)-passed,"owner_business_ui":"removed from construction app","owner_backend":"preserved for future separate portal","checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.7"
+BUILD_COMMAND_RELEASE_NAME="Construction App Cleanup & Owner Portal Separation"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
