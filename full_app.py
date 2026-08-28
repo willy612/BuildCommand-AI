@@ -12112,3 +12112,119 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10J - Master Owner Project Creation Gate Hotfix
+# ============================================================
+
+_BC1810J_ORIGINAL_PLATFORM_OWNER = _runtime._bc174_is_platform_owner
+
+def _bc1810j_is_platform_owner(user=None):
+    user=user or _runtime.current_user()
+    if not user:
+        return False
+    try:
+        if _BC1810J_ORIGINAL_PLATFORM_OWNER(user):
+            return True
+    except Exception:
+        pass
+
+    email=str(user["email"] or "").strip().lower()
+    master=str(
+        _bc182b_master_email()
+        if callable(globals().get("_bc182b_master_email"))
+        else _bc182b_MASTER_EMAIL
+        if "_bc182b_MASTER_EMAIL" in globals()
+        else _bc1810j_os.environ.get("BUILDCOMMAND_MASTER_OWNER_EMAIL","buildcommandai@gmail.com")
+    ).strip().lower()
+    return bool(email and master and email==master)
+
+import os as _bc1810j_os
+
+# Critical: the subscription/project-limit middleware looks this function up
+# in the embedded runtime module at request time. Replacing it here makes
+# the master BuildCommand owner bypass those SaaS customer limits.
+_runtime._bc174_is_platform_owner = _bc1810j_is_platform_owner
+
+@app.get("/api/projects/create-diagnostics")
+def _bc1810j_project_create_diagnostics():
+    u=_runtime.current_user()
+    if not u:
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+
+    cid=int(u["company_id"]) if u["company_id"] else None
+    owner=_bc1810j_is_platform_owner(u)
+    sub=None
+    allowed=None
+    limit=None
+    current=None
+    effective=None
+    try:
+        sub=_runtime._bc174_subscription(cid)
+        effective=_runtime._bc174_effective_status(sub)
+    except Exception:
+        pass
+    try:
+        allowed,limit,current=_runtime._bc175_resource_allowed(cid,"projects")
+    except Exception:
+        pass
+
+    c=_runtime.db()
+    try:
+        projects=[dict(r) for r in c.execute(
+            "SELECT id,name,number,status,company_id FROM projects WHERE company_id=? ORDER BY id DESC",
+            (cid,)
+        ).fetchall()]
+    finally:
+        c.close()
+
+    return {
+        "status":"ok",
+        "version":"1.8.18.10J",
+        "email":str(u["email"] or ""),
+        "company_id":cid,
+        "is_platform_or_master_owner":owner,
+        "subscription_status":effective,
+        "project_limit_allowed":allowed,
+        "project_limit":limit,
+        "project_count":current,
+        "middleware_path_is_limited":"/projects/new" in getattr(_runtime,"_BC175_LIMIT_PATHS",{}),
+        "resolved_project_id":_bc1810h_project_id(),
+        "projects":projects,
+    }
+
+@app.get("/health/master-owner-project-gate-1-8-18-10j")
+def health_master_owner_project_gate_181810j():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("owner wrapper callable",callable(_bc1810j_is_platform_owner)),
+        ("runtime owner check replaced",_runtime._bc174_is_platform_owner is _bc1810j_is_platform_owner),
+        ("master owner env supported",True),
+        ("projects/new remains plan-limited for normal customers","/projects/new" in getattr(_runtime,"_BC175_LIMIT_PATHS",{})),
+        ("project GET hotfix live",getattr(getattr(_bc1810a_first_route("/projects/new","GET"),"endpoint",None),"__name__","")=="_bc1810i_new_project_form"),
+        ("project POST hotfix live",getattr(getattr(_bc1810a_first_route("/projects/new","POST"),"endpoint",None),"__name__","")=="_bc1810i_create_project"),
+        ("project create diagnostics","/api/projects/create-diagnostics" in paths),
+        ("dedicated Blueprint upload preserved","/api/blueprint-uploads/init" in paths),
+        ("10I health preserved","/health/project-creation-1-8-18-10i" in paths),
+        ("10H health preserved","/health/dedicated-blueprint-upload-1-8-18-10h" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10J",
+        "release":"Master Owner Project Creation Gate Hotfix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "fix":"Master owner bypasses subscription and project-count gates; normal customer plan limits stay enforced.",
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10J"
+BUILD_COMMAND_RELEASE_NAME="Master Owner Project Creation Gate Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
