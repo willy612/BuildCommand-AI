@@ -9641,7 +9641,8 @@ def _bc1810_blueprint_page():
                 size:file.size,
                 mime_type:file.type,
                 category:"PLANS",
-                title:title
+                title:title,
+                project_id:{pid}
               }})
             }});
             let j=await r.json();
@@ -10168,5 +10169,217 @@ def _bc1810b_health_live_route_binding_compat():
 _BC1810B_HEALTH_10A_ROUTE=_bc1810a_prepend_route(
     "/health/live-route-binding-1-8-18-10a",
     _bc1810b_health_live_route_binding_compat,
+    ["GET"],
+)
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10C - Explicit Project Upload Binding
+# ============================================================
+
+def _bc1810c_validate_project_id(candidate):
+    try:
+        pid=int(candidate)
+    except Exception:
+        return None
+    u=_runtime.current_user()
+    if not u:
+        return None
+    c=_runtime.db()
+    try:
+        row=c.execute(
+            "SELECT id FROM projects WHERE id=? AND company_id=?",
+            (pid,u["company_id"])
+        ).fetchone()
+        return int(row["id"]) if row else None
+    finally:
+        c.close()
+
+@app.post("/api/uploads/init-v1810c")
+async def _bc1810c_upload_init_impl(request:_BC189_Request):
+    user=_runtime.current_user()
+    if not user:
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+
+    try:
+        data=await request.json()
+    except Exception:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Invalid upload metadata."},
+            status_code=400
+        )
+
+    pid=_bc1810c_validate_project_id(data.get("project_id"))
+    if not pid:
+        pid=_bc1810b_upload_project_id()
+
+    if not pid:
+        return _BC189_JSONResponse(
+            {
+                "status":"error",
+                "error":"No valid active project could be resolved for this upload.",
+                "received_project_id":data.get("project_id"),
+                "company_id":_runtime.current_company_id(),
+            },
+            status_code=400
+        )
+
+    original=_runtime.safe_filename(str(data.get("filename") or ""))
+    ext,valid=_bc189_valid_ext(original)
+    try:
+        size=int(data.get("size") or 0)
+    except Exception:
+        size=0
+
+    if not original or not valid:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"File type not allowed."},
+            status_code=400
+        )
+    if size<=0 or size>BC189_MAX_FILE_BYTES:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"File must be between 1 byte and 500 MB."},
+            status_code=413
+        )
+
+    free=_bc189_free_bytes()
+    if free is not None and free<size+100*1024*1024:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Not enough upload storage available."},
+            status_code=507
+        )
+
+    token=_bc189_secrets.token_urlsafe(24)
+    stored=f"{_bc189_secrets.token_hex(12)}{ext}"
+    now=_BC189_datetime.utcnow().isoformat()
+
+    c=_runtime.db()
+    try:
+        c.execute(
+            "INSERT INTO large_upload_sessions("
+            "upload_token,company_id,project_id,category,title,original_name,stored_name,mime_type,"
+            "expected_bytes,received_bytes,status,created_by,created,updated"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                token,
+                _runtime.current_company_id(),
+                pid,
+                str(data.get("category") or "OTHER"),
+                str(data.get("title") or ""),
+                original,
+                stored,
+                str(data.get("mime_type") or _bc189_mimetypes.guess_type(original)[0] or "application/octet-stream"),
+                size,
+                0,
+                "UPLOADING",
+                _runtime.current_user_id(),
+                now,
+                now,
+            )
+        )
+        c.commit()
+    finally:
+        c.close()
+
+    with open(_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts",token+".part"),"wb"):
+        pass
+
+    return {
+        "status":"ok",
+        "version":"1.8.18.10C",
+        "upload_token":token,
+        "project_id":pid,
+        "chunk_bytes":BC189_CHUNK_BYTES,
+        "max_file_bytes":BC189_MAX_FILE_BYTES,
+    }
+
+_BC1810C_UPLOAD_INIT_ROUTE=_bc1810a_prepend_route(
+    "/api/uploads/init",
+    _bc1810c_upload_init_impl,
+    ["POST"],
+)
+
+@app.get("/health/explicit-project-upload-binding-1-8-18-10c")
+def health_explicit_project_upload_binding_181810c():
+    init_route=_bc1810a_first_route("/api/uploads/init","POST")
+    bp_route=_bc1810a_first_route("/blueprint-brain","GET")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("explicit project validator",callable(_bc1810c_validate_project_id)),
+        ("upload init first route",init_route is _BC1810C_UPLOAD_INIT_ROUTE),
+        ("upload init live handler",getattr(getattr(init_route,"endpoint",None),"__name__","")=="_bc1810c_upload_init_impl"),
+        ("Blueprint live page",getattr(getattr(bp_route,"endpoint",None),"__name__","")=="_bc1810_blueprint_page"),
+        ("500 MB upload",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("5 MB chunks",BC189_CHUNK_BYTES==5*1024*1024),
+        ("chunk route preserved","/api/uploads/{upload_token}/chunk" in paths),
+        ("complete route preserved","/api/uploads/{upload_token}/complete" in paths),
+        ("status route preserved","/api/uploads/{upload_token}/status" in paths),
+        ("Blueprint analyze preserved","/blueprint-brain/analyze" in paths),
+        ("Documents preserved","/documents" in paths),
+        ("1.8.18.10B preserved","/health/upload-project-context-1-8-18-10b" in paths),
+        ("1.8.18.10A preserved","/health/live-route-binding-1-8-18-10a" in paths),
+        ("1.8.18.10 preserved","/health/blueprint-unified-upload-analyze-1-8-18-10" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10C",
+        "release":"Explicit Project Upload Binding",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10C"
+BUILD_COMMAND_RELEASE_NAME="Explicit Project Upload Binding"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# Compatibility health override for 1.8.18.10B: 10C intentionally supersedes
+# the upload-init route while preserving the project-context protection.
+def _bc1810c_health_upload_project_context_compat():
+    init_route=_bc1810a_first_route("/api/uploads/init","POST")
+    doc_route=_bc1810a_first_route("/documents/upload","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("durable upload project resolver",callable(_bc1810b_upload_project_id)),
+        ("upload init first live route",getattr(getattr(init_route,"endpoint",None),"__name__","") in {"_bc1810b_upload_init_impl","_bc1810c_upload_init_impl"}),
+        ("upload init live handler",getattr(getattr(init_route,"endpoint",None),"__name__","") in {"_bc1810b_upload_init_impl","_bc1810c_upload_init_impl"}),
+        ("documents upload first live route",getattr(getattr(doc_route,"endpoint",None),"__name__","")=="_bc1810b_documents_upload"),
+        ("documents upload live handler",getattr(getattr(doc_route,"endpoint",None),"__name__","")=="_bc1810b_documents_upload"),
+        ("500 MB upload limit",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("5 MB chunk size",BC189_CHUNK_BYTES==5*1024*1024),
+        ("large upload session table helper preserved",callable(_bc189_init)),
+        ("upload chunk route preserved","/api/uploads/{upload_token}/chunk" in paths),
+        ("upload complete route preserved","/api/uploads/{upload_token}/complete" in paths),
+        ("upload status route preserved","/api/uploads/{upload_token}/status" in paths),
+        ("Blueprint page preserved","/blueprint-brain" in paths),
+        ("Blueprint analyze preserved","/blueprint-brain/analyze" in paths),
+        ("Documents page preserved","/documents" in paths),
+        ("Document download preserved","/documents/{attachment_id}/download" in paths),
+        ("1.8.18.10A preserved","/health/live-route-binding-1-8-18-10a" in paths),
+        ("1.8.18.10 preserved","/health/blueprint-unified-upload-analyze-1-8-18-10" in paths),
+        ("PostgreSQL DB helper preserved",callable(getattr(_runtime,"db",None))),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10B",
+        "release":"Upload Project Context Hotfix (compatible with 1.8.18.10C)",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+_BC1810C_HEALTH_10B_ROUTE=_bc1810a_prepend_route(
+    "/health/upload-project-context-1-8-18-10b",
+    _bc1810c_health_upload_project_context_compat,
     ["GET"],
 )
