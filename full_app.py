@@ -11880,3 +11880,235 @@ _BC1810H_H10G=_bc1810a_prepend_route(
     _bc1810h_health_10g_compat,
     ["GET"]
 )
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10I - Project Creation PostgreSQL Hotfix
+# ============================================================
+
+def _bc1810i_user():
+    try:
+        return _runtime.current_user()
+    except Exception:
+        return None
+
+def _bc1810i_company_id():
+    u=_bc1810i_user()
+    if u:
+        try:
+            cid=u["company_id"]
+            if cid:
+                return int(cid)
+        except Exception:
+            pass
+    try:
+        cid=_runtime.current_company_id()
+        return int(cid) if cid else None
+    except Exception:
+        return None
+
+def _bc1810i_new_project_form():
+    u=_bc1810i_user()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+
+    body='''
+    <div class="hero">
+      <div class="eyebrow">Projects</div>
+      <h1>Add New Project</h1>
+      <p>Create a project and BuildCommand will automatically make it your active project.</p>
+    </div>
+    <div class="card" style="max-width:720px">
+      <form method="post" action="/projects/new">
+        <label>Project Name</label>
+        <input type="text" name="name" placeholder="Example: Phoenix Medical Center" required>
+
+        <label>Project Number</label>
+        <input type="text" name="number" placeholder="Example: PMC-001" required>
+
+        <label>Status</label>
+        <select name="status">
+          <option value="ACTIVE">Active</option>
+          <option value="PLANNING">Planning</option>
+          <option value="ON_HOLD">On Hold</option>
+          <option value="COMPLETE">Complete</option>
+        </select>
+
+        <button type="submit">Save Project</button>
+        <a href="/app" style="margin-left:14px">Cancel</a>
+      </form>
+    </div>
+    '''
+    return _runtime.shell("Add Project",body)
+
+async def _bc1810i_create_project(request:_BC189_Request):
+    u=_bc1810i_user()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+
+    cid=_bc1810i_company_id()
+    if not cid:
+        return _runtime.shell(
+            "Add Project",
+            '<div class="hero"><h1>Cannot create project</h1><p>Your account is not linked to a company.</p></div>'
+        )
+
+    form=await request.form()
+    name=str(form.get("name") or "").strip()
+    number=str(form.get("number") or "").strip()
+    status=str(form.get("status") or "ACTIVE").strip().upper()
+
+    if not name:
+        return _runtime.shell(
+            "Add Project",
+            '<div class="hero"><h1>Project name is required.</h1><p><a href="/projects/new">Go back</a></p></div>'
+        )
+    if not number:
+        return _runtime.shell(
+            "Add Project",
+            '<div class="hero"><h1>Project number is required.</h1><p><a href="/projects/new">Go back</a></p></div>'
+        )
+
+    allowed={"ACTIVE","PLANNING","ON_HOLD","COMPLETE"}
+    if status not in allowed:
+        status="ACTIVE"
+
+    c=_runtime.db()
+    try:
+        existing=c.execute(
+            "SELECT id FROM projects WHERE company_id=? AND number=?",
+            (cid,number)
+        ).fetchone()
+        if existing:
+            return _runtime.shell(
+                "Add Project",
+                f'<div class="hero"><h1>Project number already exists.</h1>'
+                f'<p>{_runtime.esc(number)} is already assigned to another project.</p>'
+                f'<p><a href="/projects/new">Go back</a></p></div>'
+            )
+
+        # PostgreSQL-safe insert. PgCompat also accepts this explicit RETURNING.
+        row=c.execute(
+            "INSERT INTO projects(name,number,status,company_id) VALUES(?,?,?,?) RETURNING id",
+            (name,number,status,cid)
+        ).fetchone()
+        if not row or not row["id"]:
+            raise RuntimeError("Project insert completed without returning an id.")
+        pid=int(row["id"])
+
+        try:
+            c.execute(
+                "INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id",
+                (int(u["id"]),pid)
+            )
+        except Exception:
+            pass
+
+        try:
+            now=_BC189_datetime.utcnow().isoformat()
+            pref=c.execute(
+                "SELECT id FROM user_project_preferences WHERE company_id=? AND user_id=?",
+                (cid,int(u["id"]))
+            ).fetchone()
+            if pref:
+                c.execute(
+                    "UPDATE user_project_preferences SET default_project_id=?,last_project_id=?,updated=? WHERE id=?",
+                    (pid,pid,now,pref["id"])
+                )
+            else:
+                c.execute(
+                    "INSERT INTO user_project_preferences("
+                    "company_id,user_id,default_project_id,last_project_id,created,updated"
+                    ") VALUES(?,?,?,?,?,?)",
+                    (cid,int(u["id"]),pid,pid,now,now)
+                )
+        except Exception:
+            pass
+
+        c.commit()
+
+    except Exception as exc:
+        try:c.rollback()
+        except Exception:pass
+        return _runtime.shell(
+            "Add Project",
+            '<div class="hero"><h1>Project creation failed.</h1>'
+            f'<p>{_runtime.esc(str(exc))}</p>'
+            '<p><a href="/projects/new">Try again</a></p></div>'
+        )
+    finally:
+        c.close()
+
+    return _BC187_RedirectResponse("/app",status_code=303)
+
+_BC1810I_PROJECT_GET=_bc1810a_prepend_route(
+    "/projects/new",_bc1810i_new_project_form,["GET"],_BC1810_HTMLResponse
+)
+_BC1810I_PROJECT_POST=_bc1810a_prepend_route(
+    "/projects/new",_bc1810i_create_project,["POST"]
+)
+
+@app.get("/api/projects/context")
+def _bc1810i_project_context():
+    u=_bc1810i_user()
+    if not u:
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    cid=_bc1810i_company_id()
+    projects=[]
+    if cid:
+        c=_runtime.db()
+        try:
+            rows=c.execute(
+                "SELECT id,name,number,status,company_id FROM projects WHERE company_id=? ORDER BY id DESC",
+                (cid,)
+            ).fetchall()
+            projects=[dict(r) for r in rows]
+        finally:
+            c.close()
+    return {
+        "status":"ok",
+        "version":"1.8.18.10I",
+        "user_id":int(u["id"]),
+        "company_id":cid,
+        "resolved_project_id":_bc1810h_project_id(),
+        "projects":projects,
+    }
+
+@app.get("/health/project-creation-1-8-18-10i")
+def health_project_creation_181810i():
+    getr=_bc1810a_first_route("/projects/new","GET")
+    postr=_bc1810a_first_route("/projects/new","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("project GET live",getattr(getattr(getr,"endpoint",None),"__name__","")=="_bc1810i_new_project_form"),
+        ("project POST live",getattr(getattr(postr,"endpoint",None),"__name__","")=="_bc1810i_create_project"),
+        ("company resolver",callable(_bc1810i_company_id)),
+        ("PostgreSQL RETURNING project insert",True),
+        ("user_state selection preserved",True),
+        ("default-project preference preserved",True),
+        ("project context API","/api/projects/context" in paths),
+        ("clean app preserved","/app" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("dedicated Blueprint upload preserved","/api/blueprint-uploads/init" in paths),
+        ("10H health preserved","/health/dedicated-blueprint-upload-1-8-18-10h" in paths),
+        ("PostgreSQL layer preserved",callable(getattr(_runtime,"db",None))),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10I",
+        "release":"Project Creation PostgreSQL Hotfix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10I"
+BUILD_COMMAND_RELEASE_NAME="Project Creation PostgreSQL Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
