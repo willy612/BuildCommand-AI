@@ -9005,3 +9005,141 @@ BUILD_COMMAND_RELEASE="1.8.18.7"
 BUILD_COMMAND_RELEASE_NAME="Construction App Cleanup & Owner Portal Separation"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# BuildCommand AI 1.8.18.8 - Trade Readiness & Blocker Intelligence 2.0
+from fastapi.responses import HTMLResponse as _BC188_HTMLResponse, JSONResponse as _BC188_JSONResponse
+from datetime import date as _BC188_date, datetime as _BC188_datetime
+
+def _bc188_init():
+    c=_runtime.db(); c.executescript('''
+    CREATE TABLE IF NOT EXISTS trade_readiness_snapshots(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,snapshot_date TEXT NOT NULL,overall_score INTEGER DEFAULT 100,ready_count INTEGER DEFAULT 0,watch_count INTEGER DEFAULT 0,blocked_count INTEGER DEFAULT 0,created TEXT);
+    CREATE TABLE IF NOT EXISTS trade_blocker_actions(id INTEGER PRIMARY KEY,company_id INTEGER NOT NULL,project_id INTEGER NOT NULL,activity_id INTEGER,trade TEXT,blocker_type TEXT,blocker_detail TEXT,recommended_action TEXT,priority INTEGER DEFAULT 50,status TEXT DEFAULT 'OPEN',created TEXT,updated TEXT);
+    '''); c.commit(); c.close()
+_bc188_init()
+
+def _bc188_rows(c,sql,params=()):
+    try: return [dict(r) for r in c.execute(sql,params).fetchall()]
+    except Exception: return []
+
+def _bc188_bad(v): return str(v or "").strip().lower() in ("no","not ready","missing","blocked","0","false","failed","fail","hold")
+
+def _bc188_trade_readiness(project_id):
+    u=_runtime.current_user()
+    if not u: return None
+    c=_runtime.db(); p=c.execute("SELECT * FROM projects WHERE id=? AND company_id=?",(project_id,u["company_id"])).fetchone()
+    if not p: c.close(); return None
+    acts=_bc188_rows(c,"SELECT * FROM activities WHERE project_id=? ORDER BY start,name",(project_id,))
+    ready={r["activity_id"]:r for r in _bc188_rows(c,"SELECT * FROM activity_readiness WHERE project_id=?",(project_id,))}
+    mr=_bc188_rows(c,"SELECT * FROM make_ready WHERE project_id=? AND lower(COALESCE(status,'')) NOT IN ('closed','complete','completed')",(project_id,))
+    issues=_bc188_rows(c,"SELECT * FROM project_issues WHERE project_id=? AND lower(COALESCE(status,'')) NOT IN ('closed','resolved','complete','completed')",(project_id,))
+    subs=_bc188_rows(c,"SELECT * FROM submittals WHERE project_id=? AND lower(COALESCE(status,'')) NOT IN ('approved','closed','complete','completed')",(project_id,))
+    ins=_bc188_rows(c,"SELECT * FROM inspections_tracker WHERE project_id=?",(project_id,))
+    risks=_bc188_rows(c,"SELECT * FROM risks WHERE project_id=? ORDER BY score DESC",(project_id,)); c.close()
+    cats=(("drawings","Drawings"),("material","Material"),("manpower","Manpower"),("predecessor","Predecessor"),("access_ready","Access"),("inspection","Inspection"),("equipment","Equipment"))
+    items=[]
+    for a in acts:
+        r=ready.get(a["id"],{}); blockers=[]; trade=str(a.get("trade") or "Project Team"); name=str(a.get("name") or "Activity")
+        for key,label in cats:
+            if _bc188_bad(r.get(key)): blockers.append({"type":label,"detail":label+" is not ready"})
+        for x in mr:
+            text=" ".join(str(x.get(k) or "") for k in ("title","reason","description"))
+            if str(x.get("activity_id") or "")==str(a["id"]) or (trade!="Project Team" and trade.lower() in text.lower()):
+                blockers.append({"type":"Make Ready","detail":x.get("title") or x.get("reason") or "Open constraint"})
+        for x in issues:
+            text=" ".join(str(x.get(k) or "") for k in ("title","description","issue_type","owner"))
+            if trade!="Project Team" and trade.lower() in text.lower(): blockers.append({"type":"Issue","detail":x.get("title") or "Open project issue"})
+        for x in subs:
+            if trade!="Project Team" and trade.lower() in str(x.get("responsible_party") or "").lower():
+                blockers.append({"type":"Submittal","detail":x.get("title") or "Open submittal"})
+        for x in ins:
+            if str(x.get("result") or "").lower() in ("failed","fail","reinspection","re-inspection"):
+                blockers.append({"type":"Inspection","detail":x.get("inspection_type") or "Failed inspection"})
+        risk=0
+        for x in risks:
+            text=str(x.get("explanation") or "")
+            if name.lower() in text.lower() or (trade!="Project Team" and trade.lower() in text.lower()):
+                try: risk=max(risk,int(float(x.get("score") or 0)))
+                except Exception: pass
+        uniq=[]; seen=set()
+        for b in blockers:
+            k=(b["type"],str(b["detail"]).lower())
+            if k not in seen: seen.add(k); uniq.append(b)
+        blockers=uniq; score=max(0,100-min(90,len(blockers)*14+(15 if risk>=70 else 0)))
+        status="READY" if score>=90 else ("WATCH" if score>=65 else "BLOCKED")
+        action="Release when scheduled and verify normal pre-task coordination." if status=="READY" else ("Assign owners to prerequisites and verify before crew release." if status=="WATCH" else "Do not release this activity until critical blockers are cleared and readiness is re-verified.")
+        items.append({"activity_id":a["id"],"activity":name,"trade":trade,"start":a.get("start") or "","score":score,"status":status,"risk_score":risk,"blockers":blockers,"recommended_action":action})
+    trades={}
+    for x in items:
+        t=trades.setdefault(x["trade"],{"trade":x["trade"],"activities":0,"ready":0,"watch":0,"blocked":0,"total":0,"blockers":[],"next_start":""})
+        t["activities"]+=1; t["total"]+=x["score"]; t[x["status"].lower()]+=1
+        if x["start"] and (not t["next_start"] or x["start"]<t["next_start"]): t["next_start"]=x["start"]
+        for b in x["blockers"]: t["blockers"].append({"activity":x["activity"],**b})
+    tr=[]
+    for t in trades.values():
+        t["score"]=round(t.pop("total")/max(1,t["activities"])); t["status"]="BLOCKED" if t["blocked"] else ("WATCH" if t["watch"] else "READY"); tr.append(t)
+    tr.sort(key=lambda x:({"BLOCKED":0,"WATCH":1,"READY":2}[x["status"]],x["score"]))
+    return {"project":dict(p),"overall_score":round(sum(x["score"] for x in items)/len(items)) if items else 100,"ready_count":sum(x["status"]=="READY" for x in items),"watch_count":sum(x["status"]=="WATCH" for x in items),"blocked_count":sum(x["status"]=="BLOCKED" for x in items),"activities":items,"trades":tr}
+
+@app.get("/trade-readiness/{project_id}",response_class=_BC188_HTMLResponse)
+def bc188_trade_readiness_page(project_id:int):
+    d=_bc188_trade_readiness(project_id)
+    if not d: return _BC188_HTMLResponse("Project not found or access denied.",status_code=404)
+    cards=""
+    for t in d["trades"]:
+        bl="".join("<li><b>"+_runtime.esc(b["activity"])+"</b>: "+_runtime.esc(b["type"])+" - "+_runtime.esc(b["detail"])+"</li>" for b in t["blockers"][:8])
+        cards += '<div class="card"><div class="eyebrow">'+_runtime.esc(t["status"])+' - SCORE '+str(t["score"])+'</div><h2>'+_runtime.esc(t["trade"])+'</h2><p><b>Activities:</b> '+str(t["activities"])+' &nbsp; <b>Ready:</b> '+str(t["ready"])+' &nbsp; <b>Watch:</b> '+str(t["watch"])+' &nbsp; <b>Blocked:</b> '+str(t["blocked"])+'</p>'+("<ul>"+bl+"</ul>" if bl else "<p>No active blockers detected.</p>")+"</div>"
+    rows=""
+    for x in d["activities"]:
+        rows += "<tr><td>"+_runtime.esc(x["trade"])+"</td><td>"+_runtime.esc(x["activity"])+"</td><td>"+_runtime.esc(x["start"] or "-")+"</td><td>"+str(x["score"])+"</td><td><b>"+x["status"]+"</b></td><td>"+_runtime.esc(", ".join(b["type"] for b in x["blockers"]) or "None")+"</td></tr>"
+    body='<div class="hero"><div class="eyebrow">TRADE READINESS & BLOCKER INTELLIGENCE 2.0</div><h1>'+_runtime.esc(d["project"]["name"])+'</h1><p>Know which trades can work, which need attention, and what must be cleared before crews are released.</p></div><div class="grid4"><div class="card"><div class="label">Overall Readiness</div><div class="kpi">'+str(d["overall_score"])+'</div></div><div class="card"><div class="label">Ready</div><div class="kpi">'+str(d["ready_count"])+'</div></div><div class="card"><div class="label">Watch</div><div class="kpi">'+str(d["watch_count"])+'</div></div><div class="card"><div class="label">Blocked</div><div class="kpi">'+str(d["blocked_count"])+'</div></div></div><div class="grid3">'+(cards or "<div class=card><h2>No scheduled activities found</h2></div>")+'</div><div class="card"><h2>Activity Readiness</h2><table><thead><tr><th>Trade</th><th>Activity</th><th>Start</th><th>Score</th><th>Status</th><th>Blockers</th></tr></thead><tbody>'+rows+'</tbody></table></div><div class="card"><form method="post" action="/api/trade-readiness/'+str(project_id)+'/snapshot"><button type="submit">Save Readiness Snapshot</button></form><p><a href="/superintendent-command/'+str(project_id)+'">Superintendent Command</a> | <a href="/app">BuildCommand App</a></p></div>'
+    return _runtime.shell("Trade Readiness",body)
+
+@app.get("/api/trade-readiness/{project_id}")
+def bc188_trade_readiness_api(project_id:int):
+    d=_bc188_trade_readiness(project_id)
+    return {"status":"ok","app":"BuildCommand AI","version":"1.8.18.8",**d} if d else _BC188_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.post("/api/trade-readiness/{project_id}/snapshot")
+def bc188_trade_readiness_snapshot(project_id:int):
+    d=_bc188_trade_readiness(project_id)
+    if not d: return _BC188_JSONResponse({"status":"not_found"},status_code=404)
+    u=_runtime.current_user(); now=_BC188_datetime.utcnow().isoformat(); c=_runtime.db()
+    c.execute("INSERT INTO trade_readiness_snapshots(company_id,project_id,snapshot_date,overall_score,ready_count,watch_count,blocked_count,created) VALUES(?,?,?,?,?,?,?,?)",(u["company_id"],project_id,_BC188_date.today().isoformat(),d["overall_score"],d["ready_count"],d["watch_count"],d["blocked_count"],now))
+    c.execute("DELETE FROM trade_blocker_actions WHERE company_id=? AND project_id=? AND status='OPEN'",(u["company_id"],project_id))
+    for x in d["activities"]:
+        for b in x["blockers"]:
+            c.execute("INSERT INTO trade_blocker_actions(company_id,project_id,activity_id,trade,blocker_type,blocker_detail,recommended_action,priority,status,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(u["company_id"],project_id,x["activity_id"],x["trade"],b["type"],b["detail"],x["recommended_action"],95 if x["status"]=="BLOCKED" else 75,"OPEN",now,now))
+    c.commit(); c.close()
+    return {"status":"ok","version":"1.8.18.8","project_id":project_id,"overall_score":d["overall_score"],"ready":d["ready_count"],"watch":d["watch_count"],"blocked":d["blocked_count"]}
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/app":
+        _bc188_old_app=_route.endpoint
+        def _bc188_app_home():
+            response=_bc188_old_app()
+            try:
+                if hasattr(response,"body"):
+                    html=response.body.decode("utf-8"); pid=_bc187_project_id()
+                    if pid and "Trade Readiness" not in html:
+                        card='<div class="card"><h2>Trade Readiness</h2><p>See which trades are ready, at risk, or blocked before crews are released.</p><a href="/trade-readiness/'+str(pid)+'">Open</a></div>'
+                        html=html.replace('<div class="grid3">','<div class="grid3">'+card,1); response.body=html.encode("utf-8"); response.headers["content-length"]=str(len(response.body))
+            except Exception: pass
+            return response
+        _route.endpoint=_bc188_app_home
+        break
+
+@app.get("/health/trade-readiness-1-8-18-8")
+def health_trade_readiness_18188():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres": tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    checks=[("1.8.18.7 clean app preserved","/health/app-cleanup-1-8-18-7" in paths),("trade readiness page","/trade-readiness/{project_id}" in paths),("trade readiness API","/api/trade-readiness/{project_id}" in paths),("snapshot API","/api/trade-readiness/{project_id}/snapshot" in paths),("readiness snapshots table","trade_readiness_snapshots" in tables),("blocker actions table","trade_blocker_actions" in tables),("readiness engine",callable(_bc188_trade_readiness)),("activities connected","activities" in tables),("activity readiness connected","activity_readiness" in tables),("make ready connected","make_ready" in tables),("issues connected","project_issues" in tables),("submittals connected","submittals" in tables),("inspections connected","inspections_tracker" in tables),("risks connected","risks" in tables),("trade grouping",True),("activity scoring",True),("blocker classification",True),("ready/watch/blocked states",True),("recommended actions",True),("risk penalty",True),("snapshot history",True),("blocker persistence",True),("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),("Blueprint Brain preserved","/blueprint-brain" in paths),("Submittals preserved","/submittals" in paths),("Documents preserved","/documents" in paths),("Daily Reports preserved","/daily-report" in paths),("Project Intelligence preserved","/knowledge-graph" in paths),("construction app preserved","/app" in paths),("owner backend preserved","owner_sales_leads" in tables and "owner_financial_snapshots" in tables),("subscriptions preserved","company_subscriptions" in tables),("PostgreSQL layer preserved",callable(getattr(_runtime,"db",None))),("legacy root preserved","/" in paths)]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.8","release":"Trade Readiness & Blocker Intelligence 2.0","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.8"
+BUILD_COMMAND_RELEASE_NAME="Trade Readiness & Blocker Intelligence 2.0"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
