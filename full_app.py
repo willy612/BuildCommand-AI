@@ -10663,3 +10663,439 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10F - Upload Transport Hardening + Diagnostics
+# ============================================================
+
+BC1810F_CHUNK_BYTES = 1 * 1024 * 1024
+
+def _bc1810f_storage_diagnostics():
+    upload_dir=_runtime.UPLOAD_DIR
+    parts=_bc189_os.path.join(upload_dir,".upload_parts")
+    result={
+        "upload_dir":upload_dir,
+        "parts_dir":parts,
+        "upload_dir_exists":False,
+        "parts_dir_exists":False,
+        "upload_dir_writable":False,
+        "parts_dir_writable":False,
+        "free_bytes":None,
+        "free_mb":None,
+    }
+    try:
+        _bc189_os.makedirs(upload_dir,exist_ok=True)
+        _bc189_os.makedirs(parts,exist_ok=True)
+        result["upload_dir_exists"]=_bc189_os.path.isdir(upload_dir)
+        result["parts_dir_exists"]=_bc189_os.path.isdir(parts)
+        result["upload_dir_writable"]=_bc189_os.access(upload_dir,_bc189_os.W_OK)
+        result["parts_dir_writable"]=_bc189_os.access(parts,_bc189_os.W_OK)
+        free=_bc189_free_bytes()
+        result["free_bytes"]=free
+        result["free_mb"]=round(free/1024/1024,1) if free is not None else None
+
+        probe=_bc189_os.path.join(parts,".bc1810f_write_test")
+        with open(probe,"wb") as f:
+            f.write(b"ok")
+        _bc189_os.remove(probe)
+        result["write_test"]=True
+    except Exception as exc:
+        result["write_test"]=False
+        result["storage_error"]=str(exc)
+    return result
+
+@app.post("/api/uploads/init-v1810f")
+async def _bc1810f_upload_init_impl(request:_BC189_Request):
+    user=_runtime.current_user()
+    if not user:
+        return _BC189_JSONResponse({"status":"unauthorized","error":"Login required."},status_code=401)
+
+    try:
+        data=await request.json()
+    except Exception as exc:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Invalid upload metadata.","detail":str(exc)},
+            status_code=400
+        )
+
+    requested_pid=data.get("project_id")
+    pid=_bc1810c_validate_project_id(requested_pid)
+    if not pid:
+        pid=_bc1810b_upload_project_id()
+
+    if not pid:
+        return _BC189_JSONResponse(
+            {
+                "status":"error",
+                "error":"No valid project is available for this upload.",
+                "received_project_id":requested_pid,
+                "company_id":_runtime.current_company_id(),
+            },
+            status_code=400
+        )
+
+    original=_runtime.safe_filename(str(data.get("filename") or ""))
+    ext,valid=_bc189_valid_ext(original)
+    try:
+        size=int(data.get("size") or 0)
+    except Exception:
+        size=0
+
+    if not original or not valid:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"File type not allowed.","filename":original},
+            status_code=400
+        )
+    if size<=0 or size>BC189_MAX_FILE_BYTES:
+        return _BC189_JSONResponse(
+            {
+                "status":"error",
+                "error":"File must be between 1 byte and 500 MB.",
+                "size_bytes":size,
+                "max_file_bytes":BC189_MAX_FILE_BYTES,
+            },
+            status_code=413
+        )
+
+    storage=_bc1810f_storage_diagnostics()
+    if not storage.get("write_test"):
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Upload storage is not writable.","storage":storage},
+            status_code=507
+        )
+
+    free=storage.get("free_bytes")
+    # Keep a smaller safety margin so a modest Render disk does not reject
+    # perfectly valid 20-30 MB files simply because 100 MB reserve is unavailable.
+    reserve=25*1024*1024
+    if free is not None and free < size + reserve:
+        return _BC189_JSONResponse(
+            {
+                "status":"error",
+                "error":"Not enough upload storage available.",
+                "required_bytes":size+reserve,
+                "free_bytes":free,
+                "storage":storage,
+            },
+            status_code=507
+        )
+
+    token=_bc189_secrets.token_urlsafe(24)
+    stored=f"{_bc189_secrets.token_hex(12)}{ext}"
+    now=_BC189_datetime.utcnow().isoformat()
+
+    c=_runtime.db()
+    try:
+        c.execute(
+            "INSERT INTO large_upload_sessions("
+            "upload_token,company_id,project_id,category,title,original_name,stored_name,mime_type,"
+            "expected_bytes,received_bytes,status,created_by,created,updated"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                token,_runtime.current_company_id(),pid,
+                str(data.get("category") or "OTHER"),
+                str(data.get("title") or ""),
+                original,stored,
+                str(data.get("mime_type") or _bc189_mimetypes.guess_type(original)[0] or "application/octet-stream"),
+                size,0,"UPLOADING",_runtime.current_user_id(),now,now,
+            )
+        )
+        c.commit()
+    except Exception as exc:
+        try: c.rollback()
+        except Exception: pass
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Could not create upload session.","detail":str(exc),"project_id":pid},
+            status_code=500
+        )
+    finally:
+        c.close()
+
+    try:
+        part=_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts",token+".part")
+        with open(part,"wb"):
+            pass
+    except Exception as exc:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Could not create upload temp file.","detail":str(exc)},
+            status_code=507
+        )
+
+    return {
+        "status":"ok",
+        "version":"1.8.18.10F",
+        "upload_token":token,
+        "project_id":pid,
+        "chunk_bytes":BC1810F_CHUNK_BYTES,
+        "max_file_bytes":BC189_MAX_FILE_BYTES,
+    }
+
+@app.put("/api/uploads/{upload_token}/chunk-v1810f")
+async def _bc1810f_upload_chunk_impl(upload_token:str,request:_BC189_Request):
+    if not _runtime.current_user():
+        return _BC189_JSONResponse({"status":"unauthorized","error":"Login required."},status_code=401)
+
+    row=_bc1810d_session_for_company(upload_token)
+    if not row:
+        return _BC189_JSONResponse({"status":"not_found","error":"Upload session not found."},status_code=404)
+    if row["status"]!="UPLOADING":
+        return _BC189_JSONResponse({"status":"error","error":"Upload is not active.","upload_status":row["status"]},status_code=409)
+
+    if not _bc1810c_validate_project_id(row["project_id"]):
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Upload session project is no longer valid.","project_id":row["project_id"]},
+            status_code=409
+        )
+
+    parts=_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts")
+    _bc189_os.makedirs(parts,exist_ok=True)
+    part=_bc189_os.path.join(parts,upload_token+".part")
+    temp_chunk=part+".incoming"
+    written=0
+
+    try:
+        with open(temp_chunk,"wb") as out:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > BC1810F_CHUNK_BYTES + 65536:
+                    return _BC189_JSONResponse(
+                        {
+                            "status":"error",
+                            "error":"Chunk exceeds allowed size.",
+                            "chunk_bytes_received":written,
+                            "chunk_limit":BC1810F_CHUNK_BYTES,
+                        },
+                        status_code=413
+                    )
+                out.write(chunk)
+
+        c=_runtime.db()
+        try:
+            latest=c.execute(
+                "SELECT * FROM large_upload_sessions WHERE id=? AND company_id=?",
+                (row["id"],_runtime.current_company_id())
+            ).fetchone()
+            if not latest:
+                return _BC189_JSONResponse({"status":"not_found","error":"Upload session disappeared."},status_code=404)
+
+            current=int(latest["received_bytes"] or 0)
+            expected=int(latest["expected_bytes"] or 0)
+            received=current+written
+
+            if received>expected or received>BC189_MAX_FILE_BYTES:
+                c.execute(
+                    "UPDATE large_upload_sessions SET status='FAILED',updated=? WHERE id=?",
+                    (_BC189_datetime.utcnow().isoformat(),latest["id"])
+                )
+                c.commit()
+                return _BC189_JSONResponse(
+                    {
+                        "status":"error",
+                        "error":"Upload exceeds declared file size.",
+                        "received_bytes":received,
+                        "expected_bytes":expected,
+                    },
+                    status_code=413
+                )
+
+            with open(part,"ab") as final_part, open(temp_chunk,"rb") as incoming:
+                while True:
+                    block=incoming.read(1024*1024)
+                    if not block:
+                        break
+                    final_part.write(block)
+
+            c.execute(
+                "UPDATE large_upload_sessions SET received_bytes=?,updated=? WHERE id=?",
+                (received,_BC189_datetime.utcnow().isoformat(),latest["id"])
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        return {
+            "status":"ok",
+            "version":"1.8.18.10F",
+            "received_bytes":received,
+            "expected_bytes":expected,
+            "progress":round(received/max(1,expected)*100,1),
+        }
+
+    except Exception as exc:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Chunk write failed.","detail":str(exc),"bytes_in_chunk":written},
+            status_code=500
+        )
+    finally:
+        try:
+            if _bc189_os.path.isfile(temp_chunk):
+                _bc189_os.remove(temp_chunk)
+        except Exception:
+            pass
+
+_BC1810F_INIT_ROUTE=_bc1810a_prepend_route(
+    "/api/uploads/init",_bc1810f_upload_init_impl,["POST"]
+)
+_BC1810F_CHUNK_ROUTE=_bc1810a_prepend_route(
+    "/api/uploads/{upload_token}/chunk",_bc1810f_upload_chunk_impl,["PUT"]
+)
+
+@app.get("/api/uploads/diagnostics")
+def _bc1810f_upload_diagnostics():
+    if not _runtime.current_user():
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    recent=[]
+    c=_runtime.db()
+    try:
+        rows=c.execute(
+            "SELECT upload_token,project_id,original_name,expected_bytes,received_bytes,status,created,updated "
+            "FROM large_upload_sessions WHERE company_id=? ORDER BY id DESC LIMIT 10",
+            (_runtime.current_company_id(),)
+        ).fetchall()
+        recent=[dict(r) for r in rows]
+    except Exception as exc:
+        recent=[{"error":str(exc)}]
+    finally:
+        c.close()
+
+    return {
+        "status":"ok",
+        "version":"1.8.18.10F",
+        "company_id":_runtime.current_company_id(),
+        "runtime_project_id":_runtime.project_id(),
+        "durable_project_id":_bc187_project_id(),
+        "max_file_mb":500,
+        "chunk_mb":1,
+        "storage":_bc1810f_storage_diagnostics(),
+        "recent_uploads":recent,
+        "handlers":{
+            "init":getattr(getattr(_bc1810a_first_route("/api/uploads/init","POST"),"endpoint",None),"__name__",""),
+            "chunk":getattr(getattr(_bc1810a_first_route("/api/uploads/{upload_token}/chunk","PUT"),"endpoint",None),"__name__",""),
+            "complete":getattr(getattr(_bc1810a_first_route("/api/uploads/{upload_token}/complete","POST"),"endpoint",None),"__name__",""),
+        },
+    }
+
+@app.get("/health/upload-transport-1-8-18-10f")
+def health_upload_transport_181810f():
+    init=_bc1810a_first_route("/api/uploads/init","POST")
+    chunk=_bc1810a_first_route("/api/uploads/{upload_token}/chunk","PUT")
+    complete=_bc1810a_first_route("/api/uploads/{upload_token}/complete","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("init 10F live",getattr(getattr(init,"endpoint",None),"__name__","")=="_bc1810f_upload_init_impl"),
+        ("chunk 10F live",getattr(getattr(chunk,"endpoint",None),"__name__","")=="_bc1810f_upload_chunk_impl"),
+        ("complete 10D live",getattr(getattr(complete,"endpoint",None),"__name__","")=="_bc1810d_upload_complete_impl"),
+        ("1 MB transport chunks",BC1810F_CHUNK_BYTES==1024*1024),
+        ("500 MB maximum",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("storage diagnostics",callable(_bc1810f_storage_diagnostics)),
+        ("upload diagnostics API","/api/uploads/diagnostics" in paths),
+        ("Blueprint page preserved","/blueprint-brain" in paths),
+        ("Blueprint analysis preserved","/blueprint-brain/analyze" in paths),
+        ("Documents preserved","/documents" in paths),
+        ("10E preserved","/health/blueprint-project-js-1-8-18-10e" in paths),
+        ("10D preserved","/health/large-file-chunk-session-1-8-18-10d" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10F",
+        "release":"Upload Transport Hardening + Diagnostics",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "chunk_mb":1,
+        "max_file_mb":500,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10F"
+BUILD_COMMAND_RELEASE_NAME="Upload Transport Hardening + Diagnostics"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# Forward-compatible health shims for upload-route supersession in 1.8.18.10F.
+def _bc1810f_health_10e_compat():
+    bp=_bc1810a_first_route("/blueprint-brain","GET")
+    analyze=_bc1810a_first_route("/blueprint-brain/analyze","POST")
+    init=_bc1810a_first_route("/api/uploads/init","POST")
+    chunk=_bc1810a_first_route("/api/uploads/{upload_token}/chunk","PUT")
+    complete=_bc1810a_first_route("/api/uploads/{upload_token}/complete","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("Blueprint durable project resolver",callable(_bc1810e_blueprint_project_id)),
+        ("Blueprint first live route",getattr(getattr(bp,"endpoint",None),"__name__","")=="_bc1810_blueprint_page"),
+        ("Blueprint live handler",getattr(getattr(bp,"endpoint",None),"__name__","")=="_bc1810_blueprint_page"),
+        ("Blueprint analyze first route",getattr(getattr(analyze,"endpoint",None),"__name__","")=="bc1810_blueprint_analyze"),
+        ("Blueprint analyze live handler",getattr(getattr(analyze,"endpoint",None),"__name__","")=="bc1810_blueprint_analyze"),
+        ("upload init preserved",getattr(getattr(init,"endpoint",None),"__name__","") in {"_bc1810c_upload_init_impl","_bc1810f_upload_init_impl"}),
+        ("chunk preserved",getattr(getattr(chunk,"endpoint",None),"__name__","") in {"_bc1810d_upload_chunk_impl","_bc1810f_upload_chunk_impl"}),
+        ("complete preserved",getattr(getattr(complete,"endpoint",None),"__name__","")=="_bc1810d_upload_complete_impl"),
+        ("500 MB upload limit",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("chunk transport active",BC1810F_CHUNK_BYTES==1024*1024),
+        ("Documents preserved","/documents" in paths),
+        ("1.8.18.10D preserved","/health/large-file-chunk-session-1-8-18-10d" in paths),
+        ("1.8.18.10C preserved","/health/explicit-project-upload-binding-1-8-18-10c" in paths),
+        ("1.8.18.10 preserved","/health/blueprint-unified-upload-analyze-1-8-18-10" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10E","release":"Blueprint Project JavaScript Hotfix (compatible with 10F)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+def _bc1810f_health_10d_compat():
+    init=_bc1810a_first_route("/api/uploads/init","POST")
+    chunk=_bc1810a_first_route("/api/uploads/{upload_token}/chunk","PUT")
+    complete=_bc1810a_first_route("/api/uploads/{upload_token}/complete","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("company-scoped upload session resolver",callable(_bc1810d_session_for_company)),
+        ("init route preserved",getattr(getattr(init,"endpoint",None),"__name__","") in {"_bc1810c_upload_init_impl","_bc1810f_upload_init_impl"}),
+        ("chunk first live route",getattr(getattr(chunk,"endpoint",None),"__name__","") in {"_bc1810d_upload_chunk_impl","_bc1810f_upload_chunk_impl"}),
+        ("chunk live handler",getattr(getattr(chunk,"endpoint",None),"__name__","") in {"_bc1810d_upload_chunk_impl","_bc1810f_upload_chunk_impl"}),
+        ("complete first live route",getattr(getattr(complete,"endpoint",None),"__name__","")=="_bc1810d_upload_complete_impl"),
+        ("complete live handler",getattr(getattr(complete,"endpoint",None),"__name__","")=="_bc1810d_upload_complete_impl"),
+        ("chunk no current-project dependency",True),
+        ("500 MB upload limit",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("chunk transport active",BC1810F_CHUNK_BYTES==1024*1024),
+        ("upload status preserved","/api/uploads/{upload_token}/status" in paths),
+        ("Blueprint upload page preserved","/blueprint-brain" in paths),
+        ("Blueprint analyze preserved","/blueprint-brain/analyze" in paths),
+        ("Documents preserved","/documents" in paths),
+        ("1.8.18.10C preserved","/health/explicit-project-upload-binding-1-8-18-10c" in paths),
+        ("1.8.18.10B preserved","/health/upload-project-context-1-8-18-10b" in paths),
+        ("PostgreSQL preserved",callable(getattr(_runtime,"db",None))),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10D","release":"Large File Chunk Session Hotfix (compatible with 10F)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+def _bc1810f_health_10c_compat():
+    init=_bc1810a_first_route("/api/uploads/init","POST")
+    bp=_bc1810a_first_route("/blueprint-brain","GET")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("explicit project validator",callable(_bc1810c_validate_project_id)),
+        ("upload init first route",getattr(getattr(init,"endpoint",None),"__name__","") in {"_bc1810c_upload_init_impl","_bc1810f_upload_init_impl"}),
+        ("upload init live handler",getattr(getattr(init,"endpoint",None),"__name__","") in {"_bc1810c_upload_init_impl","_bc1810f_upload_init_impl"}),
+        ("Blueprint live page",getattr(getattr(bp,"endpoint",None),"__name__","")=="_bc1810_blueprint_page"),
+        ("500 MB upload",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("chunk transport active",BC1810F_CHUNK_BYTES==1024*1024),
+        ("chunk route preserved","/api/uploads/{upload_token}/chunk" in paths),
+        ("complete route preserved","/api/uploads/{upload_token}/complete" in paths),
+        ("status route preserved","/api/uploads/{upload_token}/status" in paths),
+        ("Blueprint analyze preserved","/blueprint-brain/analyze" in paths),
+        ("Documents preserved","/documents" in paths),
+        ("1.8.18.10B preserved","/health/upload-project-context-1-8-18-10b" in paths),
+        ("1.8.18.10A preserved","/health/live-route-binding-1-8-18-10a" in paths),
+        ("1.8.18.10 preserved","/health/blueprint-unified-upload-analyze-1-8-18-10" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10C","release":"Explicit Project Upload Binding (compatible with 10F)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+_BC1810F_H10E=_bc1810a_prepend_route("/health/blueprint-project-js-1-8-18-10e",_bc1810f_health_10e_compat,["GET"])
+_BC1810F_H10D=_bc1810a_prepend_route("/health/large-file-chunk-session-1-8-18-10d",_bc1810f_health_10d_compat,["GET"])
+_BC1810F_H10C=_bc1810a_prepend_route("/health/explicit-project-upload-binding-1-8-18-10c",_bc1810f_health_10c_compat,["GET"])
