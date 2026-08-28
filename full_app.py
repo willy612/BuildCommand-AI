@@ -9824,3 +9824,109 @@ BUILD_COMMAND_RELEASE="1.8.18.10"
 BUILD_COMMAND_RELEASE_NAME="Blueprint Brain Unified Upload & Analyze"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10A - Live Route Binding Hotfix
+# Fixes stale FastAPI route.app handlers after endpoint replacement.
+# ============================================================
+
+def _bc1810a_prepend_route(path, endpoint, methods, response_class=None):
+    before=len(app.routes)
+    kwargs={"path":path,"endpoint":endpoint,"methods":methods}
+    if response_class is not None:
+        kwargs["response_class"]=response_class
+    app.add_api_route(**kwargs)
+    fresh=app.routes[-1]
+    if len(app.routes)!=before+1:
+        raise RuntimeError("Fresh route registration failed.")
+    app.routes.pop()
+    app.routes.insert(0,fresh)
+    return fresh
+
+# Freshly register the pages/actions that previous overlays replaced by mutating
+# .endpoint. FastAPI caches route.app, so mutation alone can leave the old
+# browser-visible handler active.
+_BC1810A_BLUEPRINT_ROUTE=_bc1810a_prepend_route(
+    "/blueprint-brain",
+    _bc1810_blueprint_page,
+    ["GET"],
+    _BC1810_HTMLResponse,
+)
+
+_BC1810A_DOCUMENTS_ROUTE=_bc1810a_prepend_route(
+    "/documents",
+    _bc189a_documents_page,
+    ["GET"],
+    _BC189_HTMLResponse,
+)
+
+_BC1810A_DOCUMENT_UPLOAD_ROUTE=_bc1810a_prepend_route(
+    "/documents/upload",
+    _bc189_documents_upload,
+    ["POST"],
+    _BC189_HTMLResponse,
+)
+
+def _bc1810a_first_route(path,method):
+    method=str(method).upper()
+    for r in app.routes:
+        if getattr(r,"path",None)==path and method in (getattr(r,"methods",set()) or set()):
+            return r
+    return None
+
+@app.get("/health/live-route-binding-1-8-18-10a")
+def health_live_route_binding_181810a():
+    bp=_bc1810a_first_route("/blueprint-brain","GET")
+    docs=_bc1810a_first_route("/documents","GET")
+    upload=_bc1810a_first_route("/documents/upload","POST")
+
+    bp_name=getattr(getattr(bp,"endpoint",None),"__name__","")
+    docs_name=getattr(getattr(docs,"endpoint",None),"__name__","")
+    upload_name=getattr(getattr(upload,"endpoint",None),"__name__","")
+
+    # Directly render the active functions' source markers without requiring a
+    # browser request/session in the health endpoint.
+    bp_source=getattr(_bc1810_blueprint_page,"__code__",None)
+    docs_source=getattr(_bc189a_documents_page,"__code__",None)
+
+    checks=[
+      ("Blueprint first live route",bp is _BC1810A_BLUEPRINT_ROUTE),
+      ("Blueprint live handler",bp_name=="_bc1810_blueprint_page"),
+      ("Documents first live route",docs is _BC1810A_DOCUMENTS_ROUTE),
+      ("Documents live handler",docs_name=="_bc189a_documents_page"),
+      ("Document upload first live route",upload is _BC1810A_DOCUMENT_UPLOAD_ROUTE),
+      ("Document upload live handler",upload_name=="_bc189_documents_upload"),
+      ("Blueprint unified page function",callable(_bc1810_blueprint_page)),
+      ("Documents 500 MB page function",callable(_bc189a_documents_page)),
+      ("500 MB backend",BC189_MAX_FILE_BYTES==500*1024*1024),
+      ("5 MB chunks",BC189_CHUNK_BYTES==5*1024*1024),
+      ("Blueprint analyze route","/blueprint-brain/analyze" in {getattr(r,"path","") for r in app.routes}),
+      ("1.8.18.10 preserved","/health/blueprint-unified-upload-analyze-1-8-18-10" in {getattr(r,"path","") for r in app.routes}),
+      ("1.8.18.9A preserved","/health/documents-ui-500mb-1-8-18-9a" in {getattr(r,"path","") for r in app.routes}),
+      ("Documents download preserved","/documents/{attachment_id}/download" in {getattr(r,"path","") for r in app.routes}),
+      ("construction app preserved","/app" in {getattr(r,"path","") for r in app.routes}),
+      ("Blueprint Brain runs preserved","/blueprint-brain/run/{run_id}" in {getattr(r,"path","") for r in app.routes}),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+      "status":"ok" if passed==len(checks) else "failed",
+      "app":"BuildCommand AI",
+      "version":"1.8.18.10A",
+      "release":"Live Route Binding Hotfix",
+      "passed":passed,
+      "total":len(checks),
+      "failed":len(checks)-passed,
+      "blueprint_first_handler":bp_name,
+      "documents_first_handler":docs_name,
+      "documents_upload_first_handler":upload_name,
+      "documents_page_limit":"500 MB",
+      "checks":[{"case":name,"passed":bool(ok)} for name,ok in checks]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10A"
+BUILD_COMMAND_RELEASE_NAME="Live Route Binding Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
