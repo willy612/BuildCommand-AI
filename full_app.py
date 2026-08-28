@@ -9362,3 +9362,128 @@ BUILD_COMMAND_RELEASE='1.8.18.9'
 BUILD_COMMAND_RELEASE_NAME='Large Document & Blueprint Upload Engine'
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.9A - Documents Page 500 MB UI Hotfix
+# ============================================================
+def _bc189a_documents_page():
+    pid=_runtime.project_id()
+    c=_runtime.db()
+    rows=c.execute(
+        "SELECT a.*,u.display_name FROM attachments a LEFT JOIN users u ON u.id=a.created_by "
+        "WHERE a.company_id=? AND a.project_id=? ORDER BY a.id DESC",
+        (_runtime.current_company_id(),pid)
+    ).fetchall()
+    c.close()
+
+    files_html="".join(
+        '<div class="card"><span class="badge OPEN">'+_runtime.esc(r["category"])+'</span>'
+        '<h3>'+_runtime.esc(r["title"] or r["original_name"])+'</h3>'
+        '<div class="small">'+_runtime.esc(r["original_name"])+' · '+format((r["size_bytes"] or 0)/(1024*1024),".2f")+' MB</div>'
+        '<p><a href="/documents/'+str(r["id"])+'/download" style="color:#f0b44d;font-weight:700;">Download</a></p></div>'
+        for r in rows
+    ) or '<div class="card"><div class="muted">No project documents uploaded yet.</div></div>'
+
+    body = (
+      '<div class="hero"><div class="eyebrow">Document & Photo Center</div>'
+      '<h1>Project Documents</h1>'
+      '<div class="muted">Large document support enabled. Maximum file size: <b>500 MB</b>.</div></div>'
+
+      '<div class="grid2"><div class="card"><h2>Upload Document</h2>'
+      '<form id="bc189a-upload-form" method="post" action="/documents/upload" enctype="multipart/form-data">'
+      '<label>Category</label><select name="category">'
+      '<option>PHOTO</option><option>DAILY_REPORT</option><option>RFI</option><option>PUNCH</option>'
+      '<option>SAFETY</option><option>SUBMITTAL</option><option>PLANS</option><option>SPECIFICATIONS</option><option>OTHER</option>'
+      '</select><label>Title</label><input name="title"><label>File</label><input type="file" name="file" required>'
+      '<button id="bc189a-upload-btn" type="submit">Upload File</button>'
+      '<div id="bc189a-progress-wrap" style="display:none;margin-top:12px;">'
+      '<div style="height:12px;background:#e6e8eb;border-radius:10px;overflow:hidden;">'
+      '<div id="bc189a-progress" style="height:100%;width:0%;background:#f0b44d;"></div></div>'
+      '<div id="bc189a-progress-text" class="small" style="margin-top:6px;">Preparing upload...</div></div>'
+      '</form></div>'
+
+      '<div class="card"><h2>Upload Rules</h2>'
+      '<p><b>Maximum 500 MB per file.</b></p>'
+      '<p>Large files automatically use 5 MB chunk uploads with progress tracking.</p>'
+      '<p>PDF, image, Office, CSV, and text files are accepted.</p>'
+      '<p class="muted">For durable production storage, UPLOAD_DIR should point to persistent storage.</p>'
+      '</div></div>'
+
+      '<div class="grid2">'+files_html+'</div>'
+
+      '<script>'
+      '(function(){'
+      'const form=document.getElementById("bc189a-upload-form");if(!form)return;'
+      'form.addEventListener("submit",async function(e){'
+      'const input=form.querySelector(\'input[name="file"]\');'
+      'const file=input&&input.files&&input.files[0];'
+      'if(!file)return;'
+      'if(file.size>500*1024*1024){e.preventDefault();alert("Maximum file size is 500 MB.");return;}'
+      'if(file.size<10*1024*1024)return;'
+      'e.preventDefault();'
+      'const btn=document.getElementById("bc189a-upload-btn"),wrap=document.getElementById("bc189a-progress-wrap"),bar=document.getElementById("bc189a-progress"),text=document.getElementById("bc189a-progress-text");'
+      'btn.disabled=true;wrap.style.display="block";'
+      'try{'
+      'const category=form.querySelector(\'[name="category"]\').value,title=form.querySelector(\'[name="title"]\').value;'
+      'let r=await fetch("/api/uploads/init",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({filename:file.name,size:file.size,mime_type:file.type,category:category,title:title})});'
+      'let j=await r.json();if(!r.ok)throw new Error(j.error||"Could not start upload.");'
+      'const token=j.upload_token,chunkSize=j.chunk_bytes;let offset=0;'
+      'while(offset<file.size){'
+      'const end=Math.min(offset+chunkSize,file.size),blob=file.slice(offset,end);'
+      'r=await fetch("/api/uploads/"+encodeURIComponent(token)+"/chunk",{method:"PUT",body:blob});'
+      'j=await r.json();if(!r.ok)throw new Error(j.error||"Upload chunk failed.");'
+      'offset=end;const pct=Math.min(100,(offset/file.size)*100);'
+      'bar.style.width=pct.toFixed(1)+"%";'
+      'text.textContent="Uploading "+pct.toFixed(0)+"% — "+(offset/1024/1024).toFixed(1)+" MB of "+(file.size/1024/1024).toFixed(1)+" MB";'
+      '}'
+      'text.textContent="Finalizing upload...";'
+      'r=await fetch("/api/uploads/"+encodeURIComponent(token)+"/complete",{method:"POST"});'
+      'j=await r.json();if(!r.ok)throw new Error(j.error||"Could not finalize upload.");'
+      'bar.style.width="100%";text.textContent="Upload complete.";window.location.href=j.redirect||"/documents";'
+      '}catch(err){text.textContent="Upload failed: "+err.message;btn.disabled=false;}'
+      '});'
+      '})();'
+      '</script>'
+    )
+    return _runtime.shell("Documents",body)
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/documents":
+        _route.endpoint=_bc189a_documents_page
+        break
+
+@app.get("/health/documents-ui-500mb-1-8-18-9a")
+def health_documents_ui_18189a():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+      ("documents route","/documents" in paths),
+      ("500 MB backend limit",BC189_MAX_FILE_BYTES==500*1024*1024),
+      ("5 MB chunking",BC189_CHUNK_BYTES==5*1024*1024),
+      ("upload route","/documents/upload" in paths),
+      ("init route","/api/uploads/init" in paths),
+      ("chunk route","/api/uploads/{upload_token}/chunk" in paths),
+      ("complete route","/api/uploads/{upload_token}/complete" in paths),
+      ("download route","/documents/{attachment_id}/download" in paths),
+      ("1.8.18.9 preserved","/health/large-uploads-1-8-18-9" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+      ("Trade Readiness preserved","/trade-readiness/{project_id}" in paths),
+      ("construction app preserved","/app" in paths)
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+      "status":"ok" if passed==len(checks) else "failed",
+      "app":"BuildCommand AI",
+      "version":"1.8.18.9A",
+      "release":"Documents Page 500 MB UI Hotfix",
+      "passed":passed,
+      "total":len(checks),
+      "failed":len(checks)-passed,
+      "documents_page_limit":"500 MB",
+      "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.9A"
+BUILD_COMMAND_RELEASE_NAME="Documents Page 500 MB UI Hotfix"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
