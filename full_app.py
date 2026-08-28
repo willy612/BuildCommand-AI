@@ -11099,3 +11099,272 @@ def _bc1810f_health_10c_compat():
 _BC1810F_H10E=_bc1810a_prepend_route("/health/blueprint-project-js-1-8-18-10e",_bc1810f_health_10e_compat,["GET"])
 _BC1810F_H10D=_bc1810a_prepend_route("/health/large-file-chunk-session-1-8-18-10d",_bc1810f_health_10d_compat,["GET"])
 _BC1810F_H10C=_bc1810a_prepend_route("/health/explicit-project-upload-binding-1-8-18-10c",_bc1810f_health_10c_compat,["GET"])
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10G - JavaScript Null Serialization Hotfix
+# ============================================================
+import json as _bc1810g_json
+
+_bc1810g_previous_blueprint_page = _bc1810_blueprint_page
+
+def _bc1810g_blueprint_page():
+    pid=_bc187_project_id()
+    company=_runtime.current_company_id()
+    js_project_id=_bc1810g_json.dumps(pid)
+
+    c=_runtime.db()
+    try:
+        if pid:
+            docs=c.execute(
+                "SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",
+                (company,pid)
+            ).fetchall()
+            runs=c.execute(
+                "SELECT * FROM blueprint_runs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 25",
+                (company,pid)
+            ).fetchall()
+        else:
+            docs=[]
+            runs=[]
+    finally:
+        c.close()
+
+    eligible=[]
+    for d in docs:
+        ext=_BC189_Path(d["original_name"] or "").suffix.lower()
+        if ext in {".pdf",".txt",".csv",".xlsx",".xlsm"}:
+            eligible.append(d)
+
+    docs_html=""
+    for d in eligible:
+        mb=int(d["size_bytes"] or 0)/1024/1024
+        too_large=mb >= 50
+        status='<span class="badge WATCH">UPLOAD OK · SPLIT FOR ANALYSIS</span>' if too_large else '<span class="badge READY">READY TO ANALYZE</span>'
+        disabled=' disabled' if too_large else ''
+        docs_html += (
+            '<label style="display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08)">'
+            f'<input class="bc1810-doc-check" data-bytes="{int(d["size_bytes"] or 0)}" type="checkbox" name="attachment_ids" value="{d["id"]}" style="width:auto;margin-top:5px"{disabled}>'
+            '<span style="flex:1">'
+            f'<b>{_runtime.esc(d["original_name"])}</b><br>'
+            f'<span class="small">{mb:.1f} MB · {_runtime.esc(d["category"] or "OTHER")}</span><br>{status}'
+            '</span></label>'
+        )
+
+    if not docs_html:
+        docs_html='<div class="muted">No analyzable plans/specifications uploaded yet. Upload one above.</div>'
+
+    run_cards=""
+    for r in runs:
+        run_cards += (
+            f'<div class="card"><div class="small">Run #{r["id"]} · {_runtime.esc(r["created"] or "")}</div>'
+            f'<h3>{_runtime.esc(r["project_summary"] or "Blueprint analysis")}</h3>'
+            f'<p><a href="/blueprint-brain/run/{r["id"]}">Open analysis →</a></p></div>'
+        )
+    if not run_cards:
+        run_cards='<div class="card"><p class="muted">No Blueprint Brain analyses yet.</p></div>'
+
+    project_notice = (
+        f'<div class="small">Active project ID: {pid}</div>' if pid
+        else '<div class="small" style="color:#ffcc66">No active project is currently selected. The upload API will attempt your saved/default project.</div>'
+    )
+
+    body=f'''
+    <div class="hero">
+      <div class="eyebrow">Blueprint Brain</div>
+      <h1>Upload plans. Analyze them. Stay in one place.</h1>
+      <p>Upload plans and specifications directly into Blueprint Brain, then select the files you want BuildCommand AI to analyze.</p>
+      {project_notice}
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <h2>Upload Plans / Specifications</h2>
+        <p class="muted"><b>Upload limit:</b> 500 MB per file. Large files automatically use the chunked upload engine.</p>
+        <form id="bc1810-upload-form" action="/documents/upload" method="post" enctype="multipart/form-data">
+          <input type="hidden" name="category" value="PLANS">
+          <label>Title</label>
+          <input type="text" name="title" placeholder="Plan set, specifications, addendum...">
+          <label>File</label>
+          <input id="bc1810-file" type="file" name="file" required>
+          <button id="bc1810-upload-btn" type="submit">Upload to Blueprint Brain</button>
+        </form>
+        <div id="bc1810-progress-wrap" style="display:none;margin-top:14px">
+          <div style="height:12px;background:rgba(255,255,255,.08);border-radius:999px;overflow:hidden">
+            <div id="bc1810-progress" style="height:100%;width:0%;background:#59d185"></div>
+          </div>
+          <div id="bc1810-progress-text" class="small" style="margin-top:8px"></div>
+        </div>
+        <pre id="bc1810-upload-error" style="display:none;white-space:pre-wrap;margin-top:12px;color:#ff9b9b"></pre>
+      </div>
+
+      <div class="card">
+        <h2>Analyze Plans</h2>
+        <form action="/blueprint-brain/analyze" method="post" id="bc1810-analyze-form">
+          <label>Analysis focus (optional)</label>
+          <textarea name="focus" rows="3" placeholder="Example: focus on electrical scope and major conflicts"></textarea>
+          <div style="margin-top:12px">{docs_html}</div>
+          <div id="bc1810-selected-size" class="small" style="margin-top:10px">Selected: 0.0 MB</div>
+          <button type="submit" style="margin-top:12px">Analyze Selected Plans</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="hero" style="margin-top:18px">
+      <div class="eyebrow">Recent Blueprint Runs</div>
+    </div>
+    <div class="grid two">{run_cards}</div>
+
+    <script>
+    (() => {{
+      const uploadForm=document.getElementById("bc1810-upload-form");
+      const fileInput=document.getElementById("bc1810-file");
+      const btn=document.getElementById("bc1810-upload-btn");
+      const wrap=document.getElementById("bc1810-progress-wrap");
+      const bar=document.getElementById("bc1810-progress");
+      const progressText=document.getElementById("bc1810-progress-text");
+      const errorBox=document.getElementById("bc1810-upload-error");
+
+      async function readResponse(response) {{
+        const raw=await response.text();
+        let data=null;
+        try {{ data=raw ? JSON.parse(raw) : {{}}; }}
+        catch (_) {{ data={{error:raw || ("HTTP "+response.status)}}; }}
+        if(!response.ok) {{
+          const msg=(data && (data.error||data.detail)) || raw || ("HTTP "+response.status);
+          throw new Error("HTTP "+response.status+": "+msg);
+        }}
+        return data;
+      }}
+
+      uploadForm.addEventListener("submit",async(e)=>{{
+        const file=fileInput.files[0];
+        if(!file) return;
+        if(file.size < 10*1024*1024) return;
+
+        e.preventDefault();
+        errorBox.style.display="none";
+        errorBox.textContent="";
+        btn.disabled=true;
+        wrap.style.display="block";
+
+        try {{
+          const title=uploadForm.querySelector('[name="title"]').value;
+          let response=await fetch("/api/uploads/init",{{
+            method:"POST",
+            headers:{{"Content-Type":"application/json"}},
+            body:JSON.stringify({{
+              filename:file.name,
+              size:file.size,
+              mime_type:file.type,
+              category:"PLANS",
+              title:title,
+              project_id:{js_project_id}
+            }})
+          }});
+
+          let data=await readResponse(response);
+          const token=data.upload_token;
+          const chunkSize=data.chunk_bytes || (1024*1024);
+
+          let offset=0;
+          while(offset < file.size) {{
+            const end=Math.min(offset+chunkSize,file.size);
+            const blob=file.slice(offset,end);
+
+            response=await fetch(
+              "/api/uploads/"+encodeURIComponent(token)+"/chunk",
+              {{
+                method:"PUT",
+                headers:{{"Content-Type":"application/octet-stream"}},
+                body:blob
+              }}
+            );
+            data=await readResponse(response);
+
+            offset=end;
+            const pct=Math.min(100,(offset/file.size)*100);
+            bar.style.width=pct.toFixed(1)+"%";
+            progressText.textContent=
+              "Uploading "+pct.toFixed(0)+"% — "+
+              (offset/1024/1024).toFixed(1)+" MB of "+
+              (file.size/1024/1024).toFixed(1)+" MB";
+          }}
+
+          response=await fetch(
+            "/api/uploads/"+encodeURIComponent(token)+"/complete",
+            {{method:"POST"}}
+          );
+          data=await readResponse(response);
+
+          bar.style.width="100%";
+          progressText.textContent="Upload complete.";
+          window.location.href="/blueprint-brain?uploaded="+encodeURIComponent(data.attachment_id);
+
+        }} catch(err) {{
+          const message=(err && err.message) ? err.message : String(err);
+          progressText.textContent="Upload failed.";
+          errorBox.textContent=message;
+          errorBox.style.display="block";
+          alert("Upload failed: "+message);
+          btn.disabled=false;
+        }}
+      }});
+
+      const checks=[...document.querySelectorAll(".bc1810-doc-check")];
+      const selected=document.getElementById("bc1810-selected-size");
+      function updateSelected() {{
+        const bytes=checks.filter(x=>x.checked).reduce((n,x)=>n+Number(x.dataset.bytes||0),0);
+        selected.textContent="Selected: "+(bytes/1024/1024).toFixed(1)+" MB";
+      }}
+      checks.forEach(x=>x.addEventListener("change",updateSelected));
+      updateSelected();
+    }})();
+    </script>
+    '''
+    return _runtime.shell("Blueprint Brain",body)
+
+_BC1810G_BLUEPRINT_ROUTE=_bc1810a_prepend_route(
+    "/blueprint-brain",
+    _bc1810g_blueprint_page,
+    ["GET"],
+    _BC1810_HTMLResponse,
+)
+
+@app.get("/health/javascript-null-serialization-1-8-18-10g")
+def health_javascript_null_serialization_181810g():
+    route=_bc1810a_first_route("/blueprint-brain","GET")
+    init=_bc1810a_first_route("/api/uploads/init","POST")
+    chunk=_bc1810a_first_route("/api/uploads/{upload_token}/chunk","PUT")
+    complete=_bc1810a_first_route("/api/uploads/{upload_token}/complete","POST")
+    checks=[
+        ("Blueprint 10G first route",route is _BC1810G_BLUEPRINT_ROUTE),
+        ("Blueprint 10G live handler",getattr(getattr(route,"endpoint",None),"__name__","")=="_bc1810g_blueprint_page"),
+        ("JSON serializer available",callable(_bc1810g_json.dumps)),
+        ("None serializes to null",_bc1810g_json.dumps(None)=="null"),
+        ("10F init preserved",getattr(getattr(init,"endpoint",None),"__name__","")=="_bc1810f_upload_init_impl"),
+        ("10F chunk preserved",getattr(getattr(chunk,"endpoint",None),"__name__","")=="_bc1810f_upload_chunk_impl"),
+        ("10D complete preserved",getattr(getattr(complete,"endpoint",None),"__name__","")=="_bc1810d_upload_complete_impl"),
+        ("500 MB max",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("1 MB chunks",BC1810F_CHUNK_BYTES==1024*1024),
+        ("diagnostics preserved","/api/uploads/diagnostics" in {getattr(r,"path","") for r in app.routes}),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10G",
+        "release":"JavaScript Null Serialization Hotfix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "fix":"Python None is serialized as JavaScript null.",
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10G"
+BUILD_COMMAND_RELEASE_NAME="JavaScript Null Serialization Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
