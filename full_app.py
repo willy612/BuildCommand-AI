@@ -11368,3 +11368,515 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10H - Dedicated Blueprint Upload Pipeline
+# ============================================================
+
+def _bc1810h_user():
+    try:
+        return _runtime.current_user()
+    except Exception:
+        return None
+
+def _bc1810h_company_id():
+    u=_bc1810h_user()
+    if u:
+        try:
+            cid=u["company_id"]
+            if cid:
+                return int(cid)
+        except Exception:
+            pass
+    try:
+        cid=_runtime.current_company_id()
+        return int(cid) if cid else None
+    except Exception:
+        return None
+
+def _bc1810h_project_id(candidate=None):
+    u=_bc1810h_user()
+    cid=_bc1810h_company_id()
+    if not u or not cid:
+        return None
+
+    c=_runtime.db()
+    try:
+        if candidate not in (None,"","null"):
+            try:
+                pid=int(candidate)
+                r=c.execute(
+                    "SELECT id FROM projects WHERE id=? AND company_id=?",
+                    (pid,cid)
+                ).fetchone()
+                if r:
+                    return int(r["id"])
+            except Exception:
+                pass
+
+        try:
+            pref=c.execute(
+                "SELECT * FROM user_project_preferences WHERE company_id=? AND user_id=?",
+                (cid,int(u["id"]))
+            ).fetchone()
+            if pref:
+                for key in ("last_project_id","default_project_id"):
+                    try:
+                        pid=pref[key]
+                    except Exception:
+                        pid=None
+                    if pid:
+                        r=c.execute(
+                            "SELECT id FROM projects WHERE id=? AND company_id=?",
+                            (pid,cid)
+                        ).fetchone()
+                        if r:
+                            return int(r["id"])
+        except Exception:
+            pass
+
+        try:
+            state=c.execute(
+                "SELECT selected_project_id FROM user_state WHERE user_id=?",
+                (int(u["id"]),)
+            ).fetchone()
+            if state and state["selected_project_id"]:
+                pid=int(state["selected_project_id"])
+                r=c.execute(
+                    "SELECT id FROM projects WHERE id=? AND company_id=?",
+                    (pid,cid)
+                ).fetchone()
+                if r:
+                    return int(r["id"])
+        except Exception:
+            pass
+
+        try:
+            r=c.execute(
+                "SELECT p.id FROM projects p "
+                "LEFT JOIN project_archive_state a ON a.project_id=p.id "
+                "WHERE p.company_id=? AND COALESCE(a.archived,0)=0 "
+                "ORDER BY p.id DESC LIMIT 1",
+                (cid,)
+            ).fetchone()
+            if r:
+                return int(r["id"])
+        except Exception:
+            pass
+
+        r=c.execute(
+            "SELECT id FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 1",
+            (cid,)
+        ).fetchone()
+        return int(r["id"]) if r else None
+    finally:
+        c.close()
+
+def _bc1810h_session(upload_token):
+    cid=_bc1810h_company_id()
+    if not cid:
+        return None
+    c=_runtime.db()
+    try:
+        row=c.execute(
+            "SELECT * FROM large_upload_sessions WHERE upload_token=? AND company_id=?",
+            (upload_token,cid)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        c.close()
+
+def _bc1810h_save_attachment(row):
+    u=_bc1810h_user()
+    cid=_bc1810h_company_id()
+    if not u or not cid:
+        raise RuntimeError("Authenticated user/company context unavailable.")
+
+    pid=int(row["project_id"])
+    c=_runtime.db()
+    try:
+        project=c.execute(
+            "SELECT id FROM projects WHERE id=? AND company_id=?",
+            (pid,cid)
+        ).fetchone()
+        if not project:
+            raise RuntimeError("Upload project does not belong to authenticated company.")
+
+        now=_BC189_datetime.utcnow().isoformat()
+        cur=c.execute(
+            "INSERT INTO attachments("
+            "company_id,project_id,category,title,original_name,stored_name,mime_type,size_bytes,created_by,created"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                cid,pid,row["category"] or "PLANS",(row["title"] or "").strip(),
+                row["original_name"],row["stored_name"],
+                row["mime_type"] or "application/octet-stream",
+                int(row["expected_bytes"] or 0),int(u["id"]),now
+            )
+        )
+        aid=cur.lastrowid
+        c.execute(
+            "INSERT INTO document_processing_status("
+            "attachment_id,company_id,project_id,status,progress,message,created,updated"
+            ") VALUES(?,?,?,?,?,?,?,?)",
+            (
+                aid,cid,pid,"UPLOADED",100,
+                "Upload complete and ready for BuildCommand processing.",
+                now,now
+            )
+        )
+        c.commit()
+        return aid
+    except Exception:
+        try: c.rollback()
+        except Exception: pass
+        raise
+    finally:
+        c.close()
+
+@app.post("/api/blueprint-uploads/init")
+async def _bc1810h_blueprint_upload_init(request:_BC189_Request):
+    u=_bc1810h_user()
+    cid=_bc1810h_company_id()
+    if not u:
+        return _BC189_JSONResponse({"status":"unauthorized","error":"Login required."},status_code=401)
+    if not cid:
+        return _BC189_JSONResponse({"status":"error","error":"Your account has no company context."},status_code=400)
+
+    try:
+        data=await request.json()
+    except Exception as exc:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Invalid upload metadata.","detail":str(exc)},
+            status_code=400
+        )
+
+    pid=_bc1810h_project_id(data.get("project_id"))
+    if not pid:
+        return _BC189_JSONResponse(
+            {
+                "status":"error",
+                "error":"No project exists for your logged-in company.",
+                "company_id":cid,
+                "user_id":int(u["id"]),
+                "received_project_id":data.get("project_id"),
+            },
+            status_code=400
+        )
+
+    original=_runtime.safe_filename(str(data.get("filename") or ""))
+    ext,valid=_bc189_valid_ext(original)
+    try:
+        size=int(data.get("size") or 0)
+    except Exception:
+        size=0
+
+    if not original or not valid:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"File type not allowed.","filename":original},
+            status_code=400
+        )
+    if size<=0 or size>BC189_MAX_FILE_BYTES:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"File must be between 1 byte and 500 MB."},
+            status_code=413
+        )
+
+    storage=_bc1810f_storage_diagnostics()
+    if not storage.get("write_test"):
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Upload storage is not writable.","storage":storage},
+            status_code=507
+        )
+
+    token=_bc189_secrets.token_urlsafe(24)
+    stored=f"{_bc189_secrets.token_hex(12)}{ext}"
+    now=_BC189_datetime.utcnow().isoformat()
+
+    c=_runtime.db()
+    try:
+        c.execute(
+            "INSERT INTO large_upload_sessions("
+            "upload_token,company_id,project_id,category,title,original_name,stored_name,mime_type,"
+            "expected_bytes,received_bytes,status,created_by,created,updated"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                token,cid,pid,str(data.get("category") or "PLANS"),
+                str(data.get("title") or ""),original,stored,
+                str(data.get("mime_type") or _bc189_mimetypes.guess_type(original)[0] or "application/octet-stream"),
+                size,0,"UPLOADING",int(u["id"]),now,now
+            )
+        )
+        c.commit()
+    except Exception as exc:
+        try:c.rollback()
+        except Exception:pass
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Could not create Blueprint upload session.","detail":str(exc)},
+            status_code=500
+        )
+    finally:
+        c.close()
+
+    parts=_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts")
+    _bc189_os.makedirs(parts,exist_ok=True)
+    part=_bc189_os.path.join(parts,token+".part")
+    try:
+        with open(part,"wb"):
+            pass
+    except Exception as exc:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Could not create upload temp file.","detail":str(exc)},
+            status_code=507
+        )
+
+    return {
+        "status":"ok",
+        "version":"1.8.18.10H",
+        "upload_token":token,
+        "company_id":cid,
+        "project_id":pid,
+        "chunk_bytes":BC1810F_CHUNK_BYTES,
+        "max_file_bytes":BC189_MAX_FILE_BYTES,
+    }
+
+@app.put("/api/blueprint-uploads/{upload_token}/chunk")
+async def _bc1810h_blueprint_upload_chunk(upload_token:str,request:_BC189_Request):
+    if not _bc1810h_user():
+        return _BC189_JSONResponse({"status":"unauthorized","error":"Login required."},status_code=401)
+
+    row=_bc1810h_session(upload_token)
+    if not row:
+        return _BC189_JSONResponse({"status":"not_found","error":"Blueprint upload session not found."},status_code=404)
+    if row["status"]!="UPLOADING":
+        return _BC189_JSONResponse({"status":"error","error":"Upload is not active."},status_code=409)
+
+    if _bc1810h_project_id(row["project_id"]) != int(row["project_id"]):
+        return _BC189_JSONResponse({"status":"error","error":"Upload project is no longer valid."},status_code=409)
+
+    parts=_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts")
+    _bc189_os.makedirs(parts,exist_ok=True)
+    part=_bc189_os.path.join(parts,upload_token+".part")
+    incoming=part+".incoming"
+    written=0
+
+    try:
+        with open(incoming,"wb") as out:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > BC1810F_CHUNK_BYTES + 65536:
+                    return _BC189_JSONResponse(
+                        {"status":"error","error":"Chunk exceeds allowed size."},
+                        status_code=413
+                    )
+                out.write(chunk)
+
+        c=_runtime.db()
+        try:
+            latest=c.execute(
+                "SELECT * FROM large_upload_sessions WHERE id=? AND company_id=?",
+                (row["id"],_bc1810h_company_id())
+            ).fetchone()
+            if not latest:
+                return _BC189_JSONResponse({"status":"not_found","error":"Upload session disappeared."},status_code=404)
+
+            current=int(latest["received_bytes"] or 0)
+            expected=int(latest["expected_bytes"] or 0)
+            received=current+written
+            if received>expected:
+                return _BC189_JSONResponse(
+                    {"status":"error","error":"Upload exceeds declared file size."},
+                    status_code=413
+                )
+
+            with open(part,"ab") as target,open(incoming,"rb") as source:
+                while True:
+                    block=source.read(1024*1024)
+                    if not block:
+                        break
+                    target.write(block)
+
+            c.execute(
+                "UPDATE large_upload_sessions SET received_bytes=?,updated=? WHERE id=?",
+                (received,_BC189_datetime.utcnow().isoformat(),latest["id"])
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        return {
+            "status":"ok",
+            "version":"1.8.18.10H",
+            "received_bytes":received,
+            "expected_bytes":expected,
+            "progress":round(received/max(1,expected)*100,1),
+        }
+    finally:
+        try:
+            if _bc189_os.path.isfile(incoming):
+                _bc189_os.remove(incoming)
+        except Exception:
+            pass
+
+@app.post("/api/blueprint-uploads/{upload_token}/complete")
+def _bc1810h_blueprint_upload_complete(upload_token:str):
+    if not _bc1810h_user():
+        return _BC189_JSONResponse({"status":"unauthorized","error":"Login required."},status_code=401)
+
+    row=_bc1810h_session(upload_token)
+    if not row:
+        return _BC189_JSONResponse({"status":"not_found","error":"Blueprint upload session not found."},status_code=404)
+
+    expected=int(row["expected_bytes"] or 0)
+    received=int(row["received_bytes"] or 0)
+    if received!=expected:
+        return _BC189_JSONResponse(
+            {
+                "status":"error","error":"Upload is incomplete.",
+                "received_bytes":received,"expected_bytes":expected
+            },
+            status_code=409
+        )
+
+    part=_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts",upload_token+".part")
+    final=_bc189_os.path.join(_runtime.UPLOAD_DIR,row["stored_name"])
+    if not _bc189_os.path.isfile(part):
+        return _BC189_JSONResponse({"status":"error","error":"Upload temp file is missing."},status_code=404)
+
+    try:
+        _bc189_os.replace(part,final)
+        aid=_bc1810h_save_attachment(row)
+
+        c=_runtime.db()
+        try:
+            c.execute(
+                "UPDATE large_upload_sessions SET status='COMPLETE',updated=? WHERE id=?",
+                (_BC189_datetime.utcnow().isoformat(),row["id"])
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        return {
+            "status":"ok",
+            "version":"1.8.18.10H",
+            "attachment_id":aid,
+            "company_id":_bc1810h_company_id(),
+            "project_id":int(row["project_id"]),
+            "size_bytes":expected,
+            "redirect":"/blueprint-brain",
+        }
+    except Exception as exc:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Could not finalize Blueprint upload.","detail":str(exc)},
+            status_code=500
+        )
+
+def _bc1810h_blueprint_page():
+    html=_bc1810g_blueprint_page()
+    html=html.replace('"/api/uploads/init"','"/api/blueprint-uploads/init"')
+    html=html.replace('"/api/uploads/"+encodeURIComponent(token)+"/chunk"',
+                      '"/api/blueprint-uploads/"+encodeURIComponent(token)+"/chunk"')
+    html=html.replace('"/api/uploads/"+encodeURIComponent(token)+"/complete"',
+                      '"/api/blueprint-uploads/"+encodeURIComponent(token)+"/complete"')
+    return html
+
+_BC1810H_BLUEPRINT_ROUTE=_bc1810a_prepend_route(
+    "/blueprint-brain",_bc1810h_blueprint_page,["GET"],_BC1810_HTMLResponse
+)
+
+@app.get("/api/blueprint-uploads/diagnostics")
+def _bc1810h_blueprint_upload_diagnostics():
+    u=_bc1810h_user()
+    cid=_bc1810h_company_id()
+    pid=_bc1810h_project_id()
+    projects=[]
+    if cid:
+        c=_runtime.db()
+        try:
+            rows=c.execute(
+                "SELECT id,name FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 20",
+                (cid,)
+            ).fetchall()
+            projects=[dict(r) for r in rows]
+        finally:
+            c.close()
+    return {
+        "status":"ok",
+        "version":"1.8.18.10H",
+        "user_id":int(u["id"]) if u else None,
+        "user_company_id":cid,
+        "request_company_id":_runtime.current_company_id(),
+        "resolved_project_id":pid,
+        "company_projects":projects,
+        "storage":_bc1810f_storage_diagnostics(),
+    }
+
+@app.get("/health/dedicated-blueprint-upload-1-8-18-10h")
+def health_dedicated_blueprint_upload_181810h():
+    paths={getattr(r,"path","") for r in app.routes}
+    bp=_bc1810a_first_route("/blueprint-brain","GET")
+    checks=[
+        ("authoritative user helper",callable(_bc1810h_user)),
+        ("authoritative company helper",callable(_bc1810h_company_id)),
+        ("project resolver",callable(_bc1810h_project_id)),
+        ("dedicated init route","/api/blueprint-uploads/init" in paths),
+        ("dedicated chunk route","/api/blueprint-uploads/{upload_token}/chunk" in paths),
+        ("dedicated complete route","/api/blueprint-uploads/{upload_token}/complete" in paths),
+        ("dedicated diagnostics","/api/blueprint-uploads/diagnostics" in paths),
+        ("Blueprint 10H first route",bp is _BC1810H_BLUEPRINT_ROUTE),
+        ("Blueprint 10H live handler",getattr(getattr(bp,"endpoint",None),"__name__","")=="_bc1810h_blueprint_page"),
+        ("1 MB chunks",BC1810F_CHUNK_BYTES==1024*1024),
+        ("500 MB max",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("legacy upload routes preserved","/api/uploads/init" in paths),
+        ("10G health preserved","/health/javascript-null-serialization-1-8-18-10g" in paths),
+        ("10F health preserved","/health/upload-transport-1-8-18-10f" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10H",
+        "release":"Dedicated Blueprint Upload Pipeline",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10H"
+BUILD_COMMAND_RELEASE_NAME="Dedicated Blueprint Upload Pipeline"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+def _bc1810h_health_10g_compat():
+    route=_bc1810a_first_route("/blueprint-brain","GET")
+    init=_bc1810a_first_route("/api/uploads/init","POST")
+    chunk=_bc1810a_first_route("/api/uploads/{upload_token}/chunk","PUT")
+    complete=_bc1810a_first_route("/api/uploads/{upload_token}/complete","POST")
+    checks=[
+        ("Blueprint live route compatible",getattr(getattr(route,"endpoint",None),"__name__","") in {"_bc1810g_blueprint_page","_bc1810h_blueprint_page"}),
+        ("Blueprint handler compatible",getattr(getattr(route,"endpoint",None),"__name__","") in {"_bc1810g_blueprint_page","_bc1810h_blueprint_page"}),
+        ("JSON serializer available",callable(_bc1810g_json.dumps)),
+        ("None serializes to null",_bc1810g_json.dumps(None)=="null"),
+        ("10F init preserved",getattr(getattr(init,"endpoint",None),"__name__","")=="_bc1810f_upload_init_impl"),
+        ("10F chunk preserved",getattr(getattr(chunk,"endpoint",None),"__name__","")=="_bc1810f_upload_chunk_impl"),
+        ("10D complete preserved",getattr(getattr(complete,"endpoint",None),"__name__","")=="_bc1810d_upload_complete_impl"),
+        ("500 MB max",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("1 MB chunks",BC1810F_CHUNK_BYTES==1024*1024),
+        ("diagnostics preserved","/api/uploads/diagnostics" in {getattr(r,"path","") for r in app.routes}),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10G","release":"JavaScript Null Serialization Hotfix (compatible with 10H)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+_BC1810H_H10G=_bc1810a_prepend_route(
+    "/health/javascript-null-serialization-1-8-18-10g",
+    _bc1810h_health_10g_compat,
+    ["GET"]
+)
