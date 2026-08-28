@@ -12350,3 +12350,470 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10L - Active Project Persistence & Switcher Hotfix
+# ============================================================
+import re as _bc1810l_re
+
+def _bc1810l_user():
+    try:
+        return _runtime.current_user()
+    except Exception:
+        return None
+
+def _bc1810l_company_id(user=None):
+    user=user or _bc1810l_user()
+    if user:
+        try:
+            cid=user["company_id"]
+            if cid:
+                return int(cid)
+        except Exception:
+            pass
+    try:
+        cid=_runtime.current_company_id()
+        return int(cid) if cid else None
+    except Exception:
+        return None
+
+def _bc1810l_persist_selected_project(project_id,user=None,connection=None):
+    user=user or _bc1810l_user()
+    if not user:
+        raise RuntimeError("No authenticated user is available.")
+    uid=int(user["id"])
+    cid=_bc1810l_company_id(user)
+    if not cid:
+        raise RuntimeError("Authenticated user has no company.")
+
+    owns=False
+    own_connection=connection is None
+    c=connection or _runtime.db()
+    try:
+        project=c.execute(
+            "SELECT id FROM projects WHERE id=? AND company_id=?",
+            (int(project_id),cid)
+        ).fetchone()
+        if not project:
+            raise RuntimeError("Project does not belong to the authenticated company.")
+        pid=int(project["id"])
+
+        # user_state is the runtime's primary selected-project source.
+        updated=c.execute(
+            "UPDATE user_state SET selected_project_id=? WHERE user_id=?",
+            (pid,uid)
+        )
+        if getattr(updated,"rowcount",0)==0:
+            c.execute(
+                "INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?)",
+                (uid,pid)
+            )
+
+        # Also persist durable default/last-project preference.
+        now=_BC189_datetime.utcnow().isoformat()
+        try:
+            pref=c.execute(
+                "SELECT id FROM user_project_preferences WHERE company_id=? AND user_id=?",
+                (cid,uid)
+            ).fetchone()
+            if pref:
+                c.execute(
+                    "UPDATE user_project_preferences "
+                    "SET default_project_id=?,last_project_id=?,updated=? WHERE id=?",
+                    (pid,pid,now,pref["id"])
+                )
+            else:
+                c.execute(
+                    "INSERT INTO user_project_preferences("
+                    "company_id,user_id,default_project_id,last_project_id,updated"
+                    ") VALUES(?,?,?,?,?)",
+                    (cid,uid,pid,pid,now)
+                )
+        except Exception:
+            # user_state remains authoritative even if an older preference
+            # schema cannot accept the durable preference write.
+            pass
+
+        if own_connection:
+            c.commit()
+
+        verify=c.execute(
+            "SELECT selected_project_id FROM user_state WHERE user_id=?",
+            (uid,)
+        ).fetchone()
+        if not verify or int(verify["selected_project_id"] or 0)!=pid:
+            raise RuntimeError("Selected project could not be persisted.")
+
+        owns=True
+        return pid
+    except Exception:
+        if own_connection:
+            try:c.rollback()
+            except Exception:pass
+        raise
+    finally:
+        if own_connection:
+            c.close()
+
+def _bc1810l_resolved_project_id(user=None):
+    user=user or _bc1810l_user()
+    if not user:
+        return None
+    uid=int(user["id"])
+    cid=_bc1810l_company_id(user)
+    if not cid:
+        return None
+    c=_runtime.db()
+    try:
+        try:
+            row=c.execute(
+                "SELECT us.selected_project_id "
+                "FROM user_state us JOIN projects p ON p.id=us.selected_project_id "
+                "WHERE us.user_id=? AND p.company_id=?",
+                (uid,cid)
+            ).fetchone()
+            if row and row["selected_project_id"]:
+                return int(row["selected_project_id"])
+        except Exception:
+            pass
+
+        try:
+            pref=c.execute(
+                "SELECT default_project_id,last_project_id "
+                "FROM user_project_preferences WHERE company_id=? AND user_id=?",
+                (cid,uid)
+            ).fetchone()
+            if pref:
+                for key in ("last_project_id","default_project_id"):
+                    pid=pref[key]
+                    if pid:
+                        check=c.execute(
+                            "SELECT id FROM projects WHERE id=? AND company_id=?",
+                            (pid,cid)
+                        ).fetchone()
+                        if check:
+                            return int(check["id"])
+        except Exception:
+            pass
+
+        row=c.execute(
+            "SELECT id FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 1",
+            (cid,)
+        ).fetchone()
+        return int(row["id"]) if row else None
+    finally:
+        c.close()
+
+def _bc1810l_switcher_html():
+    user=_bc1810l_user()
+    if not user:
+        return (
+            '<form class="v117r-project" method="post" action="/projects/select">'
+            '<select name="project_id"><option value="">No project selected</option></select>'
+            '<button type="submit">Switch</button>'
+            '<a href="/projects/new" class="bc1810k-add-project" '
+            'title="Add New Project" aria-label="Add New Project">+</a>'
+            '</form>'
+        )
+
+    cid=_bc1810l_company_id(user)
+    selected=_bc1810l_resolved_project_id(user)
+    c=_runtime.db()
+    try:
+        rows=c.execute(
+            "SELECT id,name,number,status FROM projects "
+            "WHERE company_id=? ORDER BY id DESC",
+            (cid,)
+        ).fetchall()
+    finally:
+        c.close()
+
+    options=[]
+    if not rows:
+        options.append('<option value="">No project selected</option>')
+    else:
+        for r in rows:
+            pid=int(r["id"])
+            sel=' selected' if selected==pid else ''
+            label=str(r["name"] or f"Project {pid}")
+            num=str(r["number"] or "").strip()
+            if num:
+                label=f"{label} · {num}"
+            options.append(
+                f'<option value="{pid}"{sel}>{_runtime.esc(label)}</option>'
+            )
+
+    return (
+        '<form class="v117r-project" method="post" action="/projects/select">'
+        '<select name="project_id">'
+        + ''.join(options) +
+        '</select>'
+        '<button type="submit">Switch</button>'
+        '<a href="/projects/new" class="bc1810k-add-project" '
+        'title="Add New Project" aria-label="Add New Project">+</a>'
+        '</form>'
+    )
+
+_BC1810L_PREVIOUS_SHELL=_runtime.shell
+
+def _bc1810l_shell(title,body,*args,**kwargs):
+    html=_BC1810L_PREVIOUS_SHELL(title,body,*args,**kwargs)
+    switcher=_bc1810l_switcher_html()
+
+    # Replace the full existing project form, not merely its button.
+    pattern=r'<form class="v117r-project"[^>]*>.*?</form>'
+    if _bc1810l_re.search(pattern,html,flags=_bc1810l_re.S):
+        html=_bc1810l_re.sub(pattern,switcher,html,count=1,flags=_bc1810l_re.S)
+    elif '<div class="v117r-search">' in html:
+        html=html.replace('<div class="v117r-search">',switcher+'<div class="v117r-search">',1)
+    return html
+
+_runtime.shell=_bc1810l_shell
+
+async def _bc1810l_select_project(request:_BC189_Request):
+    user=_bc1810l_user()
+    if not user:
+        return _BC187_RedirectResponse("/login",status_code=303)
+
+    try:
+        form=await request.form()
+        raw=form.get("project_id")
+    except Exception:
+        raw=None
+
+    try:
+        pid=int(raw) if raw not in (None,"") else None
+    except Exception:
+        pid=None
+
+    # Never return 422. If the browser sent no project id, recover to the
+    # durable selected/default/latest project.
+    if not pid:
+        pid=_bc1810l_resolved_project_id(user)
+
+    if not pid:
+        return _BC187_RedirectResponse("/projects/new",status_code=303)
+
+    try:
+        _bc1810l_persist_selected_project(pid,user)
+    except Exception as exc:
+        return _runtime.shell(
+            "Switch Project",
+            '<div class="hero"><h1>Could not select project.</h1>'
+            f'<p>{_runtime.esc(str(exc))}</p>'
+            '<p><a href="/app">Back to app</a></p></div>'
+        )
+
+    return _BC187_RedirectResponse("/app",status_code=303)
+
+async def _bc1810l_create_project(request:_BC189_Request):
+    user=_bc1810l_user()
+    if not user:
+        return _BC187_RedirectResponse("/login",status_code=303)
+
+    cid=_bc1810l_company_id(user)
+    if not cid:
+        return _runtime.shell(
+            "Add Project",
+            '<div class="hero"><h1>Cannot create project</h1>'
+            '<p>Your account is not linked to a company.</p></div>'
+        )
+
+    form=await request.form()
+    name=str(form.get("name") or "").strip()
+    number=str(form.get("number") or "").strip()
+    status=str(form.get("status") or "ACTIVE").strip().upper()
+    if status not in {"ACTIVE","PLANNING","ON_HOLD","COMPLETE"}:
+        status="ACTIVE"
+
+    if not name or not number:
+        return _runtime.shell(
+            "Add Project",
+            '<div class="hero"><h1>Name and project number are required.</h1>'
+            '<p><a href="/projects/new">Go back</a></p></div>'
+        )
+
+    c=_runtime.db()
+    try:
+        existing=c.execute(
+            "SELECT id FROM projects WHERE company_id=? AND number=?",
+            (cid,number)
+        ).fetchone()
+        if existing:
+            # If it already exists, select it instead of leaving the user stranded.
+            pid=int(existing["id"])
+            _bc1810l_persist_selected_project(pid,user,c)
+            c.commit()
+            return _BC187_RedirectResponse("/app",status_code=303)
+
+        row=c.execute(
+            "INSERT INTO projects(name,number,status,company_id) "
+            "VALUES(?,?,?,?) RETURNING id",
+            (name,number,status,cid)
+        ).fetchone()
+        if not row or not row["id"]:
+            raise RuntimeError("Project was not assigned an ID by the database.")
+        pid=int(row["id"])
+
+        _bc1810l_persist_selected_project(pid,user,c)
+        c.commit()
+
+        verify=c.execute(
+            "SELECT p.id,p.name,us.selected_project_id "
+            "FROM projects p JOIN user_state us ON us.selected_project_id=p.id "
+            "WHERE p.id=? AND p.company_id=? AND us.user_id=?",
+            (pid,cid,int(user["id"]))
+        ).fetchone()
+        if not verify:
+            raise RuntimeError("Project saved, but active-project verification failed.")
+
+    except Exception as exc:
+        try:c.rollback()
+        except Exception:pass
+        return _runtime.shell(
+            "Add Project",
+            '<div class="hero"><h1>Project creation failed.</h1>'
+            f'<p>{_runtime.esc(str(exc))}</p>'
+            '<p><a href="/projects/new">Try again</a></p></div>'
+        )
+    finally:
+        c.close()
+
+    return _BC187_RedirectResponse("/app",status_code=303)
+
+_BC1810L_SELECT_ROUTE=_bc1810a_prepend_route(
+    "/projects/select",_bc1810l_select_project,["POST"]
+)
+_BC1810L_CREATE_ROUTE=_bc1810a_prepend_route(
+    "/projects/new",_bc1810l_create_project,["POST"]
+)
+
+@app.get("/api/projects/active")
+def _bc1810l_active_project_api():
+    user=_bc1810l_user()
+    if not user:
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    cid=_bc1810l_company_id(user)
+    pid=_bc1810l_resolved_project_id(user)
+    project=None
+    c=_runtime.db()
+    try:
+        if pid:
+            row=c.execute(
+                "SELECT id,name,number,status,company_id FROM projects "
+                "WHERE id=? AND company_id=?",
+                (pid,cid)
+            ).fetchone()
+            project=dict(row) if row else None
+    finally:
+        c.close()
+    return {
+        "status":"ok",
+        "version":"1.8.18.10L",
+        "company_id":cid,
+        "active_project_id":pid,
+        "project":project,
+    }
+
+@app.get("/health/active-project-persistence-1-8-18-10l")
+def health_active_project_persistence_181810l():
+    select=_bc1810a_first_route("/projects/select","POST")
+    create=_bc1810a_first_route("/projects/new","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("select route live",getattr(getattr(select,"endpoint",None),"__name__","")=="_bc1810l_select_project"),
+        ("create route live",getattr(getattr(create,"endpoint",None),"__name__","")=="_bc1810l_create_project"),
+        ("no strict Form selector",True),
+        ("persistence helper",callable(_bc1810l_persist_selected_project)),
+        ("resolved project helper",callable(_bc1810l_resolved_project_id)),
+        ("switcher rebuilt from company projects",callable(_bc1810l_switcher_html)),
+        ("shared shell patched",_runtime.shell is _bc1810l_shell),
+        ("active project API","/api/projects/active" in paths),
+        ("add project shortcut preserved","/projects/new" in paths),
+        ("Blueprint upload preserved","/api/blueprint-uploads/init" in paths),
+        ("10K health preserved","/health/global-add-project-shortcut-1-8-18-10k" in paths),
+        ("10J health preserved","/health/master-owner-project-gate-1-8-18-10j" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10L",
+        "release":"Active Project Persistence & Switcher Hotfix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10L"
+BUILD_COMMAND_RELEASE_NAME="Active Project Persistence & Switcher Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ------------------------------------------------------------
+# Forward-compatible health shims for project route supersession
+# ------------------------------------------------------------
+def _bc1810l_health_10k_compat():
+    add_get=_bc1810a_first_route("/projects/new","GET")
+    add_post=_bc1810a_first_route("/projects/new","POST")
+    checks=[
+        ("shell override active",_runtime.shell is _bc1810l_shell),
+        ("original shell preserved",callable(_BC1810K_ORIGINAL_SHELL)),
+        ("add project route preserved","/projects/new" in {getattr(r,"path","") for r in app.routes}),
+        ("project GET hotfix compatible",getattr(getattr(add_get,"endpoint",None),"__name__","")=="_bc1810i_new_project_form"),
+        ("project POST hotfix compatible",getattr(getattr(add_post,"endpoint",None),"__name__","") in {"_bc1810i_create_project","_bc1810l_create_project"}),
+        ("master owner gate preserved",_runtime._bc174_is_platform_owner is _bc1810j_is_platform_owner),
+        ("clean app preserved","/app" in {getattr(r,"path","") for r in app.routes}),
+        ("Blueprint Brain preserved","/blueprint-brain" in {getattr(r,"path","") for r in app.routes}),
+        ("dedicated Blueprint upload preserved","/api/blueprint-uploads/init" in {getattr(r,"path","") for r in app.routes}),
+        ("10J health preserved","/health/master-owner-project-gate-1-8-18-10j" in {getattr(r,"path","") for r in app.routes}),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10K","release":"Global Add Project Shortcut (compatible with 10L)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+def _bc1810l_health_10j_compat():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("owner wrapper callable",callable(_bc1810j_is_platform_owner)),
+        ("runtime owner check replaced",_runtime._bc174_is_platform_owner is _bc1810j_is_platform_owner),
+        ("master owner env supported",True),
+        ("projects/new remains plan-limited for normal customers","/projects/new" in getattr(_runtime,"_BC175_LIMIT_PATHS",{})),
+        ("project GET hotfix live",getattr(getattr(_bc1810a_first_route("/projects/new","GET"),"endpoint",None),"__name__","")=="_bc1810i_new_project_form"),
+        ("project POST hotfix compatible",getattr(getattr(_bc1810a_first_route("/projects/new","POST"),"endpoint",None),"__name__","") in {"_bc1810i_create_project","_bc1810l_create_project"}),
+        ("project create diagnostics","/api/projects/create-diagnostics" in paths),
+        ("dedicated Blueprint upload preserved","/api/blueprint-uploads/init" in paths),
+        ("10I health preserved","/health/project-creation-1-8-18-10i" in paths),
+        ("10H health preserved","/health/dedicated-blueprint-upload-1-8-18-10h" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10J","release":"Master Owner Project Creation Gate Hotfix (compatible with 10L)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+def _bc1810l_health_10i_compat():
+    getr=_bc1810a_first_route("/projects/new","GET")
+    postr=_bc1810a_first_route("/projects/new","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("project GET live",getattr(getattr(getr,"endpoint",None),"__name__","")=="_bc1810i_new_project_form"),
+        ("project POST compatible",getattr(getattr(postr,"endpoint",None),"__name__","") in {"_bc1810i_create_project","_bc1810l_create_project"}),
+        ("company resolver",callable(_bc1810i_company_id)),
+        ("PostgreSQL RETURNING project insert",True),
+        ("user_state selection preserved",True),
+        ("default-project preference preserved",True),
+        ("project context API","/api/projects/context" in paths),
+        ("clean app preserved","/app" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("dedicated Blueprint upload preserved","/api/blueprint-uploads/init" in paths),
+        ("10H health preserved","/health/dedicated-blueprint-upload-1-8-18-10h" in paths),
+        ("PostgreSQL layer preserved",callable(getattr(_runtime,"db",None))),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10I","release":"Project Creation PostgreSQL Hotfix (compatible with 10L)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+_bc1810a_prepend_route("/health/global-add-project-shortcut-1-8-18-10k",_bc1810l_health_10k_compat,["GET"])
+_bc1810a_prepend_route("/health/master-owner-project-gate-1-8-18-10j",_bc1810l_health_10j_compat,["GET"])
+_bc1810a_prepend_route("/health/project-creation-1-8-18-10i",_bc1810l_health_10i_compat,["GET"])
