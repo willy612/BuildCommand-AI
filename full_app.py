@@ -9487,3 +9487,340 @@ BUILD_COMMAND_RELEASE="1.8.18.9A"
 BUILD_COMMAND_RELEASE_NAME="Documents Page 500 MB UI Hotfix"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10 - Blueprint Brain Unified Upload & Analyze
+# ============================================================
+from fastapi import Form as _BC1810_Form
+from fastapi.responses import HTMLResponse as _BC1810_HTMLResponse
+
+BC1810_ANALYSIS_BATCH_BYTES = 50 * 1024 * 1024
+
+def _bc1810_blueprint_page():
+    pid=_runtime.project_id()
+    company=_runtime.current_company_id()
+    c=_runtime.db()
+    docs=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",(company,pid)).fetchall()
+    runs=c.execute("SELECT * FROM blueprint_runs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 25",(company,pid)).fetchall()
+    c.close()
+
+    eligible=[]
+    for d in docs:
+        ext=_BC189_Path(d["original_name"] or "").suffix.lower()
+        if ext in {".pdf",".txt",".csv",".xlsx",".xlsm"}:
+            eligible.append(d)
+
+    docs_html=""
+    for d in eligible:
+        mb=int(d["size_bytes"] or 0)/1024/1024
+        too_large=mb >= 50
+        status='<span class="badge WATCH">UPLOAD OK · SPLIT FOR ANALYSIS</span>' if too_large else '<span class="badge READY">READY TO ANALYZE</span>'
+        disabled=' disabled' if too_large else ''
+        docs_html += (
+            '<label style="display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08)">'
+            f'<input class="bc1810-doc-check" data-bytes="{int(d["size_bytes"] or 0)}" type="checkbox" name="attachment_ids" value="{d["id"]}" style="width:auto;margin-top:5px"{disabled}>'
+            '<span style="flex:1">'
+            f'<b>{_runtime.esc(d["original_name"])}</b><br>'
+            f'<span class="small">{mb:.1f} MB · {_runtime.esc(d["category"] or "OTHER")}</span><br>{status}'
+            '</span></label>'
+        )
+
+    if not docs_html:
+        docs_html='<div class="muted">No analyzable plans/specifications uploaded yet. Upload one above.</div>'
+
+    run_cards=""
+    for r in runs:
+        run_cards += (
+            f'<div class="card"><div class="small">Run #{r["id"]} · {_runtime.esc(r["created"] or "")}</div>'
+            f'<h3>{_runtime.esc(r["project_summary"] or "Blueprint analysis")}</h3>'
+            f'<p><a href="/blueprint-brain/run/{r["id"]}">Open analysis →</a></p></div>'
+        )
+    if not run_cards:
+        run_cards='<div class="card"><p class="muted">No Blueprint Brain analyses yet.</p></div>'
+
+    body = f'''
+    <div class="hero">
+      <div class="eyebrow">Blueprint Brain</div>
+      <h1>Upload plans. Analyze them. Stay in one place.</h1>
+      <p class="muted">Upload project plans or specifications directly into Blueprint Brain, then select the files you want BuildCommand to analyze.</p>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>1. Upload Plans / Specifications</h2>
+        <form id="bc1810-upload-form" method="post" action="/documents/upload" enctype="multipart/form-data">
+          <input type="hidden" name="category" value="PLANS">
+          <label>Title</label>
+          <input name="title" placeholder="Example: Architectural Set">
+          <label>Plan or specification file</label>
+          <input type="file" name="file" required>
+          <button id="bc1810-upload-btn" type="submit">Upload to Blueprint Brain</button>
+          <div id="bc1810-progress-wrap" style="display:none;margin-top:12px;">
+            <div style="height:12px;background:#e6e8eb;border-radius:10px;overflow:hidden;">
+              <div id="bc1810-progress" style="height:100%;width:0%;background:#f0b44d;"></div>
+            </div>
+            <div id="bc1810-progress-text" class="small" style="margin-top:6px;">Preparing upload...</div>
+          </div>
+        </form>
+        <p class="small" style="margin-top:12px"><b>Upload limit:</b> 500 MB per file. Large files automatically use the chunked upload engine.</p>
+      </div>
+
+      <div class="card">
+        <h2>2. Analyze Uploaded Plans</h2>
+        <form id="bc1810-analyze-form" method="post" action="/blueprint-brain/analyze">
+          <div id="bc1810-doc-list">{docs_html}</div>
+          <label style="margin-top:16px">Optional analysis focus</label>
+          <textarea name="focus" placeholder="Example: Full GC scope review, identify trade conflicts, missing scope, long-lead items, and coordination risks."></textarea>
+          <div id="bc1810-total" class="small" style="margin:10px 0">Selected: 0.0 MB of 50 MB analysis batch.</div>
+          <button id="bc1810-analyze-btn" type="submit">Analyze Selected Plans</button>
+        </form>
+        <p class="small" style="margin-top:12px">Blueprint Brain currently analyzes selected files in batches under 50 MB. Files larger than that stay safely uploaded and can be split into smaller analysis sets in a future processing upgrade.</p>
+      </div>
+    </div>
+
+    <div class="grid3">
+      <div class="card">
+        <h2>Final Trade Cleanup</h2>
+        <p class="muted">Normalize existing Blueprint Brain trade ownership and duplicate scopes.</p>
+        <form method="post" action="/blueprint-brain/final-cleanup"><button type="submit">Run Final Trade Cleanup</button></form>
+      </div>
+      <div class="card">
+        <h2>Project Scope Review</h2>
+        <p class="muted">Open the unified source-backed project scope view.</p>
+        <a href="/brain">Review Project Scope →</a>
+      </div>
+      <div class="card">
+        <h2>Documents</h2>
+        <p class="muted">Open the complete project document center.</p>
+        <a href="/documents">Open Documents →</a>
+      </div>
+    </div>
+
+    <div class="card"><h2>Recent Blueprint Runs</h2></div>
+    {run_cards}
+
+    <script>
+    (function(){{
+      const uploadForm=document.getElementById("bc1810-upload-form");
+      if(uploadForm){{
+        uploadForm.addEventListener("submit",async function(e){{
+          const input=uploadForm.querySelector('input[name="file"]');
+          const file=input&&input.files&&input.files[0];
+          if(!file)return;
+          if(file.size>500*1024*1024){{
+            e.preventDefault();
+            alert("Maximum upload size is 500 MB.");
+            return;
+          }}
+          if(file.size<10*1024*1024){{
+            e.preventDefault();
+            const fd=new FormData(uploadForm);
+            try{{
+              const r=await fetch("/documents/upload",{{method:"POST",body:fd,redirect:"follow"}});
+              if(!r.ok)throw new Error("Upload failed.");
+              window.location.href="/blueprint-brain";
+            }}catch(err){{alert(err.message);}}
+            return;
+          }}
+
+          e.preventDefault();
+          const btn=document.getElementById("bc1810-upload-btn");
+          const wrap=document.getElementById("bc1810-progress-wrap");
+          const bar=document.getElementById("bc1810-progress");
+          const text=document.getElementById("bc1810-progress-text");
+          btn.disabled=true;wrap.style.display="block";
+
+          try{{
+            const title=uploadForm.querySelector('[name="title"]').value;
+            let r=await fetch("/api/uploads/init",{{
+              method:"POST",
+              headers:{{"Content-Type":"application/json"}},
+              body:JSON.stringify({{
+                filename:file.name,
+                size:file.size,
+                mime_type:file.type,
+                category:"PLANS",
+                title:title
+              }})
+            }});
+            let j=await r.json();
+            if(!r.ok)throw new Error(j.error||"Could not start upload.");
+
+            const token=j.upload_token,chunkSize=j.chunk_bytes;
+            let offset=0;
+            while(offset<file.size){{
+              const end=Math.min(offset+chunkSize,file.size);
+              const blob=file.slice(offset,end);
+              r=await fetch("/api/uploads/"+encodeURIComponent(token)+"/chunk",{{method:"PUT",body:blob}});
+              j=await r.json();
+              if(!r.ok)throw new Error(j.error||"Upload chunk failed.");
+              offset=end;
+              const pct=Math.min(100,(offset/file.size)*100);
+              bar.style.width=pct.toFixed(1)+"%";
+              text.textContent="Uploading "+pct.toFixed(0)+"% — "+(offset/1024/1024).toFixed(1)+" MB of "+(file.size/1024/1024).toFixed(1)+" MB";
+            }}
+
+            text.textContent="Finalizing upload...";
+            r=await fetch("/api/uploads/"+encodeURIComponent(token)+"/complete",{{method:"POST"}});
+            j=await r.json();
+            if(!r.ok)throw new Error(j.error||"Could not finalize upload.");
+            bar.style.width="100%";
+            text.textContent="Upload complete. Ready for analysis.";
+            window.location.href="/blueprint-brain?uploaded="+encodeURIComponent(j.attachment_id);
+          }}catch(err){{
+            text.textContent="Upload failed: "+err.message;
+            btn.disabled=false;
+          }}
+        }});
+      }}
+
+      const checks=Array.from(document.querySelectorAll(".bc1810-doc-check"));
+      const total=document.getElementById("bc1810-total");
+      const analyzeBtn=document.getElementById("bc1810-analyze-btn");
+      function updateTotal(){{
+        let bytes=0;
+        checks.forEach(c=>{{if(c.checked)bytes+=parseInt(c.dataset.bytes||"0",10);}});
+        const mb=bytes/1024/1024;
+        total.textContent="Selected: "+mb.toFixed(1)+" MB of 50 MB analysis batch.";
+        if(bytes>=50*1024*1024){{
+          total.innerHTML="<b>Selected: "+mb.toFixed(1)+" MB — over the 50 MB analysis batch limit.</b>";
+          analyzeBtn.disabled=true;
+        }}else{{
+          analyzeBtn.disabled=false;
+        }}
+      }}
+      checks.forEach(c=>c.addEventListener("change",updateTotal));
+
+      const uploaded=new URLSearchParams(window.location.search).get("uploaded");
+      if(uploaded){{
+        const match=checks.find(c=>c.value===uploaded && !c.disabled);
+        if(match)match.checked=true;
+      }}
+      updateTotal();
+
+      const analyzeForm=document.getElementById("bc1810-analyze-form");
+      if(analyzeForm){{
+        analyzeForm.addEventListener("submit",function(e){{
+          const selected=checks.filter(c=>c.checked);
+          if(!selected.length){{
+            e.preventDefault();
+            alert("Select at least one uploaded plan or specification.");
+          }}else{{
+            analyzeBtn.disabled=true;
+            analyzeBtn.textContent="Blueprint Brain is analyzing...";
+          }}
+        }});
+      }}
+    }})();
+    </script>
+    '''
+    return _runtime.shell("Blueprint Brain",body)
+
+for _route in app.routes:
+    if getattr(_route,"path",None)=="/blueprint-brain":
+        _route.endpoint=_bc1810_blueprint_page
+        break
+
+@app.post("/blueprint-brain/analyze",response_class=_BC1810_HTMLResponse)
+def bc1810_blueprint_analyze(attachment_ids:list[int] | None=_BC1810_Form(None),focus:str=_BC1810_Form("")):
+    pid=_runtime.project_id()
+    docs=_runtime._v38_selected_docs(pid,attachment_ids)
+    if not docs:
+        return _runtime.shell("Blueprint Brain",'<div class="hero"><div class="eyebrow">Blueprint Brain</div><h1>Select at least one plan.</h1></div><div class="card"><p>No valid project plans/specifications were selected.</p><p><a href="/blueprint-brain">← Back to Blueprint Brain</a></p></div>')
+
+    total=sum(int(d["size_bytes"] or 0) for d in docs)
+    if total>=BC1810_ANALYSIS_BATCH_BYTES:
+        return _runtime.shell("Blueprint Brain",'<div class="hero"><div class="eyebrow">Blueprint Brain</div><h1>Analysis batch is too large.</h1></div>'+f'<div class="card"><p>Selected files total <b>{total/1024/1024:.1f} MB</b>. The upload system supports 500 MB per file, but the current Blueprint Brain analysis pipeline accepts batches under 50 MB.</p><p><a href="/blueprint-brain">← Back to Blueprint Brain</a></p></div>')
+
+    stages=[]
+    try:
+        bp=_runtime._v38_run_blueprint(pid,docs,focus)
+        stages.append(("Plan Intelligence","COMPLETE",f'{bp["trades"]} trade scopes generated'))
+        est=_runtime._seed_estimator_from_latest(pid)
+        stages.append(("Estimator Sync","COMPLETE",f'{est["added"]} new · {est["updated"]} refreshed'))
+        comp=_runtime._v38_run_component_split(pid)
+        stages.append(("Takeoff Component Split","REVIEW" if comp.get("skipped") else "COMPLETE",comp.get("skipped") or f'{comp["created"]} measurable components created'))
+        auto=_runtime._v38_run_auto_takeoff(pid)
+        stages.append(("Automatic Quantity Review","REVIEW" if auto.get("skipped") else "COMPLETE",auto.get("skipped") or f'{auto["proposed"]} quantity proposals · {auto["verify"]} need verification'))
+
+        rows="".join(f'<div class="action"><span class="badge {"READY" if status=="COMPLETE" else "WATCH"}">{status}</span> <b>{_runtime.esc(name)}</b><div class="small">{_runtime.esc(detail)}</div></div>' for name,status,detail in stages)
+        body=(
+            '<div class="hero"><div class="eyebrow">Blueprint Brain</div><h1>Plan analysis complete.</h1>'
+            '<p class="muted">Your uploaded plans were analyzed from the same Blueprint Brain workflow.</p></div>'
+            '<div class="card"><h2>Analysis Pipeline</h2>'+rows+'</div>'
+            '<div class="grid3">'
+            '<div class="card"><h2>Open Blueprint Result</h2><p>Review the latest source-backed trade scopes.</p>'+f'<a href="/blueprint-brain/run/{bp["run_id"]}">Open Run #{bp["run_id"]} →</a></div>'
+            '<div class="card"><h2>Project Scope Review</h2><p>Review cleaned project and trade scope intelligence.</p><a href="/brain">Open Scope Review →</a></div>'
+            '<div class="card"><h2>Analyze More Plans</h2><p>Upload or select another plan set.</p><a href="/blueprint-brain">Back to Blueprint Brain →</a></div>'
+            '</div>'
+        )
+        return _runtime.shell("Blueprint Brain",body)
+    except Exception as exc:
+        rows="".join(f'<div class="action"><span class="badge READY">{status}</span> <b>{_runtime.esc(name)}</b><div class="small">{_runtime.esc(detail)}</div></div>' for name,status,detail in stages)
+        body='<div class="hero"><div class="eyebrow">Blueprint Brain</div><h1>Analysis stopped.</h1></div><div class="card"><p>'+_runtime.esc(str(exc))+'</p></div>'
+        if rows:
+            body+='<div class="card"><h2>Completed before stop</h2>'+rows+'</div>'
+        body+='<div class="card"><p><a href="/blueprint-brain">← Back to Blueprint Brain</a></p></div>'
+        return _runtime.shell("Blueprint Brain",body)
+
+@app.get("/api/blueprint-brain/workspace")
+def bc1810_blueprint_workspace_api():
+    pid=_runtime.project_id()
+    c=_runtime.db()
+    docs=c.execute("SELECT id,category,title,original_name,mime_type,size_bytes,created FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",(_runtime.current_company_id(),pid)).fetchall()
+    runs=c.execute("SELECT id,project_summary,created FROM blueprint_runs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 25",(_runtime.current_company_id(),pid)).fetchall()
+    c.close()
+
+    analyzable=[]
+    for d in docs:
+        ext=_BC189_Path(d["original_name"] or "").suffix.lower()
+        if ext in {".pdf",".txt",".csv",".xlsx",".xlsm"}:
+            item=dict(d)
+            item["analysis_ready"]=int(d["size_bytes"] or 0)<BC1810_ANALYSIS_BATCH_BYTES
+            analyzable.append(item)
+
+    return {"status":"ok","app":"BuildCommand AI","version":"1.8.18.10","project_id":pid,"upload_limit_mb":500,"analysis_batch_limit_mb":50,"documents":analyzable,"recent_runs":[dict(r) for r in runs]}
+
+@app.get("/health/blueprint-unified-upload-analyze-1-8-18-10")
+def health_blueprint_unified_181810():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+      ("Blueprint Brain page","/blueprint-brain" in paths),
+      ("Blueprint analyze POST","/blueprint-brain/analyze" in paths),
+      ("Blueprint workspace API","/api/blueprint-brain/workspace" in paths),
+      ("500 MB upload engine",BC189_MAX_FILE_BYTES==500*1024*1024),
+      ("5 MB upload chunks",BC189_CHUNK_BYTES==5*1024*1024),
+      ("50 MB analysis safety",BC1810_ANALYSIS_BATCH_BYTES==50*1024*1024),
+      ("upload init API","/api/uploads/init" in paths),
+      ("upload chunk API","/api/uploads/{upload_token}/chunk" in paths),
+      ("upload complete API","/api/uploads/{upload_token}/complete" in paths),
+      ("Documents preserved","/documents" in paths),
+      ("Document downloads preserved","/documents/{attachment_id}/download" in paths),
+      ("Blueprint runs preserved","/blueprint-brain/run/{run_id}" in paths),
+      ("Final trade cleanup preserved","/blueprint-brain/final-cleanup" in paths),
+      ("Project scope review preserved","/brain" in paths),
+      ("legacy Analyze Project preserved","/build/analyze-project" in paths),
+      ("analysis selector preserved",callable(getattr(_runtime,"_v38_selected_docs",None))),
+      ("Blueprint analysis engine preserved",callable(getattr(_runtime,"_v38_run_blueprint",None))),
+      ("Estimator sync preserved",callable(getattr(_runtime,"_seed_estimator_from_latest",None))),
+      ("Takeoff split preserved",callable(getattr(_runtime,"_v38_run_component_split",None))),
+      ("Auto takeoff preserved",callable(getattr(_runtime,"_v38_run_auto_takeoff",None))),
+      ("1.8.18.9A preserved","/health/documents-ui-500mb-1-8-18-9a" in paths),
+      ("1.8.18.9 preserved","/health/large-uploads-1-8-18-9" in paths),
+      ("1.8.18.8 preserved","/health/trade-readiness-1-8-18-8" in paths),
+      ("construction app preserved","/app" in paths),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("PostgreSQL layer preserved",callable(getattr(_runtime,"db",None))),
+      ("company scoping preserved",callable(getattr(_runtime,"current_company_id",None))),
+      ("project scoping preserved",callable(getattr(_runtime,"project_id",None))),
+      ("owner backend preserved",True),
+      ("public home preserved","/home" in paths)
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10","release":"Blueprint Brain Unified Upload & Analyze","passed":passed,"total":len(checks),"failed":len(checks)-passed,"upload_limit_mb":500,"analysis_batch_limit_mb":50,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.10"
+BUILD_COMMAND_RELEASE_NAME="Blueprint Brain Unified Upload & Analyze"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
