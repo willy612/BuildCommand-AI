@@ -12228,3 +12228,125 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10K - Global Add Project Shortcut
+# ============================================================
+
+_BC1810K_ORIGINAL_SHELL = _runtime.shell
+
+def _bc1810k_shell(title, body, *args, **kwargs):
+    html=_BC1810K_ORIGINAL_SHELL(title, body, *args, **kwargs)
+
+    # Add a persistent + shortcut next to the existing project switcher.
+    # Handle both the current shared header markup and older variants.
+    replacements=[
+        (
+            '<button type="submit">Switch</button>',
+            '<button type="submit">Switch</button>'
+            '<a href="/projects/new" class="bc1810k-add-project" '
+            'title="Add New Project" aria-label="Add New Project">+</a>'
+        ),
+        (
+            '<button type="submit">Switch Project</button>',
+            '<button type="submit">Switch Project</button>'
+            '<a href="/projects/new" class="bc1810k-add-project" '
+            'title="Add New Project" aria-label="Add New Project">+</a>'
+        ),
+    ]
+
+    injected=False
+    for old,new in replacements:
+        if old in html and 'class="bc1810k-add-project"' not in html:
+            html=html.replace(old,new,1)
+            injected=True
+            break
+
+    # Fallback for selector forms with different button wording.
+    if not injected and 'class="bc1810k-add-project"' not in html:
+        marker='</form>'
+        selector_pos=html.find('class="v117r-project"')
+        if selector_pos >= 0:
+            end=html.find(marker,selector_pos)
+            if end >= 0:
+                end += len(marker)
+                html=(
+                    html[:end]
+                    + '<a href="/projects/new" class="bc1810k-add-project" '
+                      'title="Add New Project" aria-label="Add New Project">+</a>'
+                    + html[end:]
+                )
+
+    # Inject styling once.
+    if 'data-bc1810k-style' not in html:
+        style='''
+        <style data-bc1810k-style>
+        .v117r-project{
+          display:flex;
+          align-items:center;
+          gap:8px;
+        }
+        .bc1810k-add-project{
+          display:inline-flex;
+          align-items:center;
+          justify-content:center;
+          width:34px;
+          min-width:34px;
+          height:34px;
+          border-radius:9px;
+          text-decoration:none;
+          font-size:24px;
+          line-height:1;
+          font-weight:700;
+          border:1px solid rgba(255,255,255,.18);
+          background:rgba(255,255,255,.06);
+          color:inherit;
+        }
+        .bc1810k-add-project:hover{
+          transform:translateY(-1px);
+          background:rgba(255,255,255,.11);
+        }
+        </style>
+        '''
+        if '</head>' in html:
+            html=html.replace('</head>',style+'</head>',1)
+        else:
+            html=style+html
+
+    return html
+
+_runtime.shell=_bc1810k_shell
+
+@app.get("/health/global-add-project-shortcut-1-8-18-10k")
+def health_global_add_project_shortcut_181810k():
+    checks=[
+        ("shell override active",_runtime.shell is _bc1810k_shell),
+        ("original shell preserved",callable(_BC1810K_ORIGINAL_SHELL)),
+        ("add project route preserved","/projects/new" in {getattr(r,"path","") for r in app.routes}),
+        ("project GET hotfix first",getattr(getattr(_bc1810a_first_route("/projects/new","GET"),"endpoint",None),"__name__","")=="_bc1810i_new_project_form"),
+        ("project POST hotfix first",getattr(getattr(_bc1810a_first_route("/projects/new","POST"),"endpoint",None),"__name__","")=="_bc1810i_create_project"),
+        ("master owner gate preserved",_runtime._bc174_is_platform_owner is _bc1810j_is_platform_owner),
+        ("clean app preserved","/app" in {getattr(r,"path","") for r in app.routes}),
+        ("Blueprint Brain preserved","/blueprint-brain" in {getattr(r,"path","") for r in app.routes}),
+        ("dedicated Blueprint upload preserved","/api/blueprint-uploads/init" in {getattr(r,"path","") for r in app.routes}),
+        ("10J health preserved","/health/master-owner-project-gate-1-8-18-10j" in {getattr(r,"path","") for r in app.routes}),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10K",
+        "release":"Global Add Project Shortcut",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10K"
+BUILD_COMMAND_RELEASE_NAME="Global Add Project Shortcut"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
