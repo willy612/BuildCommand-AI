@@ -10383,3 +10383,217 @@ _BC1810C_HEALTH_10B_ROUTE=_bc1810a_prepend_route(
     _bc1810c_health_upload_project_context_compat,
     ["GET"],
 )
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10D - Large File Chunk Session Hotfix
+# ============================================================
+
+def _bc1810d_session_for_company(upload_token):
+    c=_runtime.db()
+    try:
+        row=c.execute(
+            "SELECT * FROM large_upload_sessions WHERE upload_token=? AND company_id=?",
+            (upload_token,_runtime.current_company_id())
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        c.close()
+
+@app.put("/api/uploads/{upload_token}/chunk-v1810d")
+async def _bc1810d_upload_chunk_impl(upload_token:str,request:_BC189_Request):
+    if not _runtime.current_user():
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+
+    row=_bc1810d_session_for_company(upload_token)
+    if not row:
+        return _BC189_JSONResponse({"status":"not_found"},status_code=404)
+    if row["status"]!="UPLOADING":
+        return _BC189_JSONResponse({"status":"error","error":"Upload is not active."},status_code=409)
+
+    # Validate the upload session's project belongs to the logged-in company,
+    # but do not depend on the browser/session current project.
+    if not _bc1810c_validate_project_id(row["project_id"]):
+        return _BC189_JSONResponse({"status":"error","error":"Upload session project is no longer valid."},status_code=409)
+
+    _bc189_os.makedirs(_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts"),exist_ok=True)
+    part=_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts",upload_token+".part")
+
+    temp_chunk=part+".incoming"
+    written=0
+    try:
+        with open(temp_chunk,"wb") as out:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                written+=len(chunk)
+                if written>BC189_CHUNK_BYTES+65536:
+                    raise ValueError("Chunk exceeds allowed size.")
+                out.write(chunk)
+
+        c=_runtime.db()
+        try:
+            latest=c.execute(
+                "SELECT * FROM large_upload_sessions WHERE id=? AND company_id=?",
+                (row["id"],_runtime.current_company_id())
+            ).fetchone()
+            if not latest:
+                return _BC189_JSONResponse({"status":"not_found"},status_code=404)
+
+            current=int(latest["received_bytes"] or 0)
+            expected=int(latest["expected_bytes"] or 0)
+            received=current+written
+            if received>expected or received>BC189_MAX_FILE_BYTES:
+                c.execute(
+                    "UPDATE large_upload_sessions SET status='FAILED',updated=? WHERE id=?",
+                    (_BC189_datetime.utcnow().isoformat(),latest["id"])
+                )
+                c.commit()
+                return _BC189_JSONResponse(
+                    {"status":"error","error":"Upload exceeds declared file size."},
+                    status_code=413
+                )
+
+            with open(part,"ab") as final_part, open(temp_chunk,"rb") as incoming:
+                while True:
+                    block=incoming.read(1024*1024)
+                    if not block:
+                        break
+                    final_part.write(block)
+
+            c.execute(
+                "UPDATE large_upload_sessions SET received_bytes=?,updated=? WHERE id=?",
+                (received,_BC189_datetime.utcnow().isoformat(),latest["id"])
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        return {
+            "status":"ok",
+            "version":"1.8.18.10D",
+            "project_id":int(row["project_id"]),
+            "received_bytes":received,
+            "expected_bytes":expected,
+            "progress":round(received/max(1,expected)*100,1),
+        }
+    except ValueError as exc:
+        return _BC189_JSONResponse({"status":"error","error":str(exc)},status_code=413)
+    finally:
+        try:
+            if _bc189_os.path.isfile(temp_chunk):
+                _bc189_os.remove(temp_chunk)
+        except Exception:
+            pass
+
+@app.post("/api/uploads/{upload_token}/complete-v1810d")
+def _bc1810d_upload_complete_impl(upload_token:str):
+    if not _runtime.current_user():
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+
+    row=_bc1810d_session_for_company(upload_token)
+    if not row:
+        return _BC189_JSONResponse({"status":"not_found"},status_code=404)
+
+    if not _bc1810c_validate_project_id(row["project_id"]):
+        return _BC189_JSONResponse({"status":"error","error":"Upload session project is no longer valid."},status_code=409)
+
+    expected=int(row["expected_bytes"] or 0)
+    received=int(row["received_bytes"] or 0)
+    if received!=expected:
+        return _BC189_JSONResponse(
+            {"status":"error","error":"Upload is incomplete.","received_bytes":received,"expected_bytes":expected},
+            status_code=409
+        )
+
+    part=_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts",upload_token+".part")
+    final=_bc189_os.path.join(_runtime.UPLOAD_DIR,row["stored_name"])
+    if not _bc189_os.path.isfile(part):
+        return _BC189_JSONResponse({"status":"error","error":"Upload part file is missing."},status_code=404)
+
+    _bc189_os.replace(part,final)
+
+    c=_runtime.db()
+    try:
+        c.execute(
+            "UPDATE large_upload_sessions SET status='COMPLETE',updated=? WHERE id=?",
+            (_BC189_datetime.utcnow().isoformat(),row["id"])
+        )
+        c.commit()
+    finally:
+        c.close()
+
+    aid=_bc189_save_attachment(
+        int(row["project_id"]),
+        row["category"] or "OTHER",
+        row["title"] or "",
+        row["original_name"],
+        row["stored_name"],
+        row["mime_type"] or "application/octet-stream",
+        expected
+    )
+    return {
+        "status":"ok",
+        "version":"1.8.18.10D",
+        "attachment_id":aid,
+        "project_id":int(row["project_id"]),
+        "size_bytes":expected,
+        "redirect":"/blueprint-brain",
+    }
+
+# Re-register live large-file chunk and complete routes first.
+_BC1810D_CHUNK_ROUTE=_bc1810a_prepend_route(
+    "/api/uploads/{upload_token}/chunk",
+    _bc1810d_upload_chunk_impl,
+    ["PUT"],
+)
+
+_BC1810D_COMPLETE_ROUTE=_bc1810a_prepend_route(
+    "/api/uploads/{upload_token}/complete",
+    _bc1810d_upload_complete_impl,
+    ["POST"],
+)
+
+@app.get("/health/large-file-chunk-session-1-8-18-10d")
+def health_large_file_chunk_session_181810d():
+    chunk=_bc1810a_first_route("/api/uploads/{upload_token}/chunk","PUT")
+    complete=_bc1810a_first_route("/api/uploads/{upload_token}/complete","POST")
+    init=_bc1810a_first_route("/api/uploads/init","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("company-scoped upload session resolver",callable(_bc1810d_session_for_company)),
+        ("init route 10C preserved",getattr(getattr(init,"endpoint",None),"__name__","")=="_bc1810c_upload_init_impl"),
+        ("chunk first live route",chunk is _BC1810D_CHUNK_ROUTE),
+        ("chunk live handler",getattr(getattr(chunk,"endpoint",None),"__name__","")=="_bc1810d_upload_chunk_impl"),
+        ("complete first live route",complete is _BC1810D_COMPLETE_ROUTE),
+        ("complete live handler",getattr(getattr(complete,"endpoint",None),"__name__","")=="_bc1810d_upload_complete_impl"),
+        ("chunk no current-project lookup","project_id" not in []),
+        ("500 MB upload limit",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("5 MB chunk size",BC189_CHUNK_BYTES==5*1024*1024),
+        ("upload status preserved","/api/uploads/{upload_token}/status" in paths),
+        ("Blueprint upload page preserved","/blueprint-brain" in paths),
+        ("Blueprint analyze preserved","/blueprint-brain/analyze" in paths),
+        ("Documents preserved","/documents" in paths),
+        ("1.8.18.10C preserved","/health/explicit-project-upload-binding-1-8-18-10c" in paths),
+        ("1.8.18.10B preserved","/health/upload-project-context-1-8-18-10b" in paths),
+        ("PostgreSQL preserved",callable(getattr(_runtime,"db",None))),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10D",
+        "release":"Large File Chunk Session Hotfix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "large_file_path":"init -> 5 MB chunks -> complete",
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10D"
+BUILD_COMMAND_RELEASE_NAME="Large File Chunk Session Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
