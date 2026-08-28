@@ -9498,7 +9498,7 @@ from fastapi.responses import HTMLResponse as _BC1810_HTMLResponse
 BC1810_ANALYSIS_BATCH_BYTES = 50 * 1024 * 1024
 
 def _bc1810_blueprint_page():
-    pid=_runtime.project_id()
+    pid=_bc187_project_id()
     company=_runtime.current_company_id()
     c=_runtime.db()
     docs=c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",(company,pid)).fetchall()
@@ -9725,7 +9725,7 @@ for _route in app.routes:
 
 @app.post("/blueprint-brain/analyze",response_class=_BC1810_HTMLResponse)
 def bc1810_blueprint_analyze(attachment_ids:list[int] | None=_BC1810_Form(None),focus:str=_BC1810_Form("")):
-    pid=_runtime.project_id()
+    pid=_bc187_project_id()
     docs=_runtime._v38_selected_docs(pid,attachment_ids)
     if not docs:
         return _runtime.shell("Blueprint Brain",'<div class="hero"><div class="eyebrow">Blueprint Brain</div><h1>Select at least one plan.</h1></div><div class="card"><p>No valid project plans/specifications were selected.</p><p><a href="/blueprint-brain">← Back to Blueprint Brain</a></p></div>')
@@ -10593,6 +10593,72 @@ def health_large_file_chunk_session_181810d():
 
 BUILD_COMMAND_RELEASE="1.8.18.10D"
 BUILD_COMMAND_RELEASE_NAME="Large File Chunk Session Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10E - Blueprint Project JS Hotfix
+# ============================================================
+
+def _bc1810e_blueprint_project_id():
+    return _bc187_project_id()
+
+# Re-register Blueprint Brain GET after source fix so FastAPI's cached route.app
+# definitely uses the corrected page function.
+_BC1810E_BLUEPRINT_ROUTE=_bc1810a_prepend_route(
+    "/blueprint-brain",
+    _bc1810_blueprint_page,
+    ["GET"],
+    _BC1810_HTMLResponse,
+)
+
+# Re-register Blueprint analyze POST with durable project resolution too.
+_BC1810E_ANALYZE_ROUTE=_bc1810a_prepend_route(
+    "/blueprint-brain/analyze",
+    bc1810_blueprint_analyze,
+    ["POST"],
+    _BC1810_HTMLResponse,
+)
+
+@app.get("/health/blueprint-project-js-1-8-18-10e")
+def health_blueprint_project_js_181810e():
+    bp=_bc1810a_first_route("/blueprint-brain","GET")
+    analyze=_bc1810a_first_route("/blueprint-brain/analyze","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("Blueprint durable project resolver",callable(_bc1810e_blueprint_project_id)),
+        ("Blueprint first live route",bp is _BC1810E_BLUEPRINT_ROUTE),
+        ("Blueprint live handler",getattr(getattr(bp,"endpoint",None),"__name__","")=="_bc1810_blueprint_page"),
+        ("Blueprint analyze first route",analyze is _BC1810E_ANALYZE_ROUTE),
+        ("Blueprint analyze live handler",getattr(getattr(analyze,"endpoint",None),"__name__","")=="bc1810_blueprint_analyze"),
+        ("upload init 10C preserved",getattr(getattr(_bc1810a_first_route("/api/uploads/init","POST"),"endpoint",None),"__name__","")=="_bc1810c_upload_init_impl"),
+        ("chunk 10D preserved",getattr(getattr(_bc1810a_first_route("/api/uploads/{upload_token}/chunk","PUT"),"endpoint",None),"__name__","")=="_bc1810d_upload_chunk_impl"),
+        ("complete 10D preserved",getattr(getattr(_bc1810a_first_route("/api/uploads/{upload_token}/complete","POST"),"endpoint",None),"__name__","")=="_bc1810d_upload_complete_impl"),
+        ("500 MB upload limit",BC189_MAX_FILE_BYTES==500*1024*1024),
+        ("5 MB chunks",BC189_CHUNK_BYTES==5*1024*1024),
+        ("Documents preserved","/documents" in paths),
+        ("1.8.18.10D preserved","/health/large-file-chunk-session-1-8-18-10d" in paths),
+        ("1.8.18.10C preserved","/health/explicit-project-upload-binding-1-8-18-10c" in paths),
+        ("1.8.18.10 preserved","/health/blueprint-unified-upload-analyze-1-8-18-10" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10E",
+        "release":"Blueprint Project JavaScript Hotfix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "fix":"Blueprint page now renders a real project_id instead of Python None.",
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10E"
+BUILD_COMMAND_RELEASE_NAME="Blueprint Project JavaScript Hotfix"
 try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
