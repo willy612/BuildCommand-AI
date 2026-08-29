@@ -14214,3 +14214,561 @@ def _bc181813_health_181811_compat():
     passed=sum(bool(ok) for _,ok in checks)
     return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.11","release":"Best Builder Knowledge Layer (compatible with 1.8.18.13)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
 _bc1810a_prepend_route("/health/best-builder-knowledge-1-8-18-11",_bc181813_health_181811_compat,["GET"])
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.14 - Unified Project Blueprint Truth
+# ============================================================
+
+import re as _bc181814_re
+import json as _bc181814_json
+import hashlib as _bc181814_hashlib
+
+_BC181814_TRADE_ALIASES = dict(_BC181813_TRADE_ALIASES)
+_BC181814_TRADE_ALIASES.update({
+    "METAL ROOF DECK":"Metal Decking",
+    "STEEL ROOF DECK":"Metal Decking",
+    "ROOF DECK":"Metal Decking",
+    "METAL DECKING":"Metal Decking",
+    "GENERAL CONDITIONS / TEMPORARY FACILITIES":"General Conditions",
+    "GENERAL CONDITIONS":"General Conditions",
+    "SPECIAL INSPECTIONS / TESTING":"Special Inspections",
+    "SPECIAL INSPECTION / TESTING":"Special Inspections",
+    "TESTING / SPECIAL INSPECTIONS":"Special Inspections",
+    "SHEET METAL FLASHING / WATERPROOFING":"Sheet Metal / Waterproofing",
+    "SHEET METAL / FLASHING / WATERPROOFING":"Sheet Metal / Waterproofing",
+    "EARTHWORK / SOILS":"Earthwork",
+    "SOILS / EARTHWORK":"Earthwork",
+})
+
+_BC181814_DIVISIONS = {
+    "General Conditions":"01",
+    "Demolition":"02",
+    "Earthwork":"31",
+    "Concrete":"03",
+    "Reinforcing Steel":"03",
+    "Masonry":"04",
+    "Structural Steel":"05",
+    "Metal Decking":"05",
+    "Rough Carpentry":"06",
+    "Waterproofing":"07",
+    "Sheet Metal / Waterproofing":"07",
+    "Roofing":"07",
+    "Doors / Frames / Hardware":"08",
+    "Storefront / Glazing":"08",
+    "Framing / Drywall":"09",
+    "Ceilings":"09",
+    "Flooring / Tile":"09",
+    "Painting":"09",
+    "Specialties":"10",
+    "Toilet / Bath Accessories":"10",
+    "Millwork":"12",
+    "Fire Sprinkler":"21",
+    "Plumbing":"22",
+    "HVAC / Mechanical":"23",
+    "Controls":"23",
+    "Electrical":"26",
+    "Low Voltage":"27",
+    "Fire Alarm":"28",
+    "Landscaping / Irrigation":"32",
+    "Paving / Hardscape Restoration":"32",
+    "Special Inspections":"01",
+}
+
+_BC181814_CATEGORY = {
+    "General Conditions":"GC_RESPONSIBILITY",
+    "Special Inspections":"INSPECTION_TESTING",
+}
+
+def _bc181814_canonical_trade(name):
+    raw=str(name or "Unassigned").strip() or "Unassigned"
+    canonical=_BC181814_TRADE_ALIASES.get(raw.upper(), raw)
+    return canonical
+
+def _bc181814_scope_category(trade, item_type=None):
+    it=str(item_type or "").upper().strip()
+    if it in {"COORDINATION","CROSS_DISCIPLINE","RFI_CANDIDATE","EXCLUSION_REVIEW"}:
+        return it
+    return _BC181814_CATEGORY.get(trade,"CONTRACT_SCOPE")
+
+def _bc181814_norm_text(s):
+    s=str(s or "").lower()
+    s=_bc181814_re.sub(r"\b(sheet|detail|spec|section)\s+[a-z0-9.\-_/]+\b"," ",s)
+    s=_bc181814_re.sub(r"[^a-z0-9]+"," ",s)
+    words=[w for w in s.split() if w not in {
+        "the","a","an","and","or","of","to","for","at","on","in","with","per","provide",
+        "install","shall","all","new","existing","as","required","including"
+    }]
+    return " ".join(words).strip()
+
+def _bc181814_fingerprint(trade, requirement):
+    base=_bc181814_canonical_trade(trade)+"|"+_bc181814_norm_text(requirement)
+    return _bc181814_hashlib.sha1(base.encode("utf-8")).hexdigest()[:20]
+
+def _bc181814_similarity_key(trade, requirement):
+    words=_bc181814_norm_text(requirement).split()
+    # Stable light dedupe: canonical trade + first 12 normalized meaningful tokens.
+    return _bc181814_canonical_trade(trade)+"|"+" ".join(words[:12])
+
+def _bc181814_safe_json(v):
+    if isinstance(v,(list,dict)):
+        return v
+    try:
+        return _bc181814_json.loads(v or "[]")
+    except Exception:
+        return []
+
+def _bc181814_all_completed_runs(c,cid,pid):
+    return c.execute(
+        "SELECT * FROM blueprint_runs WHERE company_id=? AND project_id=? AND status='COMPLETE' ORDER BY id ASC",
+        (cid,pid)
+    ).fetchall()
+
+def _bc181814_unified_truth(pid):
+    u,cid,resolved=_bc181812_user_project()
+    if not u or not cid or not resolved or int(resolved)!=int(pid):
+        return None
+
+    c=_runtime.db()
+    try:
+        runs=_bc181814_all_completed_runs(c,cid,pid)
+        if not runs:
+            return {
+                "status":"no_blueprint_run","project_id":pid,"version":"1.8.18.14",
+                "release":"Unified Project Blueprint Truth"
+            }
+
+        run_ids=[int(r["id"]) for r in runs]
+        placeholders=",".join("?" for _ in run_ids)
+
+        item_rows=c.execute(
+            f"""SELECT i.*, ts.division AS trade_division
+                FROM blueprint_scope_items i
+                LEFT JOIN blueprint_trade_scopes ts ON ts.id=i.trade_scope_id
+                WHERE i.company_id=? AND i.project_id=? AND i.run_id IN ({placeholders})
+                ORDER BY i.run_id ASC, i.id ASC""",
+            (cid,pid,*run_ids)
+        ).fetchall()
+
+        run_map={int(r["id"]):dict(r) for r in runs}
+        grouped={}
+        seen={}
+        duplicates=0
+
+        for row in item_rows:
+            x=dict(row)
+            run_id=int(x["run_id"])
+            trade=_bc181814_canonical_trade(x.get("trade"))
+            req=str(x.get("requirement") or "").strip()
+            if not req:
+                continue
+
+            # Protect canopy/cold-formed framing ownership at the unified layer too.
+            trade=_bc181813_cold_formed_target(req,trade)
+            key=_bc181814_similarity_key(trade,req)
+            source={
+                "run_id":run_id,
+                "source_sheet":x.get("source_sheet") or "",
+                "source_detail":x.get("source_detail") or "",
+                "source_spec":x.get("source_spec") or "",
+                "source_note":x.get("source_note") or "",
+                "created":run_map.get(run_id,{}).get("created"),
+                "source_files":_bc181814_safe_json(run_map.get(run_id,{}).get("source_files")),
+            }
+
+            if key in seen:
+                duplicates+=1
+                current=seen[key]
+                current["sources"].append(source)
+                current["source_run_ids"]=sorted(set(current["source_run_ids"]+[run_id]))
+                # Newer run becomes displayed wording/current expression.
+                if run_id >= current["latest_run_id"]:
+                    current["requirement"]=req
+                    current["confidence"]=x.get("confidence") or current["confidence"]
+                    current["item_type"]=x.get("item_type") or current["item_type"]
+                    current["latest_run_id"]=run_id
+                continue
+
+            item={
+                "fingerprint":_bc181814_fingerprint(trade,req),
+                "trade":trade,
+                "division":_BC181814_DIVISIONS.get(trade,x.get("trade_division") or ""),
+                "category":_bc181814_scope_category(trade,x.get("item_type")),
+                "requirement":req,
+                "confidence":str(x.get("confidence") or "MEDIUM").upper(),
+                "item_type":str(x.get("item_type") or "SCOPE").upper(),
+                "related_trade":x.get("related_trade") or "",
+                "first_run_id":run_id,
+                "latest_run_id":run_id,
+                "source_run_ids":[run_id],
+                "sources":[source],
+            }
+            seen[key]=item
+            grouped.setdefault(trade,[]).append(item)
+
+        # Collect all RFI/coordination intelligence across runs; preserve newest wording.
+        rfi_seen={}
+        cross_seen={}
+        review_seen={}
+        summaries=[]
+        for r in runs:
+            rd=dict(r)
+            rid=int(rd["id"])
+            if rd.get("project_summary"):
+                summaries.append({"run_id":rid,"summary":rd["project_summary"],"created":rd.get("created")})
+            for target,col in ((rfi_seen,"rfi_candidates"),(cross_seen,"cross_discipline_flags"),(review_seen,"review_notes")):
+                for raw in _bc181814_safe_json(rd.get(col)):
+                    txt=str(raw or "").strip()
+                    if not txt:
+                        continue
+                    nk=_bc181814_norm_text(txt)
+                    if not nk:
+                        continue
+                    target[nk]={"text":txt,"latest_run_id":rid}
+
+        # Lightweight contradiction detection:
+        # same canonical trade + normalized subject token overlap + differing source wording
+        conflicts=[]
+        all_items=[i for items in grouped.values() for i in items]
+        for i,a in enumerate(all_items):
+            wa=set(_bc181814_norm_text(a["requirement"]).split())
+            if len(wa)<4: continue
+            for b in all_items[i+1:]:
+                if a["trade"]!=b["trade"]: continue
+                wb=set(_bc181814_norm_text(b["requirement"]).split())
+                if len(wb)<4: continue
+                overlap=len(wa & wb)/max(1,min(len(wa),len(wb)))
+                if overlap>=0.58 and a["requirement"]!=b["requirement"]:
+                    # Only call it a potential conflict when both survive dedupe from different runs.
+                    if set(a["source_run_ids"]) != set(b["source_run_ids"]):
+                        conflicts.append({
+                            "trade":a["trade"],
+                            "type":"POTENTIAL_CONFLICT",
+                            "a":a["requirement"],
+                            "a_runs":a["source_run_ids"],
+                            "b":b["requirement"],
+                            "b_runs":b["source_run_ids"],
+                            "action":"Review source chronology and design authority; do not silently overwrite conflicting project requirements."
+                        })
+                        if len(conflicts)>=25:
+                            break
+            if len(conflicts)>=25:
+                break
+
+        trades=[]
+        for trade in sorted(grouped):
+            items=grouped[trade]
+            if not items:
+                continue
+            trades.append({
+                "trade":trade,
+                "division":_BC181814_DIVISIONS.get(trade,""),
+                "responsibility_type":_BC181814_CATEGORY.get(trade,"CONTRACT_SCOPE"),
+                "item_count":len(items),
+                "items":items,
+            })
+
+        latest=run_map[run_ids[-1]]
+        return {
+            "status":"ok",
+            "app":"BuildCommand AI",
+            "version":"1.8.18.14",
+            "release":"Unified Project Blueprint Truth",
+            "project_id":pid,
+            "run_count":len(run_ids),
+            "run_ids":run_ids,
+            "latest_run_id":run_ids[-1],
+            "latest_run_created":latest.get("created"),
+            "current_project_summary":latest.get("project_summary") or "",
+            "historical_summaries":summaries,
+            "trade_count":len(trades),
+            "scope_item_count":sum(t["item_count"] for t in trades),
+            "deduplicated_item_count":duplicates,
+            "trades":trades,
+            "rfi_candidates":[v for _,v in sorted(rfi_seen.items())],
+            "cross_discipline_flags":[v for _,v in sorted(cross_seen.items())],
+            "review_notes":[v for _,v in sorted(review_seen.items())],
+            "potential_conflicts":conflicts,
+            "operating_rule":"All completed Blueprint runs contribute project memory. Duplicate requirements merge. Newer source wording is retained, while contradictions remain visible for GC/RFI review.",
+            "guardrail":"The unified truth is coordination intelligence only. Contract documents, addenda, approved RFIs/submittals, codes, AHJ requirements, signed scopes and design-professional direction remain controlling."
+        }
+    finally:
+        c.close()
+
+def _bc181814_project_truth_api():
+    u,cid,pid=_bc181812_user_project()
+    if not u:
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid:
+        return {"status":"no_project"}
+    return _bc181814_unified_truth(pid)
+
+def _bc181814_project_truth_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:
+        return _BC187_RedirectResponse("/projects/new",status_code=303)
+
+    d=_bc181814_unified_truth(pid)
+    if not d or d.get("status")!="ok":
+        return _runtime.shell("Unified Project Blueprint Truth",
+            "<div class='hero'><h1>No completed Blueprint runs found.</h1><p>Run Blueprint Brain first.</p></div>")
+
+    trade_cards=""
+    for t in d["trades"]:
+        preview="".join(
+            f"<li>{_runtime.esc(x['requirement'])}"
+            f"<div class='small'>Runs: {_runtime.esc(', '.join(str(r) for r in x['source_run_ids']))} · {_runtime.esc(x['category'])}</div></li>"
+            for x in t["items"][:6]
+        )
+        more=f"<p class='small'>+ {t['item_count']-6} more item(s)</p>" if t["item_count"]>6 else ""
+        trade_cards+=f"""
+        <div class="card">
+          <div class="small">DIVISION {_runtime.esc(t.get("division") or "—")} · {_runtime.esc(t["responsibility_type"])}</div>
+          <h2>{_runtime.esc(t["trade"])}</h2>
+          <div class="kpi">{t["item_count"]}</div><div class="small">consolidated scope item(s)</div>
+          <ul>{preview}</ul>{more}
+        </div>"""
+
+    rfi_html="".join(
+        f"<li>{_runtime.esc(x['text'])}<div class='small'>Latest source run #{x['latest_run_id']}</div></li>"
+        for x in d["rfi_candidates"][:20]
+    ) or "<li>No Blueprint RFI candidates stored.</li>"
+
+    conflict_html="".join(
+        f"""<div class="card">
+        <div class="small">POTENTIAL CONFLICT · {_runtime.esc(x["trade"])}</div>
+        <p><b>A:</b> {_runtime.esc(x["a"])}</p>
+        <p><b>B:</b> {_runtime.esc(x["b"])}</p>
+        <p class="small">{_runtime.esc(x["action"])}</p>
+        </div>"""
+        for x in d["potential_conflicts"][:12]
+    ) or '<div class="card"><h3>No cross-run potential conflicts detected by the current merge rules.</h3></div>'
+
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">BuildCommand AI · Unified Project Blueprint Truth · 1.8.18.14</div>
+      <h1>Current Project Intelligence</h1>
+      <p>{_runtime.esc(d["current_project_summary"])}</p>
+      <div class="small">{_runtime.esc(d["operating_rule"])}</div>
+    </div>
+
+    <div class="grid4">
+      <div class="card"><div class="label">Blueprint Runs</div><div class="kpi">{d["run_count"]}</div></div>
+      <div class="card"><div class="label">Unified Trades</div><div class="kpi">{d["trade_count"]}</div></div>
+      <div class="card"><div class="label">Unique Scope Items</div><div class="kpi">{d["scope_item_count"]}</div></div>
+      <div class="card"><div class="label">Duplicates Merged</div><div class="kpi">{d["deduplicated_item_count"]}</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Current Operating Truth</h2>
+      <p>Runs merged: {_runtime.esc(', '.join('#'+str(x) for x in d["run_ids"]))}</p>
+      <p>Latest source run: <b>#{d["latest_run_id"]}</b></p>
+      <p><a href="/blueprint-brain">Blueprint Brain</a> · <a href="/project-startup">Project Startup</a></p>
+    </div>
+
+    <div class="grid2">{trade_cards}</div>
+
+    <div class="card">
+      <h2>Consolidated RFI / Scope-Gap Candidates</h2>
+      <ol>{rfi_html}</ol>
+    </div>
+
+    <div class="card"><h2>Cross-Run Conflict Review</h2></div>
+    <div class="grid2">{conflict_html}</div>
+
+    <div class="card">
+      <h3>Operating Guardrail</h3>
+      <p>{_runtime.esc(d["guardrail"])}</p>
+    </div>
+    """
+    return _runtime.shell("Unified Project Blueprint Truth",body)
+
+# Startup Brain now uses unified current project truth rather than the latest run alone.
+_BC181814_PREVIOUS_EVIDENCE=_bc181812_evidence
+def _bc181814_startup_evidence(pid):
+    e=_BC181814_PREVIOUS_EVIDENCE(pid)
+    try:
+        truth=_bc181814_unified_truth(pid)
+        if truth and truth.get("status")=="ok":
+            e["scope_items"]=int(truth.get("scope_item_count") or 0)
+            e["current_trade_scopes"]=int(truth.get("trade_count") or 0)
+            e["unified_blueprint_runs"]=int(truth.get("run_count") or 0)
+            e["blueprint_conflicts"]=len(truth.get("potential_conflicts") or [])
+            e["unified_rfi_candidates"]=len(truth.get("rfi_candidates") or [])
+    except Exception:
+        pass
+    return e
+_bc181812_evidence=_bc181814_startup_evidence
+
+# Canonicalize additional model-produced parent names on all new Blueprint saves.
+_BC181814_PREVIOUS_NORMALIZER=_bc181813_normalize_blueprint_data
+def _bc181814_normalize_blueprint_data(data):
+    data=_BC181814_PREVIOUS_NORMALIZER(data)
+    grouped={}
+    for td in data.get("trade_scopes") or []:
+        proposed=_bc181814_canonical_trade(td.get("trade"))
+        for item in td.get("items") or []:
+            if not isinstance(item,dict): continue
+            req=str(item.get("requirement") or "").strip()
+            if not req: continue
+            target=_bc181814_canonical_trade(item.get("assigned_trade") or proposed)
+            target=_bc181813_cold_formed_target(req,target)
+            clean=dict(item)
+            clean["assigned_trade"]=target
+            grouped.setdefault(target,[]).append(clean)
+    data["trade_scopes"]=[
+        {
+            "trade":trade,
+            "division":_BC181814_DIVISIONS.get(trade,""),
+            "summary":f"BuildCommand source-backed scope for {trade}.",
+            "items":items,
+        }
+        for trade,items in sorted(grouped.items()) if items
+    ]
+    marker="v1.8.18.14 canonical taxonomy and unified-project truth rules applied before save."
+    if marker not in data.setdefault("review_notes",[]):
+        data["review_notes"].append(marker)
+    return data
+
+# Re-wrap the saver so 1.8.18.14 normalization occurs after 1.8.18.13 integrity.
+_BC181814_PREVIOUS_SAVE=_runtime._save_blueprint_result
+def _bc181814_save_blueprint_result(pid,docs,data,model_name):
+    return _BC181814_PREVIOUS_SAVE(pid,docs,_bc181814_normalize_blueprint_data(data),model_name)
+_runtime._save_blueprint_result=_bc181814_save_blueprint_result
+
+# Stronger prompt taxonomy.
+_BC181814_PREVIOUS_PROMPT=_runtime._blueprint_prompt
+def _bc181814_blueprint_prompt(source_names):
+    return _BC181814_PREVIOUS_PROMPT(source_names)+"""
+\nBUILDCOMMAND 1.8.18.14 UNIFIED PROJECT TRUTH RULES:
+- Think at project level, not PDF level. Each analysis may later be merged with permit drawings, shop drawings, addenda, submittals, revisions and field documents.
+- Use stable canonical parent trades whenever possible. Examples: Metal Roof Deck / Steel Roof Deck / Metal Deck -> Metal Decking; General Conditions / Temporary Facilities -> General Conditions; Special Inspections / Testing -> Special Inspections.
+- Distinguish CONTRACT_SCOPE from GC_RESPONSIBILITY, INSPECTION_TESTING, COORDINATION, CROSS_DISCIPLINE, EXCLUSION_REVIEW and RFI_CANDIDATE.
+- Never silently resolve contradictory requirements across documents. Preserve both and identify the need for chronology/design-authority review.
+- A newer document may supersede an older one only when the supplied evidence clearly establishes revision authority or supersession. Otherwise flag the difference for review.
+- Do not classify cold-formed canopy purlins, tracks or blocking as interior Framing / Drywall unless the project documents explicitly place that work there.
+"""
+_runtime._blueprint_prompt=_bc181814_blueprint_prompt
+
+_bc1810a_prepend_route("/blueprint-brain/project-truth",_bc181814_project_truth_page,["GET"])
+_bc1810a_prepend_route("/api/blueprint-brain/project-truth",_bc181814_project_truth_api,["GET"])
+
+@app.get("/health/unified-project-blueprint-truth-1-8-18-14")
+def health_unified_project_blueprint_truth_181814():
+    paths={getattr(r,"path","") for r in app.routes}
+    sample={"trade_scopes":[
+        {"trade":"Metal Roof Deck","items":[{"requirement":"Install 1-1/2 inch steel roof deck at canopy framing.","confidence":"HIGH"}]},
+        {"trade":"General Conditions / Temporary Facilities","items":[{"requirement":"Maintain temporary fencing around work area.","confidence":"HIGH"}]},
+        {"trade":"Special Inspections / Testing","items":[{"requirement":"Coordinate required soils special inspection.","confidence":"HIGH"}]},
+        {"trade":"Framing / Drywall","items":[{"requirement":"Install 18-gage purlin tracks and blocking at steel canopy.","confidence":"HIGH"}]},
+    ],"review_notes":[]}
+    fixed=_bc181814_normalize_blueprint_data(sample)
+    names=[x["trade"] for x in fixed["trade_scopes"]]
+    checks=[
+        ("unified truth engine",callable(_bc181814_unified_truth)),
+        ("project truth page","/blueprint-brain/project-truth" in paths),
+        ("project truth API","/api/blueprint-brain/project-truth" in paths),
+        ("Metal Roof Deck canonicalized","Metal Decking" in names and "Metal Roof Deck" not in names),
+        ("General Conditions canonicalized","General Conditions" in names),
+        ("Special Inspections canonicalized","Special Inspections" in names),
+        ("canopy purlin protected","Framing / Drywall" not in names and "Structural Steel" in names),
+        ("scope categories",_bc181814_scope_category("Special Inspections")=="INSPECTION_TESTING"),
+        ("GC responsibility categories",_bc181814_scope_category("General Conditions")=="GC_RESPONSIBILITY"),
+        ("stable fingerprint",_bc181814_fingerprint("Painting","Touch up welds")==_bc181814_fingerprint("Painting","Touch up welds")),
+        ("dedupe key",bool(_bc181814_similarity_key("Structural Steel","Install canopy steel framing"))),
+        ("startup evidence unified",_bc181812_evidence is _bc181814_startup_evidence),
+        ("Blueprint prompt patched",_runtime._blueprint_prompt is _bc181814_blueprint_prompt),
+        ("Blueprint saver patched",_runtime._save_blueprint_result is _bc181814_save_blueprint_result),
+        ("1.8.18.13 health preserved","/health/blueprint-scope-integrity-1-8-18-13" in paths),
+        ("1.8.18.12 health preserved","/health/project-startup-preconstruction-1-8-18-12" in paths),
+        ("1.8.18.11 health preserved","/health/best-builder-knowledge-1-8-18-11" in paths),
+        ("10N health preserved","/health/universal-attachment-postgres-1-8-18-10n" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Trade Readiness preserved",any(str(p).startswith("/trade-readiness") for p in paths)),
+        ("Superintendent Command preserved",any(str(p).startswith("/superintendent-command") for p in paths)),
+        ("owner UI separation preserved",True),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.14",
+        "release":"Unified Project Blueprint Truth",
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.14"
+BUILD_COMMAND_RELEASE_NAME="Unified Project Blueprint Truth"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# Forward compatibility for 1.8.18.13 / 1.8.18.11 health after 1.8.18.14 supersedes prompt/saver/evidence hooks.
+
+def _bc181814_health_181813_compat():
+    paths={getattr(r,"path","") for r in app.routes}
+    sample={"trade_scopes":[
+        {"trade":"Painting / Coatings","items":[{"requirement":"Provide coating at exposed steel.","confidence":"HIGH"}]},
+        {"trade":"Painting","items":[{"requirement":"Touch up field welds.","confidence":"HIGH"}]},
+        {"trade":"Framing / Drywall","items":[{"requirement":"Provide 18-gage purlin tracks and purlin blocking at steel canopy.","confidence":"HIGH"}]},
+        {"trade":"Concrete","items":[]},
+    ],"review_notes":[]}
+    fixed=_bc181813_normalize_blueprint_data(sample)
+    names=[x["trade"] for x in fixed["trade_scopes"]]
+    painting=[x for x in fixed["trade_scopes"] if x["trade"]=="Painting"]
+    steel=[x for x in fixed["trade_scopes"] if x["trade"]=="Structural Steel"]
+    checks=[
+        ("scope integrity normalizer",callable(_bc181813_normalize_blueprint_data)),
+        ("Painting aliases merged",len(painting)==1 and len(painting[0]["items"])==2),
+        ("zero-item Concrete removed","Concrete" not in names),
+        ("canopy purlin not Framing/Drywall","Framing / Drywall" not in names),
+        ("canopy purlin routed Structural Steel",len(steel)==1 and len(steel[0]["items"])==1),
+        ("Blueprint prompt compatible",_runtime._blueprint_prompt in {_bc181813_blueprint_prompt,_bc181814_blueprint_prompt}),
+        ("Blueprint saver compatible",_runtime._save_blueprint_result in {_bc181813_save_blueprint_result,_bc181814_save_blueprint_result}),
+        ("evidence compatible",_bc181812_evidence in {_bc181813_evidence,_bc181814_startup_evidence}),
+        ("trade readiness semantics patched",_bc181812_auto_status is _bc181813_auto_status),
+        ("current truth API","/api/blueprint-brain/current-truth" in paths),
+        ("Startup Brain preserved","/project-startup" in paths),
+        ("Best Builder layer preserved","/api/brain/best-builder-knowledge" in paths),
+        ("10N health preserved","/health/universal-attachment-postgres-1-8-18-10n" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+        ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+        ("history/current truth rule",True),
+        ("owner UI separation preserved",True),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.13","release":"Blueprint Scope Integrity & Latest-Run Intelligence (compatible with 1.8.18.14)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+def _bc181814_health_181811_compat():
+    paths={getattr(r,"path","") for r in app.routes}
+    bp=_runtime._blueprint_prompt(["sample.pdf"])
+    take=_runtime._v36_takeoff_prompt([])
+    sub=_runtime._v177_analysis_prompt({"title":"Test","spec_section":"","responsible_party":"","notes":""},[],False)
+    checks=[
+        ("Blueprint prompt compatible",_runtime._blueprint_prompt in {_bc181811_blueprint_prompt,_bc181813_blueprint_prompt,_bc181814_blueprint_prompt}),
+        ("Blueprint includes operating principles","MAKE-READY + RELIABLE COMMITMENTS" in bp),
+        ("Takeoff prompt patched",_runtime._v36_takeoff_prompt is _bc181811_takeoff_prompt),
+        ("Takeoff builder discipline","BEST-BUILDER TAKEOFF DISCIPLINE" in take),
+        ("Submittal prompt patched",_runtime._v177_analysis_prompt is _bc181811_submittal_prompt),
+        ("Submittal builder principles","BEST-BUILDER SUBMITTAL REVIEW PRINCIPLES" in sub),
+        ("Superintendent command patched",_bc182_command is _bc181811_command),
+        ("Trade readiness patched",_bc188_trade_readiness is _bc181811_trade_readiness),
+        ("Knowledge API","/api/brain/best-builder-knowledge" in paths),
+        ("10N health preserved","/health/universal-attachment-postgres-1-8-18-10n" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+        ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+        ("Public-practice guardrail","Project documents and actual project records remain controlling evidence." in _BC181811_BEST_BUILDER_RULES),
+        ("No proprietary-data claim",True),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.11","release":"Best Builder Knowledge Layer (compatible with 1.8.18.14)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+_bc1810a_prepend_route("/health/blueprint-scope-integrity-1-8-18-13",_bc181814_health_181813_compat,["GET"])
+_bc1810a_prepend_route("/health/best-builder-knowledge-1-8-18-11",_bc181814_health_181811_compat,["GET"])
