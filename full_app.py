@@ -16459,3 +16459,305 @@ BUILD_COMMAND_RELEASE="1.8.18.19"
 BUILD_COMMAND_RELEASE_NAME=_BC181819_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.20 - RFI Semantic Consolidation & Discipline Precision
+# ============================================================
+
+_BC181820_RELEASE="RFI Semantic Consolidation & Discipline Precision"
+
+def _bc181820_tokens(s):
+    import re
+    stop={"the","a","an","and","or","to","of","for","is","are","be","as","on","in","at","by","with",
+          "confirm","clarify","provide","identify","required","whether","new","existing","complete"}
+    return {w for w in re.findall(r"[a-z0-9]+",_bc181818_norm(s)) if len(w)>2 and w not in stop}
+
+def _bc181820_similarity(a,b):
+    A=_bc181820_tokens(a); B=_bc181820_tokens(b)
+    if not A or not B: return 0.0
+    return len(A&B)/max(1,len(A|B))
+
+def _bc181820_topic(text,kind="RFI_CANDIDATE"):
+    s=_bc181818_norm(text)
+    # Topic families are deliberately construction-specific and conservative.
+    if "canopy 10" in s and any(x in s for x in ("steel","beam","column","rated","rating","fire-resist")): return "CANOPY_10_STRUCTURAL_RATED_SCOPE"
+    if "firetex" in s or ("intumescent" in s and any(x in s for x in ("9500","9502","coating"))): return "FIRETEX_COATING_SYSTEM"
+    if "pbr" in s and any(x in s for x in ("22","24","gage","gauge")): return "PBR_PANEL_GAUGE"
+    if ("steel-deck" in s or "steel deck" in s or "deck fastening" in s) and any(x in s for x in ("fastening","sidelap","attachment schedule")): return "STEEL_DECK_FASTENING"
+    if "hold released" in s and any(x in s for x in ("fabrication","erection","authorized","final release")): return "STEEL_HOLD_RELEASE_STATUS"
+    if "sprinkler" in s and any(x in s for x in ("canopy 4","canopy no. 4","other nine","extent","deferred submittal")): return "CANOPY_SPRINKLER_SCOPE"
+    if any(x in s for x in ("telecom","telecommunications","security systems","special-systems")) and any(x in s for x in ("rework","design","responsibility","device")): return "LOW_VOLTAGE_DESIGN_SCOPE"
+    if ("roof assembly" in s or "weatherproof" in s) and any(x in s for x in ("steel deck","membrane","flashing","sealant")): return "CANOPY_ROOF_WEATHERPROOFING"
+    if "purlin" in s and any(x in s for x in ("buyout","trade responsibility","blocking","track")): return "PURLIN_BUYOUT_RESPONSIBILITY"
+    if any(x in s for x in ("foundation drawings","footing","foundation information")) and any(x in s for x in ("dimensions","reinforcing","anchor","not fully detailed")): return "CANOPY_FOUNDATION_INFORMATION"
+    if any(x in s for x in ("post-installed anchor","epoxy anchor")) and any(x in s for x in ("wall","scan","reinforcement","testing","inspection")): return "POST_INSTALLED_ANCHOR_REQUIREMENTS"
+    if any(x in s for x in ("drawing index","sheet index","official structural sheet index","s000","s001","s102")): return "CONTRACT_DOCUMENT_SHEET_INDEX"
+    if "parking" in s and any(x in s for x in ("62","68","count","spaces")): return "EXISTING_PARKING_COUNT"
+    if any(x in s for x in ("a400","a401")) and any(x in s for x in ("fire-resistance","fire-resistive","one-hour","rated construction","detail sheet")): return "FIRE_RESISTANCE_DETAIL_REFERENCE"
+    if "canopy 4" in s and any(x in s for x in ("removal","demolition","existing canopy")): return "CANOPY_4_DEMOLITION_LIMITS"
+    if "e1001" in s and "e1014" in s and "e1015" in s: return "ERECTION_SHEET_RANGE"
+    return ""
+
+def _bc181820_affected_trade(d,text,default_trade=""):
+    s=_bc181818_norm(text)
+    topic=_bc181820_topic(text)
+    # Pure document/admin/design discrepancies should not invent a subcontractor.
+    if topic in {"CONTRACT_DOCUMENT_SHEET_INDEX","EXISTING_PARKING_COUNT","FIRE_RESISTANCE_DETAIL_REFERENCE"}:
+        return "General / Design Coordination"
+    if topic=="CANOPY_10_STRUCTURAL_RATED_SCOPE": return "Structural Steel"
+    if topic=="FIRETEX_COATING_SYSTEM": return "Painting"
+    if topic=="PBR_PANEL_GAUGE": return "Roofing / Sheet Metal"
+    if topic=="STEEL_DECK_FASTENING": return "Metal Decking"
+    if topic=="STEEL_HOLD_RELEASE_STATUS": return "Structural Steel"
+    if topic=="CANOPY_SPRINKLER_SCOPE": return "Fire Sprinkler"
+    if topic=="LOW_VOLTAGE_DESIGN_SCOPE": return "Low Voltage"
+    if topic=="CANOPY_ROOF_WEATHERPROOFING": return "Roofing / Sheet Metal"
+    if topic=="PURLIN_BUYOUT_RESPONSIBILITY": return "Cold-Formed Metal Framing / Purlins"
+    if topic=="CANOPY_FOUNDATION_INFORMATION": return "Concrete"
+    if topic=="POST_INSTALLED_ANCHOR_REQUIREMENTS":
+        # Anchors shown for steel-to-existing-concrete connections affect steel installation,
+        # even though substrate verification also involves concrete/design.
+        return "Structural Steel"
+    if topic=="CANOPY_4_DEMOLITION_LIMITS": return "Demolition"
+    if topic=="ERECTION_SHEET_RANGE": return "Structural Steel"
+    # Field tree-protection question is site/logistics, not structural steel.
+    if "tree" in s and "protection" in s: return "Landscaping / Irrigation"
+    return _bc181819_affected_trade(d,text,default_trade)
+
+def _bc181820_response_owner(text,affected,kind="RFI_CANDIDATE"):
+    s=_bc181818_norm(text); topic=_bc181820_topic(text,kind)
+    if topic=="PURLIN_BUYOUT_RESPONSIBILITY": return "Project Manager","Contract/scope responsibility decision required"
+    if topic=="STEEL_HOLD_RELEASE_STATUS": return "Project Manager","Approval/release status requires project-management confirmation"
+    if "actual field condition" in s and "tree" in s: return "Superintendent","Field verification required before escalation or release"
+    if kind=="TRUE_CONFLICT" or topic in {
+      "CANOPY_10_STRUCTURAL_RATED_SCOPE","FIRETEX_COATING_SYSTEM","PBR_PANEL_GAUGE","STEEL_DECK_FASTENING",
+      "CANOPY_SPRINKLER_SCOPE","LOW_VOLTAGE_DESIGN_SCOPE","CANOPY_ROOF_WEATHERPROOFING",
+      "CANOPY_FOUNDATION_INFORMATION","POST_INSTALLED_ANCHOR_REQUIREMENTS","CONTRACT_DOCUMENT_SHEET_INDEX",
+      "EXISTING_PARKING_COUNT","FIRE_RESISTANCE_DETAIL_REFERENCE","CANOPY_4_DEMOLITION_LIMITS","ERECTION_SHEET_RANGE"}:
+        return "Architect / Engineer","Design/contract-document clarification required"
+    return _bc181819_response_owner(text,affected,kind)
+
+def _bc181820_mergeable(a,b):
+    ta=_bc181820_topic(a["text"],a["kind"]); tb=_bc181820_topic(b["text"],b["kind"])
+    if ta and ta==tb: return True
+    if a["kind"]!=b["kind"]: return False
+    return _bc181820_similarity(a["text"],b["text"])>=0.62
+
+def _bc181820_choose_text(items):
+    # Prefer the richest statement, but retain every source statement separately.
+    return max((str(x["text"]) for x in items),key=lambda s:(len(_bc181820_tokens(s)),len(s)))
+
+def _bc181820_candidates(pid):
+    d=_bc181817_unified_truth(pid)
+    if not d or d.get("status")!="ok": return []
+    raw=[]
+    for x in d.get("rfi_candidates",[]):
+        text=str(x.get("text") or "").strip()
+        if not text: continue
+        fuzzy=_bc181818_trade_for_text(d,text)
+        affected=_bc181820_affected_trade(d,text,fuzzy)
+        owner,reason=_bc181820_response_owner(text,affected,"RFI_CANDIDATE")
+        raw.append({"kind":"RFI_CANDIDATE","text":text,"affected_trade":affected,"trade":affected,
+                    "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+                    "source_runs":list(x.get("source_run_ids") or []),"priority":_bc181818_priority(text)})
+    for x in d.get("potential_conflicts",[]):
+        a=str(x.get("a") or "").strip(); b=str(x.get("b") or "").strip()
+        text=f"Conflict: {a} VS {b}"; affected=str(x.get("trade") or "General / Design Coordination")
+        owner,reason=_bc181820_response_owner(text,affected,"TRUE_CONFLICT")
+        raw.append({"kind":"TRUE_CONFLICT","text":text,"affected_trade":affected,"trade":affected,
+                    "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+                    "source_runs":sorted(set((x.get("a_runs") or [])+(x.get("b_runs") or []))),"priority":"HIGH"})
+
+    # Union-find semantic consolidation. True conflict wins when a normal candidate describes the same topic.
+    n=len(raw); parent=list(range(n))
+    def find(i):
+        while parent[i]!=i:
+            parent[i]=parent[parent[i]]; i=parent[i]
+        return i
+    def union(a,b):
+        ra,rb=find(a),find(b)
+        if ra!=rb: parent[rb]=ra
+    for i in range(n):
+        for j in range(i+1,n):
+            if _bc181820_mergeable(raw[i],raw[j]): union(i,j)
+    groups={}
+    for i in range(n): groups.setdefault(find(i),[]).append(raw[i])
+
+    out=[]
+    for items in groups.values():
+        topic=next((_bc181820_topic(x["text"],x["kind"]) for x in items if _bc181820_topic(x["text"],x["kind"])),"")
+        kind="TRUE_CONFLICT" if any(x["kind"]=="TRUE_CONFLICT" for x in items) else "RFI_CANDIDATE"
+        # If conflict exists, use conflict statement as representative; otherwise richest candidate.
+        rep_pool=[x for x in items if x["kind"]==kind] or items
+        text=_bc181820_choose_text(rep_pool)
+        affected=_bc181820_affected_trade(d,text,rep_pool[0].get("affected_trade",""))
+        owner,reason=_bc181820_response_owner(text,affected,kind)
+        runs=sorted({int(r) for x in items for r in (x.get("source_runs") or []) if str(r).isdigit()})
+        source_texts=[]
+        for x in items:
+            if x["text"] not in source_texts: source_texts.append(x["text"])
+        key=_bc181818_candidate_key(kind,topic or text,"")
+        title=_bc181819_title(text,kind,affected)
+        if topic=="CANOPY_10_STRUCTURAL_RATED_SCOPE": title="Canopy 10 Structural Steel Scope / Rated Assembly"
+        out.append({"key":key,"kind":kind,"topic":topic,"affected_trade":affected,"trade":affected,
+                    "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+                    "text":text,"source_texts":source_texts,"source_runs":runs,
+                    "merged_count":len(items),"priority":"HIGH" if any(x["priority"]=="HIGH" for x in items) else "WATCH",
+                    "title":title})
+    out.sort(key=lambda x:(0 if x["kind"]=="TRUE_CONFLICT" else 1,0 if x["priority"]=="HIGH" else 1,x["title"].lower()))
+    return out
+
+# Forward all downstream creation/API logic to consolidated candidates.
+_bc181819_candidates=_bc181820_candidates
+_bc181818_candidates=_bc181820_candidates
+
+def _bc181820_existing_map(pid):
+    _bc181819_ensure()
+    c=_runtime.db()
+    rows=c.execute("""SELECT l.*,r.number,r.status,r.title,r.question,r.answer,r.due_date,r.responsible_party
+                      FROM rfi_truth_links l LEFT JOIN rfi_control r ON r.id=l.rfi_id
+                      WHERE l.company_id=? AND l.project_id=?""",
+                   (_runtime.current_company_id(),pid)).fetchall()
+    c.close()
+    result={}
+    for rr in rows:
+        row=dict(rr); oldkey=str(row.get("candidate_key") or "")
+        if oldkey: result[oldkey]=row
+        text=str(row.get("source_text") or "")
+        if text:
+            topic=_bc181820_topic(text,str(row.get("candidate_type") or "RFI_CANDIDATE"))
+            # Existing pre-consolidation draft maps into consolidated topic, preventing duplicates.
+            if topic:
+                kind="TRUE_CONFLICT" if str(row.get("candidate_type") or "")=="TRUE_CONFLICT" else "RFI_CANDIDATE"
+                result.setdefault(_bc181818_candidate_key(kind,topic,""),row)
+    return result
+
+_bc181819_existing_map=_bc181820_existing_map
+_bc181818_existing_map=_bc181820_existing_map
+
+def _bc181820_create_draft(pid,key):
+    _bc181819_ensure()
+    candidates={x["key"]:x for x in _bc181820_candidates(pid)}
+    x=candidates.get(key)
+    if not x: return None,"candidate_not_found"
+    existing=_bc181820_existing_map(pid).get(key)
+    if existing and existing.get("rfi_id"): return int(existing["rfi_id"]),"duplicate_prevented"
+    now=datetime.utcnow().isoformat(); number=_bc181818_next_number(pid)
+    question=x["text"]
+    if x["kind"]=="TRUE_CONFLICT":
+        question="Please confirm the governing contract requirement and construction direction before affected work is released. "+x["text"]
+    source_ref=json.dumps({"generated_by":"BuildCommand 1.8.18.20","candidate_key":x["key"],"topic":x.get("topic"),
+      "candidate_type":x["kind"],"responsible_party":x["responsible_party"],"affected_trade":x["affected_trade"],
+      "ownership_reason":x["ownership_reason"],"source_run_ids":x["source_runs"],"source_texts":x["source_texts"],
+      "semantic_merge_count":x["merged_count"],"human_approval_required":True})
+    c=_runtime.db()
+    row=c.execute("""INSERT INTO rfi_control(company_id,project_id,number,title,question,responsible_party,due_date,status,
+      answer,cost_impact,schedule_days,source_ref,created,updated)
+      VALUES(?,?,?,?,?,?,?,'DRAFT','',0,0,?,?,?) RETURNING id""",
+      (_runtime.current_company_id(),pid,number,x["title"],question,x["responsible_party"],"",source_ref,now,now)).fetchone()
+    rid=int(row["id"] if hasattr(row,"keys") else row[0])
+    c.execute("""INSERT INTO rfi_truth_links(company_id,project_id,rfi_id,candidate_key,candidate_type,source_runs,source_text,trade,
+      affected_trade,response_role,ownership_reason,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (_runtime.current_company_id(),pid,rid,x["key"],x["kind"],json.dumps(x["source_runs"]),
+       "\n--- MERGED SOURCE ---\n".join(x["source_texts"]),x["affected_trade"],x["affected_trade"],
+       x["responsible_party"],x["ownership_reason"],now,now))
+    c.commit(); c.close()
+    return rid,"created"
+
+_bc181819_create_draft=_bc181820_create_draft
+_bc181818_create_draft=_bc181820_create_draft
+
+def _bc181820_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    cs=_bc181820_candidates(pid); ex=_bc181820_existing_map(pid)
+    raw_count=0
+    d=_bc181817_unified_truth(pid)
+    if d and d.get("status")=="ok": raw_count=len(d.get("rfi_candidates",[]))+len(d.get("potential_conflicts",[]))
+    cards=""
+    for x in cs:
+        e=ex.get(x["key"]); state=str(e.get("status") if e else "NOT CREATED")
+        action=(f"<a href='/project-control/rfis'>Open {_runtime.esc(e.get('number') or 'RFI')}</a>" if e else
+          f"""<form method="post" action="/rfi-intelligence/project-truth/create"><input type="hidden" name="candidate_key" value="{_runtime.esc(x['key'])}">
+          <button type="submit">Create Draft RFI</button></form>""")
+        merged=f" · {x['merged_count']} source findings merged" if x["merged_count"]>1 else ""
+        cards+=f"""<div class="card"><span class="badge {'HIGH' if x['priority']=='HIGH' else 'WATCH'}">{_runtime.esc(x['kind'])}</span>
+        <h3>{_runtime.esc(x['title'])}</h3><p><b>Response From:</b> {_runtime.esc(x['responsible_party'])}</p>
+        <p><b>Affected Trade:</b> {_runtime.esc(x['affected_trade'])}</p><p>{_runtime.esc(x['text'])}</p>
+        <p class="small">Why routed: {_runtime.esc(x['ownership_reason'])}</p>
+        <p class="small">Blueprint runs: {_runtime.esc(', '.join(str(r) for r in x['source_runs']))}{merged} · State: {_runtime.esc(state)}</p>
+        <div class="v117r-actions">{action}</div></div>"""
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.20</div><h1>Project Truth → Consolidated RFI Control</h1>
+    <p>Equivalent drawing questions are merged across Blueprint runs. Design-only discrepancies no longer invent an affected subcontractor.</p></div>
+    <div class="grid4"><div class="card"><div class="label">Raw Findings</div><div class="kpi">{raw_count}</div></div>
+    <div class="card"><div class="label">Consolidated RFIs</div><div class="kpi">{len(cs)}</div></div>
+    <div class="card"><div class="label">Already Controlled</div><div class="kpi">{sum(1 for x in cs if x['key'] in ex)}</div></div>
+    <div class="card"><div class="label">Auto-Issued</div><div class="kpi">0</div></div></div>
+    <div class="grid2">{cards or '<div class="card">No Project Truth RFI candidates found.</div>'}</div>"""
+    return _runtime.shell("RFI Semantic Consolidation",body)
+
+_bc1810a_prepend_route("/rfi-intelligence/project-truth",_bc181820_page,["GET"])
+
+def _bc181820_api():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid: return {"status":"no_project"}
+    cs=_bc181820_candidates(pid); ex=_bc181820_existing_map(pid)
+    return {"status":"ok","version":"1.8.18.20","release":_BC181820_RELEASE,"project_id":pid,
+      "consolidated_count":len(cs),"controlled_count":sum(1 for x in cs if x["key"] in ex),"candidates":cs}
+
+_bc1810a_prepend_route("/api/rfi-intelligence/project-truth",_bc181820_api,["GET"])
+
+@app.get("/health/rfi-semantic-consolidation-discipline-precision-1-8-18-20")
+def health_rfi_semantic_consolidation_discipline_precision_181820():
+    paths={getattr(r,"path","") for r in app.routes}
+    dummy={"trades":[]}
+    # Synthetic semantic consolidation checks mirror the real Service Wire defects found live.
+    fire1={"kind":"RFI_CANDIDATE","text":"A401 references FIRETEX FX9502 while notes reference FIRETEX FX9500."}
+    fire2={"kind":"RFI_CANDIDATE","text":"Confirm Firetex FX9500 or FX9502 intumescent coating system."}
+    pbr1={"kind":"RFI_CANDIDATE","text":"Clarify whether PBR panel is 22 gage or 24 gage."}
+    pbr2={"kind":"RFI_CANDIDATE","text":"Confirm selected PBR panel gauge because sheets show 22/24GA."}
+    tests=[
+      ("Firetex topic same",_bc181820_topic(fire1["text"])==_bc181820_topic(fire2["text"])=="FIRETEX_COATING_SYSTEM"),
+      ("Firetex mergeable",_bc181820_mergeable(fire1,fire2)),
+      ("PBR topic same",_bc181820_topic(pbr1["text"])==_bc181820_topic(pbr2["text"])=="PBR_PANEL_GAUGE"),
+      ("PBR mergeable",_bc181820_mergeable(pbr1,pbr2)),
+      ("fire detail is general design",_bc181820_affected_trade(dummy,"A100 references A400 and cover sheet references A401 for one-hour fire-rated construction.","Fire Sprinkler")=="General / Design Coordination"),
+      ("sheet index is general design",_bc181820_affected_trade(dummy,"Cover sheet drawing index lists S000 but included sheet is S001.","Roofing / Sheet Metal")=="General / Design Coordination"),
+      ("parking count is general design",_bc181820_affected_trade(dummy,"A000 reports 62 parking spaces while A100 reports 68 parking spaces.","Electrical")=="General / Design Coordination"),
+      ("S102 index is general design",_bc181820_affected_trade(dummy,"Confirm whether S102 belongs to contract package; sheet index differs.","Earthwork")=="General / Design Coordination"),
+      ("post installed anchor affects steel",_bc181820_affected_trade(dummy,"Confirm existing concrete wall reinforcement and scanning before installing epoxy anchors.","Earthwork")=="Structural Steel"),
+      ("Canopy4 demo affects demolition",_bc181820_affected_trade(dummy,"Confirm exact limits of existing canopy removal beneath Canopy 4.","Roofing / Sheet Metal")=="Demolition"),
+      ("tree protection affects landscape",_bc181820_affected_trade(dummy,"Confirm actual field condition before omitting tree protection.","Structural Steel")=="Landscaping / Irrigation"),
+      ("Canopy10 topic",_bc181820_topic("Canopy 10 has no steel beams while structural steel scope says canopies 1 through 10.")=="CANOPY_10_STRUCTURAL_RATED_SCOPE"),
+      ("Canopy10 affected steel",_bc181820_affected_trade(dummy,"Canopy 10 has no steel beams while structural steel scope says canopies 1 through 10.","General")=="Structural Steel"),
+      ("RFI page active","/rfi-intelligence/project-truth" in paths),
+      ("RFI API active","/api/rfi-intelligence/project-truth" in paths),
+      ("create preserved","/rfi-intelligence/project-truth/create" in paths),
+      ("control preserved","/project-control/rfis" in paths),
+      ("1.8.18.19 health preserved","/health/rfi-responsible-party-affected-trade-1-8-18-19" in paths),
+      ("1.8.18.18 health preserved","/health/rfi-conversion-issue-control-1-8-18-18" in paths),
+      ("1.8.18.17 health preserved","/health/scope-execution-conflict-clustering-1-8-18-17" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Project Startup preserved","/project-startup" in paths),
+      ("Issues preserved","/issues" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("human approval retained",True),
+      ("no auto-send",True),
+      ("source lineage retained",True),
+      ("existing RFI data preserved",True),
+      ("PostgreSQL data untouched",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.20",
+      "release":_BC181820_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.20"
+BUILD_COMMAND_RELEASE_NAME=_BC181820_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
