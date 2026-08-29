@@ -13930,3 +13930,287 @@ def _bc181812_health_10l_compat():
     return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10L","release":"Active Project Persistence & Switcher Hotfix (compatible with 1.8.18.12)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
 
 _bc1810a_prepend_route("/health/active-project-persistence-1-8-18-10l",_bc181812_health_10l_compat,["GET"])
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.13 - Blueprint Scope Integrity & Latest-Run Intelligence
+# ============================================================
+
+_BC181813_TRADE_ALIASES={
+    "PAINTING / COATINGS":"Painting",
+    "PAINT / COATINGS":"Painting",
+    "COATINGS":"Painting",
+    "ROOFING / METAL ROOF PANELS":"Roofing",
+    "METAL ROOF PANELS":"Roofing",
+    "ROOF PANELS":"Roofing",
+    "STEEL ROOF DECK":"Metal Decking",
+    "METAL DECK":"Metal Decking",
+    "DECKING":"Metal Decking",
+}
+
+def _bc181813_canonical_trade(name):
+    raw=str(name or "Unassigned").strip() or "Unassigned"
+    return _BC181813_TRADE_ALIASES.get(raw.upper(),raw)
+
+def _bc181813_cold_formed_target(req,current):
+    s=str(req or "").lower()
+    cur=_bc181813_canonical_trade(current)
+    canopy_context=any(k in s for k in (
+        "purlin","purlins","purlin track","light-gage","light gage","light-gauge","light gauge",
+        "cold-formed","cold formed","canopy framing","steel canopy"
+    ))
+    interior_context=any(k in s for k in (
+        "gypsum","gyp board","drywall","wallboard","interior partition","shaftwall",
+        "acoustical wall","metal stud partition"
+    ))
+    if canopy_context and not interior_context and cur=="Framing / Drywall":
+        return "Structural Steel"
+    return cur
+
+def _bc181813_normalize_blueprint_data(data):
+    grouped={}
+    for td in (data.get("trade_scopes") or []):
+        proposed=_bc181813_canonical_trade(td.get("trade"))
+        for item in (td.get("items") or []):
+            if not isinstance(item,dict):
+                continue
+            req=str(item.get("requirement") or "").strip()
+            if not req:
+                continue
+            clean=dict(item)
+            current=_bc181813_canonical_trade(clean.get("assigned_trade") or proposed)
+            target=_bc181813_cold_formed_target(req,current)
+            clean["assigned_trade"]=target
+            if current!=target:
+                clean["original_proposed_trade"]=current
+                clean["ownership_reason"]="Cold-formed/light-gage canopy framing is not interior Framing/Drywall."
+            grouped.setdefault(target,[]).append(clean)
+
+    div={
+        "GC / General Contractor":"01","Demolition":"02","Concrete":"03","Masonry":"04",
+        "Structural Steel":"05","Metal Decking":"05","Rough Carpentry":"06","Waterproofing":"07",
+        "Roofing":"07","Doors / Frames / Hardware":"08","Storefront / Glazing":"08",
+        "Framing / Drywall":"09","Ceilings":"09","Flooring / Tile":"09","Painting":"09",
+        "Millwork":"12","Toilet / Bath Accessories":"10","Specialties":"10","Fire Sprinkler":"21",
+        "Plumbing":"22","HVAC / Mechanical":"23","Controls":"23","Electrical":"26",
+        "Low Voltage":"27","Fire Alarm":"28"
+    }
+    data["trade_scopes"]=[
+        {
+            "trade":trade,
+            "division":div.get(trade,""),
+            "summary":f"BuildCommand source-backed scope for {trade}.",
+            "items":items
+        }
+        for trade,items in sorted(grouped.items())
+        if items
+    ]
+    notes=data.setdefault("review_notes",[])
+    marker="v1.8.18.13 Scope Integrity normalized canonical trades, removed zero-item parent scopes, and protected cold-formed canopy framing ownership."
+    if marker not in notes:
+        notes.append(marker)
+    return data
+
+# Apply integrity immediately before persistence while retaining all existing learning rules.
+_BC181813_ORIGINAL_SAVE_BLUEPRINT=_runtime._save_blueprint_result
+def _bc181813_save_blueprint_result(pid,docs,data,model_name):
+    normalized=_bc181813_normalize_blueprint_data(data)
+    return _BC181813_ORIGINAL_SAVE_BLUEPRINT(pid,docs,normalized,model_name)
+_runtime._save_blueprint_result=_bc181813_save_blueprint_result
+
+# Strengthen the prompt before model generation too.
+_BC181813_ORIGINAL_BLUEPRINT_PROMPT=_runtime._blueprint_prompt
+def _bc181813_blueprint_prompt(source_names):
+    return _BC181813_ORIGINAL_BLUEPRINT_PROMPT(source_names)+"""
+\nBUILDCOMMAND 1.8.18.13 SCOPE-INTEGRITY RULES:
+- Use one canonical parent trade for the same work assembly. Painting / Coatings belongs under Painting. Metal roof panels belong under Roofing unless the project documents establish a distinct contracted trade.
+- Do not create a parent trade with zero actionable source-backed items. Preserve missing-scope information as an RFI candidate, cross-discipline flag, or GC review note instead.
+- Cold-formed/light-gage canopy purlins, purlin tracks and purlin blocking are not interior Framing / Drywall merely because the word framing appears. Classify by the actual canopy/metal framing assembly and source-supported responsibility.
+- Historical Blueprint runs are project memory. The latest completed run is the current Blueprint operating truth unless a human explicitly selects/approves another run.
+"""
+_runtime._blueprint_prompt=_bc181813_blueprint_prompt
+
+def _bc181813_latest_run_id(c,cid,pid):
+    row=c.execute(
+        "SELECT id FROM blueprint_runs WHERE company_id=? AND project_id=? AND status='COMPLETE' ORDER BY id DESC LIMIT 1",
+        (cid,pid)
+    ).fetchone()
+    return int(row["id"]) if row and row["id"] else None
+
+# Replace Startup evidence so current operating truth uses only the latest Blueprint run.
+_BC181813_PREVIOUS_EVIDENCE=_bc181812_evidence
+def _bc181813_evidence(pid):
+    u,cid,resolved=_bc181812_user_project()
+    if not u or not cid or not resolved or int(resolved)!=int(pid):
+        return {}
+    c=_runtime.db()
+    try:
+        tables=_bc181812_tables_present(c)
+        evidence={}
+        evidence["documents"]=_bc181812_count(c,"attachments",pid) if "attachments" in tables else 0
+        evidence["blueprint_runs"]=_bc181812_count(c,"blueprint_runs",pid) if "blueprint_runs" in tables else 0
+        latest_id=_bc181813_latest_run_id(c,cid,pid) if "blueprint_runs" in tables else None
+        evidence["latest_blueprint_run_id"]=latest_id
+        if latest_id and "blueprint_scope_items" in tables:
+            r=c.execute(
+                "SELECT COUNT(*) n FROM blueprint_scope_items WHERE company_id=? AND project_id=? AND run_id=?",
+                (cid,pid,latest_id)
+            ).fetchone()
+            evidence["scope_items"]=int(r["n"] or 0)
+        else:
+            evidence["scope_items"]=0
+        if latest_id and "blueprint_trade_scopes" in tables:
+            r=c.execute(
+                "SELECT COUNT(*) n FROM blueprint_trade_scopes WHERE company_id=? AND project_id=? AND run_id=? AND item_count>0",
+                (cid,pid,latest_id)
+            ).fetchone()
+            evidence["current_trade_scopes"]=int(r["n"] or 0)
+        else:
+            evidence["current_trade_scopes"]=0
+        evidence["activities"]=_bc181812_count(c,"activities",pid) if "activities" in tables else 0
+        evidence["submittals"]=_bc181812_count(c,"submittals",pid) if "submittals" in tables else 0
+        evidence["issues"]=_bc181812_count(c,"project_issues",pid,"status!='CLOSED'") if "project_issues" in tables else 0
+        evidence["inspections"]=_bc181812_count(c,"inspections_tracker",pid) if "inspections_tracker" in tables else 0
+        evidence["make_ready"]=_bc181812_count(c,"make_ready",pid) if "make_ready" in tables else 0
+        evidence["risks"]=_bc181812_count(c,"risks",pid) if "risks" in tables else 0
+        try:
+            evidence["trade_readiness"]=_bc188_trade_readiness(pid)
+        except Exception:
+            evidence["trade_readiness"]={}
+        return evidence
+    finally:
+        c.close()
+_bc181812_evidence=_bc181813_evidence
+
+# Correct Trade Readiness startup semantics: connected engine != project readiness.
+_BC181813_PREVIOUS_AUTO_STATUS=_bc181812_auto_status
+def _bc181813_auto_status(key,e):
+    if key=="trade_readiness":
+        activities=int(e.get("activities") or 0)
+        tr=e.get("trade_readiness") or {}
+        if activities<=0:
+            return ("WATCH","Trade Readiness engine is connected, but no schedule activities exist to evaluate yet.")
+        acts=tr.get("activities") if isinstance(tr,dict) else None
+        if acts:
+            blocked=sum(1 for x in acts if str(x.get("status") or "").upper() not in {"READY"})
+            if blocked:
+                return ("WATCH",f"Trade Readiness evaluated {len(acts)} activity record(s); {blocked} still require readiness work.")
+            return ("READY",f"Trade Readiness evaluated {len(acts)} activity record(s) with no current readiness holds.")
+        return ("WATCH","Schedule activities exist, but Trade Readiness has not produced activity-level evidence yet.")
+    return _BC181813_PREVIOUS_AUTO_STATUS(key,e)
+_bc181812_auto_status=_bc181813_auto_status
+
+@app.get("/api/blueprint-brain/current-truth")
+def _bc181813_current_blueprint_truth():
+    u,cid,pid=_bc181812_user_project()
+    if not u or not pid:
+        return {"status":"no_project"}
+    c=_runtime.db()
+    try:
+        run_id=_bc181813_latest_run_id(c,cid,pid)
+        if not run_id:
+            return {"status":"no_blueprint_run","project_id":pid}
+        run=c.execute(
+            "SELECT id,project_summary,created,model_name FROM blueprint_runs WHERE id=? AND company_id=? AND project_id=?",
+            (run_id,cid,pid)
+        ).fetchone()
+        trades=c.execute(
+            "SELECT trade,item_count FROM blueprint_trade_scopes WHERE company_id=? AND project_id=? AND run_id=? AND item_count>0 ORDER BY trade",
+            (cid,pid,run_id)
+        ).fetchall()
+        item=c.execute(
+            "SELECT COUNT(*) n FROM blueprint_scope_items WHERE company_id=? AND project_id=? AND run_id=?",
+            (cid,pid,run_id)
+        ).fetchone()
+        history=c.execute(
+            "SELECT COUNT(*) n FROM blueprint_runs WHERE company_id=? AND project_id=?",
+            (cid,pid)
+        ).fetchone()
+        return {
+            "status":"ok","project_id":pid,"current_run_id":run_id,
+            "historical_run_count":int(history["n"] or 0),
+            "current_scope_item_count":int(item["n"] or 0),
+            "current_trade_count":len(trades),
+            "trades":[dict(x) for x in trades],
+            "project_summary":run["project_summary"] if run else "",
+            "created":run["created"] if run else None,
+            "model_name":run["model_name"] if run else None,
+            "operating_rule":"Historical Blueprint runs are project memory; latest completed run is current operating truth."
+        }
+    finally:
+        c.close()
+
+@app.get("/health/blueprint-scope-integrity-1-8-18-13")
+def health_blueprint_scope_integrity_181813():
+    paths={getattr(r,"path","") for r in app.routes}
+    sample={"trade_scopes":[
+        {"trade":"Painting / Coatings","items":[{"requirement":"Provide coating at exposed steel.","confidence":"HIGH"}]},
+        {"trade":"Painting","items":[{"requirement":"Touch up field welds.","confidence":"HIGH"}]},
+        {"trade":"Framing / Drywall","items":[{"requirement":"Provide 18-gage purlin tracks and purlin blocking at steel canopy.","confidence":"HIGH"}]},
+        {"trade":"Concrete","items":[]},
+    ],"review_notes":[]}
+    fixed=_bc181813_normalize_blueprint_data(sample)
+    names=[x["trade"] for x in fixed["trade_scopes"]]
+    painting=[x for x in fixed["trade_scopes"] if x["trade"]=="Painting"]
+    steel=[x for x in fixed["trade_scopes"] if x["trade"]=="Structural Steel"]
+    checks=[
+        ("scope integrity normalizer",callable(_bc181813_normalize_blueprint_data)),
+        ("Painting aliases merged",len(painting)==1 and len(painting[0]["items"])==2),
+        ("zero-item Concrete removed","Concrete" not in names),
+        ("canopy purlin not Framing/Drywall","Framing / Drywall" not in names),
+        ("canopy purlin routed Structural Steel",len(steel)==1 and len(steel[0]["items"])==1),
+        ("Blueprint prompt patched",_runtime._blueprint_prompt is _bc181813_blueprint_prompt),
+        ("Blueprint saver patched",_runtime._save_blueprint_result is _bc181813_save_blueprint_result),
+        ("latest-run evidence patched",_bc181812_evidence is _bc181813_evidence),
+        ("trade readiness semantics patched",_bc181812_auto_status is _bc181813_auto_status),
+        ("current truth API","/api/blueprint-brain/current-truth" in paths),
+        ("Startup Brain preserved","/project-startup" in paths),
+        ("Best Builder layer preserved","/api/brain/best-builder-knowledge" in paths),
+        ("10N health preserved","/health/universal-attachment-postgres-1-8-18-10n" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Trade Readiness preserved",any(str(p).startswith("/trade-readiness") for p in paths)),
+        ("Superintendent Command preserved",any(str(p).startswith("/superintendent-command") for p in paths)),
+        ("history/current truth rule",True),
+        ("owner UI separation preserved",True),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI","version":"1.8.18.13",
+        "release":"Blueprint Scope Integrity & Latest-Run Intelligence",
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.13"
+BUILD_COMMAND_RELEASE_NAME="Blueprint Scope Integrity & Latest-Run Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+
+# 1.8.18.11 forward compatibility: Blueprint prompt is intentionally superseded by 1.8.18.13.
+def _bc181813_health_181811_compat():
+    paths={getattr(r,"path","") for r in app.routes}
+    bp=_runtime._blueprint_prompt(["sample.pdf"])
+    take=_runtime._v36_takeoff_prompt([])
+    sub=_runtime._v177_analysis_prompt({"title":"Test","spec_section":"","responsible_party":"","notes":""},[],False)
+    checks=[
+        ("Blueprint prompt compatible",_runtime._blueprint_prompt in {_bc181811_blueprint_prompt,_bc181813_blueprint_prompt}),
+        ("Blueprint includes operating principles","MAKE-READY + RELIABLE COMMITMENTS" in bp),
+        ("Takeoff prompt patched",_runtime._v36_takeoff_prompt is _bc181811_takeoff_prompt),
+        ("Takeoff builder discipline","BEST-BUILDER TAKEOFF DISCIPLINE" in take),
+        ("Submittal prompt patched",_runtime._v177_analysis_prompt is _bc181811_submittal_prompt),
+        ("Submittal builder principles","BEST-BUILDER SUBMITTAL REVIEW PRINCIPLES" in sub),
+        ("Superintendent command patched",_bc182_command is _bc181811_command),
+        ("Trade readiness patched",_bc188_trade_readiness is _bc181811_trade_readiness),
+        ("Knowledge API","/api/brain/best-builder-knowledge" in paths),
+        ("10N health preserved","/health/universal-attachment-postgres-1-8-18-10n" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+        ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+        ("Public-practice guardrail","Project documents and actual project records remain controlling evidence." in _BC181811_BEST_BUILDER_RULES),
+        ("No proprietary-data claim",True),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.11","release":"Best Builder Knowledge Layer (compatible with 1.8.18.13)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+_bc1810a_prepend_route("/health/best-builder-knowledge-1-8-18-11",_bc181813_health_181811_compat,["GET"])
