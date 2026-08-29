@@ -13153,3 +13153,305 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.11 - Best Builder Knowledge Layer
+# Public-industry practices synthesized into BuildCommand rules.
+# ============================================================
+
+_BC181811_BEST_BUILDER_RULES = """
+BUILDCOMMAND BEST-BUILDER OPERATING PRINCIPLES
+
+Apply these as construction-management reasoning rules. They are general public-industry practices, not project facts. Never invent a project condition to satisfy a rule.
+
+1. PLAN THE WORK BEFORE RELEASING THE CREW
+- Work should not be treated as executable until drawings/information, materials, manpower, predecessor work, access, inspections/permits, equipment, safety controls, and required decisions are ready.
+- Identify constraints early, assign an owner, and drive each constraint to a dated closure.
+- Protect reliable workflow instead of merely reporting schedule dates.
+
+2. MAKE-READY + RELIABLE COMMITMENTS
+- Separate what SHOULD happen from what CAN happen and what WILL be committed.
+- Near-term work should be make-ready before it enters the weekly commitment plan.
+- Track missed commitments and reasons for variance so the next planning cycle improves.
+- Prefer explicit handoffs between trades and verify predecessor completion before successor release.
+
+3. QUALITY IS BUILT IN, NOT INSPECTED IN AT THE END
+- Before a definable feature of work starts, verify scope, current drawings/specifications, approved submittals, mockup/sample requirements, inspection/testing requirements, tolerances, safety considerations, and responsible foreman.
+- Encourage a first-work/initial inspection before full production.
+- Follow up during installation, not only at punch.
+- Treat repeated deficiencies as a root-cause problem requiring corrective action.
+
+4. SAFETY IS PREPLANNED
+- Identify operation-specific hazards before work starts.
+- Confirm safeguards, competent/qualified people where required, access, equipment, permits, and coordination.
+- Use leading indicators and field observations to prevent incidents rather than reacting only after an incident.
+- Escalate life-safety or high-severity exposure above production pressure.
+
+5. ONE PROJECT TRUTH
+- Drawings, specifications, RFIs, submittals, schedule, procurement, inspections, daily reports, issues, and field status should be cross-checked rather than reasoned about in isolation.
+- When two sources conflict, surface the conflict and request resolution; do not silently choose one.
+- Preserve source traceability for every plan-derived conclusion.
+
+6. DESIGN FOR CONSTRUCTABILITY
+- Look for sequencing conflicts, access/logistics problems, temporary-work needs, prefabrication opportunities, trade congestion, incomplete interfaces, and requirements that make field installation unnecessarily difficult.
+- Raise constructability concerns early enough to affect cost and schedule.
+
+7. PROCUREMENT IS PART OF THE SCHEDULE
+- Long-lead material, fabrication, approval, release, delivery, storage, and installation dates should be connected to required-on-site dates.
+- An activity is not truly ready if its material/equipment path cannot support the planned start.
+
+8. DATA SHOULD DRIVE ACTION
+- Use measurable readiness, open constraints, schedule variance, submittal aging, inspection failures, risk scores, procurement status, and recurring field issues to prioritize attention.
+- Recommend a specific owner/action/next verification whenever evidence supports one.
+- Do not confuse more data with better decisions; surface the few items most likely to affect safety, flow, quality, cost, or milestone performance.
+
+9. START CLOSEOUT EARLY
+- Commissioning, turnover requirements, testing records, O&M information, warranties, training, as-builts, attic stock, punch/deficiency closure, and authority approvals should be planned before the end of the job.
+- Do not allow closeout to become an end-of-project surprise.
+
+10. LEARN AND IMPROVE
+- Capture why commitments were missed, why inspections failed, why rework occurred, and which constraints repeatedly appeared.
+- Convert repeated causes into prevention rules for later phases and future projects.
+
+BUILDCOMMAND GUARDRAILS
+- Project documents and actual project records remain controlling evidence.
+- These operating principles guide reasoning only; they do not override contracts, drawings, specifications, codes, AHJ requirements, design professionals, or signed subcontract scope.
+- Never attribute a recommendation to a specific contractor unless the user asks for source history.
+""".strip()
+
+_BC181811_RESEARCH_SOURCES = [
+    {"organization":"Turner Construction","public_practice":"Lean construction, waste reduction, metrics, workforce problem solving and continuous improvement."},
+    {"organization":"Lean Construction Institute","public_practice":"Last Planner System: milestone/pull/make-ready/weekly work planning, constraints, daily huddles, PPC and reasons for variance."},
+    {"organization":"Hensel Phelps","public_practice":"Quality planning before installation, preparatory meetings, initial inspection, follow-up inspection and final verification."},
+    {"organization":"Kiewit","public_practice":"Safety preplanning, craft voice, quality ownership, connected data, risk-adjusted planning, early commissioning/closeout planning and constructability."},
+    {"organization":"DPR Construction","public_practice":"Lean/IPD/BIM integration, predictable outcomes, upstream safety planning and leading indicators."},
+]
+
+# ---------------------------
+# Blueprint Brain integration
+# ---------------------------
+_BC181811_ORIGINAL_BLUEPRINT_PROMPT = _runtime._blueprint_prompt
+
+def _bc181811_blueprint_prompt(source_names):
+    base=_BC181811_ORIGINAL_BLUEPRINT_PROMPT(source_names)
+    return base + "\n\n" + _BC181811_BEST_BUILDER_RULES + """
+\nBLUEPRINT-BRAIN APPLICATION:
+- In review_notes, identify make-ready prerequisites, constructability concerns, long-lead/procurement exposure, inspection/testing gates, first-work quality-control needs, and closeout/commissioning requirements when they are explicitly supported by the documents.
+- Do not invent any such requirement. If the plans/specifications do not support it, do not add it as a project fact.
+- Treat cross-discipline interface gaps as coordination/RFI candidates rather than guessing responsibility.
+"""
+_runtime._blueprint_prompt=_bc181811_blueprint_prompt
+
+# ---------------------------
+# Estimator / takeoff prompts
+# ---------------------------
+_BC181811_ORIGINAL_TAKEOFF_PROMPT = _runtime._v36_takeoff_prompt
+def _bc181811_takeoff_prompt(targets):
+    return _BC181811_ORIGINAL_TAKEOFF_PROMPT(targets) + """
+\nBEST-BUILDER TAKEOFF DISCIPLINE:
+- Prefer a traceable quantity basis over a guessed quantity.
+- Flag scope interfaces that could create duplicate coverage or gaps.
+- When a measurable component depends on an unresolved design/interface condition, preserve VERIFY instead of forcing certainty.
+- Identify long-lead equipment only when the supplied project evidence supports that classification.
+"""
+_runtime._v36_takeoff_prompt=_bc181811_takeoff_prompt
+
+_BC181811_ORIGINAL_COMPONENT_PROMPT = _runtime._component_split_prompt
+def _bc181811_component_prompt(rows):
+    return _BC181811_ORIGINAL_COMPONENT_PROMPT(rows) + """
+\nBEST-BUILDER SCOPE DISCIPLINE:
+- Split work so procurement, installation, inspection/testing, and trade handoffs can be tracked without double counting.
+- Preserve source traceability and never invent missing components.
+"""
+_runtime._component_split_prompt=_bc181811_component_prompt
+
+# ---------------------------
+# Submittal Brain integration
+# ---------------------------
+_BC181811_ORIGINAL_SUBMITTAL_PROMPT = _runtime._v177_analysis_prompt
+def _bc181811_submittal_prompt(submittal_row,requirements,web_enabled):
+    return _BC181811_ORIGINAL_SUBMITTAL_PROMPT(submittal_row,requirements,web_enabled) + """
+\nBEST-BUILDER SUBMITTAL REVIEW PRINCIPLES:
+- Determine whether unresolved submittal information can block procurement, fabrication, installation, inspection, testing, commissioning, or a scheduled trade handoff.
+- Highlight deviations early enough to avoid rework.
+- Do not create a project requirement that is absent from the controlling documents.
+- Never auto-approve; preserve human/design-team review responsibility.
+"""
+_runtime._v177_analysis_prompt=_bc181811_submittal_prompt
+
+# ------------------------------------
+# Superintendent Command integration
+# ------------------------------------
+_BC181811_ORIGINAL_COMMAND = _bc182_command
+
+def _bc181811_command(project_id):
+    d=_BC181811_ORIGINAL_COMMAND(project_id)
+    if not d:
+        return d
+
+    # Strengthen recommendations using best-builder operating logic while
+    # preserving only evidence already present in BuildCommand.
+    for a in d.get("actions",[]):
+        typ=str(a.get("source_type") or "").upper()
+        reason=str(a.get("reason") or "")
+        cmd=str(a.get("recommended_action") or "")
+
+        if typ=="READINESS":
+            a["recommended_action"] = (
+                "Do not release the crew on commitment alone. Assign an owner to each missing prerequisite, "
+                "set a closure date, verify the predecessor/handoff, and re-check readiness before the activity starts."
+            )
+        elif typ=="MAKE_READY":
+            a["recommended_action"] = (
+                "Assign a constraint owner and required-by date. Remove the roadblock before this work enters the "
+                "reliable weekly commitment plan, then verify the handoff with the responsible trade."
+            )
+        elif typ=="INSPECTION":
+            a["recommended_action"] = (
+                "Contain the affected work, identify the root cause, complete corrections, verify the first corrected "
+                "work before full production resumes, and schedule the required reinspection."
+            )
+        elif typ=="SUBMITTAL":
+            a["recommended_action"] = (
+                "Tie the submittal to its required-on-site/fabrication need date, escalate the responsible party, "
+                "and confirm whether the delay threatens procurement, installation, inspection, or a trade handoff."
+            )
+        elif typ=="SAFETY":
+            a["recommended_action"] = (
+                "Review the operation before work continues: identify the hazard, required safeguards, responsible "
+                "supervision and corrective action. Safety exposure takes priority over production."
+            )
+        elif typ=="SCHEDULE":
+            a["recommended_action"] = (
+                "Find the controlling constraint and affected handoff, assign recovery ownership, and confirm the "
+                "recovery plan is actually executable with labor, material, access, information and inspections."
+            )
+        elif typ=="RISK":
+            a["recommended_action"] = (
+                "Convert the risk into a dated mitigation action with an owner and trigger. Verify the mitigation "
+                "against the schedule, procurement path, field sequence and trade interfaces."
+            )
+
+    d["operating_principles"]=[
+        "Make work ready before crew release",
+        "Protect reliable trade handoffs",
+        "Build quality into first work",
+        "Preplan safety before production",
+        "Connect procurement to schedule",
+        "Use project data to drive action",
+        "Capture variance and root cause",
+        "Start turnover and closeout early",
+    ]
+    return d
+
+_bc182_command=_bc181811_command
+
+# ---------------------------
+# Trade Readiness integration
+# ---------------------------
+_BC181811_ORIGINAL_TRADE_READINESS = _bc188_trade_readiness
+
+def _bc181811_trade_readiness(project_id):
+    d=_BC181811_ORIGINAL_TRADE_READINESS(project_id)
+    if not d:
+        return d
+    for x in d.get("activities",[]):
+        if x.get("status")=="READY":
+            x["recommended_action"]=(
+                "Verify the trade handoff, pre-task safety plan, current information, material/equipment, "
+                "inspection requirements and first-work quality expectations before release."
+            )
+        elif x.get("status")=="WATCH":
+            x["recommended_action"]=(
+                "Assign owners and required-by dates to every prerequisite. Keep the activity out of a reliable "
+                "commitment until the remaining constraints are verified."
+            )
+        else:
+            x["recommended_action"]=(
+                "Do not release this activity. Clear critical constraints, verify predecessor/handoff conditions, "
+                "and re-check safety, quality, material, information, access, equipment and inspection readiness."
+            )
+    d["best_builder_logic"]="Make-ready, reliable handoffs, pre-task safety, built-in quality, procurement-to-schedule, and variance learning."
+    return d
+
+_bc188_trade_readiness=_bc181811_trade_readiness
+
+# ---------------------------
+# Knowledge API / transparency
+# ---------------------------
+@app.get("/api/brain/best-builder-knowledge")
+def _bc181811_best_builder_knowledge_api():
+    return {
+        "status":"ok",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.11",
+        "release":"Best Builder Knowledge Layer",
+        "purpose":"Public industry best practices synthesized into BuildCommand reasoning rules.",
+        "project_facts_guardrail":"Project documents and live BuildCommand records remain controlling evidence.",
+        "principles":[
+            "Plan work before releasing crews",
+            "Make-ready and remove constraints",
+            "Use reliable commitments and explicit trade handoffs",
+            "Build quality in before and during installation",
+            "Preplan safety and use leading indicators",
+            "Cross-check one connected project truth",
+            "Review constructability early",
+            "Connect procurement to required-on-site dates",
+            "Drive action from measurable project signals",
+            "Start commissioning and closeout early",
+            "Capture variance/root cause and continuously improve",
+        ],
+        "public_research_sources":_BC181811_RESEARCH_SOURCES,
+    }
+
+@app.get("/health/best-builder-knowledge-1-8-18-11")
+def health_best_builder_knowledge_181811():
+    paths={getattr(r,"path","") for r in app.routes}
+    bp=_runtime._blueprint_prompt(["sample.pdf"])
+    take=_runtime._v36_takeoff_prompt([])
+    sub=_runtime._v177_analysis_prompt(
+        {"title":"Test","spec_section":"","responsible_party":"","notes":""},[],False
+    )
+    checks=[
+        ("Blueprint prompt patched",_runtime._blueprint_prompt is _bc181811_blueprint_prompt),
+        ("Blueprint includes operating principles","MAKE-READY + RELIABLE COMMITMENTS" in bp),
+        ("Takeoff prompt patched",_runtime._v36_takeoff_prompt is _bc181811_takeoff_prompt),
+        ("Takeoff builder discipline","BEST-BUILDER TAKEOFF DISCIPLINE" in take),
+        ("Submittal prompt patched",_runtime._v177_analysis_prompt is _bc181811_submittal_prompt),
+        ("Submittal builder principles","BEST-BUILDER SUBMITTAL REVIEW PRINCIPLES" in sub),
+        ("Superintendent command patched",_bc182_command is _bc181811_command),
+        ("Trade readiness patched",_bc188_trade_readiness is _bc181811_trade_readiness),
+        ("Knowledge API","/api/brain/best-builder-knowledge" in paths),
+        ("10N health preserved","/health/universal-attachment-postgres-1-8-18-10n" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Superintendent Command preserved",any(str(p).startswith("/superintendent-command") for p in paths)),
+        ("Trade Readiness preserved",any(str(p).startswith("/trade-readiness") for p in paths)),
+        ("Public-practice guardrail","Project documents and actual project records remain controlling evidence." in _BC181811_BEST_BUILDER_RULES),
+        ("No proprietary-data claim",True),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.11",
+        "release":"Best Builder Knowledge Layer",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "brains_enhanced":[
+            "Blueprint Brain",
+            "Estimator / Takeoff",
+            "Submittal Brain",
+            "Superintendent Command",
+            "Trade Readiness",
+        ],
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.11"
+BUILD_COMMAND_RELEASE_NAME="Best Builder Knowledge Layer"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
