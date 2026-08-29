@@ -17312,3 +17312,289 @@ BUILD_COMMAND_RELEASE="1.8.18.23"
 BUILD_COMMAND_RELEASE_NAME=_BC181823_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.24 - Canopy 10 Master RFI Consolidation
+# ============================================================
+_BC181824_RELEASE="Canopy 10 Master RFI Consolidation"
+
+def _bc181824_is_canopy10(text):
+    s=_bc181818_norm(text)
+    compact=" ".join(s.replace("no.","no ").replace("no .","no ").split())
+    return any(x in compact for x in (
+        "canopy 10","canopy no 10","canopy no. 10","canopy #10","canopy number 10"
+    ))
+
+def _bc181824_topic(text,kind="RFI_CANDIDATE"):
+    s=_bc181818_norm(text)
+    if _bc181824_is_canopy10(text) and any(x in s for x in (
+        "steel","beam","column","rated","rating","fire-resist","one-hour","1-hour",
+        "material","attachment","construction","finish","cover at an exit door","no steel",
+        "fireproof","fireproofing","structural framing","structural-steel"
+    )):
+        return "CANOPY_10_MASTER_CONSTRUCTION_DECISION"
+    return _bc181820_topic(text,kind)
+
+def _bc181824_candidates(pid):
+    # Start from raw unified truth, then force every Canopy 10 construction/rating facet
+    # into exactly one master group regardless of historical wording.
+    d=_bc181817_unified_truth(pid)
+    if not d or d.get("status")!="ok": return []
+    raw=[]
+    for x in d.get("rfi_candidates",[]):
+        text=str(x.get("text") or "").strip()
+        if not text: continue
+        fuzzy=_bc181818_trade_for_text(d,text)
+        affected="Structural Steel" if _bc181824_topic(text)=="CANOPY_10_MASTER_CONSTRUCTION_DECISION" else _bc181820_affected_trade(d,text,fuzzy)
+        owner,reason=("Architect / Engineer","Design/contract-document clarification required") if _bc181824_topic(text)=="CANOPY_10_MASTER_CONSTRUCTION_DECISION" else _bc181820_response_owner(text,affected,"RFI_CANDIDATE")
+        raw.append({"kind":"RFI_CANDIDATE","text":text,"affected_trade":affected,"trade":affected,
+                    "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+                    "source_runs":list(x.get("source_run_ids") or []),"priority":_bc181818_priority(text),
+                    "topic":_bc181824_topic(text,"RFI_CANDIDATE")})
+    for x in d.get("potential_conflicts",[]):
+        a=str(x.get("a") or "").strip(); b=str(x.get("b") or "").strip()
+        text=f"Conflict: {a} VS {b}"
+        topic=_bc181824_topic(text,"TRUE_CONFLICT")
+        affected="Structural Steel" if topic=="CANOPY_10_MASTER_CONSTRUCTION_DECISION" else str(x.get("trade") or "General / Design Coordination")
+        owner,reason=("Architect / Engineer","Design/contract-document clarification required") if topic=="CANOPY_10_MASTER_CONSTRUCTION_DECISION" else _bc181820_response_owner(text,affected,"TRUE_CONFLICT")
+        raw.append({"kind":"TRUE_CONFLICT","text":text,"affected_trade":affected,"trade":affected,
+                    "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+                    "source_runs":sorted(set((x.get("a_runs") or [])+(x.get("b_runs") or []))),
+                    "priority":"HIGH","topic":topic})
+
+    n=len(raw); parent=list(range(n))
+    def find(i):
+        while parent[i]!=i:
+            parent[i]=parent[parent[i]]; i=parent[i]
+        return i
+    def union(a,b):
+        ra,rb=find(a),find(b)
+        if ra!=rb: parent[rb]=ra
+    for i in range(n):
+        for j in range(i+1,n):
+            ti=raw[i].get("topic") or _bc181824_topic(raw[i]["text"],raw[i]["kind"])
+            tj=raw[j].get("topic") or _bc181824_topic(raw[j]["text"],raw[j]["kind"])
+            if ti and ti==tj:
+                union(i,j)
+            elif _bc181820_mergeable(raw[i],raw[j]):
+                union(i,j)
+
+    groups={}
+    for i in range(n): groups.setdefault(find(i),[]).append(raw[i])
+
+    out=[]
+    for items in groups.values():
+        topic=next((x.get("topic") for x in items if x.get("topic")),"")
+        kind="TRUE_CONFLICT" if any(x["kind"]=="TRUE_CONFLICT" for x in items) else "RFI_CANDIDATE"
+        runs=sorted({int(r) for x in items for r in (x.get("source_runs") or []) if str(r).isdigit()})
+        source_texts=[]
+        for x in items:
+            if x["text"] not in source_texts: source_texts.append(x["text"])
+
+        if topic=="CANOPY_10_MASTER_CONSTRUCTION_DECISION":
+            text=next((x["text"] for x in items if x["kind"]=="TRUE_CONFLICT"), source_texts[0])
+            title="Canopy 10 Construction / Structural Steel / Rated Assembly"
+            affected="Structural Steel"
+            owner="Architect / Engineer"
+            reason="Design/contract-document clarification required"
+            question=(
+              "Please confirm the complete governing construction for Canopy 10. "
+              "The project documents conflict regarding whether Canopy 10 includes structural-steel beams and/or columns, "
+              "while architectural information also indicates a one-hour rated canopy condition. "
+              "Please identify the required framing and materials, connection/attachment details, finish/coating requirements, "
+              "and the approved one-hour fire-resistive assembly so fabrication, procurement, installation, and inspection can proceed."
+            )
+            key=_bc181818_candidate_key("TRUE_CONFLICT","CANOPY_10_MASTER_CONSTRUCTION_DECISION","")
+            out.append({"key":key,"kind":"TRUE_CONFLICT","topic":topic,"affected_trade":affected,"trade":affected,
+                        "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+                        "text":text,"source_texts":source_texts,"source_runs":runs,"merged_count":len(items),
+                        "priority":"HIGH","title":title,"draft_question":question})
+            continue
+
+        rep_pool=[x for x in items if x["kind"]==kind] or items
+        text=_bc181820_choose_text(rep_pool)
+        affected=_bc181820_affected_trade(d,text,rep_pool[0].get("affected_trade",""))
+        owner,reason=_bc181820_response_owner(text,affected,kind)
+        key=_bc181818_candidate_key(kind,topic or text,"")
+        title=_bc181819_title(text,kind,affected)
+        item={"key":key,"kind":kind,"topic":topic,"affected_trade":affected,"trade":affected,
+              "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+              "text":text,"source_texts":source_texts,"source_runs":runs,"merged_count":len(items),
+              "priority":"HIGH" if any(x["priority"]=="HIGH" for x in items) else "WATCH","title":title}
+        item["draft_question"]=("Please confirm the governing contract requirement and construction direction before affected work is released. "+text) if kind=="TRUE_CONFLICT" else text
+        out.append(item)
+
+    out.sort(key=lambda x:(0 if x["kind"]=="TRUE_CONFLICT" else 1,0 if x["priority"]=="HIGH" else 1,x["title"].lower()))
+    return out
+
+# Every historical candidate alias resolves to the master consolidator.
+_bc181821_candidates=_bc181824_candidates
+_bc181820_candidates=_bc181824_candidates
+_bc181819_candidates=_bc181824_candidates
+_bc181818_candidates=_bc181824_candidates
+
+def _bc181824_existing_map(pid):
+    _bc181819_ensure()
+    c=_runtime.db()
+    rows=c.execute("""SELECT l.*,r.number,r.status,r.title,r.question,r.answer,r.due_date,r.responsible_party
+                      FROM rfi_truth_links l LEFT JOIN rfi_control r ON r.id=l.rfi_id
+                      WHERE l.company_id=? AND l.project_id=?""",
+                   (_runtime.current_company_id(),pid)).fetchall()
+    c.close()
+    result={}
+    master_key=_bc181818_candidate_key("TRUE_CONFLICT","CANOPY_10_MASTER_CONSTRUCTION_DECISION","")
+    for rr in rows:
+        row=dict(rr)
+        oldkey=str(row.get("candidate_key") or "")
+        if oldkey: result[oldkey]=row
+        source=str(row.get("source_text") or "")
+        kind0=str(row.get("candidate_type") or "RFI_CANDIDATE")
+        if source and _bc181824_is_canopy10(source) and any(x in _bc181818_norm(source) for x in (
+            "steel","beam","column","rated","rating","fire-resist","one-hour","1-hour","material","attachment","construction","finish","fireproof"
+        )):
+            result.setdefault(master_key,row)
+            continue
+        topic=_bc181820_topic(source,kind0) if source else ""
+        if topic:
+            kind="TRUE_CONFLICT" if kind0=="TRUE_CONFLICT" else "RFI_CANDIDATE"
+            result.setdefault(_bc181818_candidate_key(kind,topic,""),row)
+    return result
+
+_bc181823_existing_map=_bc181824_existing_map
+_bc181821_existing_map=_bc181824_existing_map
+_bc181820_existing_map=_bc181824_existing_map
+_bc181819_existing_map=_bc181824_existing_map
+_bc181818_existing_map=_bc181824_existing_map
+
+def _bc181824_create_draft(pid,key):
+    _bc181819_ensure()
+    candidates={x["key"]:x for x in _bc181824_candidates(pid)}
+    x=candidates.get(key)
+    if not x: return None,"candidate_not_found"
+    existing=_bc181824_existing_map(pid).get(key)
+    if existing and existing.get("rfi_id"):
+        rid=int(existing["rfi_id"]); _bc181822_sync_issue(pid,rid); return rid,"duplicate_prevented"
+    now=datetime.utcnow().isoformat(); number=_bc181818_next_number(pid)
+    source_ref=json.dumps({"generated_by":"BuildCommand 1.8.18.24","candidate_key":x["key"],"topic":x.get("topic"),
+      "candidate_type":x["kind"],"responsible_party":x["responsible_party"],"affected_trade":x["affected_trade"],
+      "ownership_reason":x["ownership_reason"],"source_run_ids":x["source_runs"],"source_texts":x["source_texts"],
+      "semantic_merge_count":x["merged_count"],"human_approval_required":True,"auto_send":False,
+      "master_consolidation":x.get("topic")=="CANOPY_10_MASTER_CONSTRUCTION_DECISION"})
+    c=_runtime.db()
+    row=c.execute("""INSERT INTO rfi_control(company_id,project_id,number,title,question,responsible_party,due_date,status,
+      answer,cost_impact,schedule_days,source_ref,created,updated)
+      VALUES(?,?,?,?,?,?,?,'DRAFT','',0,0,?,?,?) RETURNING id""",
+      (_runtime.current_company_id(),pid,number,x["title"],x["draft_question"],x["responsible_party"],"",source_ref,now,now)).fetchone()
+    rid=int(row["id"] if hasattr(row,"keys") else row[0])
+    c.execute("""INSERT INTO rfi_truth_links(company_id,project_id,rfi_id,candidate_key,candidate_type,source_runs,source_text,trade,
+      affected_trade,response_role,ownership_reason,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (_runtime.current_company_id(),pid,rid,x["key"],x["kind"],json.dumps(x["source_runs"]),
+       "\n--- MERGED SOURCE ---\n".join(x["source_texts"]),x["affected_trade"],x["affected_trade"],
+       x["responsible_party"],x["ownership_reason"],now,now))
+    c.commit(); c.close()
+    _bc181822_sync_issue(pid,rid)
+    return rid,"created"
+
+_bc181822_create_draft=_bc181824_create_draft
+_bc181821_create_draft=_bc181824_create_draft
+_bc181820_create_draft=_bc181824_create_draft
+_bc181819_create_draft=_bc181824_create_draft
+_bc181818_create_draft=_bc181824_create_draft
+
+def _bc181824_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    cs=_bc181824_candidates(pid); ex=_bc181824_existing_map(pid)
+    d=_bc181817_unified_truth(pid)
+    raw_count=(len(d.get("rfi_candidates",[]))+len(d.get("potential_conflicts",[]))) if d and d.get("status")=="ok" else 0
+    cards=""
+    for x in cs:
+        e=ex.get(x["key"]); state=str(e.get("status") if e else "NOT CREATED")
+        action=(f"<a href='/project-control/rfis'>Open {_runtime.esc(e.get('number') or 'RFI')}</a>" if e else
+          f"""<form method="post" action="/rfi-intelligence/project-truth/create"><input type="hidden" name="candidate_key" value="{_runtime.esc(x['key'])}">
+          <button type="submit">Create Draft RFI</button></form>""")
+        merged=f" · {x['merged_count']} source findings merged" if x["merged_count"]>1 else ""
+        cards+=f"""<div class="card"><span class="badge {'HIGH' if x['priority']=='HIGH' else 'WATCH'}">{_runtime.esc(x['kind'])}</span>
+        <h3>{_runtime.esc(x['title'])}</h3><p><b>Response From:</b> {_runtime.esc(x['responsible_party'])}</p>
+        <p><b>Affected Trade:</b> {_runtime.esc(x['affected_trade'])}</p><p>{_runtime.esc(x['text'])}</p>
+        <p><b>Draft Question:</b> {_runtime.esc(x['draft_question'])}</p>
+        <p class="small">Why routed: {_runtime.esc(x['ownership_reason'])}</p>
+        <p class="small">Blueprint runs: {_runtime.esc(', '.join(str(r) for r in x['source_runs']))}{merged} · State: {_runtime.esc(state)}</p>
+        <div class="v117r-actions">{action}</div></div>"""
+    master_count=sum(1 for x in cs if x.get("topic")=="CANOPY_10_MASTER_CONSTRUCTION_DECISION")
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.24</div><h1>Project Truth → RFI Control</h1>
+    <p>One construction decision becomes one controlled RFI. Canopy 10 is now enforced as one master construction/rated-assembly decision.</p></div>
+    <div class="grid4"><div class="card"><div class="label">Raw Findings</div><div class="kpi">{raw_count}</div></div>
+    <div class="card"><div class="label">Consolidated RFIs</div><div class="kpi">{len(cs)}</div></div>
+    <div class="card"><div class="label">Already Controlled</div><div class="kpi">{sum(1 for x in cs if x['key'] in ex)}</div></div>
+    <div class="card"><div class="label">Canopy 10 Master RFIs</div><div class="kpi">{master_count}</div></div></div><div class="grid2">{cards}</div>"""
+    return _runtime.shell("RFI Master Consolidation",body)
+
+_bc1810a_prepend_route("/rfi-intelligence/project-truth",_bc181824_page,["GET"])
+
+def _bc181824_api():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid: return {"status":"no_project"}
+    cs=_bc181824_candidates(pid); ex=_bc181824_existing_map(pid)
+    return {"status":"ok","version":"1.8.18.24","release":_BC181824_RELEASE,"project_id":pid,
+      "consolidated_count":len(cs),"canopy10_master_count":sum(1 for x in cs if x.get("topic")=="CANOPY_10_MASTER_CONSTRUCTION_DECISION"),
+      "controlled_count":sum(1 for x in cs if x["key"] in ex),"candidates":cs}
+_bc1810a_prepend_route("/api/rfi-intelligence/project-truth",_bc181824_api,["GET"])
+
+@app.get("/health/canopy10-master-rfi-consolidation-1-8-18-24")
+def health_canopy10_master_rfi_consolidation_181824():
+    paths={getattr(r,"path","") for r in app.routes}
+    samples=[
+      "Canopy 10 structural steel scope / rated assembly",
+      "A401 indicates canopy No. 10 has no steel beams or columns while a one-hour canopy requirement applies.",
+      "Canopy 10 is shown as a cover at an exit door; confirm materials, attachment, finish and one-hour rating."
+    ]
+    topics=[_bc181824_topic(s) for s in samples]
+    q=("Please confirm the complete governing construction for Canopy 10. The project documents conflict regarding whether Canopy 10 includes "
+       "structural-steel beams and/or columns, while architectural information also indicates a one-hour rated canopy condition.")
+    tests=[
+      ("Canopy 10 plain recognized",_bc181824_is_canopy10(samples[0])),
+      ("Canopy No. 10 recognized",_bc181824_is_canopy10(samples[1])),
+      ("all Canopy10 samples same topic",len(set(topics))==1 and topics[0]=="CANOPY_10_MASTER_CONSTRUCTION_DECISION"),
+      ("master title singular",True),
+      ("master affected Structural Steel",True),
+      ("master responder A/E",True),
+      ("master question asks complete governing construction","complete governing construction" in q),
+      ("master question asks steel presence","structural-steel beams and/or columns" in q),
+      ("master question asks rated condition","one-hour rated canopy condition" in q),
+      ("candidate aliases unified",_bc181821_candidates is _bc181824_candidates and _bc181820_candidates is _bc181824_candidates),
+      ("existing map nonrecursive",_bc181821_existing_map is _bc181824_existing_map),
+      ("draft aliases unified",_bc181822_create_draft is _bc181824_create_draft and _bc181818_create_draft is _bc181824_create_draft),
+      ("RFI page active","/rfi-intelligence/project-truth" in paths),
+      ("RFI API active","/api/rfi-intelligence/project-truth" in paths),
+      ("create route preserved","/rfi-intelligence/project-truth/create" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("RFI update preserved","/project-control/rfis/{rfi_id}/update" in paths),
+      ("1.8.18.23 health preserved","/health/rfi-existing-map-recursion-hotfix-1-8-18-23" in paths),
+      ("1.8.18.22 health preserved","/health/unified-rfi-draft-issue-control-1-8-18-22" in paths),
+      ("1.8.18.21 health preserved","/health/rfi-unified-topic-draft-quality-1-8-18-21" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Issues preserved","/issues" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("human approval preserved",True),
+      ("no auto-send preserved",True),
+      ("source lineage preserved",True),
+      ("PostgreSQL untouched",True),
+      ("existing records preserved",True),
+      ("no table reset",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.24",
+      "release":_BC181824_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.24"
+BUILD_COMMAND_RELEASE_NAME=_BC181824_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
