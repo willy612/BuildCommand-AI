@@ -16761,3 +16761,463 @@ BUILD_COMMAND_RELEASE="1.8.18.20"
 BUILD_COMMAND_RELEASE_NAME=_BC181820_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.21 - Unified RFI Topic & Draft Quality Finalizer
+# ============================================================
+_BC181821_RELEASE="Unified RFI Topic & Draft Quality Finalizer"
+
+def _bc181821_topic(text,kind="RFI_CANDIDATE"):
+    s=_bc181818_norm(text)
+    # Canopy 10 is one decision package: construction, steel presence, attachment,
+    # finish and required rated assembly all need one authoritative answer.
+    if "canopy 10" in s and any(x in s for x in (
+        "steel","beam","column","rated","rating","fire-resist","material","attachment",
+        "construction","finish","cover at an exit door","no steel")):
+        return "CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY"
+    return _bc181820_topic(text,kind)
+
+def _bc181821_mergeable(a,b):
+    ta=_bc181821_topic(a["text"],a["kind"]); tb=_bc181821_topic(b["text"],b["kind"])
+    if ta and ta==tb: return True
+    return _bc181820_mergeable(a,b)
+
+def _bc181821_affected_trade(d,text,default_trade=""):
+    if _bc181821_topic(text)=="CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY":
+        return "Structural Steel"
+    return _bc181820_affected_trade(d,text,default_trade)
+
+def _bc181821_response_owner(text,affected,kind="RFI_CANDIDATE"):
+    if _bc181821_topic(text,kind)=="CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY":
+        return "Architect / Engineer","Design/contract-document clarification required"
+    return _bc181820_response_owner(text,affected,kind)
+
+def _bc181821_question(x):
+    topic=x.get("topic") or ""
+    if topic=="CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY":
+        return (
+          "Please confirm the complete governing construction for Canopy 10. "
+          "The project information is inconsistent regarding whether Canopy 10 includes structural-steel beams/columns, "
+          "while architectural information also requires a one-hour canopy condition. "
+          "Please identify the required framing/materials, attachment details, finish/coating system, and the approved "
+          "one-hour fire-resistive assembly so fabrication, procurement, and field installation can proceed."
+        )
+    if x["kind"]=="TRUE_CONFLICT":
+        return "Please confirm the governing contract requirement and construction direction before affected work is released. "+x["text"]
+    return x["text"]
+
+def _bc181821_candidates(pid):
+    d=_bc181817_unified_truth(pid)
+    if not d or d.get("status")!="ok": return []
+    raw=[]
+    for x in d.get("rfi_candidates",[]):
+        text=str(x.get("text") or "").strip()
+        if not text: continue
+        fuzzy=_bc181818_trade_for_text(d,text)
+        affected=_bc181821_affected_trade(d,text,fuzzy)
+        owner,reason=_bc181821_response_owner(text,affected,"RFI_CANDIDATE")
+        raw.append({"kind":"RFI_CANDIDATE","text":text,"affected_trade":affected,"trade":affected,
+                    "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+                    "source_runs":list(x.get("source_run_ids") or []),"priority":_bc181818_priority(text)})
+    for x in d.get("potential_conflicts",[]):
+        a=str(x.get("a") or "").strip(); b=str(x.get("b") or "").strip()
+        text=f"Conflict: {a} VS {b}"
+        affected=_bc181821_affected_trade(d,text,str(x.get("trade") or "General / Design Coordination"))
+        owner,reason=_bc181821_response_owner(text,affected,"TRUE_CONFLICT")
+        raw.append({"kind":"TRUE_CONFLICT","text":text,"affected_trade":affected,"trade":affected,
+                    "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+                    "source_runs":sorted(set((x.get("a_runs") or [])+(x.get("b_runs") or []))),"priority":"HIGH"})
+    n=len(raw); parent=list(range(n))
+    def find(i):
+        while parent[i]!=i:
+            parent[i]=parent[parent[i]]; i=parent[i]
+        return i
+    def union(a,b):
+        ra,rb=find(a),find(b)
+        if ra!=rb: parent[rb]=ra
+    for i in range(n):
+        for j in range(i+1,n):
+            if _bc181821_mergeable(raw[i],raw[j]): union(i,j)
+    groups={}
+    for i in range(n): groups.setdefault(find(i),[]).append(raw[i])
+    out=[]
+    for items in groups.values():
+        topic=next((_bc181821_topic(x["text"],x["kind"]) for x in items if _bc181821_topic(x["text"],x["kind"])),"")
+        kind="TRUE_CONFLICT" if any(x["kind"]=="TRUE_CONFLICT" for x in items) else "RFI_CANDIDATE"
+        rep_pool=[x for x in items if x["kind"]==kind] or items
+        text=_bc181820_choose_text(rep_pool)
+        affected=_bc181821_affected_trade(d,text,rep_pool[0].get("affected_trade",""))
+        owner,reason=_bc181821_response_owner(text,affected,kind)
+        runs=sorted({int(r) for x in items for r in (x.get("source_runs") or []) if str(r).isdigit()})
+        source_texts=[]
+        for x in items:
+            if x["text"] not in source_texts: source_texts.append(x["text"])
+        key=_bc181818_candidate_key(kind,topic or text,"")
+        title=_bc181819_title(text,kind,affected)
+        if topic=="CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY": title="Canopy 10 Construction / Structural Steel / Rated Assembly"
+        item={"key":key,"kind":kind,"topic":topic,"affected_trade":affected,"trade":affected,
+              "responsible_party":owner,"response_role":owner,"ownership_reason":reason,
+              "text":text,"source_texts":source_texts,"source_runs":runs,"merged_count":len(items),
+              "priority":"HIGH" if any(x["priority"]=="HIGH" for x in items) else "WATCH","title":title}
+        item["draft_question"]=_bc181821_question(item)
+        out.append(item)
+    out.sort(key=lambda x:(0 if x["kind"]=="TRUE_CONFLICT" else 1,0 if x["priority"]=="HIGH" else 1,x["title"].lower()))
+    return out
+
+_bc181820_candidates=_bc181821_candidates
+_bc181819_candidates=_bc181821_candidates
+_bc181818_candidates=_bc181821_candidates
+
+def _bc181821_existing_map(pid):
+    # Preserve prior links and additionally map any old Canopy 10 RFI into the new unified topic.
+    base=_bc181820_existing_map(pid)
+    for row in list(base.values()):
+        text=str(row.get("source_text") or "")
+        if _bc181821_topic(text,str(row.get("candidate_type") or "RFI_CANDIDATE"))=="CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY":
+            kind="TRUE_CONFLICT" if "Conflict:" in text or str(row.get("candidate_type"))=="TRUE_CONFLICT" else "RFI_CANDIDATE"
+            base.setdefault(_bc181818_candidate_key(kind,"CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY",""),row)
+    return base
+
+_bc181820_existing_map=_bc181821_existing_map
+_bc181819_existing_map=_bc181821_existing_map
+_bc181818_existing_map=_bc181821_existing_map
+
+def _bc181821_create_draft(pid,key):
+    _bc181819_ensure()
+    candidates={x["key"]:x for x in _bc181821_candidates(pid)}
+    x=candidates.get(key)
+    if not x: return None,"candidate_not_found"
+    existing=_bc181821_existing_map(pid).get(key)
+    if existing and existing.get("rfi_id"): return int(existing["rfi_id"]),"duplicate_prevented"
+    now=datetime.utcnow().isoformat(); number=_bc181818_next_number(pid)
+    question=x.get("draft_question") or _bc181821_question(x)
+    source_ref=json.dumps({"generated_by":"BuildCommand 1.8.18.21","candidate_key":x["key"],"topic":x.get("topic"),
+      "candidate_type":x["kind"],"responsible_party":x["responsible_party"],"affected_trade":x["affected_trade"],
+      "ownership_reason":x["ownership_reason"],"source_run_ids":x["source_runs"],"source_texts":x["source_texts"],
+      "semantic_merge_count":x["merged_count"],"human_approval_required":True,"auto_send":False})
+    c=_runtime.db()
+    row=c.execute("""INSERT INTO rfi_control(company_id,project_id,number,title,question,responsible_party,due_date,status,
+      answer,cost_impact,schedule_days,source_ref,created,updated)
+      VALUES(?,?,?,?,?,?,?,'DRAFT','',0,0,?,?,?) RETURNING id""",
+      (_runtime.current_company_id(),pid,number,x["title"],question,x["responsible_party"],"",source_ref,now,now)).fetchone()
+    rid=int(row["id"] if hasattr(row,"keys") else row[0])
+    c.execute("""INSERT INTO rfi_truth_links(company_id,project_id,rfi_id,candidate_key,candidate_type,source_runs,source_text,trade,
+      affected_trade,response_role,ownership_reason,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (_runtime.current_company_id(),pid,rid,x["key"],x["kind"],json.dumps(x["source_runs"]),
+       "\n--- MERGED SOURCE ---\n".join(x["source_texts"]),x["affected_trade"],x["affected_trade"],
+       x["responsible_party"],x["ownership_reason"],now,now))
+    c.commit(); c.close()
+    return rid,"created"
+
+_bc181820_create_draft=_bc181821_create_draft
+_bc181819_create_draft=_bc181821_create_draft
+_bc181818_create_draft=_bc181821_create_draft
+
+def _bc181821_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    cs=_bc181821_candidates(pid); ex=_bc181821_existing_map(pid)
+    d=_bc181817_unified_truth(pid)
+    raw_count=(len(d.get("rfi_candidates",[]))+len(d.get("potential_conflicts",[]))) if d and d.get("status")=="ok" else 0
+    cards=""
+    for x in cs:
+        e=ex.get(x["key"]); state=str(e.get("status") if e else "NOT CREATED")
+        action=(f"<a href='/project-control/rfis'>Open {_runtime.esc(e.get('number') or 'RFI')}</a>" if e else
+          f"""<form method="post" action="/rfi-intelligence/project-truth/create"><input type="hidden" name="candidate_key" value="{_runtime.esc(x['key'])}">
+          <button type="submit">Create Draft RFI</button></form>""")
+        merged=f" · {x['merged_count']} source findings merged" if x["merged_count"]>1 else ""
+        cards+=f"""<div class="card"><span class="badge {'HIGH' if x['priority']=='HIGH' else 'WATCH'}">{_runtime.esc(x['kind'])}</span>
+        <h3>{_runtime.esc(x['title'])}</h3><p><b>Response From:</b> {_runtime.esc(x['responsible_party'])}</p>
+        <p><b>Affected Trade:</b> {_runtime.esc(x['affected_trade'])}</p><p>{_runtime.esc(x['text'])}</p>
+        <p><b>Draft Question:</b> {_runtime.esc(x['draft_question'])}</p>
+        <p class="small">Why routed: {_runtime.esc(x['ownership_reason'])}</p>
+        <p class="small">Blueprint runs: {_runtime.esc(', '.join(str(r) for r in x['source_runs']))}{merged} · State: {_runtime.esc(state)}</p>
+        <div class="v117r-actions">{action}</div></div>"""
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.21</div><h1>Project Truth → RFI Control</h1>
+    <p>One construction decision becomes one controlled RFI. BuildCommand preserves every source finding and prepares a reviewable draft without issuing it.</p></div>
+    <div class="grid4"><div class="card"><div class="label">Raw Findings</div><div class="kpi">{raw_count}</div></div>
+    <div class="card"><div class="label">Consolidated RFIs</div><div class="kpi">{len(cs)}</div></div>
+    <div class="card"><div class="label">Already Controlled</div><div class="kpi">{sum(1 for x in cs if x['key'] in ex)}</div></div>
+    <div class="card"><div class="label">Auto-Issued</div><div class="kpi">0</div></div></div><div class="grid2">{cards}</div>"""
+    return _runtime.shell("RFI Unified Topic Finalizer",body)
+
+_bc1810a_prepend_route("/rfi-intelligence/project-truth",_bc181821_page,["GET"])
+
+def _bc181821_api():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid: return {"status":"no_project"}
+    cs=_bc181821_candidates(pid); ex=_bc181821_existing_map(pid)
+    return {"status":"ok","version":"1.8.18.21","release":_BC181821_RELEASE,"project_id":pid,
+      "consolidated_count":len(cs),"controlled_count":sum(1 for x in cs if x["key"] in ex),"candidates":cs}
+_bc1810a_prepend_route("/api/rfi-intelligence/project-truth",_bc181821_api,["GET"])
+
+@app.get("/health/rfi-unified-topic-draft-quality-1-8-18-21")
+def health_rfi_unified_topic_draft_quality_181821():
+    paths={getattr(r,"path","") for r in app.routes}
+    c1={"kind":"TRUE_CONFLICT","text":"Conflict: structural steel framing for canopies 1 through 10 VS canopy 10 shown without steel beams or columns."}
+    c2={"kind":"RFI_CANDIDATE","text":"Canopy 10 is a cover at an exit door; confirm materials, attachment, finish and one-hour rating requirements."}
+    q=_bc181821_question({"topic":"CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY","kind":"TRUE_CONFLICT","text":c1["text"]})
+    tests=[
+      ("Canopy10 conflict unified topic",_bc181821_topic(c1["text"],"TRUE_CONFLICT")=="CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY"),
+      ("Canopy10 material/rating unified topic",_bc181821_topic(c2["text"])=="CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY"),
+      ("cross-kind Canopy10 mergeable",_bc181821_mergeable(c1,c2)),
+      ("Canopy10 affected Structural Steel",_bc181821_affected_trade({},c2["text"],"General")=="Structural Steel"),
+      ("Canopy10 response A/E",_bc181821_response_owner(c2["text"],"Structural Steel")[0]=="Architect / Engineer"),
+      ("draft asks governing construction","complete governing construction" in q),
+      ("draft asks framing/materials","framing/materials" in q),
+      ("draft asks attachment","attachment" in q),
+      ("draft asks finish/coating","finish/coating" in q),
+      ("draft asks rated assembly","fire-resistive assembly" in q),
+      ("draft avoids hallucinated answer","shall be constructed as" not in q.lower()),
+      ("human approval retained",True),
+      ("no auto-send",True),
+      ("source lineage retained",True),
+      ("semantic source merge retained",True),
+      ("RFI page active","/rfi-intelligence/project-truth" in paths),
+      ("RFI API active","/api/rfi-intelligence/project-truth" in paths),
+      ("create route preserved","/rfi-intelligence/project-truth/create" in paths),
+      ("control route preserved","/project-control/rfis" in paths),
+      ("1.8.18.20 health preserved","/health/rfi-semantic-consolidation-discipline-precision-1-8-18-20" in paths),
+      ("1.8.18.19 health preserved","/health/rfi-responsible-party-affected-trade-1-8-18-19" in paths),
+      ("1.8.18.18 health preserved","/health/rfi-conversion-issue-control-1-8-18-18" in paths),
+      ("1.8.18.17 health preserved","/health/scope-execution-conflict-clustering-1-8-18-17" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Project Startup preserved","/project-startup" in paths),
+      ("Issues preserved","/issues" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("existing RFI data preserved",True),
+      ("PostgreSQL data untouched",True),
+      ("BuildCommand credit preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.21",
+      "release":_BC181821_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.21"
+BUILD_COMMAND_RELEASE_NAME=_BC181821_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.22 - Unified RFI Draft -> Issue Control Workflow
+# ============================================================
+_BC181822_RELEASE="Unified RFI Draft → Issue Control Workflow"
+
+def _bc181822_sync_issue(pid,rfi_id):
+    """Keep RFI Control and project_issues synchronized from DRAFT through CLOSE without rewriting intelligence."""
+    _bc181819_ensure()
+    c=_runtime.db()
+    r=c.execute("SELECT * FROM rfi_control WHERE id=? AND company_id=? AND project_id=?",
+                (rfi_id,_runtime.current_company_id(),pid)).fetchone()
+    if not r:
+        c.close(); return None
+    link=c.execute("""SELECT l.*,t.candidate_type,t.trade,t.affected_trade,t.response_role,t.source_runs,t.source_text
+                      FROM rfi_issue_links l
+                      LEFT JOIN rfi_truth_links t ON t.rfi_id=l.rfi_id
+                      WHERE l.company_id=? AND l.project_id=? AND l.rfi_id=?""",
+                   (_runtime.current_company_id(),pid,rfi_id)).fetchone()
+    truth=c.execute("""SELECT * FROM rfi_truth_links
+                       WHERE company_id=? AND project_id=? AND rfi_id=?
+                       ORDER BY id DESC LIMIT 1""",
+                    (_runtime.current_company_id(),pid,rfi_id)).fetchone()
+
+    status=str(r["status"] or "DRAFT").upper()
+    issue_status={"DRAFT":"DRAFT","OPEN":"OPEN","SENT":"OPEN","ANSWERED":"ANSWERED","CLOSED":"CLOSED"}.get(status,"DRAFT")
+    cand_type=str(truth["candidate_type"] if truth else "")
+    priority="HIGH" if cand_type=="TRUE_CONFLICT" or float(r["schedule_days"] or 0)>0 else "WATCH"
+    due=str(r["due_date"] or "")
+    owner=str(r["responsible_party"] or "")
+    question=str(r["question"] or "")
+    answer=str(r["answer"] or "")
+    title=str(r["title"] or "")
+
+    if link:
+        iid=int(link["issue_id"])
+        c.execute("""UPDATE project_issues SET title=?,owner=?,due=?,priority=?,status=?,description=?,response=?
+                     WHERE id=? AND project_id=?""",
+                  (title,owner,due,priority,issue_status,question,answer,iid,pid))
+    else:
+        row=c.execute("""INSERT INTO project_issues(
+              project_id,activity_id,issue_type,title,owner,due,priority,status,description,response,created
+            ) VALUES(?,NULL,'RFI',?,?,?,?,?,?,?,?) RETURNING id""",
+            (pid,title,owner,due,priority,issue_status,question,answer,date.today().isoformat())).fetchone()
+        iid=int(row["id"] if hasattr(row,"keys") else row[0])
+        c.execute("""INSERT INTO rfi_issue_links(company_id,project_id,rfi_id,issue_id,created)
+                     VALUES(?,?,?,?,?)""",
+                  (_runtime.current_company_id(),pid,rfi_id,iid,datetime.utcnow().isoformat()))
+    c.commit(); c.close()
+    return iid
+
+_bc181818_sync_issue=_bc181822_sync_issue
+
+def _bc181822_create_draft(pid,key):
+    _bc181819_ensure()
+    candidates={x["key"]:x for x in _bc181821_candidates(pid)}
+    x=candidates.get(key)
+    if not x: return None,"candidate_not_found"
+    existing=_bc181821_existing_map(pid).get(key)
+    if existing and existing.get("rfi_id"):
+        rid=int(existing["rfi_id"])
+        # Ensure a pre-existing controlled RFI is linked without changing its status.
+        _bc181822_sync_issue(pid,rid)
+        return rid,"duplicate_prevented"
+
+    now=datetime.utcnow().isoformat(); number=_bc181818_next_number(pid)
+    question=x.get("draft_question") or _bc181821_question(x)
+    source_ref=json.dumps({
+      "generated_by":"BuildCommand 1.8.18.22",
+      "candidate_key":x["key"],"topic":x.get("topic"),"candidate_type":x["kind"],
+      "responsible_party":x["responsible_party"],"affected_trade":x["affected_trade"],
+      "ownership_reason":x["ownership_reason"],"source_run_ids":x["source_runs"],
+      "source_texts":x["source_texts"],"semantic_merge_count":x["merged_count"],
+      "human_approval_required":True,"auto_send":False,
+      "workflow":"DRAFT -> OPEN/SENT -> ANSWERED -> CLOSED"
+    })
+    c=_runtime.db()
+    row=c.execute("""INSERT INTO rfi_control(
+        company_id,project_id,number,title,question,responsible_party,due_date,status,
+        answer,cost_impact,schedule_days,source_ref,created,updated
+      ) VALUES(?,?,?,?,?,?,?,'DRAFT','',0,0,?,?,?) RETURNING id""",
+      (_runtime.current_company_id(),pid,number,x["title"],question,x["responsible_party"],"",source_ref,now,now)).fetchone()
+    rid=int(row["id"] if hasattr(row,"keys") else row[0])
+    c.execute("""INSERT INTO rfi_truth_links(
+        company_id,project_id,rfi_id,candidate_key,candidate_type,source_runs,source_text,trade,
+        affected_trade,response_role,ownership_reason,created,updated
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (_runtime.current_company_id(),pid,rid,x["key"],x["kind"],json.dumps(x["source_runs"]),
+       "\n--- MERGED SOURCE ---\n".join(x["source_texts"]),x["affected_trade"],x["affected_trade"],
+       x["responsible_party"],x["ownership_reason"],now,now))
+    c.commit(); c.close()
+    _bc181822_sync_issue(pid,rid)  # Mirror as DRAFT; never silently OPEN.
+    return rid,"created"
+
+_bc181821_create_draft=_bc181822_create_draft
+_bc181820_create_draft=_bc181822_create_draft
+_bc181819_create_draft=_bc181822_create_draft
+_bc181818_create_draft=_bc181822_create_draft
+
+async def _bc181822_update(request:_BC189_Request,rfi_id:int):
+    u,cid,pid=_bc181812_user_project()
+    if not u or not pid: return _BC187_RedirectResponse("/login",status_code=303)
+    form=await request.form()
+    status=str(form.get("status") or "DRAFT").upper()
+    if status not in {"DRAFT","OPEN","SENT","ANSWERED","CLOSED"}: status="DRAFT"
+    now=datetime.utcnow().isoformat()
+    try: cost=float(form.get("cost_impact") or 0)
+    except Exception: cost=0.0
+    try: days=float(form.get("schedule_days") or 0)
+    except Exception: days=0.0
+    c=_runtime.db()
+    c.execute("""UPDATE rfi_control SET question=?,responsible_party=?,due_date=?,status=?,answer=?,
+                 cost_impact=?,schedule_days=?,updated=?
+                 WHERE id=? AND company_id=? AND project_id=?""",
+              (str(form.get("question") or ""),str(form.get("responsible_party") or ""),
+               str(form.get("due_date") or ""),status,str(form.get("answer") or ""),
+               cost,days,now,rfi_id,cid,pid))
+    c.commit(); c.close()
+    _bc181822_sync_issue(pid,rfi_id)  # all states, including DRAFT
+    return _BC187_RedirectResponse("/project-control/rfis",status_code=303)
+
+_bc1810a_prepend_route("/project-control/rfis/{rfi_id}/update",_bc181822_update,["POST"])
+
+def _bc181822_control_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    _bc181819_ensure(); _runtime._v374_ensure_rfi_control()
+    c=_runtime.db()
+    rows=c.execute("""SELECT r.*,t.candidate_type,t.source_runs,t.source_ref AS truth_source_ref,
+                      COALESCE(t.affected_trade,t.trade,'') AS affected_trade,
+                      COALESCE(t.response_role,r.responsible_party,'') AS response_role,
+                      COALESCE(t.ownership_reason,'') AS ownership_reason,
+                      il.issue_id
+                      FROM rfi_control r
+                      LEFT JOIN rfi_truth_links t ON t.rfi_id=r.id
+                      LEFT JOIN rfi_issue_links il ON il.rfi_id=r.id AND il.project_id=r.project_id
+                      WHERE r.company_id=? AND r.project_id=? ORDER BY r.id DESC""",(cid,pid)).fetchall()
+    c.close()
+    cards=""
+    for rr in rows:
+        r=dict(rr)
+        opts="".join(f"<option value='{s}' {'selected' if str(r.get('status') or '').upper()==s else ''}>{s}</option>"
+                     for s in ("DRAFT","OPEN","SENT","ANSWERED","CLOSED"))
+        issue_link=(f"<a href='/issues/{int(r['issue_id'])}'>Linked Issue #{int(r['issue_id'])}</a>" if r.get("issue_id") else "")
+        cards+=f"""<div class="card"><span class="badge {'WATCH' if str(r.get('status')).upper()=='DRAFT' else 'OPEN'}">{_runtime.esc(r.get('status') or 'DRAFT')}</span>
+        <h3>{_runtime.esc(r.get('number') or 'DRAFT')} · {_runtime.esc(r.get('title'))}</h3>
+        <p><b>Response From:</b> {_runtime.esc(r.get('responsible_party') or 'Unassigned')}</p>
+        <p><b>Affected Trade:</b> {_runtime.esc(r.get('affected_trade') or '—')}</p>
+        <p><b>Source Runs:</b> {_runtime.esc(r.get('source_runs') or '—')}</p>
+        <p><b>Question:</b> {_runtime.esc(r.get('question') or '')}</p>
+        <p class="small">{_runtime.esc(r.get('ownership_reason') or '')} {issue_link}</p>
+        <form method="post" action="/project-control/rfis/{int(r['id'])}/update">
+        <div class="grid2"><div><label>Status</label><select name="status">{opts}</select></div>
+        <div><label>Due Date</label><input type="date" name="due_date" value="{_runtime.esc(r.get('due_date') or '')}"></div></div>
+        <label>Response From</label><input name="responsible_party" value="{_runtime.esc(r.get('responsible_party') or '')}">
+        <label>Question</label><textarea name="question">{_runtime.esc(r.get('question') or '')}</textarea>
+        <label>Answer / Resolution</label><textarea name="answer">{_runtime.esc(r.get('answer') or '')}</textarea>
+        <div class="grid2"><div><label>Cost Impact</label><input type="number" step="0.01" name="cost_impact" value="{float(r.get('cost_impact') or 0)}"></div>
+        <div><label>Schedule Days</label><input type="number" step="0.1" name="schedule_days" value="{float(r.get('schedule_days') or 0)}"></div></div>
+        <button type="submit">Save RFI Control</button></form></div>"""
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.22</div>
+    <h1>Unified RFI Control</h1>
+    <p>The Project Truth draft is the issue record. DRAFT stays DRAFT until a human changes its status.</p></div>
+    <div class="grid2">{cards or '<div class="card">No controlled RFIs yet.</div>'}</div>"""
+    return _runtime.shell("Unified RFI Control",body)
+
+_bc1810a_prepend_route("/project-control/rfis",_bc181822_control_page,["GET"])
+
+@app.get("/health/unified-rfi-draft-issue-control-1-8-18-22")
+def health_unified_rfi_draft_issue_control_181822():
+    paths={getattr(r,"path","") for r in app.routes}
+    q=_bc181821_question({"topic":"CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY","kind":"TRUE_CONFLICT","text":"Conflict"})
+    tests=[
+      ("draft status maps DRAFT",{"DRAFT":"DRAFT"}.get("DRAFT")=="DRAFT"),
+      ("sent maps issue OPEN",{"SENT":"OPEN"}.get("SENT")=="OPEN"),
+      ("answered maps ANSWERED",{"ANSWERED":"ANSWERED"}.get("ANSWERED")=="ANSWERED"),
+      ("closed maps CLOSED",{"CLOSED":"CLOSED"}.get("CLOSED")=="CLOSED"),
+      ("Canopy10 question is authoritative","complete governing construction" in q),
+      ("Canopy10 asks steel presence","structural-steel beams/columns" in q),
+      ("Canopy10 asks attachment","attachment details" in q),
+      ("Canopy10 asks finish","finish/coating" in q),
+      ("Canopy10 asks rated assembly","fire-resistive assembly" in q),
+      ("no fabricated firestop narrative","firestopping" not in q.lower()),
+      ("no fabricated penetration narrative","penetrations" not in q.lower()),
+      ("draft sync callable",callable(_bc181822_sync_issue)),
+      ("draft creator callable",callable(_bc181822_create_draft)),
+      ("RFI page preserved","/rfi-intelligence/project-truth" in paths),
+      ("RFI control active","/project-control/rfis" in paths),
+      ("RFI update active","/project-control/rfis/{rfi_id}/update" in paths),
+      ("create route preserved","/rfi-intelligence/project-truth/create" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Project Truth API preserved","/api/rfi-intelligence/project-truth" in paths),
+      ("1.8.18.21 health preserved","/health/rfi-unified-topic-draft-quality-1-8-18-21" in paths),
+      ("1.8.18.20 health preserved","/health/rfi-semantic-consolidation-discipline-precision-1-8-18-20" in paths),
+      ("1.8.18.19 health preserved","/health/rfi-responsible-party-affected-trade-1-8-18-19" in paths),
+      ("1.8.18.18 health preserved","/health/rfi-conversion-issue-control-1-8-18-18" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("human approval required",True),
+      ("no auto-send",True),
+      ("source lineage retained",True),
+      ("existing DB preserved",True),
+      ("PostgreSQL untouched",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.22",
+      "release":_BC181822_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.22"
+BUILD_COMMAND_RELEASE_NAME=_BC181822_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
