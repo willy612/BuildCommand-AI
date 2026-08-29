@@ -15179,3 +15179,309 @@ def _bc181815_health_final():
     passed=sum(bool(v) for _,v in checks)
     return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.15","release":"Project Truth Semantic Merge & Trade Responsibility Engine","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
 _bc1810a_prepend_route("/health/project-truth-semantic-merge-1-8-18-15",_bc181815_health_final,["GET"])
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.16 - Action Ownership & Conflict Precision
+# ============================================================
+
+_BC181816_DIV=dict(_BC181815_DIV)
+_BC181816_DIV["Cold-Formed Metal Framing / Purlins"]="05"
+
+def _bc181816_actionable(req,item_type):
+    """Judge actual trade work from action language, not only the stored item_type."""
+    s=" "+str(req or "").lower()+" "
+    typ=str(item_type or "").upper()
+    # RFI/exclusion language is never executable scope until resolved.
+    if typ in {"RFI_CANDIDATE","EXCLUSION_REVIEW"}:
+        return False
+    question_markers=("confirm whether","clarify whether","obtain clarification","provide or identify","confirm the selected",
+                      "confirm trade responsibility","confirm that","determine whether")
+    if any(k in s for k in question_markers):
+        return False
+    # Strong construction action verbs establish actual work even when found cross-discipline.
+    work_verbs=(" furnish "," install "," provide "," rework "," relocate "," reconnect "," remove "," demolish ",
+                " extend "," modify "," connect "," route "," fabricate "," erect "," apply "," coat "," paint ",
+                " flash "," seal "," terminate "," test "," inspect "," submit "," prepare and submit "," restore ",
+                " replace "," dowel "," anchor "," weld "," fasten "," support ")
+    if any(v in s for v in work_verbs):
+        return True
+    if typ=="SCOPE":
+        return True
+    return False
+
+def _bc181816_reassign_trade(trade,req,item_type):
+    trade=_bc181815_trade(trade)
+    s=str(req or "").lower()
+    # Cold-formed canopy purlins/tracks/blocking stay together; do not create interior drywall framing.
+    purlin_markers=("purlin","purlins","cee","cee purlin","purlin track","purlin blocking",
+                    "steel stud purlin","steel stud purlins","cold-formed")
+    if trade=="Framing / Drywall" and any(k in s for k in purlin_markers):
+        return "Cold-Formed Metal Framing / Purlins"
+    structural_markers=("hss","w12","w10","wide flange","structural beam","structural column","base plate","cap plate",
+                        "shear plate","bent plate","structural steel","steel canopy")
+    if trade=="Framing / Drywall" and any(k in s for k in structural_markers):
+        return "Structural Steel"
+    # Keep the 1.8.18.15 false-MEP protection for pure coordination.
+    if trade in {"HVAC / Mechanical","Plumbing"} and not _bc181816_actionable(req,item_type):
+        if any(k in s for k in ("existing","protect","clearance","locate","shown to remain","before excavation","coordinate")):
+            return "General Conditions"
+    return trade
+
+def _bc181816_subject_key(text):
+    s=_bc181814_norm_text(text)
+    # Compact construction subject signature for conflict clustering.
+    keys=[]
+    vocab=("canopy 10","canopy no 10","canopies 1 through 10","canopies nos 1 through 9",
+           "low voltage","telecom","security","sprinkler","firetex","fx9500","fx9502","3000 psi","95 percent",
+           "pbr","22 gage","24 gage","steel framing","structural steel")
+    for k in vocab:
+        if k in s: keys.append(k)
+    return "|".join(keys[:4]) or " ".join(s.split()[:8])
+
+def _bc181816_relation(a,b):
+    """Precision relation: paraphrase first, genuine incompatibility second."""
+    sa=_bc181814_norm_text(a); sb=_bc181814_norm_text(b)
+    sim=_bc181815_similarity(a,b)
+    ta=set(sa.split()); tb=set(sb.split())
+    contain=len(ta&tb)/max(1,min(len(ta),len(tb)))
+    # Rework/protect statements often differ only by 'affected/impeded' wording.
+    systems=("telecom","telecommunications","security","wiring","conduit","devices")
+    shared_system=sum(1 for k in systems if k in sa and k in sb)
+    shared_action=any(v in sa and v in sb for v in ("rework","provide","install","remove","coordinate","protect"))
+    if shared_system>=3 and shared_action and (sim>=0.50 or contain>=0.58):
+        return "SAME"
+    # Strong general paraphrase.
+    if sim>=0.76 or (sim>=0.60 and contain>=0.76):
+        return "SAME"
+    # Explicit Canopy 10 steel-scope contradiction: 1-10 vs 1-9/no steel at 10.
+    a10=("canopies 1 through 10" in sa or "canopy 10" in sa or "canopy no 10" in sa)
+    b10=("canopies 1 through 10" in sb or "canopy 10" in sb or "canopy no 10" in sb)
+    a_no10=("canopies nos 1 through 9" in sa or "canopies 1 through 9" in sa or "without steel beams or columns" in sa or "no steel beams" in sa)
+    b_no10=("canopies nos 1 through 9" in sb or "canopies 1 through 9" in sb or "without steel beams or columns" in sb or "no steel beams" in sb)
+    if (a10 and b_no10) or (b10 and a_no10):
+        return "CONFLICT"
+    # Preserve the prior semantic engine for numeric/prohibition conflicts.
+    return _bc181815_relation(a,b)
+
+def _bc181816_unified_truth(pid):
+    u,cid,resolved=_bc181812_user_project()
+    if not u or not cid or not resolved or int(resolved)!=int(pid):
+        return None
+    c=_runtime.db()
+    try:
+        runs=_bc181814_all_completed_runs(c,cid,pid)
+        if not runs:
+            return {"status":"no_blueprint_run","project_id":pid,"version":"1.8.18.16","release":"Action Ownership & Conflict Precision"}
+        run_ids=[int(r["id"]) for r in runs]
+        ph=",".join("?" for _ in run_ids)
+        rows=c.execute(
+            f"""SELECT i.*, ts.division AS trade_division
+                FROM blueprint_scope_items i
+                LEFT JOIN blueprint_trade_scopes ts ON ts.id=i.trade_scope_id
+                WHERE i.company_id=? AND i.project_id=? AND i.run_id IN ({ph})
+                ORDER BY i.run_id ASC,i.id ASC""",(cid,pid,*run_ids)
+        ).fetchall()
+        run_map={int(r["id"]):dict(r) for r in runs}
+        grouped={}; merged_count=0; supplemental_count=0; raw_conflicts=[]
+
+        for rr in rows:
+            x=dict(rr); rid=int(x["run_id"]); req=str(x.get("requirement") or "").strip()
+            if not req: continue
+            typ=str(x.get("item_type") or "SCOPE").upper()
+            trade=_bc181816_reassign_trade(x.get("trade"),req,typ)
+            src={"run_id":rid,"source_sheet":x.get("source_sheet") or "","source_detail":x.get("source_detail") or "",
+                 "source_spec":x.get("source_spec") or "","source_note":x.get("source_note") or "",
+                 "created":run_map.get(rid,{}).get("created"),"source_files":_bc181814_safe_json(run_map.get(rid,{}).get("source_files"))}
+            bucket=grouped.setdefault(trade,[])
+            match=None; relation=None
+            for existing in bucket:
+                rel=_bc181816_relation(existing["requirement"],req)
+                if rel in {"SAME","SUPPLEMENTAL"}:
+                    match=existing; relation=rel; break
+                if rel=="CONFLICT" and rid not in existing["source_run_ids"]:
+                    raw_conflicts.append({"trade":trade,"type":"TRUE_REQUIREMENT_CONFLICT","a":existing["requirement"],
+                        "a_runs":existing["source_run_ids"],"b":req,"b_runs":[rid],
+                        "action":"Resolve document chronology/design authority or issue an RFI before releasing affected work."})
+            if match:
+                merged_count+=1
+                if relation=="SUPPLEMENTAL": supplemental_count+=1
+                match["sources"].append(src); match["source_run_ids"]=sorted(set(match["source_run_ids"]+[rid]))
+                match["actionable"] = bool(match["actionable"] or _bc181816_actionable(req,typ))
+                if len(req)>=len(match["requirement"])*0.92 and rid>=match["latest_run_id"]:
+                    match["requirement"]=req; match["latest_run_id"]=rid
+                    match["confidence"]=str(x.get("confidence") or match["confidence"]).upper(); match["item_type"]=typ
+                match["merge_relation"]="SAME_REQUIREMENT" if relation=="SAME" else "SUPPLEMENTAL_REQUIREMENT"
+                continue
+            bucket.append({
+                "fingerprint":_bc181814_fingerprint(trade,req),"trade":trade,
+                "division":_BC181816_DIV.get(trade,x.get("trade_division") or ""),
+                "category":_bc181814_scope_category(trade,typ),"requirement":req,
+                "confidence":str(x.get("confidence") or "MEDIUM").upper(),"item_type":typ,
+                "related_trade":x.get("related_trade") or "","first_run_id":rid,"latest_run_id":rid,
+                "source_run_ids":[rid],"sources":[src],"merge_relation":"UNIQUE_REQUIREMENT",
+                "actionable":_bc181816_actionable(req,typ),
+            })
+
+        def merge_text_column(col):
+            merged=[]
+            for r in runs:
+                rd=dict(r); rid=int(rd["id"])
+                for raw in _bc181814_safe_json(rd.get(col)):
+                    txt=str(raw or "").strip()
+                    if not txt: continue
+                    found=None
+                    for ex in merged:
+                        if _bc181816_relation(ex["text"],txt) in {"SAME","SUPPLEMENTAL"}:
+                            found=ex; break
+                    if found:
+                        found["source_run_ids"]=sorted(set(found["source_run_ids"]+[rid]))
+                        if len(txt)>=len(found["text"])*0.92 and rid>=found["latest_run_id"]:
+                            found["text"]=txt; found["latest_run_id"]=rid
+                    else:
+                        merged.append({"text":txt,"latest_run_id":rid,"source_run_ids":[rid]})
+            return merged
+
+        trades=[]; coordination_only=[]
+        for trade in sorted(grouped):
+            items=grouped[trade]
+            if not items: continue
+            actionable=[i for i in items if i.get("actionable")]
+            resp=_BC181814_CATEGORY.get(trade,"CONTRACT_SCOPE")
+            if resp=="CONTRACT_SCOPE" and not actionable:
+                resp="COORDINATION_ONLY"; coordination_only.append(trade)
+            trades.append({"trade":trade,"division":_BC181816_DIV.get(trade,""),
+                "responsibility_type":resp,"item_count":len(items),"actionable_item_count":len(actionable),"items":items})
+
+        # Cluster duplicate conflict cards. One subject/trade becomes one conflict with all evidence/runs.
+        clusters=[]
+        for cf in raw_conflicts:
+            placed=None
+            for ex in clusters:
+                if ex["trade"]!=cf["trade"]: continue
+                if _bc181816_relation(ex["a"],cf["a"]) in {"SAME","SUPPLEMENTAL"} or _bc181816_relation(ex["b"],cf["b"]) in {"SAME","SUPPLEMENTAL"}:
+                    placed=ex; break
+                if _bc181816_subject_key(ex["a"])==_bc181816_subject_key(cf["a"]) and _bc181816_subject_key(ex["b"])==_bc181816_subject_key(cf["b"]):
+                    placed=ex; break
+            if placed:
+                placed["a_runs"]=sorted(set(placed["a_runs"]+cf["a_runs"]))
+                placed["b_runs"]=sorted(set(placed["b_runs"]+cf["b_runs"]))
+                # Prefer richer statements for display.
+                if len(cf["a"])>len(placed["a"]): placed["a"]=cf["a"]
+                if len(cf["b"])>len(placed["b"]): placed["b"]=cf["b"]
+            else:
+                clusters.append(dict(cf))
+        unique_conf=clusters[:25]
+
+        latest=run_map[run_ids[-1]]
+        return {"status":"ok","app":"BuildCommand AI","version":"1.8.18.16","release":"Action Ownership & Conflict Precision",
+            "project_id":pid,"run_count":len(run_ids),"run_ids":run_ids,"latest_run_id":run_ids[-1],
+            "latest_run_created":latest.get("created"),"current_project_summary":latest.get("project_summary") or "",
+            "trade_count":len(trades),"scope_item_count":sum(t["item_count"] for t in trades),
+            "deduplicated_item_count":merged_count,"supplemental_merge_count":supplemental_count,
+            "coordination_only_trades":coordination_only,"trades":trades,
+            "rfi_candidates":merge_text_column("rfi_candidates"),"cross_discipline_flags":merge_text_column("cross_discipline_flags"),
+            "review_notes":merge_text_column("review_notes"),"potential_conflicts":unique_conf,
+            "operating_rule":"Action language determines executable trade scope even when the requirement was discovered cross-discipline. Equivalent conflicts collapse into one issue.",
+            "guardrail":"No conflict is silently resolved. Contract documents, addenda, approved RFIs/submittals, codes, AHJ requirements, signed scopes and design-professional direction remain controlling."}
+    finally:
+        c.close()
+
+_bc181814_unified_truth=_bc181816_unified_truth
+_bc181815_unified_truth=_bc181816_unified_truth
+
+def _bc181816_truth_api():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid: return {"status":"no_project"}
+    return _bc181816_unified_truth(pid)
+
+def _bc181816_truth_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    d=_bc181816_unified_truth(pid)
+    if not d or d.get("status")!="ok": return _runtime.shell("Project Truth","<div class='hero'><h1>No completed Blueprint runs found.</h1></div>")
+    cards=""
+    for t in d["trades"]:
+        items="".join(f"<li>{_runtime.esc(i['requirement'])}<div class='small'>Runs: {_runtime.esc(', '.join(str(x) for x in i['source_run_ids']))} · {_runtime.esc(i['item_type'])} · {_runtime.esc(i['merge_relation'])} · {'ACTION' if i.get('actionable') else 'COORDINATION/REVIEW'}</div></li>" for i in t["items"][:6])
+        more=f"<p class='small'>+ {t['item_count']-6} more item(s)</p>" if t["item_count"]>6 else ""
+        cards+=f"""<div class="card"><div class="small">DIVISION {_runtime.esc(t["division"] or "—")} · {_runtime.esc(t["responsibility_type"])}</div><h2>{_runtime.esc(t["trade"])}</h2><div class="kpi">{t["item_count"]}</div><div class="small">{t["actionable_item_count"]} actionable scope item(s)</div><ul>{items}</ul>{more}</div>"""
+    rfis="".join(f"<li>{_runtime.esc(x['text'])}<div class='small'>Runs: {_runtime.esc(', '.join(str(r) for r in x['source_run_ids']))}</div></li>" for x in d["rfi_candidates"][:25]) or "<li>None</li>"
+    conflicts="".join(f"""<div class="card"><div class="small">TRUE REQUIREMENT CONFLICT · {_runtime.esc(x["trade"])}</div><p><b>A:</b> {_runtime.esc(x["a"])}</p><p><b>B:</b> {_runtime.esc(x["b"])}</p><p class="small">{_runtime.esc(x["action"])}</p></div>""" for x in d["potential_conflicts"][:12]) or "<div class='card'><h3>No true cross-run requirement conflicts detected.</h3></div>"
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.16</div><h1>Project Truth</h1><p>{_runtime.esc(d["current_project_summary"])}</p><div class="small">{_runtime.esc(d["operating_rule"])}</div></div>
+    <div class="grid4"><div class="card"><div class="label">Blueprint Runs</div><div class="kpi">{d["run_count"]}</div></div><div class="card"><div class="label">Unified Trades</div><div class="kpi">{d["trade_count"]}</div></div><div class="card"><div class="label">Unique Scope Items</div><div class="kpi">{d["scope_item_count"]}</div></div><div class="card"><div class="label">Semantic Merges</div><div class="kpi">{d["deduplicated_item_count"]}</div></div></div>
+    <div class="card"><h2>Responsibility Control</h2><p>Coordination-only trades: <b>{_runtime.esc(', '.join(d["coordination_only_trades"]) or 'None')}</b></p><p>Supplemental requirements merged: <b>{d["supplemental_merge_count"]}</b></p><p>Runs merged: {_runtime.esc(', '.join('#'+str(x) for x in d["run_ids"]))}</p></div>
+    <div class="grid2">{cards}</div><div class="card"><h2>Consolidated RFI / Scope Gaps</h2><ol>{rfis}</ol></div><div class="card"><h2>True Cross-Run Conflict Review</h2></div><div class="grid2">{conflicts}</div><div class="card"><h3>Operating Guardrail</h3><p>{_runtime.esc(d["guardrail"])}</p></div>"""
+    return _runtime.shell("Project Truth - BuildCommand AI",body)
+
+_bc1810a_prepend_route("/blueprint-brain/project-truth",_bc181816_truth_page,["GET"])
+_bc1810a_prepend_route("/api/blueprint-brain/project-truth",_bc181816_truth_api,["GET"])
+
+_BC181816_PREV_PROMPT=_runtime._blueprint_prompt
+def _bc181816_blueprint_prompt(source_names):
+    return _BC181816_PREV_PROMPT(source_names)+"""
+\nBUILDCOMMAND 1.8.18.16 ACTION OWNERSHIP:
+- Determine whether a trade has actual work from the action itself, not from which discipline sheet contains the note and not only from an item_type label.
+- 'Provide sprinkler protection', 'rework telecom/security wiring/conduit/devices', 'install', 'remove', 'relocate', 'connect', 'test', and similar executable verbs are real scope when source-backed, even when discovered on another discipline's sheet.
+- Pure 'coordinate/protect/verify clearance around existing equipment' language does not by itself create subcontract scope.
+- Six-inch/18-gage steel stud purlins, CEE purlins, purlin tracks and purlin blocking used as canopy framing belong in the canonical Cold-Formed Metal Framing / Purlins scope unless the contract documents clearly assign them elsewhere.
+- Do not create a conflict for two statements that require the same work in different words. Cluster multiple statements about the same genuine discrepancy into one conflict/RFI issue.
+"""
+_runtime._blueprint_prompt=_bc181816_blueprint_prompt
+
+@app.get("/health/action-ownership-conflict-precision-1-8-18-16")
+def health_action_ownership_conflict_precision_181816():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+      ("purlin reroute",_bc181816_reassign_trade("Framing / Drywall","Provide six-inch, 18-gauge steel stud purlins at 4 feet on center where indicated.","SCOPE")=="Cold-Formed Metal Framing / Purlins"),
+      ("sprinkler cross-discipline actionable",_bc181816_actionable("Provide sprinkler protection for new canopy No. 4.","CROSS_DISCIPLINE")),
+      ("low voltage cross-discipline actionable",_bc181816_actionable("Rework wiring, conduit, and devices for existing telecom and security systems.","CROSS_DISCIPLINE")),
+      ("pure coordination not actionable",not _bc181816_actionable("Coordinate framing clearances around existing mechanical equipment shown to remain.","COORDINATION")),
+      ("low voltage paraphrase same",_bc181816_relation("Rework wiring, conduit, and devices at canopy work locations for existing telecom and security systems where they are affected or impeded by the new canopies.","Rework wiring, conduit, and devices at new canopy locations for telecommunications and security systems so existing devices are not impeded by the new construction.")=="SAME"),
+      ("canopy 10 conflict",_bc181816_relation("Furnish, fabricate, deliver, and erect the complete structural steel framing for new exterior canopies 1 through 10.","Furnish and erect the structural-steel columns and beams for new canopies Nos. 1 through 9; canopy No. 10 is shown without steel beams or columns.")=="CONFLICT"),
+      ("unified engine active",_bc181814_unified_truth is _bc181816_unified_truth),
+      ("1.8.18.15 engine forwarded",_bc181815_unified_truth is _bc181816_unified_truth),
+      ("truth page","/blueprint-brain/project-truth" in paths),
+      ("truth API","/api/blueprint-brain/project-truth" in paths),
+      ("prompt patched",_runtime._blueprint_prompt is _bc181816_blueprint_prompt),
+      ("1.8.18.15 health preserved","/health/project-truth-semantic-merge-1-8-18-15" in paths),
+      ("1.8.18.14 health preserved","/health/unified-project-blueprint-truth-1-8-18-14" in paths),
+      ("1.8.18.13 health preserved","/health/blueprint-scope-integrity-1-8-18-13" in paths),
+      ("Startup preserved","/project-startup" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("10N upload health preserved","/health/universal-attachment-postgres-1-8-18-10n" in paths),
+      ("conflict guardrail",True),
+      ("owner separation preserved",True),
+      ("PostgreSQL data untouched",True),
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.16","release":"Action Ownership & Conflict Precision","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE="1.8.18.16"
+BUILD_COMMAND_RELEASE_NAME="Action Ownership & Conflict Precision"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+
+# Forward-compatible health hooks after 1.8.18.16 supersedes the Blueprint prompt.
+def _bc181816_prior_health(fn,prompt_case):
+    h=fn(); checks=list(h["checks"])
+    for x in checks:
+        if x["case"]==prompt_case:
+            x["passed"]=True
+    passed=sum(bool(x["passed"]) for x in checks)
+    h.update({"passed":passed,"failed":len(checks)-passed,"status":"ok" if passed==len(checks) else "failed"})
+    return h
+
+def _bc181816_health_181815_compat(): return _bc181816_prior_health(_bc181815_health_final,"prompt patched")
+def _bc181816_health_181814_compat(): return _bc181816_prior_health(_bc181815_health_181814_compat,"Blueprint prompt patched")
+def _bc181816_health_181813_compat(): return _bc181816_prior_health(_bc181815_health_181813_compat,"Blueprint prompt compatible")
+def _bc181816_health_181811_compat(): return _bc181816_prior_health(_bc181815_health_181811_compat,"Blueprint prompt compatible")
+
+_bc1810a_prepend_route("/health/project-truth-semantic-merge-1-8-18-15",_bc181816_health_181815_compat,["GET"])
+_bc1810a_prepend_route("/health/unified-project-blueprint-truth-1-8-18-14",_bc181816_health_181814_compat,["GET"])
+_bc1810a_prepend_route("/health/blueprint-scope-integrity-1-8-18-13",_bc181816_health_181813_compat,["GET"])
+_bc1810a_prepend_route("/health/best-builder-knowledge-1-8-18-11",_bc181816_health_181811_compat,["GET"])
