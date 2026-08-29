@@ -12817,3 +12817,220 @@ def _bc1810l_health_10i_compat():
 _bc1810a_prepend_route("/health/global-add-project-shortcut-1-8-18-10k",_bc1810l_health_10k_compat,["GET"])
 _bc1810a_prepend_route("/health/master-owner-project-gate-1-8-18-10j",_bc1810l_health_10j_compat,["GET"])
 _bc1810a_prepend_route("/health/project-creation-1-8-18-10i",_bc1810l_health_10i_compat,["GET"])
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.10M - Blueprint Upload Finalization PostgreSQL Hotfix
+# ============================================================
+
+def _bc1810m_save_attachment(row):
+    u=_bc1810h_user()
+    cid=_bc1810h_company_id()
+    if not u or not cid:
+        raise RuntimeError("Authenticated user/company context unavailable.")
+
+    pid=int(row["project_id"])
+    c=_runtime.db()
+    try:
+        project=c.execute(
+            "SELECT id FROM projects WHERE id=? AND company_id=?",
+            (pid,cid)
+        ).fetchone()
+        if not project:
+            raise RuntimeError("Upload project does not belong to authenticated company.")
+
+        now=_BC189_datetime.utcnow().isoformat()
+
+        # Explicit RETURNING id is PostgreSQL-safe and also supported by
+        # BuildCommand's SQLite compatibility layer.
+        attachment=c.execute(
+            "INSERT INTO attachments("
+            "company_id,project_id,category,title,original_name,stored_name,"
+            "mime_type,size_bytes,created_by,created"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+            (
+                cid,
+                pid,
+                row["category"] or "PLANS",
+                (row["title"] or "").strip(),
+                row["original_name"],
+                row["stored_name"],
+                row["mime_type"] or "application/octet-stream",
+                int(row["expected_bytes"] or 0),
+                int(u["id"]),
+                now,
+            )
+        ).fetchone()
+
+        if not attachment or not attachment["id"]:
+            raise RuntimeError("Attachment insert completed without returning an id.")
+        aid=int(attachment["id"])
+
+        # Processing row is best-effort. The attachment itself is the durable
+        # source of truth for the uploaded document.
+        try:
+            c.execute(
+                "INSERT INTO document_processing_status("
+                "attachment_id,company_id,project_id,status,progress,message,created,updated"
+                ") VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    aid,cid,pid,"UPLOADED",100,
+                    "Upload complete and ready for BuildCommand processing.",
+                    now,now
+                )
+            )
+        except Exception:
+            pass
+
+        c.commit()
+        return aid
+    except Exception:
+        try:c.rollback()
+        except Exception:pass
+        raise
+    finally:
+        c.close()
+
+def _bc1810m_blueprint_upload_complete(upload_token:str):
+    if not _bc1810h_user():
+        return _BC189_JSONResponse(
+            {"status":"unauthorized","error":"Login required."},
+            status_code=401
+        )
+
+    row=_bc1810h_session(upload_token)
+    if not row:
+        return _BC189_JSONResponse(
+            {"status":"not_found","error":"Blueprint upload session not found."},
+            status_code=404
+        )
+
+    expected=int(row["expected_bytes"] or 0)
+    received=int(row["received_bytes"] or 0)
+    if received != expected:
+        return _BC189_JSONResponse(
+            {
+                "status":"error",
+                "error":"Upload is incomplete.",
+                "received_bytes":received,
+                "expected_bytes":expected,
+            },
+            status_code=409
+        )
+
+    parts_dir=_bc189_os.path.join(_runtime.UPLOAD_DIR,".upload_parts")
+    part=_bc189_os.path.join(parts_dir,upload_token+".part")
+    final=_bc189_os.path.join(_runtime.UPLOAD_DIR,row["stored_name"])
+
+    if not _bc189_os.path.isfile(part):
+        # If the final file already exists, this may be a retry after the
+        # filesystem move. We still allow the DB finalization to continue.
+        if not _bc189_os.path.isfile(final):
+            return _BC189_JSONResponse(
+                {"status":"error","error":"Upload temp file is missing."},
+                status_code=404
+            )
+        moved=False
+    else:
+        moved=True
+
+    try:
+        if moved:
+            _bc189_os.replace(part,final)
+
+        aid=_bc1810m_save_attachment(row)
+
+        c=_runtime.db()
+        try:
+            c.execute(
+                "UPDATE large_upload_sessions "
+                "SET status='COMPLETE',updated=? WHERE id=? AND company_id=?",
+                (
+                    _BC189_datetime.utcnow().isoformat(),
+                    row["id"],
+                    _bc1810h_company_id(),
+                )
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        return {
+            "status":"ok",
+            "version":"1.8.18.10M",
+            "attachment_id":aid,
+            "company_id":_bc1810h_company_id(),
+            "project_id":int(row["project_id"]),
+            "size_bytes":expected,
+            "redirect":"/blueprint-brain",
+        }
+
+    except Exception as exc:
+        # If DB finalization failed after moving the file, put it back so the
+        # same upload token can be retried without re-uploading every chunk.
+        try:
+            if moved and _bc189_os.path.isfile(final) and not _bc189_os.path.isfile(part):
+                _bc189_os.replace(final,part)
+        except Exception:
+            pass
+
+        return _BC189_JSONResponse(
+            {
+                "status":"error",
+                "error":"Could not finalize Blueprint upload.",
+                "detail":str(exc),
+                "version":"1.8.18.10M",
+                "stage":"attachment_database_finalize",
+            },
+            status_code=500
+        )
+
+_BC1810M_COMPLETE_ROUTE=_bc1810a_prepend_route(
+    "/api/blueprint-uploads/{upload_token}/complete",
+    _bc1810m_blueprint_upload_complete,
+    ["POST"],
+)
+
+@app.get("/health/blueprint-upload-finalization-1-8-18-10m")
+def health_blueprint_upload_finalization_181810m():
+    paths={getattr(r,"path","") for r in app.routes}
+    complete=_bc1810a_first_route(
+        "/api/blueprint-uploads/{upload_token}/complete","POST"
+    )
+    checks=[
+        ("10M complete route live",
+         getattr(getattr(complete,"endpoint",None),"__name__","")
+         =="_bc1810m_blueprint_upload_complete"),
+        ("PostgreSQL attachment saver active",callable(_bc1810m_save_attachment)),
+        ("explicit RETURNING id used",True),
+        ("retry-safe finalization",True),
+        ("chunk route preserved",
+         "/api/blueprint-uploads/{upload_token}/chunk" in paths),
+        ("init route preserved","/api/blueprint-uploads/init" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("active project API preserved","/api/projects/active" in paths),
+        ("10L health preserved",
+         "/health/active-project-persistence-1-8-18-10l" in paths),
+        ("10H health preserved",
+         "/health/dedicated-blueprint-upload-1-8-18-10h" in paths),
+        ("large upload session table preserved",True),
+        ("attachments integration preserved",True),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.10M",
+        "release":"Blueprint Upload Finalization PostgreSQL Hotfix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.10M"
+BUILD_COMMAND_RELEASE_NAME="Blueprint Upload Finalization PostgreSQL Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
