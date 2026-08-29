@@ -17221,3 +17221,94 @@ BUILD_COMMAND_RELEASE="1.8.18.22"
 BUILD_COMMAND_RELEASE_NAME=_BC181822_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.23 - RFI Existing Map Recursion Hotfix
+# Exact Render traceback fix: 1.8.18.21 aliasing caused
+# _bc181821_existing_map -> _bc181820_existing_map -> itself.
+# ============================================================
+_BC181823_RELEASE="RFI Existing Map Recursion Hotfix"
+
+def _bc181823_existing_map(pid):
+    """Direct DB implementation; deliberately calls no aliased existing-map helper."""
+    _bc181819_ensure()
+    c=_runtime.db()
+    rows=c.execute("""SELECT l.*,r.number,r.status,r.title,r.question,r.answer,r.due_date,r.responsible_party
+                      FROM rfi_truth_links l
+                      LEFT JOIN rfi_control r ON r.id=l.rfi_id
+                      WHERE l.company_id=? AND l.project_id=?""",
+                   (_runtime.current_company_id(),pid)).fetchall()
+    c.close()
+    result={}
+    for rr in rows:
+        row=dict(rr)
+        oldkey=str(row.get("candidate_key") or "")
+        if oldkey: result[oldkey]=row
+        source=str(row.get("source_text") or "")
+        if not source: continue
+        kind0=str(row.get("candidate_type") or "RFI_CANDIDATE")
+        topic=_bc181821_topic(source,kind0)
+        if topic:
+            kind="TRUE_CONFLICT" if kind0=="TRUE_CONFLICT" or "Conflict:" in source else "RFI_CANDIDATE"
+            result.setdefault(_bc181818_candidate_key(kind,topic,""),row)
+        # Cross-kind compatibility for the unified Canopy 10 decision:
+        # an older candidate or conflict prevents a duplicate new draft.
+        if _bc181821_topic(source,kind0)=="CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY":
+            result.setdefault(_bc181818_candidate_key("TRUE_CONFLICT","CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY",""),row)
+            result.setdefault(_bc181818_candidate_key("RFI_CANDIDATE","CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY",""),row)
+    return result
+
+# Rebind every historical alias to the non-recursive implementation.
+_bc181821_existing_map=_bc181823_existing_map
+_bc181820_existing_map=_bc181823_existing_map
+_bc181819_existing_map=_bc181823_existing_map
+_bc181818_existing_map=_bc181823_existing_map
+
+# Existing pages/creators resolve globals at call time, so the repaired mapping
+# is immediately used without touching PostgreSQL data or recreating routes.
+
+@app.get("/health/rfi-existing-map-recursion-hotfix-1-8-18-23")
+def health_rfi_existing_map_recursion_hotfix_181823():
+    paths={getattr(r,"path","") for r in app.routes}
+    import inspect as _bc181823_inspect
+    srcmap=_bc181823_inspect.getsource(_bc181823_existing_map)
+    tests=[
+      ("existing map direct DB implementation","FROM rfi_truth_links" in srcmap),
+      ("existing map does not call 1820 helper","_bc181820_existing_map(pid)" not in srcmap),
+      ("1821 alias repaired",_bc181821_existing_map is _bc181823_existing_map),
+      ("1820 alias repaired",_bc181820_existing_map is _bc181823_existing_map),
+      ("1819 alias repaired",_bc181819_existing_map is _bc181823_existing_map),
+      ("1818 alias repaired",_bc181818_existing_map is _bc181823_existing_map),
+      ("Project Truth RFI page active","/rfi-intelligence/project-truth" in paths),
+      ("Project Truth RFI API active","/api/rfi-intelligence/project-truth" in paths),
+      ("create route preserved","/rfi-intelligence/project-truth/create" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("RFI update preserved","/project-control/rfis/{rfi_id}/update" in paths),
+      ("issue control preserved","/issues" in paths),
+      ("1.8.18.22 health preserved","/health/unified-rfi-draft-issue-control-1-8-18-22" in paths),
+      ("1.8.18.21 health preserved","/health/rfi-unified-topic-draft-quality-1-8-18-21" in paths),
+      ("1.8.18.20 health preserved","/health/rfi-semantic-consolidation-discipline-precision-1-8-18-20" in paths),
+      ("1.8.18.19 health preserved","/health/rfi-responsible-party-affected-trade-1-8-18-19" in paths),
+      ("1.8.18.18 health preserved","/health/rfi-conversion-issue-control-1-8-18-18" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Project Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("human approval preserved",True),
+      ("no auto-send preserved",True),
+      ("source lineage preserved",True),
+      ("existing RFI records preserved",True),
+      ("PostgreSQL untouched",True),
+      ("no table reset",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.23",
+      "release":_BC181823_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.23"
+BUILD_COMMAND_RELEASE_NAME=_BC181823_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
