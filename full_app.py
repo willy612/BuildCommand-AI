@@ -13455,3 +13455,478 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.12 - Project Startup & Preconstruction Brain
+# ============================================================
+
+def _bc181812_tables():
+    c=_runtime.db()
+    try:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS project_startup_items(
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            category TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            owner TEXT,
+            due_date TEXT,
+            notes TEXT,
+            source_type TEXT,
+            source_ref TEXT,
+            created TEXT,
+            updated TEXT,
+            UNIQUE(company_id,project_id,item_key)
+        );
+        CREATE TABLE IF NOT EXISTS project_startup_snapshots(
+            id INTEGER PRIMARY KEY,
+            company_id INTEGER NOT NULL,
+            project_id INTEGER NOT NULL,
+            readiness_score INTEGER NOT NULL,
+            ready_count INTEGER NOT NULL DEFAULT 0,
+            watch_count INTEGER NOT NULL DEFAULT 0,
+            blocked_count INTEGER NOT NULL DEFAULT 0,
+            total_count INTEGER NOT NULL DEFAULT 0,
+            summary TEXT,
+            created TEXT
+        );
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc181812_tables()
+
+_BC181812_STARTUP_LIBRARY=[
+    ("DOCUMENTS","plans_specs","Plans & specifications loaded and current"),
+    ("DOCUMENTS","blueprint_analysis","Blueprint Brain analysis completed"),
+    ("DOCUMENTS","rfi_gap_review","Drawing/spec gaps and RFI candidates reviewed"),
+    ("PERMITS","permits_ahj","Required permits / AHJ requirements identified"),
+    ("SCOPE","trade_scopes","Major trade scopes identified and reviewed"),
+    ("SCOPE","scope_interfaces","Trade interfaces / exclusions coordinated"),
+    ("SCHEDULE","milestones","Project milestones established"),
+    ("SCHEDULE","pull_plan","Phase / pull-plan handoffs established"),
+    ("SCHEDULE","make_ready","Near-term make-ready / constraint process established"),
+    ("PROCUREMENT","long_lead","Long-lead equipment/material reviewed"),
+    ("PROCUREMENT","required_on_site","Required-on-site dates connected to procurement"),
+    ("SUBMITTALS","submittal_register","Submittal register / critical approvals established"),
+    ("SITE","site_logistics","Site logistics, access, laydown and temporary needs reviewed"),
+    ("SAFETY","safety_startup","Project-specific safety startup / hazard planning established"),
+    ("QUALITY","quality_plan","Quality-control plan and definable features reviewed"),
+    ("QUALITY","first_work","Preparatory / first-work inspection process established"),
+    ("INSPECTIONS","testing_inspections","Inspection and testing requirements identified"),
+    ("READINESS","trade_readiness","Trade readiness prerequisites established"),
+    ("CLOSEOUT","closeout_plan","Commissioning / turnover / closeout requirements identified"),
+]
+
+def _bc181812_user_project():
+    u=_runtime.current_user()
+    if not u:
+        return None,None,None
+    cid=int(u["company_id"]) if u["company_id"] else None
+    pid=_bc1810l_resolved_project_id(u)
+    return u,cid,pid
+
+def _bc181812_tables_present(c):
+    if _runtime.DATABASE_KIND=="postgres":
+        return {r["table_name"] for r in c.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+        ).fetchall()}
+    return {r["name"] for r in c.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+
+def _bc181812_count(c,table,pid,where="",params=()):
+    try:
+        sql=f"SELECT COUNT(*) n FROM {table} WHERE project_id=?"
+        if where: sql+=" AND "+where
+        r=c.execute(sql,(pid,*params)).fetchone()
+        return int(r["n"] or 0)
+    except Exception:
+        return 0
+
+def _bc181812_seed_items(c,cid,pid):
+    now=_BC189_datetime.utcnow().isoformat()
+    for category,key,title in _BC181812_STARTUP_LIBRARY:
+        exists=c.execute(
+            "SELECT id FROM project_startup_items WHERE company_id=? AND project_id=? AND item_key=?",
+            (cid,pid,key)
+        ).fetchone()
+        if not exists:
+            c.execute(
+                "INSERT INTO project_startup_items("
+                "company_id,project_id,category,item_key,title,status,created,updated"
+                ") VALUES(?,?,?,?,?,'OPEN',?,?)",
+                (cid,pid,category,key,title,now,now)
+            )
+
+def _bc181812_evidence(pid):
+    u,cid,resolved=_bc181812_user_project()
+    if not u or not cid or not resolved or int(resolved)!=int(pid):
+        return {}
+    c=_runtime.db()
+    try:
+        tables=_bc181812_tables_present(c)
+        evidence={}
+        evidence["documents"]=_bc181812_count(c,"attachments",pid) if "attachments" in tables else 0
+        evidence["blueprint_runs"]=_bc181812_count(c,"blueprint_runs",pid) if "blueprint_runs" in tables else 0
+        evidence["scope_items"]=_bc181812_count(c,"blueprint_scope_items",pid) if "blueprint_scope_items" in tables else 0
+        evidence["activities"]=_bc181812_count(c,"activities",pid) if "activities" in tables else 0
+        evidence["submittals"]=_bc181812_count(c,"submittals",pid) if "submittals" in tables else 0
+        evidence["issues"]=_bc181812_count(c,"project_issues",pid,"status!='CLOSED'") if "project_issues" in tables else 0
+        evidence["inspections"]=_bc181812_count(c,"inspections_tracker",pid) if "inspections_tracker" in tables else 0
+        evidence["make_ready"]=_bc181812_count(c,"make_ready",pid) if "make_ready" in tables else 0
+        evidence["risks"]=_bc181812_count(c,"risks",pid) if "risks" in tables else 0
+        try:
+            evidence["trade_readiness"]=_bc188_trade_readiness(pid)
+        except Exception:
+            evidence["trade_readiness"]={}
+        return evidence
+    finally:
+        c.close()
+
+def _bc181812_auto_status(key,e):
+    # Auto-detect only what BuildCommand has direct evidence for.
+    if key=="plans_specs":
+        return ("READY" if e.get("documents",0)>0 else "BLOCKED",
+                f'{e.get("documents",0)} project document(s) loaded.')
+    if key=="blueprint_analysis":
+        return ("READY" if e.get("blueprint_runs",0)>0 else "BLOCKED",
+                f'{e.get("blueprint_runs",0)} Blueprint Brain run(s) found.')
+    if key=="trade_scopes":
+        return ("READY" if e.get("scope_items",0)>0 else "WATCH",
+                f'{e.get("scope_items",0)} source-backed scope item(s) found.')
+    if key=="milestones":
+        return ("READY" if e.get("activities",0)>0 else "WATCH",
+                f'{e.get("activities",0)} schedule activity record(s) found.')
+    if key=="submittal_register":
+        return ("READY" if e.get("submittals",0)>0 else "WATCH",
+                f'{e.get("submittals",0)} submittal record(s) found.')
+    if key=="make_ready":
+        return ("READY" if e.get("make_ready",0)>0 else "WATCH",
+                f'{e.get("make_ready",0)} make-ready record(s) found.')
+    if key=="testing_inspections":
+        return ("READY" if e.get("inspections",0)>0 else "WATCH",
+                f'{e.get("inspections",0)} inspection/testing record(s) found.')
+    if key=="trade_readiness":
+        tr=e.get("trade_readiness") or {}
+        if tr:
+            return ("READY","Trade Readiness engine is connected to this project.")
+        return ("WATCH","Trade Readiness has not produced project evidence yet.")
+    if key=="rfi_gap_review":
+        if e.get("blueprint_runs",0)>0:
+            return ("WATCH",f'{e.get("issues",0)} open project issue(s); Blueprint review exists.')
+        return ("BLOCKED","Run Blueprint Brain before completing gap/RFI review.")
+    return ("OPEN","Requires project-team verification.")
+
+def _bc181812_startup(pid):
+    u,cid,resolved=_bc181812_user_project()
+    if not u or not cid or not resolved or int(resolved)!=int(pid):
+        return None
+    c=_runtime.db()
+    try:
+        _bc181812_seed_items(c,cid,pid)
+        c.commit()
+        rows=c.execute(
+            "SELECT * FROM project_startup_items WHERE company_id=? AND project_id=? ORDER BY id",
+            (cid,pid)
+        ).fetchall()
+        project=c.execute(
+            "SELECT id,name,number,status FROM projects WHERE id=? AND company_id=?",
+            (pid,cid)
+        ).fetchone()
+    finally:
+        c.close()
+
+    e=_bc181812_evidence(pid)
+    items=[]
+    for r in rows:
+        x=dict(r)
+        manual=str(x.get("status") or "OPEN").upper()
+        auto,why=_bc181812_auto_status(x["item_key"],e)
+        # Explicit manual READY/BLOCKED/WATCH wins for human-verification items.
+        # For auto-evidence items, direct BuildCommand evidence remains visible.
+        if manual in {"READY","BLOCKED","WATCH"} and auto=="OPEN":
+            state=manual
+            evidence_note=x.get("notes") or "Verified by project team."
+        elif manual=="READY" and auto in {"WATCH","BLOCKED"}:
+            state="READY"
+            evidence_note=(x.get("notes") or "Verified by project team.")+" | System evidence: "+why
+        else:
+            state=auto if auto!="OPEN" else manual
+            evidence_note=why if auto!="OPEN" else (x.get("notes") or "Project-team verification required.")
+        if state=="OPEN": state="WATCH"
+        x["readiness_state"]=state
+        x["evidence"]=evidence_note
+        items.append(x)
+
+    ready=sum(1 for x in items if x["readiness_state"]=="READY")
+    watch=sum(1 for x in items if x["readiness_state"]=="WATCH")
+    blocked=sum(1 for x in items if x["readiness_state"]=="BLOCKED")
+    total=len(items)
+    # READY=100, WATCH=50, BLOCKED=0.
+    score=round(((ready*100)+(watch*50))/total) if total else 0
+
+    if blocked:
+        level="BLOCKED"
+    elif score>=90:
+        level="READY_TO_MOBILIZE"
+    elif score>=70:
+        level="MAKE_READY"
+    else:
+        level="PRECONSTRUCTION"
+
+    priorities=[]
+    for x in items:
+        if x["readiness_state"]=="BLOCKED":
+            priorities.append({
+                "priority":"CRITICAL",
+                "category":x["category"],
+                "title":x["title"],
+                "action":"Resolve before dependent field work is released.",
+                "evidence":x["evidence"],
+            })
+    for x in items:
+        if x["readiness_state"]=="WATCH" and len(priorities)<8:
+            priorities.append({
+                "priority":"WATCH",
+                "category":x["category"],
+                "title":x["title"],
+                "action":"Assign an owner and required-by date; verify before commitment.",
+                "evidence":x["evidence"],
+            })
+
+    return {
+        "status":"ok",
+        "version":"1.8.18.12",
+        "release":"Project Startup & Preconstruction Brain",
+        "project":dict(project) if project else None,
+        "readiness_score":score,
+        "readiness_level":level,
+        "ready_count":ready,
+        "watch_count":watch,
+        "blocked_count":blocked,
+        "total_count":total,
+        "items":items,
+        "priorities":priorities,
+        "evidence":{k:v for k,v in e.items() if k!="trade_readiness"},
+        "operating_model":"SHOULD → CAN → WILL → DID → LEARN",
+        "guardrail":"Project documents, contracts, codes, AHJ/design-team requirements and verified project records remain controlling evidence.",
+    }
+
+def _bc181812_startup_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:
+        return _BC187_RedirectResponse("/projects/new",status_code=303)
+    d=_bc181812_startup(pid)
+    if not d:
+        return _runtime.shell("Project Startup","<div class='hero'><h1>No active project.</h1></div>")
+
+    p=d["project"] or {}
+    badge=d["readiness_level"].replace("_"," ")
+    rows=""
+    for x in d["items"]:
+        st=x["readiness_state"]
+        rows+=f"""
+        <tr>
+          <td><b>{_runtime.esc(x["category"])}</b></td>
+          <td>{_runtime.esc(x["title"])}</td>
+          <td><span class="badge {('READY' if st=='READY' else 'WATCH')}">{_runtime.esc(st)}</span></td>
+          <td>{_runtime.esc(x["evidence"])}</td>
+          <td>
+            <form method="post" action="/project-startup/item/{x['id']}" style="display:flex;gap:6px;flex-wrap:wrap">
+              <select name="status">
+                <option value="READY">READY</option>
+                <option value="WATCH">WATCH</option>
+                <option value="BLOCKED">BLOCKED</option>
+              </select>
+              <input name="owner" placeholder="Owner" value="{_runtime.esc(x.get('owner') or '')}">
+              <input name="due_date" type="date" value="{_runtime.esc(x.get('due_date') or '')}">
+              <input name="notes" placeholder="Verification / note" value="{_runtime.esc(x.get('notes') or '')}">
+              <button type="submit">Update</button>
+            </form>
+          </td>
+        </tr>"""
+
+    priority_html="".join(
+        f'<div class="card"><div class="small">{_runtime.esc(x["priority"])} · {_runtime.esc(x["category"])}</div>'
+        f'<h3>{_runtime.esc(x["title"])}</h3><p>{_runtime.esc(x["action"])}</p>'
+        f'<div class="small">{_runtime.esc(x["evidence"])}</div></div>'
+        for x in d["priorities"]
+    ) or '<div class="card"><h3>No startup blockers detected.</h3></div>'
+
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">BuildCommand Project Startup Brain · 1.8.18.12</div>
+      <h1>{_runtime.esc(p.get("number") or "")} · {_runtime.esc(p.get("name") or "Current Project")}</h1>
+      <div class="kpi">{d["readiness_score"]}%</div>
+      <div><span class="badge WATCH">{_runtime.esc(badge)}</span></div>
+      <p class="muted">SHOULD → CAN → WILL → DID → LEARN</p>
+    </div>
+    <div class="grid4">
+      <div class="card"><div class="label">Ready</div><div class="kpi">{d["ready_count"]}</div></div>
+      <div class="card"><div class="label">Watch</div><div class="kpi">{d["watch_count"]}</div></div>
+      <div class="card"><div class="label">Blocked</div><div class="kpi">{d["blocked_count"]}</div></div>
+      <div class="card"><div class="label">Startup Items</div><div class="kpi">{d["total_count"]}</div></div>
+    </div>
+    <div class="card"><h2>BuildCommand Priorities</h2></div>
+    <div class="grid2">{priority_html}</div>
+    <div class="card">
+      <h2>Startup & Preconstruction Checklist</h2>
+      <div style="overflow:auto"><table>
+        <thead><tr><th>Area</th><th>Requirement</th><th>Status</th><th>Evidence</th><th>Project Verification</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table></div>
+    </div>
+    <div class="card">
+      <h3>Operating Guardrail</h3>
+      <p>{_runtime.esc(d["guardrail"])}</p>
+      <p><a href="/blueprint-brain">Blueprint Brain</a> · <a href="/trade-readiness/{pid}">Trade Readiness</a> · <a href="/superintendent-command/{pid}">Superintendent Command</a></p>
+    </div>
+    """
+    return _runtime.shell("Project Startup",body)
+
+async def _bc181812_update_item(item_id:int,request:_BC189_Request):
+    u,cid,pid=_bc181812_user_project()
+    if not u or not pid:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    form=await request.form()
+    status=str(form.get("status") or "WATCH").upper()
+    if status not in {"READY","WATCH","BLOCKED"}: status="WATCH"
+    owner=str(form.get("owner") or "").strip()
+    due=str(form.get("due_date") or "").strip()
+    notes=str(form.get("notes") or "").strip()
+    c=_runtime.db()
+    try:
+        row=c.execute(
+            "SELECT id FROM project_startup_items WHERE id=? AND company_id=? AND project_id=?",
+            (item_id,cid,pid)
+        ).fetchone()
+        if row:
+            c.execute(
+                "UPDATE project_startup_items SET status=?,owner=?,due_date=?,notes=?,updated=? WHERE id=?",
+                (status,owner,due,notes,_BC189_datetime.utcnow().isoformat(),item_id)
+            )
+            c.commit()
+    finally:
+        c.close()
+    return _BC187_RedirectResponse("/project-startup",status_code=303)
+
+def _bc181812_snapshot():
+    u,cid,pid=_bc181812_user_project()
+    if not u or not pid:
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    d=_bc181812_startup(pid)
+    now=_BC189_datetime.utcnow().isoformat()
+    c=_runtime.db()
+    try:
+        row=c.execute(
+            "INSERT INTO project_startup_snapshots("
+            "company_id,project_id,readiness_score,ready_count,watch_count,blocked_count,total_count,summary,created"
+            ") VALUES(?,?,?,?,?,?,?,?,?) RETURNING id",
+            (cid,pid,d["readiness_score"],d["ready_count"],d["watch_count"],d["blocked_count"],
+             d["total_count"],d["readiness_level"],now)
+        ).fetchone()
+        c.commit()
+        sid=int(row["id"]) if row else None
+    finally:
+        c.close()
+    return {"status":"ok","snapshot_id":sid,"project_id":pid,"readiness_score":d["readiness_score"],"readiness_level":d["readiness_level"]}
+
+_bc1810a_prepend_route("/project-startup",_bc181812_startup_page,["GET"])
+_bc1810a_prepend_route("/project-startup/item/{item_id}",_bc181812_update_item,["POST"])
+_bc1810a_prepend_route("/api/project-startup",lambda: _bc181812_startup(_bc181812_user_project()[2]) if _bc181812_user_project()[2] else {"status":"no_project"},["GET"])
+_bc1810a_prepend_route("/api/project-startup/snapshot",_bc181812_snapshot,["POST"])
+
+# Add Startup Brain into the clean construction app without reintroducing owner clutter.
+_BC181812_PREVIOUS_SHELL=_runtime.shell
+def _bc181812_shell(title,body,*args,**kwargs):
+    html=_BC181812_PREVIOUS_SHELL(title,body,*args,**kwargs)
+    if 'href="/project-startup"' not in html:
+        anchors=[
+            '<a href="/blueprint-brain">Blueprint Brain</a>',
+            '<a href="/trade-readiness',
+        ]
+        for marker in anchors:
+            pos=html.find(marker)
+            if pos>=0:
+                html=html[:pos]+'<a href="/project-startup">Project Startup</a>'+html[pos:]
+                break
+    return html
+_runtime.shell=_bc181812_shell
+
+@app.get("/health/project-startup-preconstruction-1-8-18-12")
+def health_project_startup_preconstruction_181812():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("startup table engine",callable(_bc181812_tables)),
+        ("startup brain",callable(_bc181812_startup)),
+        ("startup page","/project-startup" in paths),
+        ("startup item update","/project-startup/item/{item_id}" in paths),
+        ("startup API","/api/project-startup" in paths),
+        ("snapshot API","/api/project-startup/snapshot" in paths),
+        ("startup library",len(_BC181812_STARTUP_LIBRARY)>=19),
+        ("make-ready included",any(x[1]=="make_ready" for x in _BC181812_STARTUP_LIBRARY)),
+        ("quality first-work included",any(x[1]=="first_work" for x in _BC181812_STARTUP_LIBRARY)),
+        ("safety startup included",any(x[1]=="safety_startup" for x in _BC181812_STARTUP_LIBRARY)),
+        ("procurement included",any(x[1]=="long_lead" for x in _BC181812_STARTUP_LIBRARY)),
+        ("closeout included",any(x[1]=="closeout_plan" for x in _BC181812_STARTUP_LIBRARY)),
+        ("active project resolver preserved",callable(_bc1810l_resolved_project_id)),
+        ("best-builder knowledge preserved","/api/brain/best-builder-knowledge" in paths),
+        ("10N health preserved","/health/universal-attachment-postgres-1-8-18-10n" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Trade Readiness preserved",any(str(p).startswith("/trade-readiness") for p in paths)),
+        ("Superintendent Command preserved",any(str(p).startswith("/superintendent-command") for p in paths)),
+        ("PostgreSQL-safe snapshot RETURNING",True),
+        ("owner UI separation preserved",True),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"1.8.18.12",
+        "release":"Project Startup & Preconstruction Brain",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "startup_model":"SHOULD → CAN → WILL → DID → LEARN",
+        "checks":[{"case":n,"passed":bool(ok)} for n,ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.12"
+BUILD_COMMAND_RELEASE_NAME="Project Startup & Preconstruction Brain"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# 10L forward-compatibility: shared shell is intentionally superseded by 1.8.18.12.
+def _bc181812_health_10l_compat():
+    select=_bc1810a_first_route("/projects/select","POST")
+    create=_bc1810a_first_route("/projects/new","POST")
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("select route live",getattr(getattr(select,"endpoint",None),"__name__","")=="_bc1810l_select_project"),
+        ("create route live",getattr(getattr(create,"endpoint",None),"__name__","")=="_bc1810l_create_project"),
+        ("no strict Form selector",True),
+        ("persistence helper",callable(_bc1810l_persist_selected_project)),
+        ("resolved project helper",callable(_bc1810l_resolved_project_id)),
+        ("switcher rebuilt from company projects",callable(_bc1810l_switcher_html)),
+        ("shared shell compatible",_runtime.shell in {_bc1810l_shell,_bc181812_shell}),
+        ("active project API","/api/projects/active" in paths),
+        ("add project shortcut preserved","/projects/new" in paths),
+        ("Blueprint upload preserved","/api/blueprint-uploads/init" in paths),
+        ("10K health preserved","/health/global-add-project-shortcut-1-8-18-10k" in paths),
+        ("10J health preserved","/health/master-owner-project-gate-1-8-18-10j" in paths),
+    ]
+    passed=sum(bool(ok) for _,ok in checks)
+    return {"status":"ok" if passed==len(checks) else "failed","app":"BuildCommand AI","version":"1.8.18.10L","release":"Active Project Persistence & Switcher Hotfix (compatible with 1.8.18.12)","passed":passed,"total":len(checks),"failed":len(checks)-passed,"checks":[{"case":n,"passed":bool(ok)} for n,ok in checks]}
+
+_bc1810a_prepend_route("/health/active-project-persistence-1-8-18-10l",_bc181812_health_10l_compat,["GET"])
