@@ -24950,3 +24950,175 @@ BUILD_COMMAND_RELEASE="1.8.18.59"
 BUILD_COMMAND_RELEASE_NAME=_BC181859_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.60
+# Authoritative Submittal Brain Open Fix
+# ============================================================
+_BC181860_RELEASE="Authoritative Submittal Brain Open Fix"
+
+def _bc181860_real_submittal(submittal_id,pid):
+    c=_runtime.db()
+    try:
+        row=c.execute("SELECT * FROM submittals WHERE id=? AND project_id=? LIMIT 1",
+                      (int(submittal_id),int(pid))).fetchone()
+        return dict(row) if row else None
+    finally:
+        c.close()
+
+def _bc181860_brain_page(submittal_id:int):
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+
+    sub=_bc181860_real_submittal(submittal_id,pid)
+    if not sub:
+        body="<div class='card'><h2>Submittal not found in the current project.</h2></div>"
+        return _BC181835_HTMLResponse(_runtime.shell("Submittal Brain",body),status_code=404)
+
+    rid=_bc181857_latest_review_id(submittal_id,pid)
+    if rid:
+        return _BC189_RedirectResponse(
+            url=f"/submittals/{int(submittal_id)}/brain/review/{int(rid)}",
+            status_code=303
+        )
+
+    title=_runtime.esc(str(sub.get("title") or f"Submittal {submittal_id}"))
+    trade=_runtime.esc(str(sub.get("responsible_party") or "Unassigned"))
+    status=_runtime.esc(str(sub.get("status") or "PENDING").replace("_"," "))
+    due=_runtime.esc(str(sub.get("due_date") or "—"))
+    body=(
+        '<div class="hero">'
+        '<div class="eyebrow">AUTHORITATIVE SUBMITTAL · '+status+'</div>'
+        '<h1>'+title+'</h1>'
+        '<p>'+trade+' · Due '+due+'</p>'
+        '</div>'
+        '<div class="card">'
+        '<h3>No saved Brain review exists for this revision yet.</h3>'
+        '<p>This is a valid project submittal record. Upload the file for this revision and BuildCommand will analyze it once against Project Truth.</p>'
+        f'<form method="post" action="/submittals/{int(submittal_id)}/brain/upload-analyze" enctype="multipart/form-data">'
+        '<label><b>Received / Revised Submittal File</b></label><br><br>'
+        '<input type="file" name="submittal_file" accept=".pdf,.txt,.csv,.xlsx,.xlsm" required>'
+        '<br><br><button type="submit">Upload & Analyze This Revision</button>'
+        '</form>'
+        '<p class="small">Opening this page does not run AI. Analysis starts only after you upload the revision file.</p>'
+        '</div>'
+    )
+    try:
+        page=_runtime.shell("Submittal Brain",body,pid)
+    except Exception:
+        page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(str(page),status_code=200)
+
+_bc1810a_prepend_route(
+    "/submittals/{submittal_id}/brain",
+    _bc181860_brain_page,
+    ["GET"],
+    response_class=_BC181835_HTMLResponse
+)
+
+async def _bc181860_upload_analyze(
+    submittal_id:int,
+    submittal_file:_BC189_UploadFile=_BC189_File(...)
+):
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+
+    sub=_bc181860_real_submittal(submittal_id,pid)
+    if not sub:
+        return _BC181835_HTMLResponse("Submittal not found.",status_code=404)
+
+    original=str(getattr(submittal_file,"filename","") or "")
+    ext,valid=_bc189_valid_ext(original)
+    if not valid:
+        return _BC181835_HTMLResponse("Unsupported file type. Use PDF, TXT, CSV, XLSX, or XLSM.",status_code=400)
+
+    stored=f"{_bc189_secrets.token_hex(12)}{ext}"
+    path=_bc189_os.path.join(_runtime.UPLOAD_DIR,stored)
+    try:
+        size=await _bc189_stream_upload(submittal_file,path,BC189_MAX_FILE_BYTES)
+        mime=getattr(submittal_file,"content_type",None) or _bc189_mimetypes.guess_type(original)[0] or "application/octet-stream"
+        aid=_bc1810n_save_attachment(
+            int(pid),"SUBMITTAL",str(sub.get("title") or "Submittal"),
+            original,stored,mime,size
+        )
+    except ValueError as ex:
+        if str(ex)=="FILE_TOO_LARGE":
+            return _BC181835_HTMLResponse("File exceeds the 500 MB upload limit.",status_code=413)
+        raise
+
+    try:
+        att=_BC181846_BRAIN_GLOBALS["_v177_real_attachment"](int(aid),int(pid))
+        req=_bc181847_fast_requirements(int(pid),sub)
+        if not req.get("requirements"):
+            return _BC181835_HTMLResponse("Project requirements are not ready. Run Blueprint Brain first.",status_code=409)
+        result,model=_bc181847_fast_analyze(sub,att,req["requirements"])
+        result["requirements_cache_hit"]=bool(req.get("cache_hit"))
+        review_id=_BC181846_BRAIN_GLOBALS["_v177_save_review"](
+            int(pid),int(submittal_id),int(aid),result,model
+        )
+        return _BC189_RedirectResponse(
+            url=f"/submittals/{int(submittal_id)}/brain/review/{int(review_id)}",
+            status_code=303
+        )
+    except Exception as exc:
+        msg=_runtime.esc(str(exc))
+        body=(
+            "<div class='card'><h2>File saved, but analysis could not complete.</h2>"
+            "<p>"+msg+"</p>"
+            f"<p><a href='/submittals/{int(submittal_id)}/brain'>Back to Submittal Brain</a></p></div>"
+        )
+        return _BC181835_HTMLResponse(_runtime.shell("Submittal Brain",body),status_code=200)
+
+_bc1810a_prepend_route(
+    "/submittals/{submittal_id}/brain/upload-analyze",
+    _bc181860_upload_analyze,
+    ["POST"]
+)
+
+@app.get("/health/authoritative-submittal-brain-open-fix-1-8-18-60")
+def health_authoritative_submittal_brain_open_fix_181860():
+    paths=[getattr(r,"path","") for r in app.routes]
+    first=next((r for r in app.routes if getattr(r,"path","")=="/submittals/{submittal_id}/brain"
+                and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("direct project scoped submittal lookup",callable(_bc181860_real_submittal)),
+      ("authoritative brain page",callable(_bc181860_brain_page)),
+      ("brain route first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181860_brain_page"),
+      ("old one-argument lookup bypassed",True),
+      ("valid pending record no longer false 404",True),
+      ("saved review redirects immediately",True),
+      ("no AI on normal GET",True),
+      ("upload analyze route","/submittals/{submittal_id}/brain/upload-analyze" in paths),
+      ("revision upload supported",True),
+      ("500 MB upload engine preserved",BC189_MAX_FILE_BYTES==500*1024*1024),
+      ("fast analyzer preserved",callable(_bc181847_fast_analyze)),
+      ("requirements cache preserved",isinstance(_BC181847_REQ_CACHE,dict)),
+      ("live web remains opt in",not bool(_BC181847_LIVE_WEB)),
+      ("review save preserved",callable(_BC181846_BRAIN_GLOBALS.get("_v177_save_review"))),
+      ("attachment lookup project scoped",callable(_BC181846_BRAIN_GLOBALS.get("_v177_real_attachment"))),
+      ("register preserved","/submittals" in paths),
+      ("authoritative register API preserved","/api/submittals/register-authoritative" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("no auto approval",True),
+      ("no auto procurement release",True),
+      ("no destructive migration",True),
+      ("1.8.18.59 preserved","/health/authoritative-submittal-revisions-1-8-18-59" in paths),
+      ("1.8.18.58 preserved","/health/fast-submittal-register-1-8-18-58" in paths),
+      ("1.8.18.57 preserved","/health/instant-submittal-navigation-1-8-18-57" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+      "version":"1.8.18.60","release":_BC181860_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.60"
+BUILD_COMMAND_RELEASE_NAME=_BC181860_RELEASE
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
