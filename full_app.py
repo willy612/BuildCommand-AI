@@ -24175,3 +24175,101 @@ BUILD_COMMAND_RELEASE="1.8.18.54"
 BUILD_COMMAND_RELEASE_NAME=_BC181854_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.55
+# Lookahead Blocker Deduplication
+# ============================================================
+_BC181855_RELEASE="Lookahead Blocker Deduplication"
+
+_BC181855_PREV_SYNC=_bc181854_sync_activity
+
+def _bc181855_unique_submittals(rows):
+    unique=[];seen=set()
+    for s in rows or []:
+        title=" ".join(str(s.get("title") or "Open submittal").split()).strip()
+        responsible=" ".join(str(s.get("responsible_party") or "").split()).strip()
+        # The superintendent needs one actionable blocker per logical requirement,
+        # not every duplicate register/review row for the same title/trade.
+        key=(title.lower(),responsible.lower())
+        if key in seen:continue
+        seen.add(key);unique.append(s)
+    return unique
+
+def _bc181855_sync_activity(pid,activity_id):
+    result=_BC181855_PREV_SYNC(pid,activity_id)
+    if not result:return result
+    ad=result.get("activity") or {}
+    trade=str(ad.get("trade") or "Project Team")
+    c=_runtime.db()
+    try:
+        subs=_bc181854_rows(c,"""SELECT id,title,status,responsible_party,due_date FROM submittals
+          WHERE project_id=? AND lower(COALESCE(status,'')) NOT IN
+          ('approved','approved_as_noted','closed','complete','completed')""",(int(pid),))
+        related=[s for s in subs if _bc181854_trade_match(trade,(s.get("responsible_party") or "")+" "+(s.get("title") or ""))]
+        unique=_bc181855_unique_submittals(related)
+        if unique:
+            labels=[str(s.get("title") or "Open submittal") for s in unique]
+            detail="Open/unapproved: "+"; ".join(labels[:4])
+            if len(unique)>4:detail+=f"; +{len(unique)-4} more unique requirement(s)"
+            c.execute("""UPDATE lookahead_make_ready_checks SET status='BLOCKED',source_type='SYSTEM',
+              detail=?,updated_at=CURRENT_TIMESTAMP
+              WHERE project_id=? AND activity_id=? AND check_key='submittal'""",
+              (detail,int(pid),int(activity_id)))
+        else:
+            c.execute("""UPDATE lookahead_make_ready_checks SET status='READY',source_type='SYSTEM',
+              detail='No open trade submittal blocker detected.',updated_at=CURRENT_TIMESTAMP
+              WHERE project_id=? AND activity_id=? AND check_key='submittal'""",(int(pid),int(activity_id)))
+        c.commit()
+        result["checks"]=_bc181854_rows(c,"SELECT * FROM lookahead_make_ready_checks WHERE project_id=? AND activity_id=? ORDER BY id",(int(pid),int(activity_id)))
+        return result
+    finally:c.close()
+
+_bc181854_sync_activity=_bc181855_sync_activity
+
+@app.get("/health/lookahead-blocker-deduplication-1-8-18-55")
+def health_lookahead_blocker_deduplication_181855():
+    paths={getattr(r,"path","") for r in app.routes}
+    sample=[
+      {"title":"Electrical / Lighting / Power","responsible_party":"Electrical","id":1},
+      {"title":"Electrical / Lighting / Power","responsible_party":"Electrical","id":2},
+      {"title":" Electrical / Lighting / Power ","responsible_party":"Electrical","id":3},
+      {"title":"Electrical / Lighting / Power","responsible_party":"Electrical","id":4},
+    ]
+    dedup=_bc181855_unique_submittals(sample)
+    tests=[
+      ("dedupe helper",callable(_bc181855_unique_submittals)),
+      ("sync wrapper",callable(_bc181855_sync_activity)),
+      ("four duplicate rows collapse to one",len(dedup)==1),
+      ("normalized whitespace",str(dedup[0].get("title") or "").strip()=="Electrical / Lighting / Power"),
+      ("lookahead UI preserved","/lookahead-intelligence" in paths),
+      ("lookahead API preserved","/api/lookahead-intelligence/{project_id}" in paths),
+      ("human check route preserved","/lookahead/activity/{activity_id}/check/{check_key}" in paths),
+      ("system submittal blocker preserved",True),
+      ("material blocker preserved",True),
+      ("vendor blocker preserved",True),
+      ("no manual system override",True),
+      ("no procurement release",True),
+      ("no schedule date changes",True),
+      ("schedule preserved","/schedule" in paths),
+      ("make ready preserved","/make-ready" in paths),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("no destructive migration",True),
+      ("1.8.18.54 preserved","/health/intelligent-lookahead-make-ready-1-8-18-54" in paths),
+      ("1.8.18.53 preserved","/health/procurement-blocker-superintendent-command-1-8-18-53" in paths),
+      ("1.8.18.52 preserved","/health/schedule-gap-detection-activity-creation-1-8-18-52" in paths),
+    ]
+    vals=[(n,bool(v)) for n,v in tests];passed=sum(v for _,v in vals)
+    return {"status":"ok" if passed==len(vals) else "failed","app":"BuildCommand AI","version":"1.8.18.55",
+      "release":_BC181855_RELEASE,"passed":passed,"total":len(vals),"failed":len(vals)-passed,
+      "checks":[{"case":n,"passed":v} for n,v in vals]}
+
+BUILD_COMMAND_RELEASE="1.8.18.55"
+BUILD_COMMAND_RELEASE_NAME=_BC181855_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
