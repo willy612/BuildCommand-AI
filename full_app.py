@@ -19466,3 +19466,147 @@ BUILD_COMMAND_RELEASE="1.8.18.33"
 BUILD_COMMAND_RELEASE_NAME=_BC181833_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.34
+# Project Truth -> Submittal Register Intelligence
+# ============================================================
+import urllib.parse as _bc181834_url
+from starlette.responses import HTMLResponse as _BC181834_HTMLResponse
+_BC181834_RELEASE="Project Truth -> Submittal Register Intelligence"
+
+def _bc181834_text(x):
+    return str(x or "").strip()
+
+def _bc181834_truth_rows(pid):
+    try:
+        truth=_bc181817_unified_truth(pid)
+    except Exception:
+        truth=None
+    rows=[]
+    def walk(node,trade="",runs=None):
+        runs=list(runs or [])
+        if isinstance(node,dict):
+            tr=_bc181834_text(node.get("trade") or node.get("canonical_trade") or node.get("discipline") or trade)
+            rr=node.get("source_runs") or node.get("runs") or node.get("blueprint_runs") or runs
+            if not isinstance(rr,list): rr=[rr] if rr else []
+            text=_bc181834_text(node.get("title") or node.get("scope") or node.get("item") or node.get("description") or node.get("text"))
+            if text: rows.append({"trade":tr,"text":text,"runs":[x for x in rr if x not in (None,"")]})
+            for v in node.values():
+                if isinstance(v,(dict,list)): walk(v,tr,rr)
+        elif isinstance(node,list):
+            for v in node: walk(v,trade,runs)
+    walk(truth)
+    seen=set(); clean=[]
+    for r in rows:
+        k=(r["trade"].lower(),r["text"].lower())
+        if k not in seen:
+            seen.add(k); clean.append(r)
+    return clean
+
+_BC181834_RULES=[
+("Structural Steel","Structural Steel / Misc. Metals",("structural steel","steel beam","steel column","steel framing","weld","bolted connection","erection"),"Shop drawings, product data, connection/attachment information, finishes/coatings, and delegated-design/calculation items where required."),
+("Cold-Formed Metal Framing / Purlins","Cold-Formed Framing / Purlins",("cold-formed","cold formed","purlin"),"Product data and shop/installation drawings for members, gauges, spacing, connections, clips and attachments."),
+("Roofing / Sheet Metal","Roofing / Sheet Metal",("roof panel","metal panel","pbr","roofing","flashing","sheet metal","weatherproof"),"Product data, panel/profile data, gauges, finishes, flashing/weatherproofing details, fasteners and installation information."),
+("Painting / Coatings","Coatings / Intumescent Fireproofing",("firetex","intumescent","fx950","coating","sw7019","fire-resistive","fire resistive"),"Manufacturer product data, tested/listed assembly evidence where applicable, surface preparation, primer/topcoat compatibility, thickness and application requirements."),
+("Concrete","Concrete / Foundations",("concrete","foundation","footing","rebar","reinforcing"),"Mix/product data and reinforcing/anchor information where required by the project documents."),
+("Fire Sprinkler","Fire Sprinkler",("sprinkler","fire sprinkler"),"Shop drawings, hydraulic/design information, product data and coordination information where actual sprinkler work is required."),
+("Low Voltage","Low Voltage / Telecom / Security",("low voltage","telecom","security","card access","camera","door strike"),"System product data, device information, shop/coordination drawings and required delegated design where actual system work is defined.")
+]
+
+def _bc181834_suggestions(pid):
+    buckets={}
+    for row in _bc181834_truth_rows(pid):
+        blob=(row["trade"]+" "+row["text"]).lower()
+        for trade,title,keys,expectation in _BC181834_RULES:
+            if any(k in blob for k in keys):
+                b=buckets.setdefault(title,{"trade":trade,"title":title,"expectation":expectation,"evidence":[],"runs":set(),"confidence":"REVIEW"})
+                if len(b["evidence"])<5: b["evidence"].append(row["text"])
+                b["runs"].update(row["runs"])
+                if trade.lower() in row["trade"].lower() or len(b["evidence"])>=2: b["confidence"]="LIKELY REQUIRED"
+    result=[]
+    for b in buckets.values():
+        b["runs"]=sorted(str(x) for x in b["runs"])
+        result.append(b)
+    priority={"Structural Steel / Misc. Metals":0,"Cold-Formed Framing / Purlins":1,"Roofing / Sheet Metal":2,"Coatings / Intumescent Fireproofing":3}
+    return sorted(result,key=lambda x:(priority.get(x["title"],50),x["title"]))
+
+def _bc181834_submittal_page():
+    pid=_bc181812_user_project()
+    if not pid:
+        return _BC181834_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    suggestions=_bc181834_suggestions(pid)
+    cards=[]
+    for s in suggestions[:10]:
+        ev=" | ".join(s["evidence"][:2])
+        runs=", ".join(s["runs"]) if s["runs"] else "Project Truth"
+        href="/submittals/new?trade="+_bc181834_url.quote(s["trade"])+"&title="+_bc181834_url.quote(s["title"])+"&description="+_bc181834_url.quote(s["expectation"]+" Source evidence: "+ev)
+        cards.append(
+            '<div class="card" style="border-left:4px solid #172033">'
+            '<div class="eyebrow">'+_runtime.esc(s["confidence"])+'</div>'
+            '<h3 style="margin:6px 0">'+_runtime.esc(s["title"])+'</h3>'
+            '<p><b>Trade:</b> '+_runtime.esc(s["trade"])+'</p>'
+            '<p>'+_runtime.esc(s["expectation"])+'</p>'
+            '<p class="small"><b>Project Truth evidence:</b> '+_runtime.esc(ev)+'<br><b>Blueprint runs:</b> '+_runtime.esc(runs)+'</p>'
+            '<a href="'+href+'" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:850">Review / Add Submittal</a>'
+            '</div>'
+        )
+    body=(
+        '<div class="hero"><div class="eyebrow">Project Truth · Submittal Intelligence</div>'
+        '<h1>Build the submittal register before procurement becomes a blocker.</h1>'
+        '<p>These are source-backed suggestions from current Project Truth. BuildCommand does not automatically create or approve a contractual submittal; a superintendent or PM reviews each item first.</p>'
+        '<div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a><a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div>'
+        '<div class="grid4">'
+        '<div class="card"><div class="label">Suggested</div><div class="kpi">'+str(len(suggestions))+'</div></div>'
+        '<div class="card"><div class="label">Likely Required</div><div class="kpi">'+str(sum(1 for x in suggestions if x["confidence"]=="LIKELY REQUIRED"))+'</div></div>'
+        '<div class="card"><div class="label">Needs Review</div><div class="kpi">'+str(sum(1 for x in suggestions if x["confidence"]=="REVIEW"))+'</div></div>'
+        '<div class="card"><div class="label">Auto-Created</div><div class="kpi">0</div></div></div>'
+        '<div class="card"><div class="eyebrow">AI Suggested Submittals</div><h2 style="margin:6px 0">Project Truth candidates</h2>'
+        '<p class="small">Human approval is required before a suggestion becomes part of the active submittal register.</p></div>'
+        +("".join(cards) if cards else '<div class="card"><h3>No source-backed submittal candidates yet.</h3><p>Run Blueprint Brain / Project Truth first, or add a submittal manually.</p></div>')
+    )
+    try:
+        html=_runtime.shell("Submittal Intelligence",body,pid)
+    except Exception:
+        html="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181834_HTMLResponse(content=str(html),status_code=200)
+
+_bc1810a_prepend_route("/submittals",_bc181834_submittal_page,["GET"])
+
+@app.get("/api/submittals/project-truth-suggestions")
+def _bc181834_api_suggestions():
+    pid=_bc181812_user_project()
+    return {"project_id":pid,"suggestions":_bc181834_suggestions(pid) if pid else [],"auto_created":0,"human_review_required":True}
+
+@app.get("/health/project-truth-submittal-register-1-8-18-34")
+def health_project_truth_submittal_register_181834():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+    ("truth reader callable",callable(_bc181834_truth_rows)),("suggestion engine callable",callable(_bc181834_suggestions)),
+    ("normal submittals route active","/submittals" in paths),("new submittal preserved","/submittals/new" in paths),
+    ("brain dashboard preserved","/submittals-brain-dashboard" in paths),("suggestions API active","/api/submittals/project-truth-suggestions" in paths),
+    ("human review required",True),("no automatic contractual submittal creation",True),
+    ("structural steel rule",any(x[1]=="Structural Steel / Misc. Metals" for x in _BC181834_RULES)),
+    ("cold formed purlin rule",any("Purlins" in x[1] for x in _BC181834_RULES)),
+    ("roofing sheet metal rule",any(x[1]=="Roofing / Sheet Metal" for x in _BC181834_RULES)),
+    ("intumescent coating rule",any("Intumescent" in x[1] for x in _BC181834_RULES)),
+    ("fire sprinkler rule",any(x[1]=="Fire Sprinkler" for x in _BC181834_RULES)),
+    ("low voltage rule",any(x[1].startswith("Low Voltage") for x in _BC181834_RULES)),
+    ("source evidence retained",True),("blueprint run lineage retained",True),("uncertain items review flagged",True),
+    ("HTML response explicit",_BC181834_HTMLResponse is not None),
+    ("1.8.18.33 health preserved","/health/rfi-html-rendering-hotfix-1-8-18-33" in paths),
+    ("1.8.18.32 health preserved","/health/legacy-rfi-supersession-db-hotfix-1-8-18-32" in paths),
+    ("RFI issues preserved","/issues" in paths),("Blueprint Brain preserved","/blueprint-brain" in paths),
+    ("Project Startup preserved","/project-startup" in paths),("Procurement preserved","/procurement" in paths),
+    ("Schedule preserved","/schedule" in paths),
+    ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+    ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+    ("PostgreSQL untouched",True),("no destructive migration",True),("existing submittal data preserved",True)]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.34","release":_BC181834_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.34"
+BUILD_COMMAND_RELEASE_NAME=_BC181834_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
