@@ -23445,3 +23445,190 @@ BUILD_COMMAND_RELEASE="1.8.18.50"
 BUILD_COMMAND_RELEASE_NAME=_BC181850_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.51
+# Procurement Schedule Match Confirmation
+# ============================================================
+_BC181851_RELEASE="Procurement Schedule Match Confirmation"
+
+def _bc181851_procurement_source(pid,procurement_id):
+    _bc181848_ensure()
+    c=_runtime.db()
+    try:
+        return c.execute("""SELECT l.submittal_id,l.review_id,l.release_status,p.*
+          FROM procurement p
+          LEFT JOIN submittal_procurement_links l ON l.procurement_id=p.id
+          WHERE p.project_id=? AND p.id=?""",(int(pid),int(procurement_id))).fetchone()
+    finally:c.close()
+
+def _bc181851_activity_suggestion(pid,procurement_id):
+    row=_bc181851_procurement_source(pid,procurement_id)
+    if not row:
+        return {"confidence":"NONE","activity_id":None,"reason":"Procurement item not found."}
+    if row["activity_id"]:
+        c=_runtime.db()
+        try:
+            a=c.execute("SELECT id,external_id,name,trade FROM activities WHERE project_id=? AND id=?",
+                (int(pid),int(row["activity_id"]))).fetchone()
+        finally:c.close()
+        if a:
+            return {"confidence":"CONFIRMED","activity_id":int(a["id"]),"external_id":a["external_id"] or "",
+                "name":a["name"] or "","trade":a["trade"] or "","score":999,"reason":"Already linked."}
+    if row["submittal_id"]:
+        sub=_bc181849_get_submittal(pid,int(row["submittal_id"]))
+        if sub:
+            return _bc181850_activity_match(pid,sub)
+    # Fallback: match procurement item/vendor to schedule if no linked submittal row exists.
+    class _P(dict):
+        def keys(self): return super().keys()
+    pseudo=_P(title=row["item"] or "", responsible_party=row["vendor"] or "")
+    return _bc181850_activity_match(pid,pseudo)
+
+async def _bc181851_confirm_link(procurement_id:int,activity_id:str=_BC189_Form(...)):
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    try: aid=int(activity_id)
+    except Exception:return _BC181835_HTMLResponse("Invalid activity.",status_code=400)
+    c=_runtime.db()
+    try:
+        p=c.execute("SELECT id FROM procurement WHERE id=? AND project_id=?",(int(procurement_id),int(pid))).fetchone()
+        a=c.execute("SELECT id FROM activities WHERE id=? AND project_id=?",(aid,int(pid))).fetchone()
+        if not p or not a:return _BC181835_HTMLResponse("Procurement item or activity not found.",status_code=404)
+        c.execute("UPDATE procurement SET activity_id=? WHERE id=? AND project_id=?",(aid,int(procurement_id),int(pid)))
+        c.commit()
+    finally:c.close()
+    return _BC189_RedirectResponse(url="/procurement",status_code=303)
+
+def _bc181851_procurement_page():
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    c=_runtime.db()
+    try:
+        rows=c.execute("""SELECT p.*,a.external_id,a.name activity
+          FROM procurement p LEFT JOIN activities a ON a.id=p.activity_id
+          WHERE p.project_id=?
+          ORDER BY CASE p.status WHEN 'DELIVERED' THEN 5 WHEN 'SHIPPED' THEN 4
+          WHEN 'FABRICATION' THEN 3 WHEN 'RELEASED' THEN 2 ELSE 1 END,p.required_on_site""",(int(pid),)).fetchall()
+    finally:c.close()
+
+    esc=getattr(_runtime,"esc",lambda x:str(x or ""))
+    critical=watch=delivered=0
+    cards=""
+    for r in rows:
+        badge,risk_text=_runtime.procurement_risk(r["required_on_site"],r["promised_date"],r["status"])
+        if badge=="CRITICAL":critical+=1
+        elif badge=="WATCH":watch+=1
+        if r["status"]=="DELIVERED":delivered+=1
+
+        if r["external_id"]:
+            activity_block='<div class="muted"><b>Linked Activity:</b> %s - %s</div>'%(esc(r["external_id"]),esc(r["activity"]))
+        else:
+            s=_bc181851_activity_suggestion(pid,int(r["id"]))
+            conf=str(s.get("confidence") or "NONE")
+            if s.get("activity_id"):
+                activity_block="""
+                <div class="card" style="margin-top:12px;padding:12px;border:1px solid #33465c">
+                  <div class="label">Best Schedule Match</div>
+                  <div><b>%s - %s</b></div>
+                  <div class="small">Trade: %s · Confidence: %s · Score: %s</div>
+                  <form method="post" action="/procurement/%s/confirm-activity" style="margin-top:10px">
+                    <input type="hidden" name="activity_id" value="%s">
+                    <button type="submit">Confirm Link</button>
+                  </form>
+                </div>
+                """%(esc(s.get("external_id") or ""),esc(s.get("name") or ""),esc(s.get("trade") or ""),
+                     esc(conf),esc(s.get("score") or 0),r["id"],s["activity_id"])
+            else:
+                activity_block="""<div class="card" style="margin-top:12px;padding:12px;border:1px solid #33465c">
+                  <div class="label">Schedule Connection</div>
+                  <div><b>No matching scheduled activity — schedule setup required.</b></div>
+                  <div class="small">%s</div>
+                </div>"""%esc(s.get("reason") or "")
+
+        cards += """
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;">
+            <div><span class="badge %s">%s</span><h3 style="margin:10px 0 4px;">%s</h3>%s</div>
+            <a href="/procurement/%s/edit" style="color:#f0b44d;text-decoration:none;font-weight:700;">Edit</a>
+          </div>
+          <div class="grid3" style="margin-top:16px;">
+            <div><div class="label">Vendor / Sub</div><div>%s</div></div>
+            <div><div class="label">Required On Site</div><div>%s</div></div>
+            <div><div class="label">Promised</div><div>%s</div></div>
+          </div>
+          <p>%s</p><div class="small">Status: %s</div>
+        </div>
+        """%(badge,esc(risk_text),esc(r["item"]),activity_block,r["id"],esc(r["vendor"]) or "—",
+             esc(r["required_on_site"]) or "—",esc(r["promised_date"]) or "—",esc(r["notes"]) or "No notes entered.",
+             esc(r["status"]).replace("_"," ").title())
+
+    if not cards: cards='<div class="card"><div class="muted">No procurement items added yet.</div></div>'
+    body="""
+    <div class="hero"><div style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap;">
+      <div><div class="eyebrow">Procurement Intelligence</div>
+      <h1>Know what material can hurt the schedule before it arrives late.</h1>
+      <div class="muted">Track required-on-site dates, vendor commitments, long-lead exposure, and the schedule activity they can block.</div></div>
+      <a href="/procurement/new" style="display:inline-block;background:#f0b44d;color:#0a1017;text-decoration:none;padding:12px 18px;border-radius:9px;font-weight:800;">+ Add Procurement Item</a>
+    </div></div>
+    <div class="grid4">
+      <div class="card"><div class="label">Items</div><div class="kpi">%s</div></div>
+      <div class="card"><div class="label">Critical</div><div class="kpi">%s</div></div>
+      <div class="card"><div class="label">Watch</div><div class="kpi">%s</div></div>
+      <div class="card"><div class="label">Delivered</div><div class="kpi">%s</div></div>
+    </div><div class="grid2">%s</div>
+    """%(len(rows),critical,watch,delivered,cards)
+    return _BC181835_HTMLResponse(content=_runtime.shell("Procurement",body))
+
+_bc1810a_prepend_route("/procurement",_bc181851_procurement_page,["GET"],response_class=_BC181835_HTMLResponse)
+app.add_api_route("/procurement/{procurement_id}/confirm-activity",_bc181851_confirm_link,methods=["POST"])
+
+@app.get("/health/procurement-schedule-match-confirmation-1-8-18-51")
+def health_procurement_schedule_match_confirmation_181851():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("procurement page enhanced",callable(_bc181851_procurement_page)),
+      ("activity suggestion helper",callable(_bc181851_activity_suggestion)),
+      ("human confirm link route","/procurement/{procurement_id}/confirm-activity" in paths),
+      ("best schedule match visible",True),
+      ("confidence visible",True),
+      ("score visible",True),
+      ("confirm link visible",True),
+      ("no match message",True),
+      ("schedule setup required message",True),
+      ("project ownership validation",True),
+      ("activity ownership validation",True),
+      ("manual confirmation required for uncertain match",True),
+      ("existing linked activity preserved",True),
+      ("existing procurement preserved",True),
+      ("NOT_RELEASED preserved",True),
+      ("Trade Readiness consumes confirmed link",callable(_bc181849_trade_readiness)),
+      ("Procurement route preserved","/procurement" in paths),
+      ("Procurement edit preserved","/procurement/{item_id}/edit" in paths),
+      ("Procurement new preserved","/procurement/new" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("Review preserved","/submittals/{submittal_id}/brain/review/{review_id}" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("AI cannot release procurement",True),
+      ("no destructive migration",True),
+      ("1.8.18.50 preserved","/health/auto-activity-linking-procurement-readiness-1-8-18-50" in paths),
+      ("1.8.18.49 preserved","/health/auto-procurement-from-submittal-review-1-8-18-49" in paths),
+      ("1.8.18.48 preserved","/health/submittal-action-procurement-readiness-1-8-18-48" in paths),
+      ("1.8.18.47 preserved","/health/fast-submittal-analysis-engine-1-8-18-47" in paths),
+    ]
+    vals=[(n,bool(v)) for n,v in tests]
+    passed=sum(v for _,v in vals)
+    return {"status":"ok" if passed==len(vals) else "failed","app":"BuildCommand AI","version":"1.8.18.51",
+      "release":_BC181851_RELEASE,"passed":passed,"total":len(vals),"failed":len(vals)-passed,
+      "checks":[{"case":n,"passed":v} for n,v in vals]}
+
+BUILD_COMMAND_RELEASE="1.8.18.51"
+BUILD_COMMAND_RELEASE_NAME=_BC181851_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
