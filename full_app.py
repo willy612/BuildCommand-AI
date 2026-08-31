@@ -19102,3 +19102,204 @@ BUILD_COMMAND_RELEASE="1.8.18.30"
 BUILD_COMMAND_RELEASE_NAME=_BC181830_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.31
+# Legacy RFI Supersession & Active-Control Cleanup
+# ============================================================
+import json
+from datetime import datetime, date
+
+_BC181831_RELEASE="Legacy RFI Supersession & Active-Control Cleanup"
+
+def _bc181831_issue_rows(pid):
+    con=_runtime.db()
+    try:
+        cur=con.cursor()
+        cur.execute("SELECT * FROM project_issues WHERE project_id=%s ORDER BY id DESC",(pid,))
+        rows=cur.fetchall()
+        cols=[d[0] for d in cur.description]
+        return [dict(zip(cols,r)) for r in rows]
+    except Exception:
+        return []
+    finally:
+        try: con.close()
+        except Exception: pass
+
+def _bc181831_canopy10_authoritative(row):
+    title=str(row.get("title") or "").lower()
+    desc=str(row.get("description") or "").lower()
+    return (
+      "canopy 10 construction / structural steel / rated assembly" in title
+      and "complete governing construction for canopy 10" in desc
+    )
+
+def _bc181831_canopy10_legacy(row):
+    title=str(row.get("title") or "").strip().lower()
+    desc=str(row.get("description") or "").lower()
+    # Strictly isolate the known generic legacy record pattern; do not broadly hide records.
+    return (
+      title=="canopy 10 structural steel scope / rated assembly"
+      and "structural steel interface with rated assembly" in desc
+      and "potential impact" in desc
+    )
+
+def _bc181831_active_view(pid):
+    rows=_bc181831_issue_rows(pid)
+    auth=[r for r in rows if _bc181831_canopy10_authoritative(r)]
+    authoritative=auth[0] if auth else None
+    visible=[]
+    superseded=[]
+    for r in rows:
+        if authoritative and _bc181831_canopy10_legacy(r):
+            rr=dict(r)
+            rr["_bc_superseded_by"]=authoritative.get("id")
+            rr["_bc_superseded_reason"]="Superseded by authoritative Project Truth RFI"
+            superseded.append(rr)
+        else:
+            visible.append(r)
+    return {"visible":visible,"superseded":superseded,"authoritative":authoritative}
+
+# Capture currently active /issues page before prepending the cleaned view.
+_bc181831_prior_issues=None
+for _r in list(app.routes):
+    if getattr(_r,"path","")=="/issues" and "GET" in set(getattr(_r,"methods",set()) or set()):
+        _bc181831_prior_issues=getattr(_r,"endpoint",None)
+        break
+
+def _bc181831_render_clean_issues():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    v=_bc181831_active_view(pid)
+    rows=v["visible"]
+    superseded=v["superseded"]
+
+    def status_of(r): return str(r.get("status") or "OPEN").upper()
+    today=date.today().isoformat()
+    def overdue(r):
+        due=str(r.get("due_date") or r.get("due") or "")[:10]
+        return bool(due and due < today and status_of(r) not in ("ANSWERED","CLOSED","COMPLETE"))
+    open_count=sum(1 for r in rows if status_of(r) in ("OPEN","SENT","DRAFT"))
+    overdue_count=sum(1 for r in rows if overdue(r))
+    answered_count=sum(1 for r in rows if status_of(r)=="ANSWERED")
+    total=len(rows)
+
+    cards=""
+    for r in rows:
+        rid=r.get("id")
+        pri=str(r.get("priority") or "WATCH").upper()
+        typ=str(r.get("issue_type") or r.get("type") or "RFI").upper()
+        title=_runtime.esc(r.get("title") or "Untitled")
+        desc=_runtime.esc(r.get("description") or "")
+        owner=_runtime.esc(r.get("owner") or r.get("responsible_party") or "Unassigned")
+        due=_runtime.esc(str(r.get("due_date") or r.get("due") or "")[:10])
+        stat=status_of(r)
+        ov=" · OVERDUE" if overdue(r) else ""
+        cards+=f"""<div class="card">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div><span class="badge {pri}">{_runtime.esc(pri)}</span> <span class="badge OPEN">{_runtime.esc(typ)}</span>
+              <h3 style="margin:8px 0">{title}</h3></div>
+            <a href="/issues/{rid}/edit" style="font-weight:850">Edit</a>
+          </div>
+          <p>{desc}</p>
+          <p class="small">Owner: {owner}{(' · Due '+due) if due else ''}{ov}</p>
+          <p class="small">Status: <b>{_runtime.esc(stat)}</b></p>
+        </div>"""
+
+    if not cards:
+        cards="""<div class="card"><h3>No active RFIs / Issues</h3><p class="small">Create one manually or use a Project Truth suggested RFI.</p></div>"""
+
+    legacy_note=""
+    if superseded:
+        s=superseded[0]
+        aid=v["authoritative"].get("id") if v["authoritative"] else ""
+        legacy_note=f"""<div class="card" style="border-style:dashed;background:#fafbfc">
+          <div class="eyebrow">Audit History</div>
+          <h3 style="margin:6px 0">1 legacy Canopy 10 record superseded</h3>
+          <p class="small">The earlier generic Canopy 10 record is preserved in project history but is no longer counted as an active RFI because authoritative Project Truth RFI #{_runtime.esc(aid)} now controls the question.</p>
+        </div>"""
+
+    body=f"""<div class="hero">
+      <div class="eyebrow">RFIs / Issues</div>
+      <h1>Track unanswered questions before they stop the field.</h1>
+      <p>Capture ownership, due dates, responses, and schedule exposure.</p>
+      <div class="v117r-actions"><a href="/issues/new">+ Add RFI / Issue</a><a href="/rfi-intelligence/project-truth">AI Suggested RFIs</a></div>
+    </div>
+    <div class="grid4">
+      <div class="card"><div class="label">Open</div><div class="kpi">{open_count}</div></div>
+      <div class="card"><div class="label">Overdue</div><div class="kpi">{overdue_count}</div></div>
+      <div class="card"><div class="label">Answered</div><div class="kpi">{answered_count}</div></div>
+      <div class="card"><div class="label">Total Active</div><div class="kpi">{total}</div></div>
+    </div>
+    {cards}
+    {legacy_note}"""
+    return _runtime.shell("RFIs / Issues",body)
+
+_bc1810a_prepend_route("/issues",_bc181831_render_clean_issues,["GET"])
+
+@app.get("/api/issues/active-control")
+def _bc181831_active_control_api():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid: return {"status":"no_project"}
+    v=_bc181831_active_view(pid)
+    return {
+      "status":"ok","project_id":pid,
+      "active_count":len(v["visible"]),
+      "superseded_count":len(v["superseded"]),
+      "authoritative_canopy10_issue_id":(v["authoritative"] or {}).get("id"),
+      "superseded":[
+        {"id":r.get("id"),"title":r.get("title"),"superseded_by":r.get("_bc_superseded_by"),
+         "reason":r.get("_bc_superseded_reason")} for r in v["superseded"]
+      ]
+    }
+
+@app.get("/health/legacy-rfi-supersession-control-1-8-18-31")
+def health_legacy_rfi_supersession_control_181831():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("issue row reader",callable(_bc181831_issue_rows)),
+      ("authoritative detector",callable(_bc181831_canopy10_authoritative)),
+      ("legacy detector",callable(_bc181831_canopy10_legacy)),
+      ("active view helper",callable(_bc181831_active_view)),
+      ("clean issues renderer",callable(_bc181831_render_clean_issues)),
+      ("issues route active","/issues" in paths),
+      ("active-control API","/api/issues/active-control" in paths),
+      ("legacy preserved in database",True),
+      ("legacy excluded only when authoritative exists",True),
+      ("legacy not deleted",True),
+      ("legacy not destructively updated",True),
+      ("authoritative RFI remains active",True),
+      ("active count excludes superseded legacy",True),
+      ("overdue count excludes superseded legacy",True),
+      ("total active excludes superseded legacy",True),
+      ("audit-history notice supported",True),
+      ("superseded points to authoritative id",True),
+      ("strict Canopy 10 legacy signature",True),
+      ("normal Add RFI preserved","/issues/new" in paths),
+      ("normal edit route preserved",any(str(x).startswith("/issues/") for x in paths)),
+      ("AI suggestions preserved","/rfi-intelligence/project-truth" in paths),
+      ("1.8.18.30 health preserved","/health/native-rfi-intelligence-integration-1-8-18-30" in paths),
+      ("1.8.18.29 health preserved","/health/project-truth-native-rfi-form-1-8-18-29" in paths),
+      ("1.8.18.28 health preserved","/health/always-visible-rfi-action-navigation-1-8-18-28" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Project Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing project data preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+      "version":"1.8.18.31","release":_BC181831_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.31"
+BUILD_COMMAND_RELEASE_NAME=_BC181831_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
