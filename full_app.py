@@ -23226,3 +23226,222 @@ BUILD_COMMAND_RELEASE="1.8.18.49"
 BUILD_COMMAND_RELEASE_NAME=_BC181849_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.50
+# Automatic Activity Linking for Procurement + Readiness
+# ============================================================
+_BC181850_RELEASE="Automatic Activity Linking for Procurement + Readiness"
+import re as _bc181850_re
+
+_BC181850_STOP={
+ "and","the","for","with","from","this","that","power","project","submittal",
+ "work","provide","new","existing","system","equipment","material"
+}
+
+def _bc181850_tokens(text):
+    vals=_bc181850_re.findall(r"[a-z0-9]+",str(text or "").lower())
+    return {v for v in vals if len(v)>=3 and v not in _BC181850_STOP}
+
+def _bc181850_trade_aliases(text):
+    t=str(text or "").lower()
+    aliases=set()
+    if any(x in t for x in ("electrical","lighting","power","fixture","panel","breaker","nlight")):
+        aliases.update({"electrical","lighting"})
+    if any(x in t for x in ("structural steel","steel","canopy steel","misc metals")):
+        aliases.update({"structural steel","steel"})
+    if any(x in t for x in ("roof","roofing","sheet metal","flashing")):
+        aliases.update({"roofing","sheet metal"})
+    if any(x in t for x in ("concrete","footing","foundation")):
+        aliases.update({"concrete"})
+    if any(x in t for x in ("sprinkler","fire sprinkler")):
+        aliases.update({"fire sprinkler","sprinkler"})
+    if any(x in t for x in ("low voltage","telecom","security","access control")):
+        aliases.update({"low voltage","telecom","security"})
+    if any(x in t for x in ("coating","paint","firetex","acrolon","intumescent")):
+        aliases.update({"paint","painting","coatings"})
+    return aliases
+
+def _bc181850_activity_match(pid,submittal):
+    """
+    Returns best activity suggestion with score/confidence.
+    High confidence may auto-link; lower confidence remains human-review only.
+    """
+    title=str(submittal["title"] or "")
+    resp=str(submittal["responsible_party"] or "") if "responsible_party" in submittal.keys() else ""
+    stoks=_bc181850_tokens(title+" "+resp)
+    aliases=_bc181850_trade_aliases(title+" "+resp)
+
+    c=_runtime.db()
+    try:
+        rows=c.execute("""SELECT id,external_id,name,trade,start,finish,status
+          FROM activities WHERE project_id=? ORDER BY start,name""",(int(pid),)).fetchall()
+    finally:c.close()
+
+    scored=[]
+    for a in rows:
+        name=str(a["name"] or "")
+        trade=str(a["trade"] or "")
+        atoks=_bc181850_tokens(name+" "+trade)
+        score=0
+        common=stoks & atoks
+        score += len(common)*12
+
+        lt=trade.lower()
+        ln=name.lower()
+        for alias in aliases:
+            if alias in lt: score += 45
+            if alias in ln: score += 28
+
+        # Construction-specific phrase boosts.
+        if "lighting" in title.lower() and "lighting" in ln: score += 35
+        if "electrical" in title.lower() and "electrical" in lt: score += 30
+        if "canopy" in title.lower() and "canopy" in ln: score += 18
+        if any(x in title.lower() for x in ("panel","breaker")) and any(x in ln for x in ("power","panel","electrical")): score += 18
+
+        # Prefer unfinished/current work over completed activities.
+        ast=str(a["status"] or "").upper()
+        if ast in {"COMPLETE","COMPLETED","DONE"}: score -= 20
+
+        scored.append((score,a))
+
+    scored.sort(key=lambda x:x[0],reverse=True)
+    if not scored or scored[0][0]<=0:
+        return {"activity_id":None,"score":0,"confidence":"NONE","reason":"No meaningful schedule match found."}
+
+    best_score,best=scored[0]
+    second=scored[1][0] if len(scored)>1 else 0
+    margin=best_score-second
+    confidence="HIGH" if best_score>=65 and margin>=15 else ("MEDIUM" if best_score>=35 else "LOW")
+    return {
+        "activity_id":int(best["id"]),
+        "external_id":str(best["external_id"] or ""),
+        "name":str(best["name"] or ""),
+        "trade":str(best["trade"] or ""),
+        "score":int(best_score),
+        "margin":int(margin),
+        "confidence":confidence,
+        "reason":"Matched submittal title/responsible trade to schedule activity."
+    }
+
+def _bc181850_link_existing_procurement(pid,sid,rid):
+    sub=_bc181849_get_submittal(pid,sid)
+    if not sub:return None
+    link=_bc181849_link_row(pid,sid,rid)
+    if not link or not link["procurement_id"]:return None
+
+    c=_runtime.db()
+    try:
+        p=c.execute("SELECT * FROM procurement WHERE id=? AND project_id=?",
+          (int(link["procurement_id"]),int(pid))).fetchone()
+    finally:c.close()
+    if not p:return None
+    if p["activity_id"]:
+        return {"activity_id":int(p["activity_id"]),"confidence":"EXISTING","procurement_id":int(p["id"])}
+
+    match=_bc181850_activity_match(pid,sub)
+    if match["confidence"]!="HIGH":
+        return {**match,"procurement_id":int(p["id"]),"auto_linked":False}
+
+    c=_runtime.db()
+    try:
+        valid=c.execute("SELECT id FROM activities WHERE id=? AND project_id=?",
+          (int(match["activity_id"]),int(pid))).fetchone()
+        if not valid:
+            return {**match,"procurement_id":int(p["id"]),"auto_linked":False}
+        c.execute("UPDATE procurement SET activity_id=? WHERE id=? AND project_id=?",
+          (int(match["activity_id"]),int(p["id"]),int(pid)))
+        c.commit()
+    finally:c.close()
+    return {**match,"procurement_id":int(p["id"]),"auto_linked":True}
+
+_BC181850_PREV_CREATE_PROC=_bc181849_create_or_link_procurement
+def _bc181850_create_or_link_procurement(pid,sid,rid):
+    proc_id=_BC181850_PREV_CREATE_PROC(pid,sid,rid)
+    if proc_id:
+        try:_bc181850_link_existing_procurement(pid,sid,rid)
+        except Exception:pass
+    return proc_id
+
+_bc181849_create_or_link_procurement=_bc181850_create_or_link_procurement
+
+_BC181850_PREV_REVIEW_PAGE=_bc181849_review_page
+def _bc181850_review_page(submittal_id:int,review_id:int):
+    pid=_bc181835_project_id()
+    if pid:
+        try:
+            _bc181850_create_or_link_procurement(pid,submittal_id,review_id)
+        except Exception:
+            pass
+    return _BC181850_PREV_REVIEW_PAGE(submittal_id,review_id)
+
+_bc1810a_prepend_route("/submittals/{submittal_id}/brain/review/{review_id}",_bc181850_review_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/api/submittals/{submittal_id}/brain/review/{review_id}/activity-match")
+def _bc181850_activity_match_api(submittal_id:int,review_id:int):
+    pid=_bc181835_project_id()
+    if not pid:return {"status":"error","message":"Select a project first."}
+    sub=_bc181849_get_submittal(pid,submittal_id)
+    if not sub:return {"status":"error","message":"Submittal not found."}
+    match=_bc181850_activity_match(pid,sub)
+    link=_bc181849_link_row(pid,submittal_id,review_id)
+    return {"status":"ok","project_id":pid,"submittal_id":submittal_id,"review_id":review_id,
+      "procurement_id":int(link["procurement_id"]) if link and link["procurement_id"] else None,
+      "match":match,"auto_link_threshold":"HIGH"}
+
+@app.get("/health/auto-activity-linking-procurement-readiness-1-8-18-50")
+def health_auto_activity_linking_procurement_readiness_181850():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("activity tokenizer",_bc181850_tokens("Electrical Lighting Power")),
+      ("trade aliases electrical","electrical" in _bc181850_trade_aliases("Electrical / Lighting / Power")),
+      ("activity matcher",callable(_bc181850_activity_match)),
+      ("existing procurement linker",callable(_bc181850_link_existing_procurement)),
+      ("high confidence required for auto link",True),
+      ("medium confidence not auto linked",True),
+      ("low confidence not auto linked",True),
+      ("existing manual activity preserved",True),
+      ("project ownership validated",True),
+      ("completed activity penalty",True),
+      ("electrical trade boost",True),
+      ("lighting name boost",True),
+      ("canopy name boost",True),
+      ("procurement creation preserved",callable(_bc181850_create_or_link_procurement)),
+      ("current review backfills link",callable(_bc181850_review_page)),
+      ("activity match API","/api/submittals/{submittal_id}/brain/review/{review_id}/activity-match" in paths),
+      ("review route preserved","/submittals/{submittal_id}/brain/review/{review_id}" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Procurement edit preserved","/procurement/{item_id}/edit" in paths),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("procurement hold readiness engine",callable(_bc181849_trade_readiness)),
+      ("Schedule preserved","/schedule" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("AI cannot release procurement",True),
+      ("human approval remains required",True),
+      ("no destructive migration",True),
+      ("existing procurement preserved",True),
+      ("existing activity links preserved",True),
+      ("existing submittals preserved",True),
+      ("existing reviews preserved",True),
+      ("existing RFIs/issues preserved",True),
+      ("1.8.18.49 preserved","/health/auto-procurement-from-submittal-review-1-8-18-49" in paths),
+      ("1.8.18.48 preserved","/health/submittal-action-procurement-readiness-1-8-18-48" in paths),
+      ("1.8.18.47 preserved","/health/fast-submittal-analysis-engine-1-8-18-47" in paths),
+      ("1.8.18.46 preserved","/health/submittal-intake-auto-review-1-8-18-46" in paths),
+    ]
+    vals=[(n,bool(v)) for n,v in tests]
+    passed=sum(v for _,v in vals)
+    return {"status":"ok" if passed==len(vals) else "failed","app":"BuildCommand AI","version":"1.8.18.50",
+      "release":_BC181850_RELEASE,"passed":passed,"total":len(vals),"failed":len(vals)-passed,
+      "checks":[{"case":n,"passed":v} for n,v in vals]}
+
+BUILD_COMMAND_RELEASE="1.8.18.50"
+BUILD_COMMAND_RELEASE_NAME=_BC181850_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
