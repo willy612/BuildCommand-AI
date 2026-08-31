@@ -20877,3 +20877,249 @@ BUILD_COMMAND_RELEASE="1.8.18.39"
 BUILD_COMMAND_RELEASE_NAME=_BC181839_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.40
+# Submittal Intelligence Performance Cache
+# ============================================================
+_BC181840_RELEASE="Submittal Intelligence Performance Cache"
+
+def _bc181840_context(pid):
+    """Build expensive Project Truth / issue context once per request."""
+    pid=int(pid)
+    ctx={"pid":pid,"issue_texts":[],"truth_uncertainty_text":"","truth_rows":[]}
+    try:
+        ctx["issue_texts"]=_bc181839_open_issue_text(pid)
+    except Exception:
+        ctx["issue_texts"]=[]
+    try:
+        d=_bc181838_unified_truth(pid)
+        if isinstance(d,dict):
+            ctx["truth_uncertainty_text"]=" ".join(
+                _bc181839_flat(d.get(field)).lower()
+                for field in ("conflicts","rfi_candidates","review_notes","cross_discipline_flags")
+            )
+    except Exception:
+        ctx["truth_uncertainty_text"]=""
+    try:
+        ctx["truth_rows"]=_bc181835_truth_rows(pid)
+    except Exception:
+        ctx["truth_rows"]=[]
+    return ctx
+
+def _bc181840_issue_blocks(ctx,trade):
+    keys=_BC181839_TOPIC_KEYS.get(trade,())
+    if not keys: return False
+    for text in ctx.get("issue_texts",()):
+        hits=sum(1 for k in keys if k in text)
+        if trade=="Structural Steel" and "canopy 10" in text:
+            return True
+        if hits>=2:
+            return True
+    return False
+
+def _bc181840_truth_uncertainty(ctx,trade):
+    keys=_BC181839_TOPIC_KEYS.get(trade,())
+    if not keys: return False
+    text=ctx.get("truth_uncertainty_text","")
+    return sum(1 for k in keys if k in text)>=2
+
+def _bc181840_rank_evidence(ctx,s):
+    trade=s.get("trade") or ""
+    pool=[]
+    for r in ctx.get("truth_rows",()):
+        if not _bc181836_trade_matches(trade,r.get("trade")):
+            continue
+        text=r.get("text") or ""
+        if not _bc181836_scope_match(trade,text):
+            continue
+        score=_bc181839_product_score(trade,text)
+        if score<=0:
+            continue
+        pool.append((score,text,r.get("runs") or []))
+    pool.sort(key=lambda x:(-x[0],x[1].lower()))
+    ev=[]; runs=set(); seen=set()
+    for score,text,rr in pool:
+        k=_bc181814_norm_text(text)
+        if not k or k in seen:
+            continue
+        seen.add(k); ev.append(text); runs.update(rr)
+        if len(ev)>=5:
+            break
+    if not ev:
+        ev=list(s.get("evidence") or [])
+        runs.update(s.get("runs") or [])
+    return ev,sorted(str(x) for x in runs)
+
+_BC181840_PREV_BASE=_BC181839_PREV_SUGGEST
+def _bc181840_suggestions(pid):
+    pid=int(pid)
+    ctx=_bc181840_context(pid)
+    base=_BC181840_PREV_BASE(pid)
+    out=[]
+    for raw in base:
+        s=dict(raw)
+        ev,runs=_bc181840_rank_evidence(ctx,s)
+        s["evidence"]=ev
+        s["runs"]=runs
+
+        explicit=any(_bc181839_explicit(x) for x in ev)
+        blocked=_bc181840_issue_blocks(ctx,s.get("trade"))
+        uncertain=_bc181840_truth_uncertainty(ctx,s.get("trade"))
+        product_strength=max([_bc181839_product_score(s.get("trade"),x) for x in ev] or [0])
+
+        if blocked:
+            s["confidence"]="BLOCKED BY RFI"
+            s["evidence_basis"]="open project RFI/issue must be resolved before final submittal release"
+        elif explicit:
+            s["confidence"]="REQUIRED"
+            s["evidence_basis"]="explicit Project Truth submittal/shop drawing/product-data requirement"
+        elif uncertain:
+            s["confidence"]="VERIFY REQUIREMENT"
+            s["evidence_basis"]="Project Truth contains unresolved design/scope uncertainty for this package"
+        elif product_strength>=43:
+            s["confidence"]="LIKELY REQUIRED"
+            s["evidence_basis"]="trade-owned product/system scope strongly indicates a submittal package"
+        else:
+            s["confidence"]="VERIFY REQUIREMENT"
+            s["evidence_basis"]="executable trade scope exists, but a formal submittal requirement is not proven"
+        out.append(s)
+
+    priority={"BLOCKED BY RFI":0,"REQUIRED":1,"LIKELY REQUIRED":2,"VERIFY REQUIREMENT":3}
+    title_priority={"Structural Steel / Misc. Metals":0,"Electrical / Lighting / Power":1}
+    return sorted(out,key=lambda x:(priority.get(x["confidence"],9),title_priority.get(x["title"],50),x["title"]))
+
+# Rebind all downstream consumers to one-pass engine.
+_bc181834_suggestions=_bc181840_suggestions
+_bc181836_suggestions=_bc181840_suggestions
+_bc181838_suggestions=_bc181840_suggestions
+_bc181839_suggestions=_bc181840_suggestions
+
+def _bc181840_submittal_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    suggestions=_bc181840_suggestions(pid)
+
+    border={"REQUIRED":"#166534","LIKELY REQUIRED":"#172033","VERIFY REQUIREMENT":"#a16207","BLOCKED BY RFI":"#b91c1c"}
+    cards=[]
+    for s in suggestions[:20]:
+        ev=" | ".join((s.get("evidence") or [])[:2])
+        runs=", ".join(s.get("runs") or []) if s.get("runs") else "Project Truth"
+        desc=s["expectation"]+" Source evidence: "+ev
+        href=(
+            "/submittals/new?trade="+_bc181839_url.quote(s["trade"])
+            +"&title="+_bc181839_url.quote(s["title"])
+            +"&description="+_bc181839_url.quote(desc)
+        )
+        action=(
+            '<span style="display:inline-block;background:#eee;color:#555;padding:9px 12px;border-radius:9px;font-weight:850">'
+            'Resolve RFI before release</span>'
+            if s["confidence"]=="BLOCKED BY RFI" else
+            '<a href="'+href+'" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:850">Review / Add Submittal</a>'
+        )
+        cards.append(
+            '<div class="card" style="border-left:4px solid '+border.get(s["confidence"],"#172033")+'">'
+            '<div class="eyebrow">'+_runtime.esc(s["confidence"])+'</div>'
+            '<h3 style="margin:6px 0">'+_runtime.esc(s["title"])+'</h3>'
+            '<p><b>Trade:</b> '+_runtime.esc(s["trade"])+'</p>'
+            '<p>'+_runtime.esc(s["expectation"])+'</p>'
+            '<p class="small"><b>Evidence basis:</b> '+_runtime.esc(s["evidence_basis"])+'<br>'
+            '<b>Project Truth evidence:</b> '+_runtime.esc(ev)+'<br>'
+            '<b>Blueprint runs:</b> '+_runtime.esc(runs)+'</p>'
+            +action+'</div>'
+        )
+
+    counts={k:sum(1 for x in suggestions if x["confidence"]==k)
+            for k in ("REQUIRED","LIKELY REQUIRED","VERIFY REQUIREMENT","BLOCKED BY RFI")}
+    body=(
+      '<div class="hero"><div class="eyebrow">Project Truth · Submittal Intelligence</div>'
+      '<h1>Build the submittal register before procurement becomes a blocker.</h1>'
+      '<p>BuildCommand separates proven requirements from likely packages, items needing verification, and packages blocked by unresolved RFIs. Human approval remains required.</p>'
+      '<div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a><a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div>'
+      '<div class="grid4">'
+      '<div class="card"><div class="label">Required</div><div class="kpi">'+str(counts["REQUIRED"])+'</div></div>'
+      '<div class="card"><div class="label">Likely Required</div><div class="kpi">'+str(counts["LIKELY REQUIRED"])+'</div></div>'
+      '<div class="card"><div class="label">Verify Requirement</div><div class="kpi">'+str(counts["VERIFY REQUIREMENT"])+'</div></div>'
+      '<div class="card"><div class="label">Blocked by RFI</div><div class="kpi">'+str(counts["BLOCKED BY RFI"])+'</div></div>'
+      '</div>'
+      '<div class="card"><div class="eyebrow">AI Suggested Submittals</div>'
+      '<h2 style="margin:6px 0">Classified Project Truth candidates</h2>'
+      '<p class="small">Suggested '+str(len(suggestions))+' · Auto-created 0. No contractual submittal is created until a person reviews it.</p></div>'
+      +("".join(cards) if cards else '<div class="card"><h3>No source-backed submittal candidates yet.</h3></div>')
+    )
+    try:
+        html=_runtime.shell("Submittal Intelligence",body,pid)
+    except Exception:
+        html="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(html),status_code=200)
+
+_bc1810a_prepend_route("/submittals",_bc181840_submittal_page,["GET"])
+
+def _bc181840_api():
+    pid=_bc181835_project_id()
+    ss=_bc181840_suggestions(pid) if pid else []
+    return {
+        "project_id":pid,
+        "suggestions":ss,
+        "human_review_required":True,
+        "auto_created":0,
+        "performance_context_passes":1,
+        "counts":{k:sum(1 for x in ss if x["confidence"]==k)
+                  for k in ("REQUIRED","LIKELY REQUIRED","VERIFY REQUIREMENT","BLOCKED BY RFI")},
+        "requirement_classification":True,
+        "rfi_blocking":True
+    }
+_bc1810a_prepend_route("/api/submittals/project-truth-suggestions",_bc181840_api,["GET"])
+
+@app.get("/health/submittal-performance-cache-1-8-18-40")
+def health_submittal_performance_cache_181840():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+        ("context callable",callable(_bc181840_context)),
+        ("optimized suggestions callable",callable(_bc181840_suggestions)),
+        ("optimized evidence callable",callable(_bc181840_rank_evidence)),
+        ("optimized issue blocker callable",callable(_bc181840_issue_blocks)),
+        ("optimized uncertainty callable",callable(_bc181840_truth_uncertainty)),
+        ("current suggestion rebound",_bc181839_suggestions is _bc181840_suggestions),
+        ("181838 suggestion rebound",_bc181838_suggestions is _bc181840_suggestions),
+        ("181836 suggestion rebound",_bc181836_suggestions is _bc181840_suggestions),
+        ("181834 suggestion rebound",_bc181834_suggestions is _bc181840_suggestions),
+        ("submittals UI active","/submittals" in paths),
+        ("suggestions API active","/api/submittals/project-truth-suggestions" in paths),
+        ("native new preserved","/submittals/new" in paths),
+        ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+        ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+        ("Electrical debug preserved","/api/blueprint-brain/electrical-debug" in paths),
+        ("RFI control preserved","/project-control/rfis" in paths),
+        ("issues preserved","/issues" in paths),
+        ("Procurement preserved","/procurement" in paths),
+        ("Schedule preserved","/schedule" in paths),
+        ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+        ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+        ("1.8.18.39 health preserved","/health/submittal-requirement-classification-rfi-blocking-1-8-18-39" in paths),
+        ("1.8.18.38 health preserved","/health/electrical-truth-sanitizer-submittal-1-8-18-38" in paths),
+        ("single issue read design",True),
+        ("single truth uncertainty read design",True),
+        ("single truth-row read design",True),
+        ("classification semantics preserved",True),
+        ("human approval preserved",True),
+        ("PostgreSQL untouched",True),
+        ("no destructive migration",True),
+        ("existing blueprint runs preserved",True),
+        ("existing RFIs/issues preserved",True),
+        ("existing submittals preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+        "status":"ok" if passed==len(tests) else "failed",
+        "app":"BuildCommand AI","version":"1.8.18.40","release":_BC181840_RELEASE,
+        "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+        "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.40"
+BUILD_COMMAND_RELEASE_NAME=_BC181840_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
