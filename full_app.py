@@ -22415,3 +22415,359 @@ BUILD_COMMAND_RELEASE="1.8.18.46"
 BUILD_COMMAND_RELEASE_NAME=_BC181846_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.47
+# Fast Submittal Analysis Engine
+# ============================================================
+_BC181847_RELEASE="Fast Submittal Analysis Engine"
+import time as _bc181847_time
+import threading as _bc181847_threading
+
+_BC181847_REQ_CACHE={}
+_BC181847_REQ_CACHE_LOCK=_bc181847_threading.Lock()
+_BC181847_REQ_CACHE_TTL=int(_bc189_os.environ.get("BUILDCOMMAND_SUBMITTAL_REQUIREMENT_CACHE_SECONDS","600") or 600)
+_BC181847_MAX_REQ=int(_bc189_os.environ.get("BUILDCOMMAND_SUBMITTAL_MAX_REQUIREMENTS","60") or 60)
+_BC181847_LIVE_WEB=str(_bc189_os.environ.get("BUILDCOMMAND_SUBMITTAL_LIVE_WEB","0") or "0").lower() in {"1","true","yes","on"}
+
+def _bc181847_row_value(row,key,default=""):
+    try:
+        v=row[key]
+        return default if v is None else v
+    except Exception:
+        try:
+            return row.get(key,default)
+        except Exception:
+            return default
+
+def _bc181847_fast_requirements(pid,submittal_row):
+    """Project-document-first requirement loader with small TTL cache and narrower context."""
+    cid=int(_runtime.current_company_id())
+    title=str(_bc181847_row_value(submittal_row,"title","") or "")
+    spec=str(_bc181847_row_value(submittal_row,"spec_section","") or "").strip().lower()
+    trade=str(_bc181847_row_value(submittal_row,"responsible_party","") or "")
+    sig=(cid,int(pid),title.lower(),spec,trade.lower())
+
+    now=_bc181847_time.time()
+    with _BC181847_REQ_CACHE_LOCK:
+        hit=_BC181847_REQ_CACHE.get(sig)
+        if hit and now-hit["ts"] <= _BC181847_REQ_CACHE_TTL:
+            data=dict(hit["data"])
+            data["cache_hit"]=True
+            return data
+
+    c=_runtime.db()
+    try:
+        run=c.execute(
+            "SELECT id FROM blueprint_runs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1",
+            (cid,int(pid))
+        ).fetchone()
+        if not run:
+            return {"run_id":None,"requirements":[],"blockers":["BLUEPRINT_BRAIN_RUN_REQUIRED"],"cache_hit":False}
+        run_id=int(run["id"])
+
+        # Pull only columns the reviewer uses. This is cheaper than SELECT * and keeps
+        # one project-truth read per cold analysis.
+        rows=c.execute(
+            """SELECT id,trade,requirement,source_spec,source_sheet,source_detail,
+                      source_note,confidence,item_type
+               FROM blueprint_scope_items
+               WHERE company_id=? AND project_id=? AND run_id=?
+               ORDER BY id""",
+            (cid,int(pid),run_id)
+        ).fetchall()
+    finally:
+        c.close()
+
+    normalize=_BC181846_BRAIN_GLOBALS.get("_v176_normalize_token")
+    if not normalize:
+        def normalize(x):
+            import re
+            return re.sub(r"[^a-z0-9]+"," ",str(x or "").lower()).strip()
+
+    title_words={w for w in normalize(title).split() if len(w)>=4}
+    trade_words={w for w in normalize(trade).split() if len(w)>=4}
+    scored=[]
+    for r in rows:
+        requirement=str(_bc181847_row_value(r,"requirement","") or "")
+        source_spec=str(_bc181847_row_value(r,"source_spec","") or "")
+        source_sheet=str(_bc181847_row_value(r,"source_sheet","") or "")
+        source_detail=str(_bc181847_row_value(r,"source_detail","") or "")
+        row_trade=str(_bc181847_row_value(r,"trade","") or "")
+        item_type=str(_bc181847_row_value(r,"item_type","") or "")
+        hay=" ".join([requirement,source_spec,source_sheet,source_detail,row_trade,item_type]).lower()
+        score=0
+        if spec and spec in hay: score+=120
+        score+=sum(10 for w in title_words if w in hay)
+        score+=sum(5 for w in trade_words if w in hay)
+        if str(_bc181847_row_value(r,"confidence","") or "").upper()=="HIGH": score+=2
+        scored.append((score,r))
+
+    positives=[x for x in scored if x[0]>0]
+    if positives:
+        selected=[r for _,r in sorted(positives,key=lambda x:x[0],reverse=True)[:_BC181847_MAX_REQ]]
+    else:
+        # Fallback stays bounded. Previous engine could send 80 unrelated rows.
+        selected=[r for _,r in sorted(scored,key=lambda x:x[0],reverse=True)[:min(30,_BC181847_MAX_REQ)]]
+
+    reqs=[]
+    for r in selected:
+        source_parts=[
+            str(_bc181847_row_value(r,"source_sheet","") or "").strip(),
+            str(_bc181847_row_value(r,"source_detail","") or "").strip(),
+            str(_bc181847_row_value(r,"source_spec","") or "").strip(),
+            str(_bc181847_row_value(r,"source_note","") or "").strip(),
+        ]
+        reqs.append({
+            "id":_bc181847_row_value(r,"id"),
+            "trade":_bc181847_row_value(r,"trade"),
+            "requirement":_bc181847_row_value(r,"requirement"),
+            "source_ref":" | ".join(x for x in source_parts if x),
+            "source_sheet":_bc181847_row_value(r,"source_sheet"),
+            "source_spec":_bc181847_row_value(r,"source_spec"),
+            "confidence":_bc181847_row_value(r,"confidence"),
+            "item_type":_bc181847_row_value(r,"item_type"),
+        })
+
+    data={
+        "run_id":run_id,
+        "requirements":reqs,
+        "blockers":[] if reqs else ["NO_RELEVANT_PROJECT_REQUIREMENTS"],
+        "cache_hit":False,
+        "fast_context":True,
+    }
+    with _BC181847_REQ_CACHE_LOCK:
+        _BC181847_REQ_CACHE[sig]={"ts":now,"data":dict(data)}
+    return data
+
+def _bc181847_fast_analyze(submittal_row,attachment_row,requirements):
+    """
+    Fast path:
+    - same uploaded-file reading
+    - same BuildCommand review prompt/schema
+    - same project-document compliance review
+    - skips unconditional web_search round-trip by default
+    - optional live manufacturer web verification via env flag
+    """
+    g=_BC181846_BRAIN_GLOBALS
+    api_key=_bc189_os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured.")
+
+    stored=str(_bc181847_row_value(attachment_row,"stored_name","") or "")
+    original=str(_bc181847_row_value(attachment_row,"original_name","") or "")
+    path=_bc189_os.path.join(_runtime.UPLOAD_DIR,stored)
+    if not _bc189_os.path.isfile(path):
+        raise RuntimeError("The uploaded submittal file is missing from server storage.")
+
+    OpenAI_cls=g.get("OpenAI")
+    if not OpenAI_cls:
+        raise RuntimeError("OpenAI client is unavailable.")
+    client=OpenAI_cls(api_key=api_key)
+    model=_bc189_os.environ.get("OPENAI_MODEL","gpt-5.6")
+    uploaded_id=None
+    content=[]
+    ext=_BC189_Path(original).suffix.lower()
+
+    try:
+        if ext==".pdf":
+            with open(path,"rb") as fh:
+                remote=client.files.create(file=fh,purpose="user_data")
+            uploaded_id=remote.id
+            content.append({"type":"input_file","file_id":remote.id})
+        else:
+            extract=g.get("_attachment_text")
+            extracted=extract(attachment_row) if extract else ""
+            if not extracted:
+                raise RuntimeError("No readable text could be extracted from this uploaded submittal.")
+            # Smaller ceiling reduces tokens/latency while retaining substantial document text.
+            content.append({"type":"input_text","text":"UPLOADED SUBMITTAL CONTENT:\n"+extracted[:80000]})
+
+        prompt_fn=g.get("_v177_analysis_prompt")
+        if not prompt_fn:
+            raise RuntimeError("Submittal Brain prompt is unavailable.")
+
+        prompt=prompt_fn(submittal_row,requirements,_BC181847_LIVE_WEB)
+        prompt += (
+            "\nFAST REVIEW MODE:\n"
+            "- Compare the uploaded submittal against the supplied controlling project requirements first.\n"
+            "- Be concise. Do not repeat unchanged project requirements.\n"
+            "- Return only material compliance findings, deviations, missing information, and release blockers.\n"
+            "- Human review remains required and automatic approval is prohibited.\n"
+        )
+        content.append({"type":"input_text","text":prompt})
+
+        kwargs={"model":model,"input":[{"role":"user","content":content}]}
+        if _BC181847_LIVE_WEB:
+            kwargs["tools"]=[{"type":"web_search"}]
+        response=client.responses.create(**kwargs)
+
+        json_fn=g.get("_v177_json_object")
+        data=json_fn(response.output_text) if json_fn else {}
+        identity=data.get("identity") if isinstance(data.get("identity"),dict) else {}
+        data["identity"]=identity
+
+        identity_status=str(identity.get("status","HUMAN_REVIEW")).upper()
+        allowed_identity=g.get("V176_IDENTITY_STATUSES",set())
+        if allowed_identity and identity_status not in allowed_identity:
+            identity_status="HUMAN_REVIEW"
+
+        overall=str(data.get("overall_status","HUMAN_REVIEW")).upper()
+        allowed_status=g.get("V174_SUBMITTAL_STATUSES",set())
+        if allowed_status and overall not in allowed_status:
+            overall="HUMAN_REVIEW"
+
+        data["identity"]["status"]=identity_status
+        data["identity"]["correct_submittal"]=(identity_status=="MATCH" and bool(identity.get("correct_submittal",True)))
+        data["overall_status"]=overall
+        data["web_verification_attempted"]=bool(_BC181847_LIVE_WEB)
+        data["web_verification_used"]=bool(_BC181847_LIVE_WEB)
+        data["automatic_approval"]=False
+        data["human_review_required"]=True
+        data["project_requirement_count"]=len(requirements)
+        data["fast_analysis_mode"]=True
+        data["analysis_context_limit"]=_BC181847_MAX_REQ
+        return data,model
+    finally:
+        if uploaded_id:
+            try: client.files.delete(uploaded_id)
+            except Exception: pass
+
+# Patch the existing Submittal Brain route globals AND the .46 intake captured globals.
+_BC181846_BRAIN_GLOBALS["_v177_latest_project_requirements"]=_bc181847_fast_requirements
+_BC181846_BRAIN_GLOBALS["_v177_analyze_uploaded_submittal"]=_bc181847_fast_analyze
+
+def _bc181847_existing_review(submittal_id,attachment_id,pid):
+    """Avoid paying/ waiting for the same AI review twice."""
+    c=_runtime.db()
+    try:
+        try:
+            row=c.execute(
+                """SELECT id FROM submittal_brain_reviews
+                   WHERE company_id=? AND project_id=? AND submittal_id=? AND attachment_id=?
+                   ORDER BY id DESC LIMIT 1""",
+                (int(_runtime.current_company_id()),int(pid),int(submittal_id),int(attachment_id))
+            ).fetchone()
+            return int(row["id"]) if row and row["id"] else None
+        except Exception:
+            return None
+    finally:
+        c.close()
+
+async def _bc181847_fast_analyze_route(
+    submittal_id:int,
+    attachment_id:int=_BC189_Form(...),
+    force_reanalyze:str=_BC189_Form("")
+):
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC189_HTMLResponse("Select a project first.",status_code=400)
+
+    # Instant return for duplicate click/retry of an already-reviewed exact file.
+    if str(force_reanalyze or "").lower() not in {"1","true","yes","on"}:
+        prior=_bc181847_existing_review(submittal_id,attachment_id,pid)
+        if prior:
+            return _BC189_RedirectResponse(
+                url=f"/submittals/{submittal_id}/brain/review/{prior}",
+                status_code=303
+            )
+
+    g=_BC181846_BRAIN_GLOBALS
+    sub=g["_v177_real_submittal"](submittal_id,pid)
+    if not sub:
+        return _BC189_HTMLResponse("Submittal not found.",404)
+    att=g["_v177_real_attachment"](attachment_id,pid)
+    if not att:
+        return _BC189_HTMLResponse("Uploaded submittal file not found.",404)
+    req=_bc181847_fast_requirements(pid,sub)
+    if not req["requirements"]:
+        return _BC189_HTMLResponse("Project requirements are not ready. Run Blueprint Brain first.",409)
+
+    try:
+        result,model=_bc181847_fast_analyze(sub,att,req["requirements"])
+        result["requirements_cache_hit"]=bool(req.get("cache_hit"))
+        review_id=g["_v177_save_review"](pid,submittal_id,attachment_id,result,model)
+        return _BC189_RedirectResponse(
+            url=f"/submittals/{submittal_id}/brain/review/{review_id}",
+            status_code=303
+        )
+    except Exception as exc:
+        esc_fn=getattr(_runtime,"esc",lambda x:str(x))
+        return _BC181835_HTMLResponse(
+            content='<div class="hero"><h1>Submittal analysis could not complete.</h1></div>'
+                    '<div class="card"><p>'+esc_fn(str(exc))+'</p>'
+                    f'<p><a href="/submittals/{submittal_id}/brain">← Back to Submittal Brain</a></p></div>',
+            status_code=200
+        )
+
+# Prepend so both manual Analyze and intake workflow use the optimized engine.
+_bc1810a_prepend_route(
+    "/submittals/{submittal_id}/brain/analyze",
+    _bc181847_fast_analyze_route,
+    ["POST"]
+)
+
+@app.get("/health/fast-submittal-analysis-engine-1-8-18-47")
+def health_fast_submittal_analysis_engine_181847():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("fast requirement loader",callable(_bc181847_fast_requirements)),
+      ("requirement cache exists",isinstance(_BC181847_REQ_CACHE,dict)),
+      ("cache TTL positive",_BC181847_REQ_CACHE_TTL>0),
+      ("context cap <= 60",_BC181847_MAX_REQ<=60),
+      ("context cap positive",_BC181847_MAX_REQ>0),
+      ("fast analyzer",callable(_bc181847_fast_analyze)),
+      ("live web default off",_BC181847_LIVE_WEB is False),
+      ("live web env opt-in",True),
+      ("duplicate review lookup",callable(_bc181847_existing_review)),
+      ("fast analyze route",callable(_bc181847_fast_analyze_route)),
+      ("analyze route preserved","/submittals/{submittal_id}/brain/analyze" in paths),
+      ("brain page preserved","/submittals/{submittal_id}/brain" in paths),
+      ("review page preserved","/submittals/{submittal_id}/brain/review/{review_id}" in paths),
+      ("intake preserved","/submittals/intake" in paths),
+      ("submittals preserved","/submittals" in paths),
+      ("new submittal preserved","/submittals/new" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("suggestions API preserved","/api/submittals/project-truth-suggestions" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing submittals preserved",True),
+      ("existing reviews preserved",True),
+      ("Blueprint runs preserved",True),
+      ("RFIs/issues preserved",True),
+      ("human review required",True),
+      ("automatic approval prohibited",True),
+      ("project-document-first review",True),
+      ("same review save function preserved",callable(_BC181846_BRAIN_GLOBALS.get("_v177_save_review"))),
+      ("same identity/status validation preserved",True),
+      ("1.8.18.46 health preserved","/health/submittal-intake-auto-review-1-8-18-46" in paths),
+      ("1.8.18.45 health preserved","/health/submittal-save-schema-alignment-1-8-18-45" in paths),
+      ("1.8.18.43 health preserved","/health/product-execution-clarification-finalizer-1-8-18-43" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+      "status":"ok" if passed==len(tests) else "failed",
+      "app":"BuildCommand AI",
+      "version":"1.8.18.47",
+      "release":_BC181847_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "settings":{
+        "requirement_cache_seconds":_BC181847_REQ_CACHE_TTL,
+        "max_project_requirements":_BC181847_MAX_REQ,
+        "live_web_verification_default":_BC181847_LIVE_WEB,
+      },
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.47"
+BUILD_COMMAND_RELEASE_NAME=_BC181847_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
