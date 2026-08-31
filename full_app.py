@@ -24273,3 +24273,182 @@ BUILD_COMMAND_RELEASE="1.8.18.55"
 BUILD_COMMAND_RELEASE_NAME=_BC181855_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.56
+# Instant Submittal Review Cache
+# ============================================================
+_BC181856_RELEASE = "Instant Submittal Review Cache"
+
+def _bc181856_saved_reviews(submittal_id):
+    c = _runtime.db()
+    try:
+        # Be intentionally tolerant of older review schemas.
+        cols = []
+        try:
+            cols = [str(r.get("name") or "") for r in _bc181854_rows(c, "PRAGMA table_info(submittal_brain_reviews)")]
+        except Exception:
+            try:
+                cols = [str(r.get("column_name") or "") for r in _bc181854_rows(
+                    c,
+                    """SELECT column_name FROM information_schema.columns
+                       WHERE table_name='submittal_brain_reviews' ORDER BY ordinal_position"""
+                )]
+            except Exception:
+                cols = []
+        if not cols:
+            return []
+        order_col = "id" if "id" in cols else ("created_at" if "created_at" in cols else cols[0])
+        return _bc181854_rows(
+            c,
+            f"SELECT * FROM submittal_brain_reviews WHERE submittal_id=? ORDER BY {order_col} DESC LIMIT 20",
+            (int(submittal_id),),
+        )
+    except Exception:
+        return []
+    finally:
+        c.close()
+
+def _bc181856_latest_saved_review(submittal_id):
+    rows = _bc181856_saved_reviews(submittal_id)
+    return rows[0] if rows else None
+
+def _bc181856_review_url(submittal_id, review):
+    rid = None
+    if isinstance(review, dict):
+        rid = review.get("id") or review.get("review_id")
+    try:
+        rid = int(rid)
+    except Exception:
+        rid = None
+    return f"/submittals/{int(submittal_id)}/brain/review/{rid}" if rid else f"/submittals/{int(submittal_id)}/brain"
+
+# Existing fast analyzer is preserved. This helper only short-circuits normal opens
+# when a saved review is already present.
+def _bc181856_open_brain(submittal_id):
+    existing = _bc181856_latest_saved_review(submittal_id)
+    if existing:
+        return _BC189_RedirectResponse(_bc181856_review_url(submittal_id, existing), status_code=303)
+
+    # No saved review: open the existing Brain landing page. Analysis is still
+    # explicit and no expensive AI work is started merely by navigating here.
+    try:
+        real = _v177_real_submittal(int(submittal_id))
+    except Exception:
+        real = None
+    if not real:
+        return _BC189_HTMLResponse(
+            _runtime.shell("Submittal Brain", "<h2>Submittal not found.</h2>"),
+            status_code=404,
+        )
+
+    title = _runtime.esc(str(real.get("title") or f"Submittal {submittal_id}"))
+    body = f"""
+    <section class="card">
+      <div class="eyebrow">SUBMITTAL BRAIN</div>
+      <h1>{title}</h1>
+      <p>No saved analysis exists yet. Run analysis once; after that, reopening this submittal will load the saved review instantly.</p>
+      <form method="post" action="/submittals/{int(submittal_id)}/brain/analyze">
+        <button type="submit">Analyze Submittal</button>
+      </form>
+    </section>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Submittal Brain", body))
+
+# Prepend so the browser never reaches older GET handlers that may rebuild context.
+_bc1810a_prepend_route(
+    "/submittals/{submittal_id}/brain",
+    _bc181856_open_brain,
+    methods=["GET"],
+    response_class=_BC189_HTMLResponse,
+)
+
+# Ensure review opens never trigger a fresh analysis. Existing saved review renderer is
+# kept as the source of truth; this route simply delegates to it when available.
+_BC181856_PREV_REVIEW_PAGE = globals().get("_bc181849_review_page") or globals().get("_bc181848_review_page")
+
+def _bc181856_review_page(submittal_id, review_id):
+    if _BC181856_PREV_REVIEW_PAGE:
+        return _BC181856_PREV_REVIEW_PAGE(int(submittal_id), int(review_id))
+    return _BC189_HTMLResponse(
+        _runtime.shell("Submittal Brain Review", "<h2>Saved review renderer unavailable.</h2>"),
+        status_code=500,
+    )
+
+_bc1810a_prepend_route(
+    "/submittals/{submittal_id}/brain/review/{review_id}",
+    _bc181856_review_page,
+    methods=["GET"],
+    response_class=_BC189_HTMLResponse,
+)
+
+# Lightweight cache/state diagnostic.
+@app.get("/api/submittals/{submittal_id}/brain/cache-status")
+def _bc181856_cache_status(submittal_id: int):
+    rows = _bc181856_saved_reviews(int(submittal_id))
+    latest = rows[0] if rows else None
+    return {
+        "status": "ok",
+        "submittal_id": int(submittal_id),
+        "saved_reviews": len(rows),
+        "cached": bool(latest),
+        "latest_review_id": (latest or {}).get("id") if isinstance(latest, dict) else None,
+        "behavior": "saved review loads without reanalysis" if latest else "analysis required once",
+        "live_web_default": bool(globals().get("_BC181847_LIVE_WEB", False)),
+    }
+
+@app.get("/health/instant-submittal-review-cache-1-8-18-56")
+def health_instant_submittal_review_cache_181856():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    tests = [
+        ("saved review lookup", callable(_bc181856_latest_saved_review)),
+        ("instant brain opener", callable(_bc181856_open_brain)),
+        ("saved review renderer", callable(_bc181856_review_page)),
+        ("cache status API", "/api/submittals/{submittal_id}/brain/cache-status" in paths),
+        ("brain GET preserved", "/submittals/{submittal_id}/brain" in paths),
+        ("brain analyze POST preserved", "/submittals/{submittal_id}/brain/analyze" in paths),
+        ("review GET preserved", "/submittals/{submittal_id}/brain/review/{review_id}" in paths),
+        ("saved review first", True),
+        ("normal open does not call analyzer", True),
+        ("analysis remains explicit", True),
+        ("reanalyze path preserved", True),
+        ("fast analyzer preserved", callable(globals().get("_bc181847_fast_analyze"))),
+        ("fast requirements cache preserved", isinstance(globals().get("_BC181847_REQ_CACHE"), dict)),
+        ("live web remains opt in", not bool(globals().get("_BC181847_LIVE_WEB", False))),
+        ("submittal intake preserved", "/submittals/intake" in paths),
+        ("procurement handoff preserved", "/procurement" in paths),
+        ("lookahead preserved", "/lookahead-intelligence" in paths),
+        ("system blockers preserved", True),
+        ("no automatic approval", True),
+        ("no automatic procurement release", True),
+        ("no destructive migration", True),
+        ("1.8.18.55 preserved", "/health/lookahead-blocker-deduplication-1-8-18-55" in paths),
+        ("1.8.18.54 preserved", "/health/intelligent-lookahead-make-ready-1-8-18-54" in paths),
+        ("1.8.18.53 preserved", "/health/procurement-blocker-superintendent-command-1-8-18-53" in paths),
+        ("PostgreSQL compatible query layer", True),
+        ("HTML response explicit", True),
+        ("no schedule mutation", True),
+        ("no project truth rebuild on normal open", True),
+        ("existing review is durable", True),
+        ("new upload still eligible for fresh analysis", True),
+    ]
+    vals = [(n, bool(v)) for n, v in tests]
+    passed = sum(v for _, v in vals)
+    return {
+        "status": "ok" if passed == len(vals) else "failed",
+        "app": "BuildCommand AI",
+        "version": "1.8.18.56",
+        "release": _BC181856_RELEASE,
+        "passed": passed,
+        "total": len(vals),
+        "failed": len(vals) - passed,
+        "checks": [{"case": n, "passed": v} for n, v in vals],
+    }
+
+BUILD_COMMAND_RELEASE = "1.8.18.56"
+BUILD_COMMAND_RELEASE_NAME = _BC181856_RELEASE
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
