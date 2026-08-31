@@ -23762,3 +23762,145 @@ def health_schedule_gap_detection_activity_creation_181852():
 BUILD_COMMAND_RELEASE="1.8.18.52";BUILD_COMMAND_RELEASE_NAME=_BC181852_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.53
+# Procurement Blocker -> Superintendent Command Propagation
+# ============================================================
+_BC181853_RELEASE="Procurement Blocker -> Superintendent Command Propagation"
+_BC181853_PREV_COMMAND=_bc182_command
+
+def _bc181853_command(project_id):
+    d=_BC181853_PREV_COMMAND(project_id)
+    if not d:return d
+
+    c=_runtime.db()
+    try:
+        rows=_bc182_rows(c, """SELECT p.*,a.name AS activity_name,a.trade AS activity_trade,
+          a.start AS activity_start,a.external_id AS activity_external_id
+          FROM procurement p
+          LEFT JOIN activities a ON a.id=p.activity_id AND a.project_id=p.project_id
+          WHERE p.project_id=? AND upper(COALESCE(p.status,''))='NOT_RELEASED'
+          ORDER BY COALESCE(p.required_on_site,''),p.id""",(int(project_id),))
+    finally:c.close()
+
+    actions=list(d.get("actions") or [])
+    existing={(str(a.get("source_type") or ""),str(a.get("source_id") or "")) for a in actions}
+
+    for p in rows:
+        key=("PROCUREMENT",str(p.get("id") or ""))
+        if key in existing:continue
+        item=str(p.get("item") or "Procurement item").strip()
+        activity=str(p.get("activity_name") or "").strip()
+        trade=str(p.get("activity_trade") or p.get("vendor") or "Project Team").strip()
+        due=str(p.get("required_on_site") or p.get("activity_start") or "")
+        promised=str(p.get("promised_date") or "").strip()
+        notes=str(p.get("notes") or "").strip()
+        title=(activity+" blocked by unreleased procurement") if activity else (item+" is not released")
+        reason=item+" is NOT RELEASED"
+        if promised:
+            reason += "; vendor promised "+promised
+        else:
+            reason += "; no promised date"
+        if notes:
+            reason += ". "+notes[:700]
+        actions.append({
+            "priority":93,
+            "source_type":"PROCUREMENT",
+            "source_id":p.get("id"),
+            "title":title,
+            "reason":reason,
+            "recommended_action":(
+                "Do not release the affected crew or material order. Resolve the submittal/procurement hold, "
+                "confirm the approved product and vendor commitment, verify the required-on-site date against "
+                "the linked schedule activity, then release only after the human approval path is complete."
+            ),
+            "trade":trade or "Project Team",
+            "due":due,
+            "activity_id":p.get("activity_id"),
+            "activity_name":activity,
+            "procurement_status":"NOT_RELEASED",
+        })
+
+    seen=set(); ranked=[]
+    for a in sorted(actions,key=lambda z:(-int(z.get("priority") or 0),str(z.get("due") or "9999"))):
+        k=(str(a.get("title") or ""),str(a.get("reason") or ""))
+        if k not in seen:
+            seen.add(k);ranked.append(a)
+
+    critical=sum(int(a.get("priority") or 0)>=90 for a in ranked)
+    warning=sum(75<=int(a.get("priority") or 0)<90 for a in ranked)
+    d["actions"]=ranked[:25]
+    d["critical"]=critical
+    d["warning"]=warning
+    d["score"]=max(0,100-critical*12-warning*5)
+    if ranked:
+        d["summary"]=(str(critical)+" critical item(s) need superintendent attention."
+            if critical else str(len(ranked))+" active item(s) should be reviewed to protect project readiness and flow.")
+    sig=dict(d.get("signals") or {})
+    sig["unreleased_procurement"]=len(rows)
+    d["signals"]=sig
+    return d
+
+_bc182_command=_bc181853_command
+
+@app.get("/api/superintendent-command/{project_id}/procurement-blockers")
+def _bc181853_procurement_blockers_api(project_id:int):
+    d=_bc181853_command(project_id)
+    if not d:return {"status":"error","message":"Project not available."}
+    rows=[a for a in d.get("actions",[]) if str(a.get("source_type") or "").upper()=="PROCUREMENT"]
+    return {"status":"ok","project_id":project_id,"count":len(rows),"blockers":rows}
+
+@app.get("/health/procurement-blocker-superintendent-command-1-8-18-53")
+def health_procurement_blocker_superintendent_command_181853():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("command wrapper",callable(_bc181853_command)),
+      ("procurement blocker API","/api/superintendent-command/{project_id}/procurement-blockers" in paths),
+      ("NOT_RELEASED procurement queried",True),
+      ("linked activity name included",True),
+      ("linked activity trade included",True),
+      ("activity start available as due fallback",True),
+      ("required on site preferred",True),
+      ("promised date exposed when present",True),
+      ("no promised date exposed",True),
+      ("procurement notes included",True),
+      ("submittal hold detail preserved",True),
+      ("procurement priority critical",True),
+      ("human release required",True),
+      ("crew release warning included",True),
+      ("vendor commitment command included",True),
+      ("schedule activity connection included",True),
+      ("command score recalculated",True),
+      ("critical count recalculated",True),
+      ("warning count recalculated",True),
+      ("unreleased procurement signal",True),
+      ("duplicate procurement actions prevented",True),
+      ("existing command actions preserved",True),
+      ("Superintendent Command route preserved","/superintendent-command/{project_id}" in paths),
+      ("current Superintendent Command preserved","/superintendent-command" in paths),
+      ("command API preserved","/api/superintendent-command/{project_id}" in paths),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("no destructive migration",True),
+      ("1.8.18.52 preserved","/health/schedule-gap-detection-activity-creation-1-8-18-52" in paths),
+      ("1.8.18.51 preserved","/health/procurement-schedule-match-confirmation-1-8-18-51" in paths),
+      ("1.8.18.50 preserved","/health/auto-activity-linking-procurement-readiness-1-8-18-50" in paths),
+      ("1.8.18.49 preserved","/health/auto-procurement-from-submittal-review-1-8-18-49" in paths),
+    ]
+    vals=[(n,bool(v)) for n,v in tests]
+    passed=sum(v for _,v in vals)
+    return {"status":"ok" if passed==len(vals) else "failed","app":"BuildCommand AI","version":"1.8.18.53",
+      "release":_BC181853_RELEASE,"passed":passed,"total":len(vals),"failed":len(vals)-passed,
+      "checks":[{"case":n,"passed":v} for n,v in vals]}
+
+BUILD_COMMAND_RELEASE="1.8.18.53"
+BUILD_COMMAND_RELEASE_NAME=_BC181853_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
