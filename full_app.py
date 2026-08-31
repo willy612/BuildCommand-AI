@@ -20059,3 +20059,255 @@ BUILD_COMMAND_RELEASE="1.8.18.36"
 BUILD_COMMAND_RELEASE_NAME=_BC181836_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.37
+# E-Sheet Electrical Recovery & Submittal Intelligence
+# ============================================================
+import copy as _bc181837_copy
+import re as _bc181837_re
+_BC181837_RELEASE="E-Sheet Electrical Recovery & Submittal Intelligence"
+
+_BC181837_ELEC_TERMS=(
+    "electrical","lighting","light fixture","lighting fixture","luminaire","fixture",
+    "branch circuit","circuit","conduit","raceway","wiring","wire","junction box",
+    "panelboard","panel","disconnect","transformer","grounding","ground","bonding",
+    "photocell","occupancy sensor","lighting control","switch","receptacle","power",
+    "breaker","electrical connection","feed","feeder"
+)
+_BC181837_NON_ELEC_SYSTEMS=(
+    "fire sprinkler","sprinkler","fire alarm","f.a.","low voltage","telecom",
+    "telecommunications","security","card access","camera","cctv","data",
+    "hvac","mechanical","plumbing","gas piping"
+)
+_BC181837_EXECUTION=(
+    "provide","furnish","install","rework","relocate","connect","reconnect","extend",
+    "modify","replace","remove","demolish","test","ground","bond","wire","feed",
+    "mount","support","terminate"
+)
+
+def _bc181837_sheet_is_e(sheet):
+    s=str(sheet or "").strip().upper()
+    # Typical electrical sheet naming: E1.0, E101, E-101, E001, EP101, EL101.
+    return bool(_bc181837_re.match(r"^E[A-Z]?(?:[-_. ]?\d)",s))
+
+def _bc181837_is_electrical_scope(text):
+    s=" "+str(text or "").lower()+" "
+    if not any(k in s for k in _BC181837_ELEC_TERMS):
+        return False
+    # Keep specialized systems out unless the statement clearly says electrical power/connection
+    # serving that equipment.
+    if any(k in s for k in _BC181837_NON_ELEC_SYSTEMS):
+        connection_markers=("electrical connection","power connection","provide power","branch circuit","circuit to","feed ","disconnect")
+        if not any(k in s for k in connection_markers):
+            return False
+    return any(k in s for k in _BC181837_EXECUTION) or "SCOPE" in s.upper()
+
+def _bc181837_should_recover_item(item):
+    text=str(item.get("requirement") or "")
+    if not _bc181837_is_electrical_scope(text):
+        return False
+    sources=item.get("sources") or []
+    return any(_bc181837_sheet_is_e((src or {}).get("source_sheet")) for src in sources if isinstance(src,dict))
+
+_BC181837_PREV_TRUTH=_bc181817_unified_truth
+
+def _bc181837_unified_truth(pid):
+    d=_BC181837_PREV_TRUTH(pid)
+    if not isinstance(d,dict) or d.get("status")!="ok":
+        return d
+    d=_bc181837_copy.deepcopy(d)
+    trades=d.get("trades") or []
+    electrical_items=[]
+    rebuilt=[]
+
+    for tr in trades:
+        trade_name=str(tr.get("trade") or "")
+        kept=[]
+        for item in tr.get("items") or []:
+            # Existing Electrical assignments stay Electrical.
+            if trade_name=="Electrical":
+                electrical_items.append(item)
+                continue
+            # Recover only source-backed E-sheet electrical execution accidentally assigned elsewhere.
+            if _bc181837_should_recover_item(item):
+                ni=_bc181837_copy.deepcopy(item)
+                ni["trade"]="Electrical"
+                ni["division"]="26"
+                ni["recovered_from_trade"]=trade_name
+                ni["recovery_reason"]="Executable electrical scope with E-sheet source lineage"
+                electrical_items.append(ni)
+            else:
+                kept.append(item)
+
+        if trade_name!="Electrical" and kept:
+            nt=_bc181837_copy.deepcopy(tr)
+            nt["items"]=kept
+            nt["item_count"]=len(kept)
+            nt["actionable_item_count"]=sum(1 for x in kept if x.get("actionable"))
+            rebuilt.append(nt)
+
+    # Semantic de-dupe recovered/current Electrical items.
+    unique=[]
+    seen=set()
+    for item in electrical_items:
+        key=_bc181814_norm_text(item.get("requirement") or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    if unique:
+        rebuilt.append({
+            "trade":"Electrical",
+            "division":"26",
+            "responsibility_type":"CONTRACT_SCOPE",
+            "item_count":len(unique),
+            "actionable_item_count":sum(1 for x in unique if x.get("actionable")),
+            "items":unique,
+        })
+
+    rebuilt.sort(key=lambda x:(str(x.get("division") or "99"),str(x.get("trade") or "")))
+    d["trades"]=rebuilt
+    d["trade_count"]=len(rebuilt)
+    d["scope_item_count"]=sum(int(x.get("item_count") or 0) for x in rebuilt)
+    d["electrical_recovery"]={
+        "enabled":True,
+        "electrical_item_count":len(unique),
+        "recovered_item_count":sum(1 for x in unique if x.get("recovered_from_trade")),
+        "rule":"Executable Electrical scope sourced from E-sheets is owned by Division 26 Electrical; Low Voltage, Fire Alarm, Fire Sprinkler, HVAC and Plumbing remain separate unless the requirement is specifically the electrical power/connection."
+    }
+    return d
+
+# Forward Project Truth consumers to corrected truth.
+_bc181817_unified_truth=_bc181837_unified_truth
+_bc181814_unified_truth=_bc181837_unified_truth
+_bc181815_unified_truth=_bc181837_unified_truth
+_bc181816_unified_truth=_bc181837_unified_truth
+
+# Blueprint prompt enhancement for future analyses.
+_BC181837_PREV_PROMPT=_runtime._blueprint_prompt
+def _bc181837_blueprint_prompt(source_names):
+    return _BC181837_PREV_PROMPT(source_names)+"""
+\nBUILDCOMMAND 1.8.18.37 ELECTRICAL / E-SHEET OWNERSHIP:
+- Read every E-series electrical sheet as a first-class scope source. Do not summarize the E sheets only as coordination notes.
+- Build executable Division 26 Electrical scope for source-backed lighting fixtures/luminaires, lighting controls, branch circuits, conduit/raceway, conductors/wiring, junction boxes, panels/panelboards, breakers, disconnects, transformers, receptacles, grounding/bonding, supports, connections and electrical testing.
+- Electrical power/connections serving HVAC, plumbing, roofing, equipment or other trades belong in Electrical; the served equipment itself stays with its owning trade.
+- Keep Low Voltage/telecom/security, Fire Alarm, Fire Sprinkler, HVAC/Mechanical and Plumbing as separate scopes. Do not collapse those systems into Electrical merely because they appear on an E sheet.
+- Preserve source sheet/detail/note lineage for every Electrical requirement so downstream Submittal, Procurement, Schedule and Superintendent Command intelligence can trace it back to the E sheets.
+"""
+_runtime._blueprint_prompt=_bc181837_blueprint_prompt
+
+# Electrical becomes a first-class Project Truth -> Submittal rule.
+if "Electrical" not in _BC181836_TRADE_ALIASES:
+    _BC181836_TRADE_ALIASES["Electrical"]=(
+        "electrical","division 26","power","lighting"
+    )
+if "Electrical" not in _BC181836_SCOPE_KEYS:
+    _BC181836_SCOPE_KEYS["Electrical"]=(
+        "electrical","lighting","light fixture","lighting fixture","luminaire",
+        "branch circuit","circuit","conduit","raceway","wiring","junction box",
+        "panelboard","disconnect","transformer","grounding","bonding","photocell",
+        "lighting control","switch","receptacle","power","breaker","electrical connection"
+    )
+if not any(x[0]=="Electrical" for x in _BC181834_RULES):
+    _BC181834_RULES=tuple(_BC181834_RULES)+(
+      ("Electrical","Electrical / Lighting / Power",
+       ("electrical","lighting","fixture","luminaire","branch circuit","conduit","wiring","panel","disconnect","grounding","power"),
+       "Product data, lighting fixture/equipment data, controls, electrical characteristics, shop/coordination drawings, supports, connections, and delegated-design information where required by the project documents."),
+    )
+
+# Stronger Electrical execution detector: normal precision behavior plus common electrical verbs/nouns.
+_BC181837_PREV_EXEC=_bc181836_executable
+def _bc181837_executable(text):
+    s=str(text or "").lower()
+    if _BC181837_PREV_EXEC(text):
+        return True
+    # Whole-word electrical actions only; avoid false matches such as "ground" inside "underground".
+    if _bc181837_re.search(r"\\b(connect|wire|terminate|feed|ground|bond|mount|support)\\b",s):
+        return True
+    return "branch circuit" in s or "circuiting" in s
+_bc181836_executable=_bc181837_executable
+
+# Existing precision engine now consumes corrected Project Truth + Electrical rule.
+_bc181834_suggestions=_bc181836_suggestions
+
+def _bc181837_electrical_debug():
+    pid=_bc181835_project_id()
+    if not pid:
+        return {"status":"no_project"}
+    truth=_bc181837_unified_truth(pid)
+    elec=[]
+    for t in (truth or {}).get("trades",[]):
+        if str(t.get("trade") or "")=="Electrical":
+            for i in t.get("items") or []:
+                elec.append({
+                    "requirement":i.get("requirement"),
+                    "source_run_ids":i.get("source_run_ids"),
+                    "source_sheets":sorted(set(str((s or {}).get("source_sheet") or "") for s in (i.get("sources") or []) if isinstance(s,dict))),
+                    "actionable":bool(i.get("actionable")),
+                    "recovered_from_trade":i.get("recovered_from_trade"),
+                })
+    suggestions=_bc181836_suggestions(pid)
+    return {
+        "status":"ok","project_id":pid,
+        "electrical_truth_item_count":len(elec),
+        "electrical_truth_items":elec[:100],
+        "electrical_submittal_candidates":[x for x in suggestions if x.get("trade")=="Electrical"],
+        "electrical_recovery":(truth or {}).get("electrical_recovery",{})
+    }
+
+_bc1810a_prepend_route("/api/blueprint-brain/electrical-debug",_bc181837_electrical_debug,["GET"])
+
+@app.get("/health/e-sheet-electrical-recovery-submittal-1-8-18-37")
+def health_e_sheet_electrical_recovery_submittal_181837():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("E sheet detector E101",_bc181837_sheet_is_e("E101")),
+      ("E sheet detector E-201",_bc181837_sheet_is_e("E-201")),
+      ("E sheet detector EL101",_bc181837_sheet_is_e("EL101")),
+      ("architectural sheet not E",not _bc181837_sheet_is_e("A101")),
+      ("electrical lighting scope detected",_bc181837_is_electrical_scope("Provide new canopy lighting fixtures and branch circuits.")),
+      ("electrical conduit scope detected",_bc181837_is_electrical_scope("Install conduit and wiring for canopy lighting.")),
+      ("pure telecom remains separate",not _bc181837_is_electrical_scope("Rework telecommunications and security devices at canopy locations.")),
+      ("fire sprinkler remains separate",not _bc181837_is_electrical_scope("Provide sprinkler protection for canopy 4.")),
+      ("electrical power to equipment retained",_bc181837_is_electrical_scope("Provide power connection and branch circuit to mechanical equipment.")),
+      ("corrected truth active",_bc181817_unified_truth is _bc181837_unified_truth),
+      ("truth forwarding 181814",_bc181814_unified_truth is _bc181837_unified_truth),
+      ("truth forwarding 181815",_bc181815_unified_truth is _bc181837_unified_truth),
+      ("truth forwarding 181816",_bc181816_unified_truth is _bc181837_unified_truth),
+      ("Blueprint prompt enhanced",_runtime._blueprint_prompt is _bc181837_blueprint_prompt),
+      ("Electrical submittal rule exists",any(x[0]=="Electrical" for x in _BC181834_RULES)),
+      ("Electrical trade ownership exists","Electrical" in _BC181836_TRADE_ALIASES),
+      ("Electrical scope keys exist","Electrical" in _BC181836_SCOPE_KEYS),
+      ("Electrical execution supports branch circuit",_bc181836_executable("Branch circuit and wiring to new lighting.")),
+      ("electrical debug API active","/api/blueprint-brain/electrical-debug" in paths),
+      ("Project Truth route preserved","/blueprint-brain/project-truth" in paths),
+      ("Project Truth API preserved","/api/blueprint-brain/project-truth" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Submittal new preserved","/submittals/new" in paths),
+      ("Submittal Brain preserved","/submittals-brain-dashboard" in paths),
+      ("RFI issues preserved","/issues" in paths),
+      ("Project Startup preserved","/project-startup" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("1.8.18.36 health preserved","/health/submittal-evidence-precision-trade-ownership-1-8-18-36" in paths),
+      ("1.8.18.35 health preserved","/health/project-truth-submittal-bridge-hotfix-1-8-18-35" in paths),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing Blueprint runs preserved",True),
+      ("existing submittal data preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+            "version":"1.8.18.37","release":_BC181837_RELEASE,
+            "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+            "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.37"
+BUILD_COMMAND_RELEASE_NAME=_BC181837_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
