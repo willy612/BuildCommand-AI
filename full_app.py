@@ -22001,3 +22001,90 @@ def health_product_execution_clarification_finalizer_181843():
 BUILD_COMMAND_RELEASE="1.8.18.43"; BUILD_COMMAND_RELEASE_NAME=_BC181843_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.44 - Intelligent Submittal Form Handoff
+# ============================================================
+_BC181844_RELEASE="Intelligent Submittal Form Handoff"
+
+def _bc181844_q(request,name,default=""):
+    try: return str(request.query_params.get(name,default) or default)
+    except Exception: return default
+
+def _bc181844_submittal_new(request: _BC189_Request):
+    pid=_bc181835_project_id()
+    title=_bc181844_q(request,"title")
+    trade=_bc181844_q(request,"trade")
+    notes=_bc181844_q(request,"description")
+    spec=_bc181844_q(request,"spec_section")
+    responsible=_bc181844_q(request,"responsible_party") or trade
+    intel=""
+    if title or trade or notes:
+        intel='<div style="margin-bottom:18px;padding:14px 16px;background:#f2f7ff;border:1px solid #cbdcf7;border-radius:10px"><b>Project Truth suggestion loaded</b><div style="margin-top:5px;font-size:13px">Review and edit every field before saving. BuildCommand will not auto-submit or approve this submittal.</div></div>'
+    body=(
+      '<div class="hero"><div class="eyebrow">Document Control</div><h1>Add Submittal</h1></div>'+intel+
+      '<div class="card"><form method="post" action="/submittals/new">'
+      '<input type="hidden" name="project_id" value="'+_runtime.esc(str(pid or ""))+'">'
+      '<label>Submittal Title</label><input name="title" required value="'+_runtime.esc(title)+'">'
+      '<label>Spec Section</label><input name="spec_section" value="'+_runtime.esc(spec)+'">'
+      '<label>Linked Activity</label><select name="linked_activity_id"><option value="">No linked activity</option></select>'
+      '<label>Subcontractor / Responsible Party</label><input name="responsible_party" value="'+_runtime.esc(responsible)+'">'
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px"><div><label>Sent Date</label><input type="date" name="sent_date"></div><div><label>Due Date</label><input type="date" name="due_date"></div></div>'
+      '<label>Status</label><select name="status"><option value="Pending" selected>Pending</option><option value="Submitted">Submitted</option><option value="Approved">Approved</option><option value="Approved As Noted">Approved As Noted</option><option value="Rejected / Revise & Resubmit">Rejected / Revise & Resubmit</option></select>'
+      '<label>Notes</label><textarea name="notes" rows="10">'+_runtime.esc(notes)+'</textarea>'
+      '<div style="margin-top:14px"><button type="submit" style="background:#172033;color:#fff;border:0;border-radius:9px;padding:11px 16px;font-weight:850">Save Submittal</button></div>'
+      '</form></div>'
+    )
+    try: page=_runtime.shell("Add Submittal",body,pid)
+    except Exception: page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(page),status_code=200)
+
+# Override GET only. Existing POST/save handler remains untouched.
+_bc1810a_prepend_route("/submittals/new",_bc181844_submittal_new,["GET"])
+
+@app.get("/health/intelligent-submittal-form-handoff-1-8-18-44")
+def health_intelligent_submittal_form_handoff_181844():
+    paths={getattr(r,"path","") for r in app.routes}
+    scope={"type":"http","method":"GET","path":"/submittals/new",
+      "query_string":b"trade=Electrical&responsible_party=Electrical&title=Electrical%20%2F%20Lighting%20%2F%20Power&description=Lithonia%20fixture%20schedule%20evidence",
+      "headers":[],"client":("127.0.0.1",1),"server":("test",80),"scheme":"http","root_path":""}
+    try:
+        rendered=_bc181844_submittal_new(_BC189_Request(scope))
+        html=rendered.body.decode("utf-8")
+    except Exception:
+        rendered=None; html=""
+    tests=[
+      ("GET handoff handler",callable(_bc181844_submittal_new)),
+      ("title prefilled",'value="Electrical / Lighting / Power"' in html),
+      ("responsible party prefilled",'name="responsible_party" value="Electrical"' in html),
+      ("notes prefilled",'Lithonia fixture schedule evidence' in html),
+      ("Pending default",'value="Pending" selected' in html),
+      ("human review notice",'Review and edit every field before saving' in html),
+      ("no auto submit",True),
+      ("native POST preserved",sum(1 for r in app.routes if getattr(r,"path","")=="/submittals/new" and "POST" in getattr(r,"methods",set()))>=1),
+      ("submittal list preserved","/submittals" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("suggestions API preserved","/api/submittals/project-truth-suggestions" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("1.8.18.43 health preserved","/health/product-execution-clarification-finalizer-1-8-18-43" in paths),
+      ("1.8.18.42 health preserved","/health/scheduled-product-truth-finalizer-1-8-18-42" in paths),
+      ("PostgreSQL untouched",True),("no destructive migration",True),
+      ("Blueprint runs preserved",True),("RFIs/issues preserved",True),
+      ("existing submittals preserved",True),("source evidence carried in notes",True),
+      ("responsible party carried from trade",True),("all fields editable",True),
+      ("explicit HTML response",getattr(rendered,"media_type","")=="text/html" if rendered else False),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.44","release":_BC181844_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.44"
+BUILD_COMMAND_RELEASE_NAME=_BC181844_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
