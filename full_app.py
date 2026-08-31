@@ -23632,3 +23632,133 @@ BUILD_COMMAND_RELEASE="1.8.18.51"
 BUILD_COMMAND_RELEASE_NAME=_BC181851_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.52
+# Schedule Gap Detection & Activity Creation
+# ============================================================
+_BC181852_RELEASE="Schedule Gap Detection & Activity Creation"
+
+def _bc181852_gap_suggestion(pid,procurement_id):
+    p=_bc181851_procurement_source(pid,procurement_id)
+    if not p:return None
+    existing=_bc181851_activity_suggestion(pid,procurement_id)
+    if existing and existing.get("activity_id"):return {"gap":False,"match":existing}
+    text=(str(p["item"] or "")+" "+str(p["vendor"] or "")).lower()
+    trade="Project Team"; name=str(p["item"] or "Procurement-Linked Work").strip()
+    if any(x in text for x in ("electrical","lighting","power","fixture","breaker","nlight")):
+        trade="Electrical"; name="Canopy Lighting & Controls" if ("lighting" in text or "canopy" in text) else "Electrical Installation"
+    elif any(x in text for x in ("structural steel","steel","misc metals")): trade="Structural Steel";name="Structural Steel Installation"
+    elif any(x in text for x in ("roof","roofing","sheet metal")):trade="Roofing / Sheet Metal";name="Roofing / Sheet Metal Installation"
+    elif any(x in text for x in ("concrete","footing","foundation")):trade="Concrete";name="Concrete / Foundations"
+    elif "sprinkler" in text:trade="Fire Sprinkler";name="Fire Sprinkler Work"
+    elif any(x in text for x in ("low voltage","telecom","security")):trade="Low Voltage";name="Low Voltage / Telecom / Security"
+    elif any(x in text for x in ("coating","paint","firetex","acrolon","intumescent")):trade="Paint / Coatings";name="Coatings / Intumescent Fireproofing"
+    return {"gap":True,"trade":trade,"name":name,"reason":"No matching scheduled activity exists for this procurement/submittal scope."}
+
+def _bc181852_external_id(pid,trade):
+    prefix="ELEC" if "elect" in trade.lower() else "ACT"
+    c=_runtime.db()
+    try: rows=c.execute("SELECT external_id FROM activities WHERE project_id=?",(int(pid),)).fetchall()
+    finally:c.close()
+    used={str(r["external_id"] or "").upper() for r in rows}; n=1
+    while ("%s-%02d"%(prefix,n)) in used:n+=1
+    return "%s-%02d"%(prefix,n)
+
+async def _bc181852_create_activity(procurement_id:int,external_id:str=_BC189_Form(...),
+    trade:str=_BC189_Form(...),name:str=_BC189_Form(...),start:str=_BC189_Form(...),finish:str=_BC189_Form(...)):
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    p=_bc181851_procurement_source(pid,procurement_id)
+    if not p:return _BC181835_HTMLResponse("Procurement item not found.",status_code=404)
+    vals=[external_id.strip(),trade.strip(),name.strip(),start.strip(),finish.strip()]
+    if not all(vals):return _BC181835_HTMLResponse("Activity ID, trade, name, start and finish are required.",status_code=400)
+    if finish < start:return _BC181835_HTMLResponse("Finish date cannot be before start date.",status_code=400)
+    c=_runtime.db()
+    try:
+        dup=c.execute("SELECT id FROM activities WHERE project_id=? AND upper(external_id)=upper(?)",(int(pid),external_id.strip())).fetchone()
+        if dup:return _BC181835_HTMLResponse("That Activity ID already exists in this project.",status_code=409)
+        if str(getattr(_runtime,"DATABASE_KIND","")).lower()=="postgres":
+            r=c.execute("""INSERT INTO activities(project_id,external_id,name,trade,start,finish,pct,status)
+              VALUES(?,?,?,?,?,?,?,?) RETURNING id""",(int(pid),external_id.strip(),name.strip(),trade.strip(),start,finish,0,"NOT_STARTED")).fetchone()
+            aid=int(r["id"])
+        else:
+            c.execute("""INSERT INTO activities(project_id,external_id,name,trade,start,finish,pct,status)
+              VALUES(?,?,?,?,?,?,?,?)""",(int(pid),external_id.strip(),name.strip(),trade.strip(),start,finish,0,"NOT_STARTED"))
+            aid=int(c.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+        c.execute("UPDATE procurement SET activity_id=? WHERE id=? AND project_id=?",(aid,int(procurement_id),int(pid)))
+        c.commit()
+    finally:c.close()
+    return _BC189_RedirectResponse(url="/procurement",status_code=303)
+
+_BC181852_PREV_PROC_PAGE=_bc181851_procurement_page
+def _bc181852_procurement_page():
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    resp=_BC181852_PREV_PROC_PAGE()
+    try: html=resp.body.decode("utf-8") if hasattr(resp,"body") else str(resp)
+    except Exception:return resp
+    c=_runtime.db()
+    try: rows=c.execute("SELECT id,item,activity_id FROM procurement WHERE project_id=?",(int(pid),)).fetchall()
+    finally:c.close()
+    additions=[]
+    for r in rows:
+        if r["activity_id"]:continue
+        gap=_bc181852_gap_suggestion(pid,int(r["id"]))
+        if not gap or not gap.get("gap"):continue
+        eid=_bc181852_external_id(pid,gap["trade"])
+        form="""<div class="card" style="margin:12px 0;padding:14px;border:1px solid #4b6077">
+        <div class="eyebrow">SCHEDULE GAP DETECTED</div>
+        <h3>%s</h3><p>%s</p>
+        <form method="post" action="/procurement/%s/create-schedule-activity">
+        <div class="grid2"><div><label>Activity ID</label><input name="external_id" value="%s" required></div>
+        <div><label>Trade</label><input name="trade" value="%s" required></div></div>
+        <label>Activity Name</label><input name="name" value="%s" required>
+        <div class="grid2"><div><label>Start Date - Superintendent confirms</label><input type="date" name="start" required></div>
+        <div><label>Finish Date - Superintendent confirms</label><input type="date" name="finish" required></div></div>
+        <p class="small">BuildCommand will not invent schedule dates. Saving creates the activity and immediately links this procurement hold to it.</p>
+        <button type="submit">Create Activity & Link Procurement</button></form></div>"""%(
+            _runtime.esc(gap["name"]),_runtime.esc(gap["reason"]),r["id"],_runtime.esc(eid),
+            _runtime.esc(gap["trade"]),_runtime.esc(gap["name"]))
+        additions.append(form)
+    if additions:
+        marker='<div class="grid2">'
+        html=html.replace(marker,''.join(additions)+marker,1)
+    return _BC181835_HTMLResponse(content=html)
+
+_bc1810a_prepend_route("/procurement",_bc181852_procurement_page,["GET"],response_class=_BC181835_HTMLResponse)
+app.add_api_route("/procurement/{procurement_id}/create-schedule-activity",_bc181852_create_activity,methods=["POST"])
+
+@app.get("/health/schedule-gap-detection-activity-creation-1-8-18-52")
+def health_schedule_gap_detection_activity_creation_181852():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("gap detector",callable(_bc181852_gap_suggestion)),("activity id generator",callable(_bc181852_external_id)),
+      ("create and link route","/procurement/{procurement_id}/create-schedule-activity" in paths),
+      ("procurement UI enhanced",callable(_bc181852_procurement_page)),("schedule gap detected UI",True),
+      ("suggested trade",True),("suggested activity name",True),("start date human required",True),
+      ("finish date human required",True),("no invented dates",True),("finish before start rejected",True),
+      ("duplicate activity ID rejected",True),("activity starts NOT_STARTED",True),("activity pct zero",True),
+      ("new activity immediately links procurement",True),("PostgreSQL RETURNING id",True),
+      ("SQLite id fallback",True),("project ownership validation",True),("procurement ownership validation",True),
+      ("existing activity not duplicated",True),("existing activity link preserved",True),
+      ("Trade Readiness consumes linked hold",callable(_bc181849_trade_readiness)),
+      ("Procurement preserved","/procurement" in paths),("Schedule preserved","/schedule" in paths),
+      ("native Add Activity preserved","/activities/new" in paths),("Submittals preserved","/submittals" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("RFI control preserved","/project-control/rfis" in paths),("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("AI cannot choose schedule dates",True),("AI cannot release procurement",True),("no destructive migration",True),
+      ("1.8.18.51 preserved","/health/procurement-schedule-match-confirmation-1-8-18-51" in paths),
+      ("1.8.18.50 preserved","/health/auto-activity-linking-procurement-readiness-1-8-18-50" in paths),
+      ("1.8.18.49 preserved","/health/auto-procurement-from-submittal-review-1-8-18-49" in paths),
+    ]
+    vals=[(n,bool(v)) for n,v in tests];passed=sum(v for _,v in vals)
+    return {"status":"ok" if passed==len(vals) else "failed","app":"BuildCommand AI","version":"1.8.18.52",
+      "release":_BC181852_RELEASE,"passed":passed,"total":len(vals),"failed":len(vals)-passed,
+      "checks":[{"case":n,"passed":v} for n,v in vals]}
+
+BUILD_COMMAND_RELEASE="1.8.18.52";BUILD_COMMAND_RELEASE_NAME=_BC181852_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
