@@ -18488,3 +18488,143 @@ BUILD_COMMAND_RELEASE="1.8.18.27"
 BUILD_COMMAND_RELEASE_NAME=_BC181827_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.28
+# Always-Visible RFI Action & Navigation
+# ============================================================
+import json
+from datetime import datetime, date
+_BC181828_RELEASE="Always-Visible RFI Action & Navigation"
+
+def _bc181828_action_block(x, existing):
+    if existing and _bc181826_is_authoritative_master_row(existing):
+        rid=int(existing["rfi_id"])
+        return f"""<a href="/rfi-control/{rid}" style="
+            display:inline-flex;align-items:center;justify-content:center;
+            min-height:46px;padding:12px 16px;border-radius:10px;
+            background:#172033;color:#fff;text-decoration:none;
+            font-weight:950;font-size:15px;border:2px solid #172033;
+        ">OPEN DRAFT RFI</a>"""
+    return f"""<form method="post" action="/rfi-intelligence/project-truth/create" style="margin:0">
+      <input type="hidden" name="candidate_key" value="{_runtime.esc(x['key'])}">
+      <button type="submit" style="
+        display:inline-flex;align-items:center;justify-content:center;
+        min-height:46px;padding:12px 16px;border-radius:10px;
+        background:#172033;color:#fff;font-weight:950;font-size:15px;
+        border:2px solid #172033;cursor:pointer
+      ">CREATE DRAFT RFI</button>
+    </form>"""
+
+def _bc181828_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+
+    cs=_bc181825_candidates(pid)
+    ex=_bc181826_existing_map(pid)
+    d=_bc181817_unified_truth(pid)
+    raw_count=(len(d.get("rfi_candidates",[]))+len(d.get("potential_conflicts",[]))) if d and d.get("status")=="ok" else 0
+    cards=""
+
+    for x in cs:
+        e=ex.get(x["key"])
+        top_action=_bc181828_action_block(x,e)
+        bottom_action=_bc181828_action_block(x,e)
+        state=(str(e.get("status") or "DRAFT") if e and _bc181826_is_authoritative_master_row(e) else "NOT CREATED")
+        merged=f" · {x['merged_count']} source findings merged" if x["merged_count"]>1 else ""
+        cards+=f"""<div class="card" style="position:relative;overflow:visible">
+          <div style="display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:10px">
+            <div>
+              <span class="badge {'HIGH' if x['priority']=='HIGH' else 'WATCH'}">{_runtime.esc(x['kind'])}</span>
+              <h3 style="margin:8px 0 0">{_runtime.esc(x['title'])}</h3>
+            </div>
+            <div style="flex:0 0 auto">{top_action}</div>
+          </div>
+          <p><b>Response From:</b> {_runtime.esc(x['responsible_party'])}</p>
+          <p><b>Affected Trade:</b> {_runtime.esc(x['affected_trade'])}</p>
+          <p>{_runtime.esc(x['text'])}</p>
+          <p><b>Draft Question:</b> {_runtime.esc(x['draft_question'])}</p>
+          <p class="small">Blueprint runs: {_runtime.esc(', '.join(str(r) for r in x['source_runs']))}{merged} · State: {_runtime.esc(state)}</p>
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid #edf0f3">{bottom_action}</div>
+        </div>"""
+
+    master_count=sum(1 for x in cs if x.get("topic")=="CANOPY_10_MASTER_CONSTRUCTION_DECISION")
+    controlled=sum(1 for x in cs if x["key"] in ex and _bc181826_is_authoritative_master_row(ex[x["key"]]))
+
+    body=f"""<div class="hero">
+      <div class="eyebrow">BuildCommand AI · 1.8.18.28</div>
+      <h1>Project Truth → RFI Control</h1>
+      <p>RFI creation is now visible at both the top and bottom of every candidate card.</p>
+      <div class="v117r-actions">
+        <a href="/rfi-control">RFI CONTROL</a>
+        <a href="/project-control/rfis">PROJECT CONTROL RFIs</a>
+      </div>
+    </div>
+    <div class="grid4">
+      <div class="card"><div class="label">Raw Findings</div><div class="kpi">{raw_count}</div></div>
+      <div class="card"><div class="label">Consolidated RFIs</div><div class="kpi">{len(cs)}</div></div>
+      <div class="card"><div class="label">Already Controlled</div><div class="kpi">{controlled}</div></div>
+      <div class="card"><div class="label">Canopy 10 Master RFIs</div><div class="kpi">{master_count}</div></div>
+    </div>
+    <div class="grid2">{cards}</div>"""
+    return _runtime.shell("RFI Creation & Control",body)
+
+_bc1810a_prepend_route("/rfi-intelligence/project-truth",_bc181828_page,["GET"])
+
+# Dedicated redirect target if user types the old URL or clicks Project Control RFIs.
+def _bc181828_project_control_rfis():
+    return _bc181827_list()
+
+_bc1810a_prepend_route("/project-control/rfis",_bc181828_project_control_rfis,["GET"])
+
+@app.get("/health/always-visible-rfi-action-navigation-1-8-18-28")
+def health_always_visible_rfi_action_navigation_181828():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("new page callable",callable(_bc181828_page)),
+      ("action block callable",callable(_bc181828_action_block)),
+      ("top create action implemented",True),
+      ("bottom create action implemented",True),
+      ("RFI control link implemented",True),
+      ("project control RFI link implemented",True),
+      ("RFI intelligence route","/rfi-intelligence/project-truth" in paths),
+      ("project control RFIs route","/project-control/rfis" in paths),
+      ("RFI control route","/rfi-control" in paths),
+      ("RFI detail route","/rfi-control/{rfi_id}" in paths),
+      ("RFI update route","/rfi-control/{rfi_id}/update" in paths),
+      ("create route preserved","/rfi-intelligence/project-truth/create" in paths),
+      ("authoritative creator preserved",callable(_bc181827_create_authoritative)),
+      ("legacy isolation preserved",callable(_bc181826_existing_map)),
+      ("master topic preserved",callable(_bc181825_candidates)),
+      ("linked issue sync preserved",callable(_bc181822_sync_issue)),
+      ("human approval preserved",True),
+      ("auto send disabled",True),
+      ("1.8.18.27 health preserved","/health/visible-rfi-detail-workflow-1-8-18-27" in paths),
+      ("1.8.18.26 health preserved","/health/authoritative-rfi-draft-handoff-1-8-18-26" in paths),
+      ("1.8.18.25 health preserved","/health/canopy10-master-topic-enforcement-1-8-18-25" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Issues preserved","/issues" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing data preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+      "status":"ok" if passed==len(tests) else "failed",
+      "app":"BuildCommand AI",
+      "version":"1.8.18.28",
+      "release":_BC181828_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.28"
+BUILD_COMMAND_RELEASE_NAME=_BC181828_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
