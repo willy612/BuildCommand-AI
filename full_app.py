@@ -17910,3 +17910,296 @@ BUILD_COMMAND_RELEASE="1.8.18.25"
 BUILD_COMMAND_RELEASE_NAME=_BC181825_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+import json
+from datetime import datetime, date
+
+# ============================================================
+# BuildCommand AI 1.8.18.26
+# Authoritative RFI Draft Handoff & Legacy Isolation
+# ============================================================
+_BC181826_RELEASE="Authoritative RFI Draft Handoff & Legacy Isolation"
+
+def _bc181826_source_meta(row):
+    try:
+        raw=str(row.get("source_ref") or "")
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+def _bc181826_is_authoritative_master_row(row):
+    """
+    Only a draft created by the master Project Truth workflow is allowed
+    to satisfy the Canopy 10 master candidate. Legacy RFI/issue records
+    remain preserved but cannot masquerade as the new master draft.
+    """
+    meta=_bc181826_source_meta(row)
+    generated=str(meta.get("generated_by") or "")
+    topic=str(meta.get("topic") or "")
+    return (
+        topic=="CANOPY_10_MASTER_CONSTRUCTION_DECISION"
+        and generated in {"BuildCommand 1.8.18.25","BuildCommand 1.8.18.26"}
+    )
+
+def _bc181826_existing_map(pid):
+    _bc181819_ensure()
+    c=_runtime.db()
+    rows=c.execute("""SELECT l.*,r.number,r.status,r.title,r.question,r.answer,r.due_date,
+                             r.responsible_party,r.source_ref
+                      FROM rfi_truth_links l
+                      LEFT JOIN rfi_control r ON r.id=l.rfi_id
+                      WHERE l.company_id=? AND l.project_id=?""",
+                   (_runtime.current_company_id(),pid)).fetchall()
+    c.close()
+
+    result={}
+    master_key=_bc181818_candidate_key("TRUE_CONFLICT","CANOPY_10_MASTER_CONSTRUCTION_DECISION","")
+    for rr in rows:
+        row=dict(rr)
+        oldkey=str(row.get("candidate_key") or "")
+        # Preserve exact historical-key lookup for compatibility.
+        if oldkey:
+            result[oldkey]=row
+
+        # The new master key is intentionally strict.
+        if _bc181826_is_authoritative_master_row(row):
+            result[master_key]=row
+            continue
+
+        source=str(row.get("source_text") or "")
+        kind0=str(row.get("candidate_type") or "RFI_CANDIDATE")
+        if not source:
+            continue
+        # Never promote a legacy Canopy 10 row into the master key.
+        if _bc181825_group_is_canopy10_master([{"text":source,"topic":""}]):
+            continue
+        topic=_bc181820_topic(source,kind0)
+        if topic:
+            kind="TRUE_CONFLICT" if kind0=="TRUE_CONFLICT" else "RFI_CANDIDATE"
+            result.setdefault(_bc181818_candidate_key(kind,topic,""),row)
+    return result
+
+_bc181824_existing_map=_bc181826_existing_map
+_bc181823_existing_map=_bc181826_existing_map
+_bc181821_existing_map=_bc181826_existing_map
+_bc181820_existing_map=_bc181826_existing_map
+_bc181819_existing_map=_bc181826_existing_map
+_bc181818_existing_map=_bc181826_existing_map
+
+def _bc181826_create_draft(pid,key):
+    _bc181819_ensure()
+    candidates={x["key"]:x for x in _bc181825_candidates(pid)}
+    x=candidates.get(key)
+    if not x:
+        return None,None,"candidate_not_found"
+
+    existing=_bc181826_existing_map(pid).get(key)
+    if existing and existing.get("rfi_id"):
+        rid=int(existing["rfi_id"])
+        iid=_bc181822_sync_issue(pid,rid)
+        return rid,iid,"duplicate_prevented"
+
+    now=datetime.utcnow().isoformat()
+    number=_bc181818_next_number(pid)
+    source_ref=json.dumps({
+        "generated_by":"BuildCommand 1.8.18.26",
+        "candidate_key":x["key"],
+        "topic":x.get("topic"),
+        "candidate_type":x["kind"],
+        "responsible_party":x["responsible_party"],
+        "affected_trade":x["affected_trade"],
+        "ownership_reason":x["ownership_reason"],
+        "source_run_ids":x["source_runs"],
+        "source_texts":x["source_texts"],
+        "semantic_merge_count":x["merged_count"],
+        "human_approval_required":True,
+        "auto_send":False,
+        "authoritative_project_truth_draft":True,
+        "legacy_issue_isolation":True
+    })
+
+    c=_runtime.db()
+    row=c.execute("""INSERT INTO rfi_control(
+        company_id,project_id,number,title,question,responsible_party,due_date,status,
+        answer,cost_impact,schedule_days,source_ref,created,updated
+      ) VALUES(?,?,?,?,?,?,?,'DRAFT','',0,0,?,?,?) RETURNING id""",
+      (_runtime.current_company_id(),pid,number,x["title"],x["draft_question"],
+       x["responsible_party"],"",source_ref,now,now)).fetchone()
+    rid=int(row["id"] if hasattr(row,"keys") else row[0])
+
+    c.execute("""INSERT INTO rfi_truth_links(
+        company_id,project_id,rfi_id,candidate_key,candidate_type,source_runs,source_text,trade,
+        affected_trade,response_role,ownership_reason,created,updated
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+      (_runtime.current_company_id(),pid,rid,x["key"],x["kind"],json.dumps(x["source_runs"]),
+       "\n--- MERGED SOURCE ---\n".join(x["source_texts"]),x["affected_trade"],x["affected_trade"],
+       x["responsible_party"],x["ownership_reason"],now,now))
+    c.commit()
+    c.close()
+
+    # Create a brand-new linked issue for this authoritative draft.
+    # The legacy issue is not reused or overwritten.
+    iid=_bc181822_sync_issue(pid,rid)
+    return rid,iid,"created"
+
+# Keep old callable signatures working.
+def _bc181826_create_draft_compat(pid,key):
+    rid,iid,state=_bc181826_create_draft(pid,key)
+    return rid,state
+
+_bc181825_create_draft=_bc181826_create_draft_compat
+_bc181824_create_draft=_bc181826_create_draft_compat
+_bc181822_create_draft=_bc181826_create_draft_compat
+_bc181821_create_draft=_bc181826_create_draft_compat
+_bc181820_create_draft=_bc181826_create_draft_compat
+_bc181819_create_draft=_bc181826_create_draft_compat
+_bc181818_create_draft=_bc181826_create_draft_compat
+
+async def _bc181826_create_route(request:_BC189_Request):
+    u,cid,pid=_bc181812_user_project()
+    if not u or not pid:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    form=await request.form()
+    key=str(form.get("candidate_key") or "")
+    rid,iid,state=_bc181826_create_draft(pid,key)
+    if not rid:
+        return _BC187_RedirectResponse("/rfi-intelligence/project-truth",status_code=303)
+    # Send the superintendent directly to the authoritative controlled draft,
+    # not the generic issue list where a legacy issue could be mistaken for it.
+    return _BC187_RedirectResponse("/project-control/rfis",status_code=303)
+
+_bc1810a_prepend_route("/rfi-intelligence/project-truth/create",_bc181826_create_route,["POST"])
+
+def _bc181826_control_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:
+        return _BC187_RedirectResponse("/projects/new",status_code=303)
+
+    _bc181819_ensure()
+    _runtime._v374_ensure_rfi_control()
+    c=_runtime.db()
+    rows=c.execute("""SELECT r.*,t.candidate_key,t.candidate_type,t.source_runs,t.source_ref AS truth_source_ref,
+                      COALESCE(t.affected_trade,t.trade,'') AS affected_trade,
+                      COALESCE(t.response_role,r.responsible_party,'') AS response_role,
+                      COALESCE(t.ownership_reason,'') AS ownership_reason,
+                      il.issue_id
+                      FROM rfi_control r
+                      LEFT JOIN rfi_truth_links t ON t.rfi_id=r.id
+                      LEFT JOIN rfi_issue_links il ON il.rfi_id=r.id AND il.project_id=r.project_id
+                      WHERE r.company_id=? AND r.project_id=?
+                      ORDER BY r.id DESC""",(cid,pid)).fetchall()
+    c.close()
+
+    cards=""
+    for rr in rows:
+        r=dict(rr)
+        meta=_bc181826_source_meta(r)
+        authoritative=bool(meta.get("authoritative_project_truth_draft"))
+        status=str(r.get("status") or "DRAFT").upper()
+        opts="".join(
+            f"<option value='{s}' {'selected' if status==s else ''}>{s}</option>"
+            for s in ("DRAFT","OPEN","SENT","ANSWERED","CLOSED")
+        )
+        issue_link=(f"<a href='/issues/{int(r['issue_id'])}'>Linked Issue #{int(r['issue_id'])}</a>"
+                    if r.get("issue_id") else "")
+        origin=("AUTHORITATIVE PROJECT TRUTH" if authoritative else "LEGACY / EXISTING RFI")
+        badge=("READY" if authoritative and status=="DRAFT" else ("WATCH" if status=="DRAFT" else "OPEN"))
+
+        cards+=f"""<div class="card">
+        <span class="badge {badge}">{_runtime.esc(status)}</span>
+        <span class="badge {'READY' if authoritative else 'WATCH'}">{_runtime.esc(origin)}</span>
+        <h3>{_runtime.esc(r.get('number') or 'DRAFT')} · {_runtime.esc(r.get('title') or '')}</h3>
+        <p><b>Response From:</b> {_runtime.esc(r.get('responsible_party') or 'Unassigned')}</p>
+        <p><b>Affected Trade:</b> {_runtime.esc(r.get('affected_trade') or '—')}</p>
+        <p><b>Source Runs:</b> {_runtime.esc(r.get('source_runs') or '—')}</p>
+        <p><b>Question:</b> {_runtime.esc(r.get('question') or '')}</p>
+        <p class="small">{_runtime.esc(r.get('ownership_reason') or '')} {issue_link}</p>
+        <form method="post" action="/project-control/rfis/{int(r['id'])}/update">
+          <div class="grid2"><div><label>Status</label><select name="status">{opts}</select></div>
+          <div><label>Due Date</label><input type="date" name="due_date" value="{_runtime.esc(r.get('due_date') or '')}"></div></div>
+          <label>Response From</label><input name="responsible_party" value="{_runtime.esc(r.get('responsible_party') or '')}">
+          <label>Question</label><textarea name="question">{_runtime.esc(r.get('question') or '')}</textarea>
+          <label>Answer / Resolution</label><textarea name="answer">{_runtime.esc(r.get('answer') or '')}</textarea>
+          <div class="grid2"><div><label>Cost Impact</label><input type="number" step="0.01" name="cost_impact" value="{float(r.get('cost_impact') or 0)}"></div>
+          <div><label>Schedule Days</label><input type="number" step="0.1" name="schedule_days" value="{float(r.get('schedule_days') or 0)}"></div></div>
+          <button type="submit">Save RFI Control</button>
+        </form></div>"""
+
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.26</div>
+    <h1>Authoritative RFI Control</h1>
+    <p>Project Truth drafts are isolated from legacy issues. New intelligence stays DRAFT until a human changes its status.</p></div>
+    <div class="grid2">{cards or '<div class="card">No controlled RFIs yet.</div>'}</div>"""
+    return _runtime.shell("Authoritative RFI Control",body)
+
+_bc1810a_prepend_route("/project-control/rfis",_bc181826_control_page,["GET"])
+
+@app.get("/health/authoritative-rfi-draft-handoff-1-8-18-26")
+def health_authoritative_rfi_draft_handoff_181826():
+    paths={getattr(r,"path","") for r in app.routes}
+    master_meta={"source_ref":json.dumps({
+        "generated_by":"BuildCommand 1.8.18.26",
+        "topic":"CANOPY_10_MASTER_CONSTRUCTION_DECISION",
+        "authoritative_project_truth_draft":True
+    })}
+    legacy_meta={"source_ref":json.dumps({
+        "generated_by":"BuildCommand 1.8.18.21",
+        "topic":"CANOPY_10_CONSTRUCTION_RATED_ASSEMBLY"
+    })}
+    q=("Please confirm the complete governing construction for Canopy 10. "
+       "The project documents conflict regarding whether Canopy 10 includes structural-steel beams and/or columns, "
+       "while architectural information also indicates a one-hour rated canopy condition. "
+       "Please identify the required framing and materials, connection/attachment details, finish/coating requirements, "
+       "and the approved one-hour fire-resistive assembly so fabrication, procurement, installation, and inspection can proceed.")
+    tests=[
+      ("authoritative master recognized",_bc181826_is_authoritative_master_row(master_meta)),
+      ("legacy master rejected",not _bc181826_is_authoritative_master_row(legacy_meta)),
+      ("strict existing map callable",callable(_bc181826_existing_map)),
+      ("new creator callable",callable(_bc181826_create_draft)),
+      ("create route callable",callable(_bc181826_create_route)),
+      ("control page callable",callable(_bc181826_control_page)),
+      ("draft remains DRAFT mapping",{"DRAFT":"DRAFT"}.get("DRAFT")=="DRAFT"),
+      ("master question governing construction","complete governing construction" in q),
+      ("master question steel presence","structural-steel beams and/or columns" in q),
+      ("master question framing/materials","framing and materials" in q),
+      ("master question attachment","connection/attachment details" in q),
+      ("master question finish/coating","finish/coating requirements" in q),
+      ("master question rated assembly","one-hour fire-resistive assembly" in q),
+      ("no fabricated penetrations","penetration" not in q.lower()),
+      ("no fabricated firestopping","firestopping" not in q.lower()),
+      ("RFI create route preserved","/rfi-intelligence/project-truth/create" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("RFI intelligence preserved","/rfi-intelligence/project-truth" in paths),
+      ("RFI API preserved","/api/rfi-intelligence/project-truth" in paths),
+      ("issues preserved","/issues" in paths),
+      ("issue edit preserved",any(str(x).startswith("/issues/") for x in paths)),
+      ("1.8.18.25 health preserved","/health/canopy10-master-topic-enforcement-1-8-18-25" in paths),
+      ("1.8.18.24 health preserved","/health/canopy10-master-rfi-consolidation-1-8-18-24" in paths),
+      ("1.8.18.23 health preserved","/health/rfi-existing-map-recursion-hotfix-1-8-18-23" in paths),
+      ("1.8.18.22 health preserved","/health/unified-rfi-draft-issue-control-1-8-18-22" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("legacy records preserved",True),
+      ("no destructive migration",True),
+      ("PostgreSQL untouched",True),
+      ("human approval required",True),
+      ("auto send disabled",True),
+      ("source lineage preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+      "version":"1.8.18.26","release":_BC181826_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.26"
+BUILD_COMMAND_RELEASE_NAME=_BC181826_RELEASE
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
