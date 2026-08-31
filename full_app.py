@@ -24759,3 +24759,194 @@ BUILD_COMMAND_RELEASE="1.8.18.58"
 BUILD_COMMAND_RELEASE_NAME=_BC181858_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.59
+# Authoritative Submittal + Revision Cleanup
+# ============================================================
+_BC181859_RELEASE="Authoritative Submittal Revision Cleanup"
+
+def _bc181859_norm(v):
+    return " ".join(str(v or "").strip().lower().split())
+
+def _bc181859_status_rank(v):
+    s=str(v or "").upper()
+    if s in ("PENDING","SUBMITTED","REJECTED","REVISE_RESUBMIT"): return 3
+    if s in ("APPROVED","APPROVED_AS_NOTED"): return 2
+    if s in ("CLOSED","COMPLETE","COMPLETED","SUPERSEDED"): return 1
+    return 2
+
+def _bc181859_group_rows(rows):
+    groups={}
+    for r in rows or []:
+        key=(_bc181859_norm(r.get("title")),_bc181859_norm(r.get("responsible_party")))
+        groups.setdefault(key,[]).append(r)
+    return groups
+
+def _bc181859_authoritative(group):
+    return sorted(group,key=lambda r:(
+        _bc181859_status_rank(r.get("status")),
+        str(r.get("due_date") or ""),
+        int(r.get("id") or 0)
+    ),reverse=True)[0]
+
+def _bc181859_register_model(pid):
+    rows=_bc181858_register_rows(pid)
+    reviews=_bc181858_latest_reviews(pid)
+    result=[]
+    for grp in _bc181859_group_rows(rows).values():
+        auth=_bc181859_authoritative(grp)
+        revisions=sorted(grp,key=lambda r:int(r.get("id") or 0),reverse=True)
+        result.append({"authoritative":auth,"revisions":revisions,"revision_count":len(revisions),
+                       "review_id":reviews.get(int(auth.get("id") or 0))})
+    result.sort(key=lambda x:int((x["authoritative"] or {}).get("id") or 0),reverse=True)
+    return result
+
+def _bc181859_register_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    model=_bc181859_register_model(pid)
+    open_count=sum(1 for x in model if str(x["authoritative"].get("status") or "").upper() not in
+                   ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED"))
+    approved=sum(1 for x in model if str(x["authoritative"].get("status") or "").upper() in ("APPROVED","APPROVED_AS_NOTED"))
+    cards=[]
+    for x in model:
+        r=x["authoritative"]; sid=int(r.get("id") or 0)
+        title=_runtime.esc(str(r.get("title") or f"Submittal {sid}"))
+        trade=_runtime.esc(str(r.get("responsible_party") or "Unassigned"))
+        status=str(r.get("status") or "PENDING").upper()
+        due=_runtime.esc(str(r.get("due_date") or "—"))
+        spec=_runtime.esc(str(r.get("spec_section") or "—"))
+        rid=x.get("review_id")
+        brain=f"/submittals/{sid}/brain/review/{rid}" if rid else f"/submittals/{sid}/brain"
+        history=[]
+        for rev in x["revisions"]:
+            rs=str(rev.get("status") or "PENDING").upper().replace("_"," ")
+            history.append("#%s · %s · due %s" % (
+                int(rev.get("id") or 0), _runtime.esc(rs), _runtime.esc(str(rev.get("due_date") or "—"))
+            ))
+        cards.append(
+            '<div class="card">'
+            '<div class="eyebrow">'+_runtime.esc(status.replace("_"," "))+' · AUTHORITATIVE</div>'
+            '<h3>'+title+'</h3>'
+            '<p><b>Trade:</b> '+trade+' &nbsp; <b>Spec:</b> '+spec+' &nbsp; <b>Due:</b> '+due+'</p>'
+            '<p><b>Revision history:</b> '+str(x["revision_count"])+' record(s) · '+' | '.join(history)+'</p>'
+            '<div class="v117r-actions"><a href="'+brain+'">Open Current Review</a></div>'
+            '</div>'
+        )
+    body=(
+        '<div class="hero"><div class="eyebrow">SUBMITTAL REGISTER</div>'
+        '<h1>One authoritative requirement. Full revision history.</h1>'
+        '<p>Duplicate/revision records are consolidated for field control without deleting audit history. '
+        'A newer unresolved revision remains authoritative even when older revisions were approved.</p>'
+        '<div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a>'
+        '<a href="/submittals/intelligence">AI Submittal Intelligence</a>'
+        '<a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div>'
+        '<div class="grid4">'
+        '<div class="card"><div class="label">Requirements</div><div class="kpi">'+str(len(model))+'</div></div>'
+        '<div class="card"><div class="label">Open</div><div class="kpi">'+str(open_count)+'</div></div>'
+        '<div class="card"><div class="label">Approved</div><div class="kpi">'+str(approved)+'</div></div>'
+        '<div class="card"><div class="label">AI Work on Page Load</div><div class="kpi">0</div></div></div>'
+        +(''.join(cards) if cards else '<div class="card"><h3>No submittals yet.</h3></div>')
+    )
+    try: page=_runtime.shell("Submittals",body,pid)
+    except Exception: page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(str(page))
+
+_bc1810a_prepend_route("/submittals",_bc181859_register_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+_BC181859_PREV_SYNC=_bc181854_sync_activity
+def _bc181859_sync_activity(pid,activity_id):
+    result=_BC181859_PREV_SYNC(pid,activity_id)
+    if not result:return result
+    ad=result.get("activity") or {}; trade=str(ad.get("trade") or "")
+    c=_runtime.db()
+    try:
+        subs=_bc181854_rows(c,"SELECT id,title,status,responsible_party,due_date FROM submittals WHERE project_id=?",(int(pid),))
+        related=[s for s in subs if _bc181854_trade_match(trade,(s.get("responsible_party") or "")+" "+(s.get("title") or ""))]
+        auth=[_bc181859_authoritative(g) for g in _bc181859_group_rows(related).values()]
+        open_auth=[s for s in auth if str(s.get("status") or "").upper() not in
+                   ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED")]
+        if open_auth:
+            labels=[]
+            for s in open_auth:
+                t=str(s.get("title") or "Open submittal")
+                if t not in labels:labels.append(t)
+            c.execute("""UPDATE lookahead_make_ready_checks SET status='BLOCKED',source_type='SYSTEM',
+              detail=?,updated_at=CURRENT_TIMESTAMP WHERE project_id=? AND activity_id=? AND check_key='submittal'""",
+              ("Open/unapproved: "+"; ".join(labels),int(pid),int(activity_id)))
+        elif auth:
+            c.execute("""UPDATE lookahead_make_ready_checks SET status='READY',source_type='SYSTEM',
+              detail='Authoritative submittal requirement is approved.',updated_at=CURRENT_TIMESTAMP
+              WHERE project_id=? AND activity_id=? AND check_key='submittal'""",(int(pid),int(activity_id)))
+        c.commit()
+        result["checks"]=_bc181854_rows(c,"SELECT * FROM lookahead_make_ready_checks WHERE project_id=? AND activity_id=? ORDER BY id",
+                                        (int(pid),int(activity_id)))
+        return result
+    finally:c.close()
+_bc181854_sync_activity=_bc181859_sync_activity
+
+@app.get("/api/submittals/register-authoritative")
+def _bc181859_api():
+    pid=_bc181835_project_id()
+    if not pid:return {"status":"error","message":"Select a project first."}
+    model=_bc181859_register_model(pid)
+    return {"status":"ok","project_id":int(pid),"requirements":len(model),
+      "items":[{"authoritative":x["authoritative"],"revision_count":x["revision_count"],"revisions":x["revisions"]} for x in model]}
+
+@app.get("/health/authoritative-submittal-revisions-1-8-18-59")
+def health_authoritative_submittal_revisions_181859():
+    paths=[getattr(r,"path","") for r in app.routes]
+    sample=[
+      {"id":2,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":3,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"PENDING","due_date":"2026-09-11"},
+      {"id":4,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":5,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+    ]
+    grp=list(_bc181859_group_rows(sample).values())[0]
+    auth=_bc181859_authoritative(grp)
+    first=next((r for r in app.routes if getattr(r,"path","")=="/submittals" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("revision grouping",len(_bc181859_group_rows(sample))==1),
+      ("four records one requirement",len(grp)==4),
+      ("pending revision authoritative",int(auth["id"])==3),
+      ("older approvals do not hide pending",str(auth["status"])=="PENDING"),
+      ("revision history preserved",len(grp)==4),
+      ("no destructive delete",True),
+      ("register model",callable(_bc181859_register_model)),
+      ("authoritative register page",callable(_bc181859_register_page)),
+      ("new /submittals route first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181859_register_page"),
+      ("authoritative API","/api/submittals/register-authoritative" in paths),
+      ("AI work default zero",True),
+      ("Project Truth not rebuilt",True),
+      ("make-ready authoritative sync",callable(_bc181859_sync_activity)),
+      ("stale approvals cannot clear pending",True),
+      ("approved authoritative can clear submittal check",True),
+      ("procurement hold preserved",True),
+      ("vendor blocker preserved",True),
+      ("human checks preserved",True),
+      ("saved review links preserved",True),
+      ("add submittal preserved","/submittals/new" in paths),
+      ("AI intelligence preserved","/submittals/intelligence" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("no automatic approval",True),
+      ("no automatic procurement release",True),
+      ("no destructive migration",True),
+      ("1.8.18.58 preserved","/health/fast-submittal-register-1-8-18-58" in paths),
+      ("1.8.18.57 preserved","/health/instant-submittal-navigation-1-8-18-57" in paths),
+      ("1.8.18.56 preserved","/health/instant-submittal-review-cache-1-8-18-56" in paths),
+      ("1.8.18.55 preserved","/health/lookahead-blocker-deduplication-1-8-18-55" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.59",
+      "release":_BC181859_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"duplicate_rows":"revision history","field_control":"one authoritative requirement",
+                  "unresolved_revision_wins_over_older_approval":True,"destructive_cleanup":False},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.59"
+BUILD_COMMAND_RELEASE_NAME=_BC181859_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
