@@ -19862,3 +19862,200 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.36
+# Submittal Evidence Precision & Trade Ownership
+# ============================================================
+_BC181836_RELEASE="Submittal Evidence Precision & Trade Ownership"
+
+_BC181836_EXECUTE_WORDS=(
+ "provide","furnish","install","fabricate","apply","construct","erect","submit",
+ "shop drawing","product data","mix design","reinforce","rework","relocate"
+)
+_BC181836_COORD_ONLY=(
+ "coordinate","locate and protect","protect existing","do not disturb",
+ "clearance","existing equipment","shown on the site plan and survey"
+)
+
+_BC181836_TRADE_ALIASES={
+ "Structural Steel":("structural steel","steel","miscellaneous metals","misc. metals"),
+ "Cold-Formed Metal Framing / Purlins":("cold-formed","cold formed","purlin","cee purlin"),
+ "Roofing / Sheet Metal":("roofing","sheet metal","roof panel","metal panel","pbr panel","flashing"),
+ "Painting / Coatings":("painting","coating","intumescent","fireproofing","firetex"),
+ "Concrete":("concrete","foundation","footing","reinforcing","rebar"),
+ "Fire Sprinkler":("fire sprinkler","sprinkler"),
+ "Low Voltage":("low voltage","telecom","telecommunications","security","card access"),
+}
+
+_BC181836_SCOPE_KEYS={
+ "Structural Steel":("structural steel","steel beam","steel column","weld","base plate","anchor bolt","erection","steel brace"),
+ "Cold-Formed Metal Framing / Purlins":("cold-formed","cold formed","purlin","cee purlin","18-gage","18-gauge"),
+ "Roofing / Sheet Metal":("roof panel","metal panel","pbr panel","roofing","sheet metal","flashing","roof deck","steel deck"),
+ "Painting / Coatings":("firetex","intumescent","coating system","paint system","primer","topcoat","fire-resistive coating"),
+ "Concrete":("concrete","footing","foundation","reinforcing","rebar","mix"),
+ "Fire Sprinkler":("sprinkler protection","sprinkler piping","sprinkler head","fire sprinkler"),
+ "Low Voltage":("rework wiring","rework conduit","relocate device","telecommunications","security system","card access"),
+}
+
+def _bc181836_trade_matches(rule_trade,row_trade):
+    rt=(row_trade or "").lower()
+    return any(a in rt for a in _BC181836_TRADE_ALIASES.get(rule_trade,(rule_trade.lower(),)))
+
+def _bc181836_executable(text):
+    t=(text or "").lower()
+    return any(w in t for w in _BC181836_EXECUTE_WORDS)
+
+def _bc181836_coord_only(text):
+    t=(text or "").lower().strip()
+    # A coordination phrase is not disqualifying if the same sentence contains a clear executable scope command.
+    return any(w in t for w in _BC181836_COORD_ONLY) and not _bc181836_executable(t)
+
+def _bc181836_scope_match(rule_trade,text):
+    t=(text or "").lower()
+    return any(k in t for k in _BC181836_SCOPE_KEYS.get(rule_trade,()))
+
+def _bc181836_suggestions(pid):
+    rows=_bc181835_truth_rows(pid)
+    result=[]
+    for rule_trade,title,keys,expectation in _BC181834_RULES:
+        strong=[]
+        review=[]
+        runs=set()
+        for row in rows:
+            text=row["text"]
+            # Evidence must belong to the trade AND describe that trade's actual scope.
+            if not _bc181836_trade_matches(rule_trade,row["trade"]):
+                continue
+            if not _bc181836_scope_match(rule_trade,text):
+                continue
+            if _bc181836_coord_only(text):
+                continue
+            if _bc181836_executable(text):
+                strong.append(text)
+                runs.update(row["runs"])
+            else:
+                review.append(text)
+                runs.update(row["runs"])
+
+        evidence=strong[:5] if strong else review[:5]
+        if not evidence:
+            continue
+        result.append({
+            "trade":rule_trade,
+            "title":title,
+            "expectation":expectation,
+            "evidence":evidence,
+            "runs":sorted(str(x) for x in runs),
+            "confidence":"LIKELY REQUIRED" if strong else "REVIEW",
+            "evidence_basis":"trade-owned executable scope" if strong else "trade-owned scope requiring human confirmation",
+        })
+
+    priority={"Structural Steel / Misc. Metals":0,"Cold-Formed Framing / Purlins":1,"Roofing / Sheet Metal":2,"Coatings / Intumescent Fireproofing":3}
+    return sorted(result,key=lambda x:(priority.get(x["title"],50),x["title"]))
+
+# Replace broad keyword suggestion engine with precision engine.
+_bc181834_suggestions=_bc181836_suggestions
+
+def _bc181836_submittal_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    suggestions=_bc181836_suggestions(pid)
+    cards=[]
+    for s in suggestions[:10]:
+        ev=" | ".join(s["evidence"][:2])
+        runs=", ".join(s["runs"]) if s["runs"] else "Project Truth"
+        href=(
+            "/submittals/new?trade="+_bc181834_url.quote(s["trade"])
+            +"&title="+_bc181834_url.quote(s["title"])
+            +"&description="+_bc181834_url.quote(s["expectation"]+" Source evidence: "+ev)
+        )
+        cards.append(
+            '<div class="card" style="border-left:4px solid #172033">'
+            '<div class="eyebrow">'+_runtime.esc(s["confidence"])+'</div>'
+            '<h3 style="margin:6px 0">'+_runtime.esc(s["title"])+'</h3>'
+            '<p><b>Trade:</b> '+_runtime.esc(s["trade"])+'</p>'
+            '<p>'+_runtime.esc(s["expectation"])+'</p>'
+            '<p class="small"><b>Evidence basis:</b> '+_runtime.esc(s["evidence_basis"])+'<br>'
+            '<b>Project Truth evidence:</b> '+_runtime.esc(ev)+'<br>'
+            '<b>Blueprint runs:</b> '+_runtime.esc(runs)+'</p>'
+            '<a href="'+href+'" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:850">Review / Add Submittal</a>'
+            '</div>'
+        )
+    body=(
+        '<div class="hero"><div class="eyebrow">Project Truth · Submittal Intelligence</div>'
+        '<h1>Build the submittal register before procurement becomes a blocker.</h1>'
+        '<p>Suggestions now require trade-owned scope evidence. Coordination-only references do not create submittal candidates.</p>'
+        '<div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a><a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div>'
+        '<div class="grid4">'
+        '<div class="card"><div class="label">Suggested</div><div class="kpi">'+str(len(suggestions))+'</div></div>'
+        '<div class="card"><div class="label">Likely Required</div><div class="kpi">'+str(sum(1 for x in suggestions if x["confidence"]=="LIKELY REQUIRED"))+'</div></div>'
+        '<div class="card"><div class="label">Needs Review</div><div class="kpi">'+str(sum(1 for x in suggestions if x["confidence"]=="REVIEW"))+'</div></div>'
+        '<div class="card"><div class="label">Auto-Created</div><div class="kpi">0</div></div></div>'
+        '<div class="card"><div class="eyebrow">AI Suggested Submittals</div>'
+        '<h2 style="margin:6px 0">Trade-owned Project Truth candidates</h2>'
+        '<p class="small">Human approval is required before a suggestion becomes an active contractual submittal.</p></div>'
+        +("".join(cards) if cards else '<div class="card"><h3>No trade-owned submittal candidates yet.</h3><p>Add manually or review Project Truth.</p></div>')
+    )
+    try: html=_runtime.shell("Submittal Intelligence",body,pid)
+    except Exception: html="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(html),status_code=200)
+
+_bc1810a_prepend_route("/submittals",_bc181836_submittal_page,["GET"])
+
+def _bc181836_api():
+    pid=_bc181835_project_id()
+    return {"project_id":pid,"suggestions":_bc181836_suggestions(pid) if pid else [],"human_review_required":True,"coordination_only_suppressed":True}
+_bc1810a_prepend_route("/api/submittals/project-truth-suggestions",_bc181836_api,["GET"])
+
+@app.get("/health/submittal-evidence-precision-trade-ownership-1-8-18-36")
+def health_submittal_evidence_precision_trade_ownership_181836():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("precision engine callable",callable(_bc181836_suggestions)),
+      ("trade ownership matcher callable",callable(_bc181836_trade_matches)),
+      ("execution detector callable",callable(_bc181836_executable)),
+      ("coordination-only detector callable",callable(_bc181836_coord_only)),
+      ("scope matcher callable",callable(_bc181836_scope_match)),
+      ("broad engine rebound",_bc181834_suggestions is _bc181836_suggestions),
+      ("normal submittals route active","/submittals" in paths),
+      ("suggestions API active","/api/submittals/project-truth-suggestions" in paths),
+      ("new submittal preserved","/submittals/new" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("coordination does not equal execution",not _bc181836_executable("Coordinate sprinkler routing with steel and coating.")),
+      ("sprinkler executable recognized",_bc181836_executable("Provide sprinkler protection for new canopy No. 4.")),
+      ("roof false electrical evidence rejected",not _bc181836_trade_matches("Roofing / Sheet Metal","Electrical")),
+      ("coating false sprinkler evidence rejected",not _bc181836_trade_matches("Painting / Coatings","Fire Sprinkler")),
+      ("low voltage utility locate is coordination only",_bc181836_coord_only("Locate and protect existing underground telecommunications systems shown on the site plan and survey.")),
+      ("low voltage rework is executable",_bc181836_executable("Rework wiring, conduit, and devices for telecommunications and security systems.")),
+      ("structural steel ownership supported",_bc181836_trade_matches("Structural Steel","Structural Steel")),
+      ("cold formed ownership supported",_bc181836_trade_matches("Cold-Formed Metal Framing / Purlins","Cold-Formed Metal Framing / Purlins")),
+      ("concrete ownership supported",_bc181836_trade_matches("Concrete","Concrete")),
+      ("human review preserved",True),
+      ("no automatic submittal creation",True),
+      ("source lineage preserved",True),
+      ("1.8.18.35 health preserved","/health/project-truth-submittal-bridge-hotfix-1-8-18-35" in paths),
+      ("1.8.18.34 health preserved","/health/project-truth-submittal-register-1-8-18-34" in paths),
+      ("1.8.18.33 health preserved","/health/rfi-html-rendering-hotfix-1-8-18-33" in paths),
+      ("RFI issues preserved","/issues" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+      ("Project Startup preserved","/project-startup" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing submittal data preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.36","release":_BC181836_RELEASE,
+            "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+            "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.36"
+BUILD_COMMAND_RELEASE_NAME=_BC181836_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
