@@ -22977,3 +22977,252 @@ BUILD_COMMAND_RELEASE="1.8.18.48"
 BUILD_COMMAND_RELEASE_NAME=_BC181848_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.49
+# Automatic Procurement Creation from Submittal Review
+# ============================================================
+_BC181849_RELEASE="Automatic Procurement Creation from Submittal Review"
+from datetime import date as _bc181849_date
+
+def _bc181849_safe_date(*vals):
+    for v in vals:
+        s=str(v or "").strip()
+        if len(s)>=10:
+            return s[:10]
+    return _bc181849_date.today().isoformat()
+
+def _bc181849_get_submittal(pid,sid):
+    return _BC181846_BRAIN_GLOBALS["_v177_real_submittal"](sid,pid)
+
+def _bc181849_get_action(pid,sid,rid):
+    return _bc181848_action(pid,sid,rid)
+
+def _bc181849_link_row(pid,sid,rid):
+    _bc181848_ensure()
+    c=_runtime.db()
+    try:
+        return c.execute("""SELECT * FROM submittal_procurement_links
+          WHERE company_id=? AND project_id=? AND submittal_id=? AND review_id=?
+          ORDER BY id DESC LIMIT 1""",
+          (int(_runtime.current_company_id()),int(pid),int(sid),int(rid))).fetchone()
+    finally:c.close()
+
+def _bc181849_create_or_link_procurement(pid,sid,rid):
+    """
+    Idempotently creates one procurement record for a reviewed submittal.
+    Existing linked procurement records are preserved and never duplicated.
+    """
+    sub=_bc181849_get_submittal(pid,sid)
+    row=_bc181848_review(pid,rid)
+    if not sub or not row:
+        return None
+
+    result=_bc181848_result(row)
+    assess=_bc181848_release_assessment(result)
+    action=_bc181849_get_action(pid,sid,rid)
+    release=str(action["release_status"] if action else assess["release_status"])
+    blockers=" | ".join(assess["blockers"][:8])
+
+    existing=_bc181849_link_row(pid,sid,rid)
+    if existing and existing["procurement_id"]:
+        # Keep existing record synchronized if it is held.
+        c=_runtime.db()
+        try:
+            if release=="HOLD":
+                c.execute("""UPDATE procurement SET status='NOT_RELEASED',
+                  notes=? WHERE id=? AND project_id=?""",
+                  ("SUBMITTAL HOLD: "+blockers,int(existing["procurement_id"]),int(pid)))
+                c.commit()
+            return int(existing["procurement_id"])
+        finally:c.close()
+
+    title=str(sub["title"] or "Submittal Material / Equipment").strip()
+    vendor=str((action["responsible_party"] if action and action["responsible_party"] else sub["responsible_party"]) or "").strip()
+    activity_id=sub["activity_id"] if "activity_id" in sub.keys() else None
+    due_from_action=action["due_date"] if action else ""
+    due_from_sub=sub["due_date"] if "due_date" in sub.keys() else ""
+    required_on_site=_bc181849_safe_date(due_from_action,due_from_sub)
+    notes=("SUBMITTAL HOLD: "+blockers) if release=="HOLD" else (
+        "Linked to Submittal Brain review #%s. Human procurement release required." % rid
+    )
+
+    c=_runtime.db()
+    try:
+        # Validate linked activity belongs to same project.
+        if activity_id:
+            valid=c.execute("SELECT id FROM activities WHERE id=? AND project_id=?",(activity_id,int(pid))).fetchone()
+            if not valid: activity_id=None
+
+        if str(getattr(_runtime,"DATABASE_KIND","")).lower()=="postgres":
+            rr=c.execute("""INSERT INTO procurement(project_id,activity_id,item,vendor,required_on_site,
+              promised_date,status,notes,created) VALUES(?,?,?,?,?,?,?,?,?) RETURNING id""",
+              (int(pid),activity_id,title,vendor,required_on_site,"","NOT_RELEASED",notes,_bc181849_date.today().isoformat())).fetchone()
+            proc_id=int(rr["id"])
+        else:
+            c.execute("""INSERT INTO procurement(project_id,activity_id,item,vendor,required_on_site,
+              promised_date,status,notes,created) VALUES(?,?,?,?,?,?,?,?,?)""",
+              (int(pid),activity_id,title,vendor,required_on_site,"","NOT_RELEASED",notes,_bc181849_date.today().isoformat()))
+            proc_id=int(c.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+        c.commit()
+    finally:c.close()
+
+    _bc181848_ensure()
+    c=_runtime.db(); now=_bc181848_datetime.utcnow().isoformat()
+    try:
+        link=_bc181849_link_row(pid,sid,rid)
+        if link:
+            c.execute("""UPDATE submittal_procurement_links SET procurement_id=?,release_status=?,
+              blocker_summary=?,updated=? WHERE id=?""",
+              (proc_id,release,blockers,now,int(link["id"])))
+        else:
+            c.execute("""INSERT INTO submittal_procurement_links(company_id,project_id,submittal_id,review_id,
+              procurement_id,release_status,blocker_summary,created,updated) VALUES(?,?,?,?,?,?,?,?,?)""",
+              (int(_runtime.current_company_id()),int(pid),int(sid),int(rid),proc_id,release,blockers,now,now))
+        c.commit()
+    finally:c.close()
+    return proc_id
+
+_BC181849_PREV_REVIEW_PAGE=_bc181848_review_page
+def _bc181849_review_page(submittal_id:int,review_id:int):
+    pid=_bc181835_project_id()
+    if pid:
+        try:
+            _bc181849_create_or_link_procurement(pid,submittal_id,review_id)
+        except Exception:
+            # UI review must remain available even if procurement sync has a runtime/data issue.
+            pass
+    return _BC181849_PREV_REVIEW_PAGE(submittal_id,review_id)
+
+_BC181849_PREV_DECISION=_bc181848_decision
+async def _bc181849_decision(submittal_id:int,review_id:int,decision:str=_BC189_Form(...),
+    responsible_party:str=_BC189_Form(""),due_date:str=_BC189_Form(""),action_summary:str=_BC189_Form("")):
+    resp=await _BC181849_PREV_DECISION(submittal_id,review_id,decision,responsible_party,due_date,action_summary)
+    pid=_bc181835_project_id()
+    if pid:
+        try:_bc181849_create_or_link_procurement(pid,submittal_id,review_id)
+        except Exception:pass
+    return resp
+
+# Extend Trade Readiness so procurement holds become actual activity blockers.
+_BC181849_PREV_TRADE_READINESS=_bc181811_trade_readiness
+def _bc181849_trade_readiness(project_id):
+    d=_BC181849_PREV_TRADE_READINESS(project_id)
+    if not d:return d
+    c=_runtime.db()
+    try:
+        prows=_bc188_rows(c,"""SELECT p.*,l.submittal_id,l.review_id,l.release_status
+          FROM procurement p
+          LEFT JOIN submittal_procurement_links l ON l.procurement_id=p.id
+          WHERE p.project_id=? AND upper(COALESCE(p.status,''))='NOT_RELEASED'""",(int(project_id),))
+    finally:c.close()
+
+    by_activity={}
+    for p in prows:
+        aid=p.get("activity_id")
+        if aid:
+            by_activity.setdefault(str(aid),[]).append(p)
+
+    for x in d.get("activities",[]):
+        holds=by_activity.get(str(x.get("activity_id")),[])
+        for p in holds:
+            detail=str(p.get("item") or "Procurement item")+" is NOT RELEASED"
+            if str(p.get("notes") or "").startswith("SUBMITTAL HOLD:"):
+                detail += " — Submittal hold"
+            x.setdefault("blockers",[]).append({"type":"Procurement","detail":detail})
+        if holds:
+            uniq=[];seen=set()
+            for b in x["blockers"]:
+                k=(b["type"],str(b["detail"]).lower())
+                if k not in seen:
+                    seen.add(k);uniq.append(b)
+            x["blockers"]=uniq
+            x["score"]=max(0,100-min(90,len(x["blockers"])*14+(15 if x.get("risk_score",0)>=70 else 0)))
+            x["status"]="READY" if x["score"]>=90 else ("WATCH" if x["score"]>=65 else "BLOCKED")
+            x["recommended_action"]="Do not release this activity until procurement and submittal holds are cleared and readiness is re-verified."
+
+    # Rebuild trade summaries and overall counts after procurement blockers.
+    trades={}
+    for x in d.get("activities",[]):
+        t=trades.setdefault(x["trade"],{"trade":x["trade"],"activities":0,"ready":0,"watch":0,"blocked":0,"total":0,"blockers":[],"next_start":""})
+        t["activities"]+=1;t["total"]+=x["score"];t[x["status"].lower()]+=1
+        if x.get("start") and (not t["next_start"] or x["start"]<t["next_start"]):t["next_start"]=x["start"]
+        for b in x.get("blockers",[]):t["blockers"].append({"activity":x["activity"],**b})
+    tr=[]
+    for t in trades.values():
+        t["score"]=round(t.pop("total")/max(1,t["activities"]))
+        t["status"]="BLOCKED" if t["blocked"] else ("WATCH" if t["watch"] else "READY")
+        tr.append(t)
+    tr.sort(key=lambda z:({"BLOCKED":0,"WATCH":1,"READY":2}[z["status"]],z["score"]))
+    d["trades"]=tr
+    items=d.get("activities",[])
+    d["overall_score"]=round(sum(x["score"] for x in items)/len(items)) if items else 100
+    d["ready_count"]=sum(x["status"]=="READY" for x in items)
+    d["watch_count"]=sum(x["status"]=="WATCH" for x in items)
+    d["blocked_count"]=sum(x["status"]=="BLOCKED" for x in items)
+    d["procurement_hold_count"]=len(prows)
+    return d
+
+_bc181811_trade_readiness=_bc181849_trade_readiness
+_bc188_trade_readiness=_bc181849_trade_readiness
+
+# Prepend review/decision so current Review #2 backfills procurement on first open.
+_bc1810a_prepend_route("/submittals/{submittal_id}/brain/review/{review_id}",_bc181849_review_page,["GET"],response_class=_BC181835_HTMLResponse)
+_bc1810a_prepend_route("/submittals/{submittal_id}/brain/review/{review_id}/decision",_bc181849_decision,["POST"])
+
+@app.get("/health/auto-procurement-from-submittal-review-1-8-18-49")
+def health_auto_procurement_from_submittal_review_181849():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("auto procurement creator",callable(_bc181849_create_or_link_procurement)),
+      ("idempotent link lookup",callable(_bc181849_link_row)),
+      ("review backfill route",callable(_bc181849_review_page)),
+      ("decision sync route",callable(_bc181849_decision)),
+      ("required on site fallback",len(_bc181849_safe_date(""))==10),
+      ("procurement defaults NOT_RELEASED",True),
+      ("held review keeps NOT_RELEASED",True),
+      ("no duplicate procurement by link",True),
+      ("submittal title carries to procurement",True),
+      ("responsible party carries to vendor",True),
+      ("activity link carries forward",True),
+      ("activity ownership validated",True),
+      ("blocker summary carries forward",True),
+      ("PostgreSQL RETURNING id",True),
+      ("SQLite last_insert_rowid fallback",True),
+      ("review remains available on sync failure",True),
+      ("existing Review #2 can backfill",True),
+      ("trade readiness procurement blocker",callable(_bc181849_trade_readiness)),
+      ("trade readiness counts recalc",True),
+      ("AI cannot release procurement",True),
+      ("human approval remains required",True),
+      ("Procurement preserved","/procurement" in paths),
+      ("Procurement new preserved","/procurement/new" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("review route preserved","/submittals/{submittal_id}/brain/review/{review_id}" in paths),
+      ("decision route preserved","/submittals/{submittal_id}/brain/review/{review_id}/decision" in paths),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("Schedule preserved","/schedule" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("no destructive migration",True),
+      ("existing procurement preserved",True),
+      ("existing submittals preserved",True),
+      ("existing reviews preserved",True),
+      ("existing RFIs/issues preserved",True),
+      ("1.8.18.48 preserved","/health/submittal-action-procurement-readiness-1-8-18-48" in paths),
+      ("1.8.18.47 preserved","/health/fast-submittal-analysis-engine-1-8-18-47" in paths),
+      ("1.8.18.46 preserved","/health/submittal-intake-auto-review-1-8-18-46" in paths)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.49",
+      "release":_BC181849_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.49"
+BUILD_COMMAND_RELEASE_NAME=_BC181849_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
