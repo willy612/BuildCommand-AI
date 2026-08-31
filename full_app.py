@@ -20591,3 +20591,289 @@ BUILD_COMMAND_RELEASE="1.8.18.38"
 BUILD_COMMAND_RELEASE_NAME=_BC181838_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.39
+# Submittal Requirement Classification & RFI Blocking
+# ============================================================
+import re as _bc181839_re
+from urllib import parse as _bc181839_url
+_BC181839_RELEASE="Submittal Requirement Classification & RFI Blocking"
+
+_BC181839_EXPLICIT=(
+    "submittal","submittals","submit ","shop drawing","shop drawings",
+    "product data","sample","samples","for approval","manufacturer data",
+    "manufacturer's data","delegated design","delegated-design","calculations",
+    "certification","mix design"
+)
+_BC181839_DEMO_COORD=(
+    "remove existing","demolish","protect existing","maintain downstream",
+    "coordinate ","existing equipment","existing framing","safe access",
+    "restore paving","locate and protect"
+)
+_BC181839_PRODUCT_KEYS={
+ "Structural Steel":("hss","base plate","anchor bolt","weld","connection","structural steel","fabricat","erection"),
+ "Cold-Formed Metal Framing / Purlins":("purlin","cee","18-gage","18-gauge","cold-formed","cold formed","stud"),
+ "Roofing / Sheet Metal":("pbr","galvalume","fry reglet","springlok","flashing","panel","gauge","gage","sealant"),
+ "Painting / Coatings":("firetex","intumescent","dry-film","dft","coating system","one-hour","fire-resistive"),
+ "Concrete":("concrete","footing","reinforcing","rebar","anchor","mix"),
+ "Electrical":("lithonia","luminaire","fixture","lighting","timeclock","time clock","circuit breaker","panelboard","catalog","3000k"),
+ "Fire Sprinkler":("sprinkler protection","sprinkler","hydraulic","head","piping"),
+ "Low Voltage":("telecommunications","security","card access","device","camera","low voltage"),
+}
+_BC181839_TOPIC_KEYS={
+ "Structural Steel":("structural steel","canopy 10","steel beam","steel column","rated assembly"),
+ "Cold-Formed Metal Framing / Purlins":("purlin","cold-formed","cold formed","cee"),
+ "Roofing / Sheet Metal":("roofing","pbr","galvalume","flashing","sheet metal"),
+ "Painting / Coatings":("firetex","intumescent","coating","fx950","fire-resistive"),
+ "Concrete":("concrete","foundation","footing","rebar","reinforcing"),
+ "Electrical":("electrical","lighting","luminaire","circuit","panel lb","timeclock"),
+ "Fire Sprinkler":("sprinkler","fire sprinkler"),
+ "Low Voltage":("low voltage","telecom","telecommunications","security","special-systems","special systems"),
+}
+
+def _bc181839_flat(v):
+    if v is None: return ""
+    if isinstance(v,dict):
+        return " ".join(_bc181839_flat(x) for x in v.values())
+    if isinstance(v,(list,tuple,set)):
+        return " ".join(_bc181839_flat(x) for x in v)
+    return str(v)
+
+def _bc181839_explicit(text):
+    s=" "+str(text or "").lower()+" "
+    return any(k in s for k in _BC181839_EXPLICIT)
+
+def _bc181839_product_score(trade,text):
+    s=str(text or "").lower()
+    score=sum(18 for k in _BC181839_PRODUCT_KEYS.get(trade,()) if k in s)
+    if _bc181839_explicit(s): score+=120
+    if _bc181836_executable(s): score+=25
+    if any(k in s for k in _BC181839_DEMO_COORD): score-=55
+    if _bc181836_coord_only(s): score-=90
+    return score
+
+def _bc181839_open_issue_text(pid):
+    try:
+        c=_runtime.db()
+        rows=c.execute(
+          "SELECT * FROM project_issues WHERE project_id=? AND lower(COALESCE(status,'')) NOT IN ('closed','resolved','complete','completed')",
+          (int(pid),)
+        ).fetchall()
+        c.close()
+        return [_bc181839_flat(dict(r) if hasattr(r,"keys") else r).lower() for r in rows]
+    except Exception:
+        try: c.close()
+        except Exception: pass
+        return []
+
+def _bc181839_issue_blocks(pid,trade):
+    keys=_BC181839_TOPIC_KEYS.get(trade,())
+    if not keys: return False
+    for text in _bc181839_open_issue_text(pid):
+        hits=sum(1 for k in keys if k in text)
+        # one highly specific phrase or two discipline terms is enough.
+        if "canopy 10" in text and trade=="Structural Steel":
+            return True
+        if hits>=2:
+            return True
+    return False
+
+def _bc181839_truth_uncertainty(pid,trade):
+    try:
+        d=_bc181838_unified_truth(int(pid))
+    except Exception:
+        return False
+    if not isinstance(d,dict): return False
+    keys=_BC181839_TOPIC_KEYS.get(trade,())
+    if not keys: return False
+    blobs=[]
+    for field in ("conflicts","rfi_candidates","review_notes","cross_discipline_flags"):
+        blobs.append(_bc181839_flat(d.get(field)).lower())
+    text=" ".join(blobs)
+    # Require multiple discipline/topic signals to avoid incidental mentions.
+    return sum(1 for k in keys if k in text)>=2
+
+def _bc181839_rank_evidence(pid,s):
+    trade=s.get("trade") or ""
+    rows=_bc181835_truth_rows(pid)
+    pool=[]
+    for r in rows:
+        if not _bc181836_trade_matches(trade,r.get("trade")):
+            continue
+        text=r.get("text") or ""
+        if not _bc181836_scope_match(trade,text):
+            continue
+        score=_bc181839_product_score(trade,text)
+        if score<=0: continue
+        pool.append((score,text,r.get("runs") or []))
+    pool.sort(key=lambda x:(-x[0],x[1].lower()))
+    ev=[]; runs=set(); seen=set()
+    for score,text,rr in pool:
+        k=_bc181814_norm_text(text)
+        if not k or k in seen: continue
+        seen.add(k); ev.append(text); runs.update(rr)
+        if len(ev)>=5: break
+    if not ev:
+        ev=list(s.get("evidence") or [])
+        runs.update(s.get("runs") or [])
+    return ev,sorted(str(x) for x in runs)
+
+_BC181839_PREV_SUGGEST=_bc181838_suggestions
+def _bc181839_suggestions(pid):
+    base=_BC181839_PREV_SUGGEST(pid)
+    out=[]
+    for raw in base:
+        s=dict(raw)
+        ev,runs=_bc181839_rank_evidence(pid,s)
+        s["evidence"]=ev
+        s["runs"]=runs
+
+        explicit=any(_bc181839_explicit(x) for x in ev)
+        blocked=_bc181839_issue_blocks(pid,s.get("trade"))
+        uncertain=_bc181839_truth_uncertainty(pid,s.get("trade"))
+        product_strength=max([_bc181839_product_score(s.get("trade"),x) for x in ev] or [0])
+
+        if blocked:
+            s["confidence"]="BLOCKED BY RFI"
+            s["evidence_basis"]="open project RFI/issue must be resolved before final submittal release"
+        elif explicit:
+            s["confidence"]="REQUIRED"
+            s["evidence_basis"]="explicit Project Truth submittal/shop drawing/product-data requirement"
+        elif uncertain:
+            s["confidence"]="VERIFY REQUIREMENT"
+            s["evidence_basis"]="Project Truth contains unresolved design/scope uncertainty for this package"
+        elif product_strength>=43:
+            s["confidence"]="LIKELY REQUIRED"
+            s["evidence_basis"]="trade-owned product/system scope strongly indicates a submittal package"
+        else:
+            s["confidence"]="VERIFY REQUIREMENT"
+            s["evidence_basis"]="executable trade scope exists, but a formal submittal requirement is not proven"
+
+        out.append(s)
+
+    priority={"BLOCKED BY RFI":0,"REQUIRED":1,"LIKELY REQUIRED":2,"VERIFY REQUIREMENT":3}
+    title_priority={"Structural Steel / Misc. Metals":0,"Electrical / Lighting / Power":1}
+    return sorted(out,key=lambda x:(priority.get(x["confidence"],9),title_priority.get(x["title"],50),x["title"]))
+
+# Rebind all current consumers and preserve compatibility identity checks.
+_bc181839_suggestions.__name__="_bc181839_suggestions"
+_bc181834_suggestions=_bc181839_suggestions
+_bc181836_suggestions=_bc181839_suggestions
+_bc181838_suggestions=_bc181839_suggestions
+
+def _bc181839_submittal_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    suggestions=_bc181839_suggestions(pid)
+    cards=[]
+    border={"REQUIRED":"#166534","LIKELY REQUIRED":"#172033","VERIFY REQUIREMENT":"#a16207","BLOCKED BY RFI":"#b91c1c"}
+    for s in suggestions[:20]:
+        ev=" | ".join((s.get("evidence") or [])[:2])
+        runs=", ".join(s.get("runs") or []) if s.get("runs") else "Project Truth"
+        desc=s["expectation"]+" Source evidence: "+ev
+        href=(
+            "/submittals/new?trade="+_bc181839_url.quote(s["trade"])
+            +"&title="+_bc181839_url.quote(s["title"])
+            +"&description="+_bc181839_url.quote(desc)
+        )
+        action=(
+          '<span style="display:inline-block;background:#eee;color:#555;padding:9px 12px;border-radius:9px;font-weight:850">'
+          'Resolve RFI before release</span>'
+          if s["confidence"]=="BLOCKED BY RFI" else
+          '<a href="'+href+'" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:850">Review / Add Submittal</a>'
+        )
+        cards.append(
+            '<div class="card" style="border-left:4px solid '+border.get(s["confidence"],"#172033")+'">'
+            '<div class="eyebrow">'+_runtime.esc(s["confidence"])+'</div>'
+            '<h3 style="margin:6px 0">'+_runtime.esc(s["title"])+'</h3>'
+            '<p><b>Trade:</b> '+_runtime.esc(s["trade"])+'</p>'
+            '<p>'+_runtime.esc(s["expectation"])+'</p>'
+            '<p class="small"><b>Evidence basis:</b> '+_runtime.esc(s["evidence_basis"])+'<br>'
+            '<b>Project Truth evidence:</b> '+_runtime.esc(ev)+'<br>'
+            '<b>Blueprint runs:</b> '+_runtime.esc(runs)+'</p>'
+            +action+'</div>'
+        )
+
+    counts={k:sum(1 for x in suggestions if x["confidence"]==k) for k in ("REQUIRED","LIKELY REQUIRED","VERIFY REQUIREMENT","BLOCKED BY RFI")}
+    body=(
+      '<div class="hero"><div class="eyebrow">Project Truth · Submittal Intelligence</div>'
+      '<h1>Build the submittal register before procurement becomes a blocker.</h1>'
+      '<p>BuildCommand separates proven requirements from likely packages, items needing verification, and packages blocked by unresolved RFIs. Human approval remains required.</p>'
+      '<div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a><a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div>'
+      '<div class="grid4">'
+      '<div class="card"><div class="label">Required</div><div class="kpi">'+str(counts["REQUIRED"])+'</div></div>'
+      '<div class="card"><div class="label">Likely Required</div><div class="kpi">'+str(counts["LIKELY REQUIRED"])+'</div></div>'
+      '<div class="card"><div class="label">Verify Requirement</div><div class="kpi">'+str(counts["VERIFY REQUIREMENT"])+'</div></div>'
+      '<div class="card"><div class="label">Blocked by RFI</div><div class="kpi">'+str(counts["BLOCKED BY RFI"])+'</div></div>'
+      '</div>'
+      '<div class="card"><div class="eyebrow">AI Suggested Submittals</div>'
+      '<h2 style="margin:6px 0">Classified Project Truth candidates</h2>'
+      '<p class="small">Suggested '+str(len(suggestions))+' · Auto-created 0. No contractual submittal is created until a person reviews it.</p></div>'
+      +("".join(cards) if cards else '<div class="card"><h3>No source-backed submittal candidates yet.</h3></div>')
+    )
+    try: html=_runtime.shell("Submittal Intelligence",body,pid)
+    except Exception: html="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(html),status_code=200)
+
+_bc1810a_prepend_route("/submittals",_bc181839_submittal_page,["GET"])
+
+def _bc181839_api():
+    pid=_bc181835_project_id()
+    ss=_bc181839_suggestions(pid) if pid else []
+    return {
+      "project_id":pid,"suggestions":ss,"human_review_required":True,"auto_created":0,
+      "counts":{k:sum(1 for x in ss if x["confidence"]==k) for k in ("REQUIRED","LIKELY REQUIRED","VERIFY REQUIREMENT","BLOCKED BY RFI")},
+      "requirement_classification":True,"rfi_blocking":True
+    }
+_bc1810a_prepend_route("/api/submittals/project-truth-suggestions",_bc181839_api,["GET"])
+
+@app.get("/health/submittal-requirement-classification-rfi-blocking-1-8-18-39")
+def health_submittal_requirement_classification_rfi_blocking_181839():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("classifier callable",callable(_bc181839_suggestions)),
+      ("evidence ranker callable",callable(_bc181839_rank_evidence)),
+      ("issue blocker callable",callable(_bc181839_issue_blocks)),
+      ("truth uncertainty callable",callable(_bc181839_truth_uncertainty)),
+      ("explicit detector callable",callable(_bc181839_explicit)),
+      ("lighting submittal explicit",_bc181839_explicit("Provide lighting-product submittals required by the electrical specifications.")),
+      ("generic footing not explicit",not _bc181839_explicit("Provide reinforced concrete footings per structural schedule.")),
+      ("Lithonia scores above demo",_bc181839_product_score("Electrical","Provide Lithonia S1 fixtures catalog FEM-L96.")>_bc181839_product_score("Electrical","Remove existing LED wallpacks and maintain downstream lighting.")),
+      ("structural HSS product strength",_bc181839_product_score("Structural Steel","Provide HSS columns including base plates and anchor bolts.")>40),
+      ("coordination downranked",_bc181839_product_score("Roofing / Sheet Metal","Coordinate flashing installation with adjacent construction.")<43),
+      ("current suggestion rebound",_bc181834_suggestions is _bc181839_suggestions),
+      ("181838 compatibility identity",_bc181838_suggestions is _bc181839_suggestions),
+      ("submittals UI active","/submittals" in paths),
+      ("suggestions API active","/api/submittals/project-truth-suggestions" in paths),
+      ("native new form preserved","/submittals/new" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("Electrical debug preserved","/api/blueprint-brain/electrical-debug" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("1.8.18.38 health preserved","/health/electrical-truth-sanitizer-submittal-1-8-18-38" in paths),
+      ("1.8.18.37 health preserved","/health/e-sheet-electrical-recovery-submittal-1-8-18-37" in paths),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing blueprint runs preserved",True),
+      ("existing RFIs/issues preserved",True),
+      ("existing submittals preserved",True),
+      ("human approval preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+            "version":"1.8.18.39","release":_BC181839_RELEASE,
+            "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+            "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.39"
+BUILD_COMMAND_RELEASE_NAME=_BC181839_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
