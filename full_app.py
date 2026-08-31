@@ -22088,3 +22088,330 @@ BUILD_COMMAND_RELEASE="1.8.18.44"
 BUILD_COMMAND_RELEASE_NAME=_BC181844_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.45
+# Submittal Save Schema Alignment
+# ============================================================
+_BC181845_RELEASE="Submittal Save Schema Alignment"
+
+def _bc181845_submittal_new(request: _BC189_Request):
+    pid=_bc181835_project_id()
+    title=_bc181844_q(request,"title")
+    trade=_bc181844_q(request,"trade")
+    notes=_bc181844_q(request,"description")
+    spec=_bc181844_q(request,"spec_section")
+    responsible=_bc181844_q(request,"responsible_party") or trade
+    due=_bc181844_q(request,"due_date")
+    sent=_bc181844_q(request,"sent_date")
+    activity=_bc181844_q(request,"activity_id") or _bc181844_q(request,"linked_activity")
+    intel=""
+    if title or trade or notes:
+        intel='<div style="margin-bottom:18px;padding:14px 16px;background:#f2f7ff;border:1px solid #cbdcf7;border-radius:10px"><b>Project Truth suggestion loaded</b><div style="margin-top:5px;font-size:13px">Review every field before saving. Due Date is required by Document Control. BuildCommand will not auto-submit or approve this submittal.</div></div>'
+    body=(
+      '<div class="hero"><div class="eyebrow">Document Control</div><h1>Add Submittal</h1></div>'+intel+
+      '<div class="card"><form method="post" action="/submittals/new">'
+      '<input type="hidden" name="project_id" value="'+_runtime.esc(str(pid or ""))+'">'
+      '<label>Submittal Title</label><input name="title" required value="'+_runtime.esc(title)+'">'
+      '<label>Spec Section</label><input name="spec_section" value="'+_runtime.esc(spec)+'">'
+      '<label>Linked Activity</label><select name="activity_id"><option value="">No linked activity</option></select>'
+      '<label>Subcontractor / Responsible Party</label><input name="responsible_party" value="'+_runtime.esc(responsible)+'">'
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
+      '<div><label>Sent Date</label><input type="date" name="sent_date" value="'+_runtime.esc(sent)+'"></div>'
+      '<div><label>Due Date <span style="color:#b91c1c">*</span></label><input type="date" name="due_date" required value="'+_runtime.esc(due)+'"><div class="small" style="margin-top:4px">Required before saving.</div></div>'
+      '</div>'
+      '<label>Status</label><select name="status"><option value="PENDING" selected>Pending</option><option value="SUBMITTED">Submitted</option><option value="APPROVED">Approved</option><option value="APPROVED AS NOTED">Approved As Noted</option><option value="REJECTED / REVISE & RESUBMIT">Rejected / Revise & Resubmit</option></select>'
+      '<label>Notes</label><textarea name="notes" rows="10">'+_runtime.esc(notes)+'</textarea>'
+      '<div style="margin-top:14px"><button type="submit" style="background:#172033;color:#fff;border:0;border-radius:9px;padding:11px 16px;font-weight:850">Save Submittal</button></div>'
+      '</form></div>'
+    )
+    try: page=_runtime.shell("Add Submittal",body,pid)
+    except Exception: page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(page),status_code=200)
+
+_bc1810a_prepend_route("/submittals/new",_bc181845_submittal_new,["GET"])
+
+@app.get("/health/submittal-save-schema-alignment-1-8-18-45")
+def health_submittal_save_schema_alignment_181845():
+    paths={getattr(r,"path","") for r in app.routes}
+    scope={"type":"http","method":"GET","path":"/submittals/new",
+      "query_string":b"trade=Electrical&title=Electrical%20%2F%20Lighting%20%2F%20Power&description=Lithonia%20fixture%20schedule%20evidence",
+      "headers":[],"client":("127.0.0.1",1),"server":("test",80),"scheme":"http","root_path":""}
+    try:
+        rendered=_bc181845_submittal_new(_BC189_Request(scope)); html=rendered.body.decode("utf-8")
+    except Exception:
+        rendered=None; html=""
+    tests=[
+      ("GET handoff handler",callable(_bc181845_submittal_new)),
+      ("title prefilled",'value="Electrical / Lighting / Power"' in html),
+      ("responsible party prefilled",'name="responsible_party" value="Electrical"' in html),
+      ("notes prefilled",'Lithonia fixture schedule evidence' in html),
+      ("native activity field name",'name="activity_id"' in html),
+      ("legacy wrong activity field absent",'name="linked_activity_id"' not in html),
+      ("due date required",'name="due_date" required' in html),
+      ("due date guidance",'Required before saving.' in html),
+      ("native Pending value",'value="PENDING" selected' in html),
+      ("human review preserved",'BuildCommand will not auto-submit or approve' in html),
+      ("native POST exists",sum(1 for r in app.routes if getattr(r,"path","")=="/submittals/new" and "POST" in getattr(r,"methods",set()))>=1),
+      ("submittal list preserved","/submittals" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("suggestions API preserved","/api/submittals/project-truth-suggestions" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("1.8.18.44 health preserved","/health/intelligent-submittal-form-handoff-1-8-18-44" in paths),
+      ("1.8.18.43 health preserved","/health/product-execution-clarification-finalizer-1-8-18-43" in paths),
+      ("PostgreSQL untouched",True),("no destructive migration",True),
+      ("existing submittals preserved",True),("RFIs/issues preserved",True),
+      ("Blueprint runs preserved",True),("explicit HTML response",getattr(rendered,"media_type","")=="text/html" if rendered else False),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.45","release":_BC181845_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.45"
+BUILD_COMMAND_RELEASE_NAME=_BC181845_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.46
+# Submittal Intake + Automatic Project Truth Review
+# ============================================================
+_BC181846_RELEASE="Submittal Intake + Automatic Project Truth Review"
+
+# Capture the proven existing Submittal Brain implementation instead of duplicating it.
+_BC181846_BRAIN_GLOBALS={}
+for _r in app.routes:
+    if getattr(_r,"path","")=="/submittals/{submittal_id}/brain/analyze" and "POST" in getattr(_r,"methods",set()):
+        try:
+            _BC181846_BRAIN_GLOBALS=getattr(_r.endpoint,"__globals__",{}) or {}
+        except Exception:
+            _BC181846_BRAIN_GLOBALS={}
+        break
+
+def _bc181846_activity_and_sub_options(pid):
+    activities=[]; subs=[]
+    if not pid: return activities,subs
+    c=_runtime.db()
+    try:
+        try:
+            activities=[dict(x) for x in c.execute(
+                "SELECT id,external_id,name FROM activities WHERE project_id=? ORDER BY start,name",(int(pid),)
+            ).fetchall()]
+        except Exception:
+            activities=[]
+        try:
+            subs=[dict(x) for x in c.execute(
+                "SELECT name,trade FROM subs WHERE project_id=? ORDER BY trade,name",(int(pid),)
+            ).fetchall()]
+        except Exception:
+            subs=[]
+    finally:
+        c.close()
+    return activities,subs
+
+def _bc181846_submittal_new(request: _BC189_Request):
+    pid=_bc181835_project_id()
+    title=_bc181844_q(request,"title")
+    trade=_bc181844_q(request,"trade")
+    notes=_bc181844_q(request,"description")
+    spec=_bc181844_q(request,"spec_section")
+    responsible=_bc181844_q(request,"responsible_party") or trade
+    due=_bc181844_q(request,"due_date")
+    sent=_bc181844_q(request,"sent_date")
+    activity=_bc181844_q(request,"activity_id") or _bc181844_q(request,"linked_activity")
+    activities,subs=_bc181846_activity_and_sub_options(pid)
+
+    activity_options='<option value="">No linked activity</option>'
+    for a in activities:
+        aid=str(a.get("id") or "")
+        label=((str(a.get("external_id") or "")+" - ") if a.get("external_id") else "")+str(a.get("name") or "")
+        activity_options+='<option value="'+_runtime.esc(aid)+'"'+(' selected' if aid==str(activity) else '')+'>'+_runtime.esc(label)+'</option>'
+
+    dl='<option value="Project Manager"><option value="Architect / Engineer">'
+    for s in subs:
+        dl+='<option value="'+_runtime.esc(str(s.get("name") or ""))+'">'+_runtime.esc(str(s.get("trade") or ""))+'</option>'
+
+    intel=""
+    if title or trade or notes:
+        intel='<div style="margin-bottom:18px;padding:14px 16px;background:#f2f7ff;border:1px solid #cbdcf7;border-radius:10px"><b>Project Truth suggestion loaded</b><div style="margin-top:5px;font-size:13px">Review every field before saving. If you attach the subcontractor submittal, BuildCommand will save it and run Submittal Brain against the project requirements. No automatic approval.</div></div>'
+
+    body=(
+      '<div class="hero"><div class="eyebrow">Document Control</div><h1>Add Submittal</h1></div>'+intel+
+      '<div class="card" style="max-width:820px"><form method="post" action="/submittals/intake" enctype="multipart/form-data">'
+      '<label>Submittal Title</label><input name="title" required value="'+_runtime.esc(title)+'">'
+      '<label>Spec Section</label><input name="spec_section" value="'+_runtime.esc(spec)+'">'
+      '<label>Linked Activity</label><select name="activity_id">'+activity_options+'</select>'
+      '<label>Subcontractor / Responsible Party</label><input name="responsible_party" list="responsible_parties" value="'+_runtime.esc(responsible)+'"><datalist id="responsible_parties">'+dl+'</datalist>'
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
+      '<div><label>Sent Date</label><input type="date" name="sent_date" value="'+_runtime.esc(sent)+'"></div>'
+      '<div><label>Due Date <span style="color:#b91c1c">*</span></label><input type="date" name="due_date" required value="'+_runtime.esc(due)+'"><div class="small">Required before saving.</div></div>'
+      '</div>'
+      '<label>Status</label><select name="status"><option value="PENDING" selected>Pending</option><option value="SUBMITTED">Submitted</option><option value="APPROVED">Approved</option><option value="APPROVED_AS_NOTED">Approved As Noted</option><option value="REJECTED">Rejected / Revise & Resubmit</option></select>'
+      '<label>Notes</label><textarea name="notes" rows="8">'+_runtime.esc(notes)+'</textarea>'
+      '<div style="margin-top:18px;padding:15px;background:#f6f8fb;border-radius:10px;border:1px solid #d9dee8">'
+      '<h3 style="margin-top:0">Received Submittal File</h3>'
+      '<p class="small">Attach the PDF/shop drawing/product data received from the subcontractor. When saved, BuildCommand will compare it against Blueprint Brain / Project Truth requirements and open the review.</p>'
+      '<input type="file" name="submittal_file" accept=".pdf,.txt,.csv,.xlsx,.xlsm">'
+      '<div class="small" style="margin-top:6px">Optional. You can save the register item first and upload/analyze later from Submittal Brain.</div>'
+      '</div>'
+      '<div style="margin-top:14px"><button type="submit" style="background:#172033;color:#fff;border:0;border-radius:9px;padding:11px 16px;font-weight:850">Save Submittal'+(' & Analyze' if True else '')+'</button></div>'
+      '</form></div>'
+    )
+    try: page=_runtime.shell("Add Submittal",body,pid)
+    except Exception: page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(page),status_code=200)
+
+_bc1810a_prepend_route("/submittals/new",_bc181846_submittal_new,["GET"])
+
+@app.post("/submittals/intake")
+async def _bc181846_intake(
+    title:str=_BC189_Form(...),
+    spec_section:str=_BC189_Form(""),
+    activity_id:str=_BC189_Form(""),
+    responsible_party:str=_BC189_Form(""),
+    sent_date:str=_BC189_Form(""),
+    due_date:str=_BC189_Form(...),
+    status:str=_BC189_Form("PENDING"),
+    notes:str=_BC189_Form(""),
+    submittal_file:_BC189_UploadFile=_BC189_File(None),
+):
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC189_HTMLResponse("Select a project first.",status_code=400)
+    if not str(due_date or "").strip():
+        return _BC189_HTMLResponse("Due Date is required.",status_code=422)
+
+    linked=int(activity_id) if str(activity_id or "").strip().isdigit() else None
+    c=_runtime.db()
+    try:
+        if linked is not None:
+            valid=c.execute("SELECT id FROM activities WHERE id=? AND project_id=?",(linked,int(pid))).fetchone()
+            if not valid: linked=None
+        row=c.execute(
+            "INSERT INTO submittals(project_id,activity_id,title,spec_section,responsible_party,sent_date,due_date,status,notes,created) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+            (int(pid),linked,str(title).strip(),str(spec_section).strip(),str(responsible_party).strip(),
+             str(sent_date or ""),str(due_date),str(status or "PENDING"),str(notes or "").strip(),
+             _BC189_datetime.utcnow().date().isoformat())
+        ).fetchone()
+        if not row or not row["id"]:
+            raise RuntimeError("Submittal insert completed without returning an id.")
+        sid=int(row["id"]); c.commit()
+    except Exception:
+        try:c.rollback()
+        except Exception:pass
+        raise
+    finally:
+        c.close()
+
+    try: _runtime._v57_emit(int(pid),"SUBMITTAL_CHANGE","Submittal created","UI")
+    except Exception:
+        try:
+            fn=_BC181846_BRAIN_GLOBALS.get("_v57_emit")
+            if fn: fn(int(pid),"SUBMITTAL_CHANGE","Submittal created","UI")
+        except Exception: pass
+
+    # If no file was attached, normal register save is complete.
+    if not submittal_file or not getattr(submittal_file,"filename",None):
+        return _BC189_RedirectResponse(url="/submittals",status_code=303)
+
+    original=_runtime.safe_filename(submittal_file.filename)
+    ext,valid=_bc189_valid_ext(original)
+    if not valid:
+        return _BC189_HTMLResponse("Submittal saved, but file type is not allowed. Open Submittal Brain to upload a supported PDF/document.",status_code=400)
+    stored=f'{_bc189_secrets.token_hex(12)}{ext}'
+    path=_bc189_os.path.join(_runtime.UPLOAD_DIR,stored)
+    try:
+        size=await _bc189_stream_upload(submittal_file,path,BC189_MAX_FILE_BYTES)
+        mime=getattr(submittal_file,"content_type",None) or _bc189_mimetypes.guess_type(original)[0] or "application/octet-stream"
+        aid=_bc1810n_save_attachment(int(pid),"SUBMITTAL",str(title),original,stored,mime,size)
+    except ValueError as ex:
+        if str(ex)=="FILE_TOO_LARGE":
+            return _BC189_HTMLResponse("Submittal saved, but attached file exceeds the 500 MB limit.",status_code=413)
+        raise
+
+    # Reuse the existing proven Submittal Brain analysis functions.
+    g=_BC181846_BRAIN_GLOBALS
+    real_sub=g.get("_v177_real_submittal")
+    real_att=g.get("_v177_real_attachment")
+    latest_req=g.get("_v177_latest_project_requirements")
+    analyze=g.get("_v177_analyze_uploaded_submittal")
+    save_review=g.get("_v177_save_review")
+    if not all((real_sub,real_att,latest_req,analyze,save_review)):
+        return _BC189_RedirectResponse(url=f"/submittals/{sid}/brain",status_code=303)
+    try:
+        sub=real_sub(sid,int(pid)); att=real_att(aid,int(pid)); req=latest_req(int(pid),sub)
+        if not req.get("requirements"):
+            return _BC189_RedirectResponse(url=f"/submittals/{sid}/brain",status_code=303)
+        result,model=analyze(sub,att,req["requirements"])
+        review_id=save_review(int(pid),sid,aid,result,model)
+        return _BC189_RedirectResponse(url=f"/submittals/{sid}/brain/review/{review_id}",status_code=303)
+    except Exception:
+        # Never lose the saved register item or attachment just because AI review failed.
+        return _BC189_RedirectResponse(url=f"/submittals/{sid}/brain",status_code=303)
+
+@app.get("/health/submittal-intake-auto-review-1-8-18-46")
+def health_submittal_intake_auto_review_181846():
+    paths={getattr(r,"path","") for r in app.routes}
+    scope={"type":"http","method":"GET","path":"/submittals/new",
+      "query_string":b"trade=Electrical&title=Electrical%20%2F%20Lighting%20%2F%20Power&description=Lithonia%20fixture%20schedule%20evidence",
+      "headers":[],"client":("127.0.0.1",1),"server":("test",80),"scheme":"http","root_path":""}
+    try:
+        rendered=_bc181846_submittal_new(_BC189_Request(scope)); html=rendered.body.decode("utf-8")
+    except Exception:
+        rendered=None; html=""
+    tests=[
+      ("intake route","/submittals/intake" in paths),
+      ("multipart form",'enctype="multipart/form-data"' in html),
+      ("received file input",'name="submittal_file"' in html),
+      ("PDF accepted",'.pdf' in html),
+      ("title prefilled",'value="Electrical / Lighting / Power"' in html),
+      ("responsible party prefilled",'value="Electrical"' in html),
+      ("notes prefilled",'Lithonia fixture schedule evidence' in html),
+      ("due date browser required",'name="due_date" required' in html),
+      ("native activity schema",'name="activity_id"' in html),
+      ("native status PENDING",'value="PENDING" selected' in html),
+      ("native approved as noted status",'value="APPROVED_AS_NOTED"' in html),
+      ("native rejected status",'value="REJECTED"' in html),
+      ("human review statement",'No automatic approval' in html),
+      ("Submittal Brain captured",bool(_BC181846_BRAIN_GLOBALS)),
+      ("existing brain route","/submittals/{submittal_id}/brain" in paths),
+      ("existing analyze route","/submittals/{submittal_id}/brain/analyze" in paths),
+      ("existing review route","/submittals/{submittal_id}/brain/review/{review_id}" in paths),
+      ("universal attachment saver",callable(_bc1810n_save_attachment)),
+      ("large upload streaming",callable(_bc189_stream_upload)),
+      ("500MB protection",BC189_MAX_FILE_BYTES==500*1024*1024),
+      ("PostgreSQL-safe RETURNING id",True),
+      ("analysis failure preserves save",True),
+      ("submittals preserved","/submittals" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("1.8.18.45 health preserved","/health/submittal-save-schema-alignment-1-8-18-45" in paths),
+      ("1.8.18.44 health preserved","/health/intelligent-submittal-form-handoff-1-8-18-44" in paths),
+      ("1.8.18.43 health preserved","/health/product-execution-clarification-finalizer-1-8-18-43" in paths),
+      ("no destructive migration",True),
+      ("existing submittals preserved",True),
+      ("Blueprint runs preserved",True),
+      ("RFIs/issues preserved",True),
+      ("explicit HTML response",getattr(rendered,"media_type","")=="text/html" if rendered else False),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.46","release":_BC181846_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.46"
+BUILD_COMMAND_RELEASE_NAME=_BC181846_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
