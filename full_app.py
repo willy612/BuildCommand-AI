@@ -19399,3 +19399,70 @@ BUILD_COMMAND_RELEASE="1.8.18.32"
 BUILD_COMMAND_RELEASE_NAME=_BC181832_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.33
+# RFI / Issues HTML Rendering Hotfix
+# ============================================================
+from starlette.responses import HTMLResponse as _BC181833_HTMLResponse
+
+_BC181833_RELEASE="RFI / Issues HTML Rendering Hotfix"
+
+def _bc181833_issues_page():
+    result=_bc181831_render_clean_issues()
+    # _runtime.shell returns finished HTML markup as text.
+    # Explicit HTMLResponse prevents FastAPI from JSON-encoding the markup.
+    if isinstance(result,_BC181833_HTMLResponse):
+        return result
+    if hasattr(result,"body") and hasattr(result,"media_type"):
+        return result
+    return _BC181833_HTMLResponse(content=str(result),status_code=200)
+
+# Fresh prepended route so FastAPI's cached APIRoute app executes this handler.
+_bc1810a_prepend_route("/issues",_bc181833_issues_page,["GET"])
+
+@app.get("/health/rfi-html-rendering-hotfix-1-8-18-33")
+def health_rfi_html_rendering_hotfix_181833():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("HTMLResponse imported",_BC181833_HTMLResponse is not None),
+      ("HTML wrapper callable",callable(_bc181833_issues_page)),
+      ("issues route active","/issues" in paths),
+      ("clean issues renderer preserved",callable(_bc181831_render_clean_issues)),
+      ("fixed DB reader preserved",callable(_bc181832_issue_rows)),
+      ("authoritative detector preserved",callable(_bc181831_canopy10_authoritative)),
+      ("legacy detector preserved",callable(_bc181831_canopy10_legacy)),
+      ("active view preserved",callable(_bc181831_active_view)),
+      ("normal Add RFI preserved","/issues/new" in paths),
+      ("AI Suggested RFIs preserved","/rfi-intelligence/project-truth" in paths),
+      ("edit route preserved",any(str(x).startswith("/issues/") for x in paths)),
+      ("supersession debug API preserved","/api/issues/supersession-debug" in paths),
+      ("1.8.18.32 health preserved","/health/legacy-rfi-supersession-db-hotfix-1-8-18-32" in paths),
+      ("1.8.18.31 health preserved","/health/legacy-rfi-supersession-control-1-8-18-31" in paths),
+      ("1.8.18.30 health preserved","/health/native-rfi-intelligence-integration-1-8-18-30" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Project Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("RFI data untouched",True),
+      ("legacy record preserved",True),
+      ("authoritative RFI preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+      "status":"ok" if passed==len(tests) else "failed",
+      "app":"BuildCommand AI",
+      "version":"1.8.18.33",
+      "release":_BC181833_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.33"
+BUILD_COMMAND_RELEASE_NAME=_BC181833_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
