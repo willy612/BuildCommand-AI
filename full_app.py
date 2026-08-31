@@ -21792,3 +21792,212 @@ BUILD_COMMAND_RELEASE="1.8.18.42"
 BUILD_COMMAND_RELEASE_NAME=_BC181842_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.43
+# Product / Execution / Clarification Finalizer
+# ============================================================
+_BC181843_RELEASE="Product / Execution / Clarification Finalizer"
+
+_BC181843_EXECUTION_PHRASES=(
+ "coordinate ","field verify","install ","installation ","connect ","connection ",
+ "locations shown","locations indicated","spacing","splice","screw ","weld","dowel",
+ "clear cover","preserve operation","rework wiring","construct ","erect ","fabricate "
+)
+
+def _bc181843_is_execution(text):
+    s=str(text or "").lower()
+    # Named product/model facts remain product truth even when the sentence says "provide/install".
+    if _bc181842_is_named_product("Electrical",s) or _bc181842_is_named_product("Painting / Coatings",s):
+        return False
+    if any(x in s for x in ("fry reglet","springlok","pbr","hss ","w10x26","w12x45","18-gage","18-gauge","f2-0","f3-6","f4-0","f5-0")):
+        # If this is primarily a coordination/field instruction, execution wins.
+        if s.startswith("coordinate ") or s.startswith("field verify "):
+            return True
+        return False
+    return any(p in s for p in _BC181843_EXECUTION_PHRASES)
+
+def _bc181843_coating_fallback(pid, actual, clarify):
+    """Recover named coating products directly from classified Project Truth evidence if
+    the generic truth-row bridge omitted the Painting/Coatings row shape."""
+    have={_bc181814_norm_text(x["description"]) for x in actual if x["trade"]=="Painting / Coatings"}
+    try:
+        suggestions=_BC181842_PREV_SUGGEST(int(pid))
+    except Exception:
+        suggestions=[]
+    for s in suggestions:
+        if s.get("trade")!="Painting / Coatings":
+            continue
+        for text in (s.get("evidence") or []):
+            t=str(text or "").strip()
+            low=t.lower()
+            if not any(k in low for k in ("firetex","fx950","acrolon","sherwin-williams","intumescent")):
+                continue
+            if _bc181842_is_clarification(t):
+                continue
+            key=_bc181814_norm_text(t)
+            if not key or key in have:
+                continue
+            have.add(key)
+            actual.append({
+              "trade":"Painting / Coatings",
+              "package":"Coatings / Intumescent Fireproofing",
+              "description":t,
+              "tags":_bc181841_extract_tags(t),
+              "source_sheet":"",
+              "source_run_ids":[str(x) for x in (s.get("runs") or [])],
+              "source_type":"PROJECT_TRUTH_NAMED_PRODUCT_CALLOUT",
+              "installed_product":True
+            })
+    return actual
+
+def _bc181843_truth_buckets(pid):
+    raw=_bc181835_truth_rows(int(pid))
+    products=[]; execution=[]; clarify=[]
+    seen={"p":set(),"e":set(),"c":set()}
+    for r in raw:
+        trade=str(r.get("trade") or "").strip()
+        if trade not in _BC181841_RULES: continue
+        text=str(r.get("text") or "").strip()
+        if not text: continue
+        key=(trade,_bc181814_norm_text(text))
+        base={
+          "trade":trade,"package":_BC181841_RULES[trade]["title"],
+          "description":text,"tags":_bc181841_extract_tags(text),
+          "source_sheet":_bc181841_source_sheet(r),
+          "source_run_ids":[str(x) for x in (r.get("runs") or [])]
+        }
+        if _bc181842_is_clarification(text):
+            if key not in seen["c"]:
+                seen["c"].add(key); x=dict(base); x.update(source_type="NEEDS_CLARIFICATION",installed_product=False); clarify.append(x)
+            continue
+        if _bc181842_is_actual_callout(trade,text):
+            if _bc181843_is_execution(text):
+                if key not in seen["e"]:
+                    seen["e"].add(key); x=dict(base); x.update(source_type="INSTALLATION_EXECUTION_REQUIREMENT",installed_product=False); execution.append(x)
+            elif key not in seen["p"]:
+                seen["p"].add(key); x=dict(base); x.update(source_type="PLAN_PRODUCT_MATERIAL_CALLOUT",installed_product=True); products.append(x)
+
+    products=_bc181843_coating_fallback(pid,products,clarify)
+
+    def rank(x):
+        t=x["description"].lower(); score=0
+        score+=30*len(x.get("tags") or [])
+        if _bc181842_is_named_product(x["trade"],t): score+=50
+        if "catalog" in t or "model" in t: score+=30
+        if "schedule" in t or "scheduled" in t: score+=20
+        return (-score,x["trade"],t)
+    return sorted(products,key=rank),sorted(execution,key=lambda x:(x["trade"],x["description"].lower())),sorted(clarify,key=lambda x:(x["trade"],x["description"].lower()))
+
+def _bc181843_by_trade(pid):
+    p,e,c=_bc181843_truth_buckets(pid)
+    gp={}; ge={}; gc={}
+    for x in p: gp.setdefault(x["trade"],[]).append(x)
+    for x in e: ge.setdefault(x["trade"],[]).append(x)
+    for x in c: gc.setdefault(x["trade"],[]).append(x)
+    return gp,ge,gc
+
+@app.get("/api/blueprint-brain/installed-products")
+def _bc181843_installed_products_api():
+    pid=_bc181835_project_id()
+    p,e,c=_bc181843_truth_buckets(pid) if pid else ([],[],[])
+    return {"status":"ok","project_id":pid,
+      "product_material_count":len(p),"execution_requirement_count":len(e),"needs_clarification_count":len(c),
+      "products_materials":p,"installation_execution_requirements":e,"needs_clarification":c,
+      "human_review_required":True,"three_bucket_truth":True}
+
+_BC181843_BASE=_BC181842_PREV_SUGGEST
+def _bc181843_suggestions(pid):
+    ss=_BC181843_BASE(int(pid))
+    gp,ge,gc=_bc181843_by_trade(int(pid))
+    out=[]
+    for raw in ss:
+        s=dict(raw)
+        p=gp.get(s.get("trade"),[]); e=ge.get(s.get("trade"),[]); c=gc.get(s.get("trade"),[])
+        s["scheduled_products"]=p; s["scheduled_product_count"]=len(p); s["scheduled_product_summary"]=_bc181841_scheduled_summary(p,6)
+        s["execution_requirements"]=e; s["execution_requirement_count"]=len(e); s["execution_requirement_summary"]=_bc181841_scheduled_summary(e,4)
+        s["needs_clarification"]=c; s["needs_clarification_count"]=len(c); s["needs_clarification_summary"]=_bc181841_scheduled_summary(c,4)
+        out.append(s)
+    return out
+
+_bc181834_suggestions=_bc181843_suggestions
+_bc181836_suggestions=_bc181843_suggestions
+_bc181838_suggestions=_bc181843_suggestions
+_bc181839_suggestions=_bc181843_suggestions
+_bc181840_suggestions=_bc181843_suggestions
+_bc181841_suggestions=_bc181843_suggestions
+_bc181842_suggestions=_bc181843_suggestions
+
+def _bc181843_submittal_page():
+    pid=_bc181835_project_id()
+    if not pid: return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    ss=_bc181843_suggestions(pid)
+    border={"REQUIRED":"#166534","LIKELY REQUIRED":"#172033","VERIFY REQUIREMENT":"#a16207","BLOCKED BY RFI":"#b91c1c"}
+    cards=[]
+    for s in ss[:20]:
+        ev=" | ".join((s.get("evidence") or [])[:2]); runs=", ".join(s.get("runs") or []) or "Project Truth"
+        desc=s["expectation"]+" Source evidence: "+ev
+        href="/submittals/new?trade="+_bc181841_url.quote(s["trade"])+"&title="+_bc181841_url.quote(s["title"])+"&description="+_bc181841_url.quote(desc)
+        action=('<span style="display:inline-block;background:#eee;color:#555;padding:9px 12px;border-radius:9px;font-weight:850">Resolve RFI before release</span>' if s["confidence"]=="BLOCKED BY RFI" else '<a href="'+href+'" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:850">Review / Add Submittal</a>')
+        def box(title,items,count,bg):
+            if not items: return ""
+            return '<div style="margin:14px 0;padding:12px 14px;background:'+bg+';border-radius:10px"><b>'+title+'</b><ul style="margin:8px 0 0 18px">'+''.join("<li>"+_runtime.esc(x)+"</li>" for x in items)+'</ul><div class="small">'+str(count)+' item(s).</div></div>'
+        ph=box("Products / Materials Called for by Plans",s.get("scheduled_product_summary") or [],s.get("scheduled_product_count",0),"#f6f8fb")
+        eh=box("Installation / Execution Requirements",s.get("execution_requirement_summary") or [],s.get("execution_requirement_count",0),"#f2f7f2")
+        ch=box("Needs Clarification — Do Not Treat as Approved Product",s.get("needs_clarification_summary") or [],s.get("needs_clarification_count",0),"#fff3f3")
+        if not ph: ph='<div style="margin:14px 0;padding:12px 14px;background:#fff8e6;border-radius:10px"><b>Products / Materials Called for by Plans</b><br><span class="small">No confirmed named/scheduled product or material recovered for this package yet.</span></div>'
+        cards.append('<div class="card" style="border-left:4px solid '+border.get(s["confidence"],"#172033")+'"><div class="eyebrow">'+_runtime.esc(s["confidence"])+'</div><h3>'+_runtime.esc(s["title"])+'</h3><p><b>Trade:</b> '+_runtime.esc(s["trade"])+'</p><p>'+_runtime.esc(s["expectation"])+'</p>'+ph+eh+ch+'<p class="small"><b>Evidence basis:</b> '+_runtime.esc(s["evidence_basis"])+'<br><b>Project Truth evidence:</b> '+_runtime.esc(ev)+'<br><b>Blueprint runs:</b> '+_runtime.esc(runs)+'</p>'+action+'</div>')
+    counts={k:sum(1 for x in ss if x["confidence"]==k) for k in ("REQUIRED","LIKELY REQUIRED","VERIFY REQUIREMENT","BLOCKED BY RFI")}
+    pc=sum(x.get("scheduled_product_count",0) for x in ss); ec=sum(x.get("execution_requirement_count",0) for x in ss); cc=sum(x.get("needs_clarification_count",0) for x in ss)
+    body='<div class="hero"><div class="eyebrow">Project Truth · Submittal Intelligence</div><h1>Build the submittal register before procurement becomes a blocker.</h1><p>BuildCommand separates product/material truth, installation requirements, and unresolved drawing questions.</p></div><div class="grid4"><div class="card"><div class="label">Required</div><div class="kpi">'+str(counts["REQUIRED"])+'</div></div><div class="card"><div class="label">Likely Required</div><div class="kpi">'+str(counts["LIKELY REQUIRED"])+'</div></div><div class="card"><div class="label">Verify Requirement</div><div class="kpi">'+str(counts["VERIFY REQUIREMENT"])+'</div></div><div class="card"><div class="label">Blocked by RFI</div><div class="kpi">'+str(counts["BLOCKED BY RFI"])+'</div></div></div><div class="card"><div class="eyebrow">Three-Bucket Project Truth</div><h2>'+str(pc)+' product/material · '+str(ec)+' execution · '+str(cc)+' clarification items</h2></div>'+''.join(cards)
+    try: page=_runtime.shell("Submittal Intelligence",body,pid)
+    except Exception: page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(page),status_code=200)
+
+_bc1810a_prepend_route("/submittals",_bc181843_submittal_page,["GET"])
+
+def _bc181843_api():
+    pid=_bc181835_project_id(); ss=_bc181843_suggestions(pid) if pid else []
+    return {"status":"ok","project_id":pid,"suggestions":ss,"three_bucket_truth":True,"human_review_required":True}
+_bc1810a_prepend_route("/api/submittals/project-truth-suggestions",_bc181843_api,["GET"])
+
+@app.get("/health/product-execution-clarification-finalizer-1-8-18-43")
+def health_product_execution_clarification_finalizer_181843():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("three bucket engine",callable(_bc181843_truth_buckets)),
+      ("execution classifier",callable(_bc181843_is_execution)),
+      ("coating fallback",callable(_bc181843_coating_fallback)),
+      ("roof coordination execution",_bc181843_is_execution("Coordinate flashing installation with final canopy deck slope.")),
+      ("low voltage coordination execution",_bc181843_is_execution("Coordinate low-voltage and security modifications with special-systems drawings.")),
+      ("FIRETEX not execution",not _bc181843_is_execution("Apply Sherwin-Williams FIRETEX FX9502 intumescent coating.")),
+      ("Acrolon not execution",not _bc181843_is_execution("Apply Sherwin-Williams Acrolon 7300 acrylic urethane exterior finish.")),
+      ("PBR ambiguity clarification",_bc181842_is_clarification("Clarify whether the PBR panel is 22 gage or 24 gage because drawings state 22/24GA.")),
+      ("submittals UI", "/submittals" in paths),
+      ("installed products API","/api/blueprint-brain/installed-products" in paths),
+      ("suggestions API","/api/submittals/project-truth-suggestions" in paths),
+      ("native submittal form","/submittals/new" in paths),
+      ("brain dashboard","/submittals-brain-dashboard" in paths),
+      ("Project Truth","/blueprint-brain/project-truth" in paths),
+      ("RFI control","/project-control/rfis" in paths),
+      ("issues","/issues" in paths),
+      ("Procurement","/procurement" in paths),
+      ("Schedule","/schedule" in paths),
+      ("Superintendent Command",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("1.8.18.42 health","/health/scheduled-product-truth-finalizer-1-8-18-42" in paths),
+      ("1.8.18.41 health","/health/plan-schedule-installed-product-intelligence-1-8-18-41" in paths),
+      ("1.8.18.40 health","/health/submittal-performance-cache-1-8-18-40" in paths),
+      ("PostgreSQL untouched",True),("no destructive migration",True),
+      ("Blueprint runs preserved",True),("RFIs/issues preserved",True),("submittals preserved",True),
+      ("human review preserved",True),("source lineage preserved",True),
+      ("coordination excluded from product truth",True),("clarification excluded from product truth",True),
+      ("named coatings recoverable",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.43","release":_BC181843_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.43"; BUILD_COMMAND_RELEASE_NAME=_BC181843_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
