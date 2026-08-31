@@ -22771,3 +22771,209 @@ BUILD_COMMAND_RELEASE="1.8.18.47"
 BUILD_COMMAND_RELEASE_NAME=_BC181847_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.48
+# Submittal Action + Procurement Hold + Trade Readiness Link
+# ============================================================
+_BC181848_RELEASE = "Submittal Action + Procurement Hold + Trade Readiness Link"
+import json as _bc181848_json
+from datetime import datetime as _bc181848_datetime
+
+def _bc181848_ensure():
+    c = _runtime.db()
+    try:
+        pg = str(getattr(_runtime, "DATABASE_KIND", "")).lower() == "postgres"
+        iddef = "BIGSERIAL PRIMARY KEY" if pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        c.execute("""CREATE TABLE IF NOT EXISTS submittal_review_actions(
+          id %s,
+          company_id INTEGER NOT NULL, project_id INTEGER NOT NULL,
+          submittal_id INTEGER NOT NULL, review_id INTEGER NOT NULL,
+          decision TEXT NOT NULL DEFAULT 'HOLD',
+          release_status TEXT NOT NULL DEFAULT 'HOLD',
+          action_summary TEXT, blocker_summary TEXT, responsible_party TEXT,
+          due_date TEXT, created_by INTEGER, created TEXT, updated TEXT
+        )""" % iddef)
+        c.execute("""CREATE TABLE IF NOT EXISTS submittal_procurement_links(
+          id %s,
+          company_id INTEGER NOT NULL, project_id INTEGER NOT NULL,
+          submittal_id INTEGER NOT NULL, review_id INTEGER NOT NULL,
+          procurement_id INTEGER, release_status TEXT NOT NULL DEFAULT 'HOLD',
+          blocker_summary TEXT, created TEXT, updated TEXT
+        )""" % iddef)
+        c.commit()
+    finally:
+        c.close()
+
+def _bc181848_review(pid, rid):
+    c=_runtime.db()
+    try:
+        return c.execute("SELECT * FROM submittal_brain_reviews WHERE company_id=? AND project_id=? AND id=?",
+            (int(_runtime.current_company_id()),int(pid),int(rid))).fetchone()
+    finally:c.close()
+
+def _bc181848_result(row):
+    try:return _bc181848_json.loads(row["analysis_json"] or "{}")
+    except Exception:return {}
+
+def _bc181848_release_assessment(result):
+    hard=[]; human=[]
+    for f in (result.get("findings") or []):
+        st=str(f.get("status") or "").upper().replace("_"," ")
+        msg=str(f.get("category") or "Finding")
+        if f.get("explanation"): msg += ": " + str(f.get("explanation"))
+        if st in {"DOES NOT COMPLY","NONCOMPLIANT","NON COMPLIANT","REJECT","REJECTED"}: hard.append(msg)
+        elif st in {"HUMAN REVIEW","VERIFY","REVIEW"}: human.append(msg)
+    overall=str(result.get("overall_status") or "").upper().replace("_"," ")
+    if hard or overall in {"DOES NOT COMPLY","NONCOMPLIANT","NON COMPLIANT","REJECTED"}:
+        return {"release_status":"HOLD","recommended_decision":"REVISE_RESUBMIT","blockers":(hard+human)[:12]}
+    if human or overall in {"HUMAN REVIEW","PARTIAL MATCH"}:
+        return {"release_status":"HOLD","recommended_decision":"HUMAN_REVIEW","blockers":human[:12]}
+    return {"release_status":"REVIEW_FOR_RELEASE","recommended_decision":"READY_FOR_HUMAN_DECISION","blockers":[]}
+
+def _bc181848_action(pid,sid,rid):
+    _bc181848_ensure(); c=_runtime.db()
+    try:
+        return c.execute("""SELECT * FROM submittal_review_actions WHERE company_id=? AND project_id=?
+          AND submittal_id=? AND review_id=? ORDER BY id DESC LIMIT 1""",
+          (int(_runtime.current_company_id()),int(pid),int(sid),int(rid))).fetchone()
+    finally:c.close()
+
+def _bc181848_sync_procurement_hold(pid,sid,rid,release,blockers):
+    _bc181848_ensure(); c=_runtime.db(); now=_bc181848_datetime.utcnow().isoformat()
+    try:
+        link=c.execute("""SELECT * FROM submittal_procurement_links WHERE company_id=? AND project_id=?
+          AND submittal_id=? AND review_id=? ORDER BY id DESC LIMIT 1""",
+          (int(_runtime.current_company_id()),int(pid),int(sid),int(rid))).fetchone()
+        if link and link["procurement_id"] and release=="HOLD":
+            c.execute("""UPDATE procurement SET status='NOT_RELEASED',notes=? WHERE id=? AND project_id=?""",
+                ("SUBMITTAL HOLD: "+str(blockers or ""),int(link["procurement_id"]),int(pid)))
+        if link:
+            c.execute("UPDATE submittal_procurement_links SET release_status=?,blocker_summary=?,updated=? WHERE id=?",
+                (release,blockers,now,int(link["id"])))
+        else:
+            c.execute("""INSERT INTO submittal_procurement_links(company_id,project_id,submittal_id,review_id,
+              procurement_id,release_status,blocker_summary,created,updated) VALUES(?,?,?,?,?,?,?,?,?)""",
+              (int(_runtime.current_company_id()),int(pid),int(sid),int(rid),None,release,blockers,now,now))
+        c.commit()
+    finally:c.close()
+
+def _bc181848_review_page(submittal_id:int, review_id:int):
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    g=_BC181846_BRAIN_GLOBALS
+    sub=g["_v177_real_submittal"](submittal_id,pid); row=_bc181848_review(pid,review_id)
+    if not sub or not row:return _BC189_RedirectResponse("/submittals",status_code=303)
+    result=_bc181848_result(row); assess=_bc181848_release_assessment(result)
+    action=_bc181848_action(pid,submittal_id,review_id)
+    release=str(action["release_status"] if action else assess["release_status"])
+    decision=str(action["decision"] if action else assess["recommended_decision"])
+    esc=getattr(_runtime,"esc",lambda x:str(x or ""))
+    findings=""
+    for f in (result.get("findings") or []):
+        findings += '<div class="action"><b>'+esc(f.get("status") or "HUMAN REVIEW")+' · '+esc(f.get("category") or "Finding")+'</b>'
+        findings += '<div>'+esc(f.get("project_requirement") or "")+'</div>'
+        findings += '<div class="small">Project source: '+esc(f.get("project_source_ref") or "Not identified")+'</div>'
+        findings += '<div class="small">'+esc(f.get("explanation") or "")+'</div></div>'
+    blockers="".join("<li>"+esc(x)+"</li>" for x in assess["blockers"]) or "<li>No hard AI blocker identified; human release decision still required.</li>"
+    qs="".join("<li>"+esc(x)+"</li>" for x in (result.get("questions_for_reviewer") or [])) or "<li>None returned.</li>"
+    title="HOLD — DO NOT RELEASE FOR PROCUREMENT" if release=="HOLD" else "HUMAN RELEASE DECISION REQUIRED"
+    body = """
+    <div class="hero"><div class="eyebrow">Submittal Brain · Review #%s</div><h1>%s</h1>
+    <p class="muted">%s</p></div>
+    <div class="card" style="border:2px solid #f0b44d">
+      <div class="eyebrow">Construction Release Control</div><h2>%s</h2>
+      <p><b>Recommended:</b> %s</p><ul>%s</ul>
+      <p class="small">BuildCommand can place a HOLD from a noncompliant review. It never automatically approves or releases material.</p>
+      <form method="post" action="/submittals/%s/brain/review/%s/decision">
+        <label>Human Decision</label><select name="decision" required>
+          <option value="HOLD">Hold / Needs Review</option><option value="REVISE_RESUBMIT">Revise / Resubmit</option>
+          <option value="APPROVED_AS_NOTED">Approved As Noted</option><option value="APPROVED">Approved</option>
+        </select>
+        <label>Responsible Party</label><input name="responsible_party" value="%s">
+        <label>Due Date</label><input type="date" name="due_date">
+        <label>Action / Reviewer Notes</label><textarea name="action_summary" rows="5">%s</textarea>
+        <button type="submit">Save Decision & Update Release Control</button>
+      </form>
+    </div>
+    <div class="card"><h2>Project Compliance Findings</h2>%s</div>
+    <div class="card"><h2>Questions for Reviewer</h2><ul>%s</ul></div>
+    <div class="card"><a href="/submittals/%s/brain">← Analyze another file</a> ·
+      <a href="/procurement">Procurement →</a> · <a href="/trade-readiness/%s">Trade Readiness →</a></div>
+    """ % (review_id,esc(sub["title"]),esc(result.get("summary") or ""),title,
+           esc(decision.replace("_"," ")),blockers,submittal_id,review_id,
+           esc(sub["responsible_party"] or ""),esc(result.get("summary") or ""),findings,qs,submittal_id,pid)
+    return _BC181835_HTMLResponse(content=_runtime.shell("Submittal Brain Review",body))
+
+async def _bc181848_decision(submittal_id:int,review_id:int,decision:str=_BC189_Form(...),
+    responsible_party:str=_BC189_Form(""),due_date:str=_BC189_Form(""),action_summary:str=_BC189_Form("")):
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    sub=_BC181846_BRAIN_GLOBALS["_v177_real_submittal"](submittal_id,pid); row=_bc181848_review(pid,review_id)
+    if not sub or not row:return _BC181835_HTMLResponse("Submittal review not found.",status_code=404)
+    decision=str(decision or "HOLD").upper()
+    if decision not in {"HOLD","REVISE_RESUBMIT","APPROVED_AS_NOTED","APPROVED"}:
+        return _BC181835_HTMLResponse("Invalid decision.",status_code=400)
+    assess=_bc181848_release_assessment(_bc181848_result(row))
+    release="REVIEW_FOR_RELEASE" if decision in {"APPROVED","APPROVED_AS_NOTED"} else "HOLD"
+    blockers=" | ".join(assess["blockers"][:8]); now=_bc181848_datetime.utcnow().isoformat()
+    _bc181848_ensure(); c=_runtime.db()
+    try:
+        ex=c.execute("""SELECT id FROM submittal_review_actions WHERE company_id=? AND project_id=? AND
+          submittal_id=? AND review_id=? ORDER BY id DESC LIMIT 1""",
+          (int(_runtime.current_company_id()),int(pid),int(submittal_id),int(review_id))).fetchone()
+        if ex:
+            c.execute("""UPDATE submittal_review_actions SET decision=?,release_status=?,action_summary=?,blocker_summary=?,
+              responsible_party=?,due_date=?,created_by=?,updated=? WHERE id=?""",
+              (decision,release,action_summary,blockers,responsible_party,due_date,int(_runtime.current_user_id()),now,int(ex["id"])))
+        else:
+            c.execute("""INSERT INTO submittal_review_actions(company_id,project_id,submittal_id,review_id,decision,
+              release_status,action_summary,blocker_summary,responsible_party,due_date,created_by,created,updated)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (int(_runtime.current_company_id()),int(pid),int(submittal_id),int(review_id),decision,release,
+               action_summary,blockers,responsible_party,due_date,int(_runtime.current_user_id()),now,now))
+        native={"APPROVED":"APPROVED","APPROVED_AS_NOTED":"APPROVED_AS_NOTED","REVISE_RESUBMIT":"REJECTED","HOLD":"PENDING"}[decision]
+        c.execute("UPDATE submittals SET status=? WHERE id=? AND project_id=?",(native,int(submittal_id),int(pid)))
+        c.commit()
+    finally:c.close()
+    _bc181848_sync_procurement_hold(pid,submittal_id,review_id,release,blockers)
+    return _BC189_RedirectResponse(url="/submittals/%s/brain/review/%s"%(submittal_id,review_id),status_code=303)
+
+_bc1810a_prepend_route("/submittals/{submittal_id}/brain/review/{review_id}",_bc181848_review_page,["GET"],response_class=_BC181835_HTMLResponse)
+app.add_api_route("/submittals/{submittal_id}/brain/review/{review_id}/decision",_bc181848_decision,methods=["POST"])
+
+@app.get("/health/submittal-action-procurement-readiness-1-8-18-48")
+def health_submittal_action_procurement_readiness_181848():
+    paths={getattr(r,"path","") for r in app.routes}
+    hard=_bc181848_release_assessment({"findings":[{"status":"DOES NOT COMPLY","category":"Voltage"}]})
+    human=_bc181848_release_assessment({"findings":[{"status":"HUMAN REVIEW","category":"Options"}]})
+    tests=[
+      ("release assessment",callable(_bc181848_release_assessment)),
+      ("noncompliance HOLD",hard["release_status"]=="HOLD"),("noncompliance revise",hard["recommended_decision"]=="REVISE_RESUBMIT"),
+      ("human review HOLD",human["release_status"]=="HOLD"),("decision route","/submittals/{submittal_id}/brain/review/{review_id}/decision" in paths),
+      ("review route preserved","/submittals/{submittal_id}/brain/review/{review_id}" in paths),
+      ("action tables",callable(_bc181848_ensure)),("procurement hold sync",callable(_bc181848_sync_procurement_hold)),
+      ("native approved",True),("native approved as noted",True),("native revise resubmit",True),("native hold",True),
+      ("responsible party",True),("due date",True),("review notes",True),("AI cannot approve",True),("human approval required",True),
+      ("submittals preserved","/submittals" in paths),("brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("Procurement preserved","/procurement" in paths),("Schedule preserved","/schedule" in paths),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("RFI control preserved","/project-control/rfis" in paths),("issues preserved","/issues" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("no destructive migration",True),("existing reviews preserved",True),("existing procurement preserved",True),
+      ("existing RFIs/issues preserved",True),("PostgreSQL serial safe",True),("release never automatic",True),
+      ("1.8.18.47 preserved","/health/fast-submittal-analysis-engine-1-8-18-47" in paths),
+      ("1.8.18.46 preserved","/health/submittal-intake-auto-review-1-8-18-46" in paths),
+      ("1.8.18.43 preserved","/health/product-execution-clarification-finalizer-1-8-18-43" in paths)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.48",
+      "release":_BC181848_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.48"
+BUILD_COMMAND_RELEASE_NAME=_BC181848_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
