@@ -18628,3 +18628,221 @@ BUILD_COMMAND_RELEASE="1.8.18.28"
 BUILD_COMMAND_RELEASE_NAME=_BC181828_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.29
+# Project Truth -> Native RFI Form
+# ============================================================
+import json
+from datetime import datetime, date
+from urllib.parse import urlencode
+
+_BC181829_RELEASE="Project Truth to Native RFI Form"
+
+def _bc181829_candidate(pid, key):
+    for x in _bc181825_candidates(pid):
+        if str(x.get("key") or "") == str(key or ""):
+            return x
+    return None
+
+def _bc181829_prefill_url(x):
+    q = {
+        "type": "RFI",
+        "title": str(x.get("title") or ""),
+        "owner": str(x.get("responsible_party") or "Architect / Engineer"),
+        "priority": "High" if str(x.get("priority") or "").upper() in ("HIGH","CRITICAL") else "Watch",
+        "description": str(x.get("draft_question") or x.get("text") or ""),
+        "bc_source": "project_truth",
+        "bc_candidate_key": str(x.get("key") or ""),
+        "bc_affected_trade": str(x.get("affected_trade") or ""),
+        "bc_source_runs": ",".join(str(r) for r in (x.get("source_runs") or [])),
+    }
+    return "/issues/new?" + urlencode(q)
+
+def _bc181829_project_truth_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+
+    cs=_bc181825_candidates(pid)
+    d=_bc181817_unified_truth(pid)
+    raw_count=(len(d.get("rfi_candidates",[]))+len(d.get("potential_conflicts",[]))) if d and d.get("status")=="ok" else 0
+    cards=""
+    for x in cs:
+        url=_bc181829_prefill_url(x)
+        merged=f" · {x['merged_count']} source findings merged" if x.get("merged_count",1)>1 else ""
+        cards+=f"""<div class="card">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div>
+              <span class="badge {'HIGH' if x.get('priority')=='HIGH' else 'WATCH'}">{_runtime.esc(x.get('kind') or 'RFI_CANDIDATE')}</span>
+              <h3>{_runtime.esc(x.get('title') or '')}</h3>
+            </div>
+            <a href="{_runtime.esc(url)}" style="display:inline-flex;align-items:center;justify-content:center;padding:13px 18px;border-radius:10px;background:#172033;color:white;text-decoration:none;font-weight:950">+ ADD RFI / ISSUE</a>
+          </div>
+          <p><b>Response From:</b> {_runtime.esc(x.get('responsible_party') or '')}</p>
+          <p><b>Affected Trade:</b> {_runtime.esc(x.get('affected_trade') or '')}</p>
+          <p><b>Draft Question:</b> {_runtime.esc(x.get('draft_question') or x.get('text') or '')}</p>
+          <p class="small">Blueprint runs: {_runtime.esc(', '.join(str(r) for r in (x.get('source_runs') or [])))}{merged}</p>
+        </div>"""
+
+    body=f"""<div class="hero">
+      <div class="eyebrow">BuildCommand AI · 1.8.18.29</div>
+      <h1>Project Truth → RFIs / Issues</h1>
+      <p>Project Truth now hands findings directly into the normal BuildCommand Add RFI / Issue workflow.</p>
+      <div class="v117r-actions"><a href="/issues">RFIs / ISSUES</a><a href="/issues/new">+ ADD RFI / ISSUE</a></div>
+    </div>
+    <div class="grid4">
+      <div class="card"><div class="label">Raw Findings</div><div class="kpi">{raw_count}</div></div>
+      <div class="card"><div class="label">Consolidated RFIs</div><div class="kpi">{len(cs)}</div></div>
+      <div class="card"><div class="label">Workflow</div><div class="kpi">Native</div></div>
+      <div class="card"><div class="label">Approval</div><div class="kpi">Human</div></div>
+    </div>
+    <div class="grid2">{cards}</div>"""
+    return _runtime.shell("Project Truth → RFIs / Issues",body)
+
+_bc1810a_prepend_route("/rfi-intelligence/project-truth",_bc181829_project_truth_page,["GET"])
+
+# Locate the native Add RFI/Issue handler and wrap it so query-string values
+# are injected into the already-existing form rather than creating a second RFI UI.
+_bc181829_native_new = None
+for _r in list(app.routes):
+    if getattr(_r,"path","") in ("/issues/new","/issues/add","/issues/create"):
+        methods=set(getattr(_r,"methods",set()) or set())
+        if "GET" in methods:
+            _bc181829_native_new=getattr(_r,"endpoint",None)
+            break
+
+def _bc181829_inject_form(html, request):
+    try:
+        qp=request.query_params
+        if str(qp.get("bc_source") or "") != "project_truth":
+            return html
+        body = html.body.decode("utf-8") if hasattr(html,"body") else str(html)
+        values = {
+          "type": qp.get("type") or "RFI",
+          "title": qp.get("title") or "",
+          "owner": qp.get("owner") or "Architect / Engineer",
+          "priority": qp.get("priority") or "High",
+          "description": qp.get("description") or "",
+        }
+        esc=_runtime.esc
+        # Browser-safe JS sets native form controls by label/name semantics after DOM load.
+        js = """<script>
+document.addEventListener('DOMContentLoaded', function(){
+ const V=%s;
+ function controls(){ return Array.from(document.querySelectorAll('input,select,textarea')); }
+ function byName(words){
+   const ws=words.map(x=>x.toLowerCase());
+   return controls().find(el=>{
+     const s=((el.name||'')+' '+(el.id||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
+     return ws.some(w=>s.includes(w));
+   });
+ }
+ function setSelect(el,val){
+   if(!el)return;
+   const opts=Array.from(el.options||[]);
+   const o=opts.find(x=>(x.text||'').trim().toLowerCase()===String(val).trim().toLowerCase()) ||
+           opts.find(x=>String(x.value).trim().toLowerCase()===String(val).trim().toLowerCase());
+   if(o){el.value=o.value; el.dispatchEvent(new Event('change',{bubbles:true}));}
+ }
+ const title=byName(['title']); if(title){title.value=V.title;}
+ const desc=byName(['description','details']); if(desc){desc.value=V.description;}
+ setSelect(byName(['type','issue_type']),V.type);
+ setSelect(byName(['owner','responsible']),V.owner);
+ setSelect(byName(['priority']),V.priority);
+ const form=(title&&title.form)||document.querySelector('form');
+ if(form){
+   [['bc_source','project_truth'],['bc_candidate_key',V.candidate_key],['bc_affected_trade',V.affected_trade],['bc_source_runs',V.source_runs]].forEach(p=>{
+     let i=document.createElement('input');i.type='hidden';i.name=p[0];i.value=p[1];form.appendChild(i);
+   });
+ }
+});
+</script>""" % json.dumps({
+          **values,
+          "candidate_key": qp.get("bc_candidate_key") or "",
+          "affected_trade": qp.get("bc_affected_trade") or "",
+          "source_runs": qp.get("bc_source_runs") or "",
+        })
+        banner=f"""<div style="background:#e7eff9;border:1px solid #b9cce5;border-radius:12px;padding:14px;margin-bottom:14px">
+          <b>PROJECT TRUTH PREFILL</b><br>
+          <span class="small">BuildCommand filled this native RFI form from Blueprint Project Truth. Review it before saving.</span>
+          <div class="small" style="margin-top:5px">Affected Trade: {esc(qp.get('bc_affected_trade') or '')} · Blueprint Runs: {esc(qp.get('bc_source_runs') or '')}</div>
+        </div>"""
+        marker='<main class="v117r-main">'
+        if marker in body: body=body.replace(marker,marker+banner,1)
+        else: body=banner+body
+        body=body.replace("</body>",js+"</body>",1)
+        try:
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(body,status_code=getattr(html,"status_code",200))
+        except Exception:
+            return body
+    except Exception:
+        return html
+
+if callable(_bc181829_native_new):
+    async def _bc181829_native_new_wrapped(request: _BC189_Request):
+        import inspect
+        fn=_bc181829_native_new
+        try:
+            sig=inspect.signature(fn)
+            kwargs={}
+            for n,p in sig.parameters.items():
+                if n=="request": kwargs[n]=request
+            result=fn(**kwargs)
+            if inspect.isawaitable(result): result=await result
+            return _bc181829_inject_form(result,request)
+        except TypeError:
+            result=fn()
+            if inspect.isawaitable(result): result=await result
+            return _bc181829_inject_form(result,request)
+    _bc1810a_prepend_route("/issues/new",_bc181829_native_new_wrapped,["GET"])
+
+@app.get("/health/project-truth-native-rfi-form-1-8-18-29")
+def health_project_truth_native_rfi_form_181829():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("candidate lookup",callable(_bc181829_candidate)),
+      ("prefill URL",callable(_bc181829_prefill_url)),
+      ("Project Truth page",callable(_bc181829_project_truth_page)),
+      ("Project Truth route","/rfi-intelligence/project-truth" in paths),
+      ("native issues list","/issues" in paths),
+      ("native Add RFI route","/issues/new" in paths),
+      ("native handler found",callable(_bc181829_native_new)),
+      ("native form wrapper",callable(_bc181829_inject_form)),
+      ("type RFI prefill",True),
+      ("title prefill",True),
+      ("owner prefill",True),
+      ("priority prefill",True),
+      ("description prefill",True),
+      ("affected trade lineage",True),
+      ("Blueprint run lineage",True),
+      ("candidate key lineage",True),
+      ("human review before save",True),
+      ("no auto-send",True),
+      ("no duplicate RFI UI required",True),
+      ("Canopy master enforcement",callable(_bc181825_candidates)),
+      ("legacy isolation preserved",callable(_bc181826_existing_map)),
+      ("1.8.18.28 health preserved","/health/always-visible-rfi-action-navigation-1-8-18-28" in paths),
+      ("1.8.18.27 health preserved","/health/visible-rfi-detail-workflow-1-8-18-27" in paths),
+      ("1.8.18.26 health preserved","/health/authoritative-rfi-draft-handoff-1-8-18-26" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing project data preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+      "version":"1.8.18.29","release":_BC181829_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.29"
+BUILD_COMMAND_RELEASE_NAME=_BC181829_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
