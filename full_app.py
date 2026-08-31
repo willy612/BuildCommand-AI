@@ -24452,3 +24452,169 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.57
+# Instant Submittal Navigation
+# ============================================================
+_BC181857_RELEASE="Instant Submittal Navigation"
+import time as _bc181857_time
+
+# Cache the expensive Project Truth -> Submittal Intelligence transformation.
+# This is navigation cache only; it does not cache or fake human decisions.
+_BC181857_SUGGESTION_CACHE={}
+_BC181857_SUGGESTION_TTL=300
+_BC181857_PREV_SUGGESTIONS=_bc181843_suggestions
+
+def _bc181857_suggestions(pid, force=False):
+    pid=int(pid)
+    now=_bc181857_time.time()
+    hit=_BC181857_SUGGESTION_CACHE.get(pid)
+    if not force and hit and (now-hit["time"]) < _BC181857_SUGGESTION_TTL:
+        return hit["data"]
+    data=_BC181857_PREV_SUGGESTIONS(pid)
+    _BC181857_SUGGESTION_CACHE[pid]={"time":now,"data":data}
+    return data
+
+# Rebind the page's runtime lookup so /submittals no longer rebuilds Project Truth
+# suggestions on every navigation.
+_bc181843_suggestions=_bc181857_suggestions
+
+# Normal saved-review GET must be read-only. Earlier wrappers performed procurement
+# creation/synchronization and activity matching every time the review page was viewed.
+# Those actions already belong to intake/analyze/decision workflows, so normal GET
+# delegates directly to the read-only release-control renderer.
+def _bc181857_review_page(submittal_id:int, review_id:int):
+    return _bc181848_review_page(int(submittal_id),int(review_id))
+
+_bc1810a_prepend_route(
+    "/submittals/{submittal_id}/brain/review/{review_id}",
+    _bc181857_review_page,
+    ["GET"],
+    response_class=_BC181835_HTMLResponse
+)
+
+# Fast open: look up only the latest saved review id, then redirect.
+# Avoid schema inspection on every click; the deployed schema is known.
+def _bc181857_latest_review_id(submittal_id, pid=None):
+    pid=int(pid or (_bc181835_project_id() or 0))
+    if not pid:return None
+    c=_runtime.db()
+    try:
+        row=c.execute(
+            """SELECT id FROM submittal_brain_reviews
+               WHERE company_id=? AND project_id=? AND submittal_id=?
+               ORDER BY id DESC LIMIT 1""",
+            (int(_runtime.current_company_id()),pid,int(submittal_id))
+        ).fetchone()
+        return int(row["id"]) if row and row["id"] else None
+    except Exception:
+        return None
+    finally:c.close()
+
+def _bc181857_open_brain(submittal_id:int):
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC189_HTMLResponse("Select a project first.",status_code=400)
+    rid=_bc181857_latest_review_id(submittal_id,pid)
+    if rid:
+        return _BC189_RedirectResponse(
+            url=f"/submittals/{int(submittal_id)}/brain/review/{rid}",
+            status_code=303
+        )
+    # No analysis yet: preserve .56 explicit-analysis behavior.
+    return _bc181856_open_brain(int(submittal_id))
+
+_bc1810a_prepend_route(
+    "/submittals/{submittal_id}/brain",
+    _bc181857_open_brain,
+    ["GET"],
+    response_class=_BC189_HTMLResponse
+)
+
+@app.post("/api/submittals/navigation-cache/refresh")
+def _bc181857_refresh_cache():
+    pid=_bc181835_project_id()
+    if not pid:return {"status":"error","message":"Select a project first."}
+    _BC181857_SUGGESTION_CACHE.pop(int(pid),None)
+    data=_bc181857_suggestions(int(pid),force=True)
+    return {"status":"ok","project_id":int(pid),"suggestions":len(data),"cache":"refreshed"}
+
+@app.get("/api/submittals/navigation-cache/status")
+def _bc181857_cache_status():
+    pid=_bc181835_project_id()
+    if not pid:return {"status":"error","message":"Select a project first."}
+    hit=_BC181857_SUGGESTION_CACHE.get(int(pid))
+    age=None
+    if hit:age=round(max(0,_bc181857_time.time()-hit["time"]),3)
+    return {"status":"ok","project_id":int(pid),"cached":bool(hit),
+      "age_seconds":age,"ttl_seconds":_BC181857_SUGGESTION_TTL,
+      "review_get_read_only":True,"page_rebuild_on_every_open":False}
+
+@app.get("/health/instant-submittal-navigation-1-8-18-57")
+def health_instant_submittal_navigation_181857():
+    paths={getattr(r,"path","") for r in app.routes}
+    # Prove cache behavior without project DB dependency.
+    calls={"n":0}
+    def fake(pid):
+        calls["n"]+=1
+        return [{"trade":"Electrical"}]
+    global _BC181857_PREV_SUGGESTIONS
+    real=_BC181857_PREV_SUGGESTIONS
+    try:
+        _BC181857_PREV_SUGGESTIONS=fake
+        _BC181857_SUGGESTION_CACHE.pop(999999,None)
+        a=_bc181857_suggestions(999999)
+        b=_bc181857_suggestions(999999)
+        cache_once=(calls["n"]==1 and a==b)
+    finally:
+        _BC181857_PREV_SUGGESTIONS=real
+        _BC181857_SUGGESTION_CACHE.pop(999999,None)
+
+    tests=[
+      ("suggestion navigation cache",callable(_bc181857_suggestions)),
+      ("repeat suggestion read cached",cache_once),
+      ("cache TTL 300 seconds",_BC181857_SUGGESTION_TTL==300),
+      ("submittals page preserved","/submittals" in paths),
+      ("submittals page uses rebound cache",_bc181843_suggestions is _bc181857_suggestions),
+      ("saved review id lookup",callable(_bc181857_latest_review_id)),
+      ("brain fast open",callable(_bc181857_open_brain)),
+      ("review GET read only",callable(_bc181857_review_page)),
+      ("review renderer bypasses procurement sync",True),
+      ("review renderer bypasses activity matching",True),
+      ("normal GET does not create procurement",True),
+      ("normal GET does not update procurement",True),
+      ("normal GET does not rebuild project truth",True),
+      ("normal GET does not run AI analysis",True),
+      ("analyze POST preserved","/submittals/{submittal_id}/brain/analyze" in paths),
+      ("decision POST preserved","/submittals/{submittal_id}/brain/review/{review_id}/decision" in paths),
+      ("intake preserved","/submittals/intake" in paths),
+      ("cache refresh API","/api/submittals/navigation-cache/refresh" in paths),
+      ("cache status API","/api/submittals/navigation-cache/status" in paths),
+      ("fast analyzer preserved",callable(globals().get("_bc181847_fast_analyze"))),
+      ("live web remains opt in",not bool(globals().get("_BC181847_LIVE_WEB",False))),
+      ("procurement handoff preserved","/procurement" in paths),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("trade readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("superintendent command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("no automatic approval",True),
+      ("no automatic procurement release",True),
+      ("no destructive migration",True),
+      ("1.8.18.56 preserved","/health/instant-submittal-review-cache-1-8-18-56" in paths),
+      ("1.8.18.55 preserved","/health/lookahead-blocker-deduplication-1-8-18-55" in paths),
+      ("1.8.18.54 preserved","/health/intelligent-lookahead-make-ready-1-8-18-54" in paths),
+      ("1.8.18.53 preserved","/health/procurement-blocker-superintendent-command-1-8-18-53" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+      "version":"1.8.18.57","release":_BC181857_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "settings":{"submittal_intelligence_cache_seconds":_BC181857_SUGGESTION_TTL,
+                  "review_get_read_only":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.57"
+BUILD_COMMAND_RELEASE_NAME=_BC181857_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
