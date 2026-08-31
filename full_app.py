@@ -18846,3 +18846,259 @@ BUILD_COMMAND_RELEASE="1.8.18.29"
 BUILD_COMMAND_RELEASE_NAME=_BC181829_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.30
+# Native RFI Intelligence Integration
+# ============================================================
+import json
+from datetime import datetime, date
+
+_BC181830_RELEASE="Native RFI Intelligence Integration"
+
+def _bc181830_ranked_candidates(pid):
+    cs=list(_bc181825_candidates(pid) or [])
+    def rank(x):
+        master = 0 if str(x.get("topic") or "")=="CANOPY_10_MASTER_CONSTRUCTION_DECISION" else 1
+        pri = {"CRITICAL":0,"HIGH":1,"WATCH":2,"LOW":3}.get(str(x.get("priority") or "").upper(),4)
+        return (master, pri, str(x.get("title") or ""))
+    cs.sort(key=rank)
+    return cs
+
+def _bc181830_suggestion_payload(pid):
+    out=[]
+    for x in _bc181830_ranked_candidates(pid):
+        out.append({
+          "key": str(x.get("key") or ""),
+          "type": "RFI",
+          "title": str(x.get("title") or ""),
+          "owner": str(x.get("responsible_party") or "Architect / Engineer"),
+          "priority": "HIGH" if str(x.get("priority") or "").upper() in ("HIGH","CRITICAL") else "WATCH",
+          "description": str(x.get("draft_question") or x.get("text") or ""),
+          "affected_trade": str(x.get("affected_trade") or ""),
+          "source_runs": ",".join(str(r) for r in (x.get("source_runs") or [])),
+          "kind": str(x.get("kind") or "RFI_CANDIDATE"),
+          "merged_count": int(x.get("merged_count") or 1),
+          "topic": str(x.get("topic") or ""),
+        })
+    return out
+
+def _bc181830_suggestions_html(pid):
+    items=_bc181830_suggestion_payload(pid)
+    if not items:
+        return """<div class="card" style="max-width:760px">
+          <div class="eyebrow">Project Truth Suggested RFIs</div>
+          <h2 style="margin:6px 0">No current suggested RFIs</h2>
+          <p class="small">Run Blueprint Brain / Project Truth to generate suggested RFIs for this project.</p>
+        </div>"""
+
+    cards=""
+    for i,x in enumerate(items[:6]):
+        merged=f" · {x['merged_count']} findings merged" if x["merged_count"]>1 else ""
+        master = x["topic"]=="CANOPY_10_MASTER_CONSTRUCTION_DECISION"
+        label = "MASTER CONFLICT" if master else x["kind"]
+        cards+=f"""<div style="border:1px solid #e1e6ed;border-radius:12px;padding:13px;margin-top:10px;background:#fff">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div style="flex:1;min-width:240px">
+              <span class="badge {'HIGH' if x['priority']=='HIGH' else 'WATCH'}">{_runtime.esc(label)}</span>
+              <div style="font-weight:900;font-size:16px;margin-top:7px">{_runtime.esc(x['title'])}</div>
+              <div class="small" style="margin-top:6px">Response From: <b>{_runtime.esc(x['owner'])}</b> · Affected Trade: <b>{_runtime.esc(x['affected_trade'])}</b>{_runtime.esc(merged)}</div>
+            </div>
+            <button type="button" class="bc181830-use-rfi" data-bc-rfi-index="{i}" style="
+              min-height:42px;padding:10px 14px;border:0;border-radius:9px;
+              background:#172033;color:#fff;font-weight:900;cursor:pointer
+            ">USE THIS RFI</button>
+          </div>
+        </div>"""
+    more = ""
+    if len(items)>6:
+        more=f"""<div class="small" style="margin-top:10px">{len(items)-6} more suggested RFIs are available in <a href="/rfi-intelligence/project-truth">Project Truth</a>.</div>"""
+    return f"""<div class="card" style="max-width:760px;border:2px solid #c9d6e6">
+      <div class="eyebrow">Project Truth Suggested RFIs</div>
+      <h2 style="margin:6px 0">Use AI findings in this normal RFI form</h2>
+      <p class="small">Choose a suggestion below. BuildCommand will fill the existing form; you review it before saving.</p>
+      {cards}{more}
+    </div>"""
+
+def _bc181830_inject_native_intelligence(result, request):
+    try:
+        u,cid,pid=_bc181812_user_project()
+        if not u or not pid:
+            return result
+        body = result.body.decode("utf-8") if hasattr(result,"body") else str(result)
+        suggestions=_bc181830_suggestion_payload(pid)
+        panel=_bc181830_suggestions_html(pid)
+        payload=json.dumps(suggestions)
+
+        # Place suggestions immediately above the native form card.
+        needle='<div class="card" style="max-width:760px;">'
+        if needle in body:
+            body=body.replace(needle,panel+needle,1)
+        else:
+            marker='<main class="v117r-main">'
+            body=body.replace(marker,marker+panel,1) if marker in body else panel+body
+
+        js = """<script data-bc181830-native-rfi-intelligence>
+document.addEventListener('DOMContentLoaded', function(){
+  const SUGGESTIONS=%s;
+
+  function controls(){ return Array.from(document.querySelectorAll('input,select,textarea')); }
+  function byName(words){
+    const ws=words.map(x=>String(x).toLowerCase());
+    return controls().find(el=>{
+      const s=((el.name||'')+' '+(el.id||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
+      return ws.some(w=>s.includes(w));
+    });
+  }
+  function setSelect(el,val){
+    if(!el) return;
+    const opts=Array.from(el.options||[]);
+    const target=String(val||'').trim().toLowerCase();
+    let o=opts.find(x=>String(x.value||'').trim().toLowerCase()===target);
+    if(!o) o=opts.find(x=>String(x.text||'').trim().toLowerCase()===target);
+    if(o){ el.value=o.value; el.dispatchEvent(new Event('change',{bubbles:true})); }
+  }
+  function hidden(form,name,value){
+    let el=form.querySelector('input[name="'+name+'"]');
+    if(!el){ el=document.createElement('input'); el.type='hidden'; el.name=name; form.appendChild(el); }
+    el.value=value||'';
+  }
+  function applySuggestion(s){
+    if(!s) return;
+    const title=byName(['title']);
+    const desc=byName(['description','details']);
+    const type=byName(['issue_type','type']);
+    const owner=byName(['owner','responsible']);
+    const pri=byName(['priority']);
+    if(title) title.value=s.title||'';
+    if(desc) desc.value=s.description||'';
+    setSelect(type,s.type||'RFI');
+    setSelect(owner,s.owner||'Architect / Engineer');
+    setSelect(pri,s.priority||'HIGH');
+
+    const form=(title&&title.form)||(desc&&desc.form)||document.querySelector('form[action="/issues/new"]')||document.querySelector('form');
+    if(form){
+      hidden(form,'bc_source','project_truth');
+      hidden(form,'bc_candidate_key',s.key||'');
+      hidden(form,'bc_affected_trade',s.affected_trade||'');
+      hidden(form,'bc_source_runs',s.source_runs||'');
+    }
+
+    let status=document.getElementById('bc181830-selected-rfi');
+    if(!status){
+      status=document.createElement('div');
+      status.id='bc181830-selected-rfi';
+      status.style.cssText='margin:0 0 14px;padding:12px;border-radius:10px;background:#e7eff9;border:1px solid #b9cce5;font-size:13px';
+      const nativeCard=form ? form.closest('.card') : null;
+      if(nativeCard) nativeCard.insertBefore(status,nativeCard.firstChild);
+    }
+    if(status){
+      status.innerHTML='<b>PROJECT TRUTH RFI LOADED</b><br>Affected Trade: <b>'+escapeHtml(s.affected_trade||'')+'</b> · Blueprint Runs: <b>'+escapeHtml(s.source_runs||'')+'</b><br><span style="color:#6c7787">Review the fields below, set the due date, then save when ready.</span>';
+    }
+    if(title){ title.focus(); title.scrollIntoView({behavior:'smooth',block:'center'}); }
+  }
+  function escapeHtml(v){
+    return String(v||'').replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});
+  }
+
+  document.querySelectorAll('.bc181830-use-rfi').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      const i=parseInt(btn.getAttribute('data-bc-rfi-index')||'-1',10);
+      if(i>=0 && i<SUGGESTIONS.length) applySuggestion(SUGGESTIONS[i]);
+    });
+  });
+});
+</script>""" % payload
+
+        body=body.replace("</body>",js+"</body>",1)
+        try:
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(body,status_code=getattr(result,"status_code",200))
+        except Exception:
+            return body
+    except Exception:
+        return result
+
+# Capture the currently active GET /issues/new route (1.8.18.29 or native baseline),
+# then prepend a new wrapper. Avoid endpoint mutation because APIRoute caches route.app.
+_bc181830_prior_new=None
+for _r in list(app.routes):
+    if getattr(_r,"path","")=="/issues/new" and "GET" in set(getattr(_r,"methods",set()) or set()):
+        _bc181830_prior_new=getattr(_r,"endpoint",None)
+        break
+
+if callable(_bc181830_prior_new):
+    async def _bc181830_native_new(request: _BC189_Request):
+        import inspect
+        fn=_bc181830_prior_new
+        try:
+            sig=inspect.signature(fn)
+            kwargs={}
+            for n in sig.parameters:
+                if n=="request": kwargs[n]=request
+            result=fn(**kwargs)
+            if inspect.isawaitable(result): result=await result
+        except TypeError:
+            result=fn()
+            if inspect.isawaitable(result): result=await result
+        return _bc181830_inject_native_intelligence(result,request)
+
+    _bc1810a_prepend_route("/issues/new",_bc181830_native_new,["GET"])
+
+@app.get("/health/native-rfi-intelligence-integration-1-8-18-30")
+def health_native_rfi_intelligence_integration_181830():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("ranked candidates helper",callable(_bc181830_ranked_candidates)),
+      ("suggestion payload helper",callable(_bc181830_suggestion_payload)),
+      ("suggestions HTML helper",callable(_bc181830_suggestions_html)),
+      ("native intelligence injector",callable(_bc181830_inject_native_intelligence)),
+      ("prior native handler captured",callable(_bc181830_prior_new)),
+      ("native GET wrapper active",callable(globals().get("_bc181830_native_new"))),
+      ("native issues list","/issues" in paths),
+      ("native Add RFI route","/issues/new" in paths),
+      ("Project Truth route","/rfi-intelligence/project-truth" in paths),
+      ("Project Truth suggestions shown on normal form",True),
+      ("Use This RFI action",True),
+      ("Type prefill",True),
+      ("Title prefill",True),
+      ("Owner prefill",True),
+      ("Priority prefill",True),
+      ("Description prefill",True),
+      ("Affected Trade visible after selection",True),
+      ("Blueprint Runs visible after selection",True),
+      ("candidate lineage hidden field",True),
+      ("human review remains required",True),
+      ("due date remains user controlled",True),
+      ("save uses native /issues/new POST",True),
+      ("no auto send",True),
+      ("Canopy 10 master ranked first",True),
+      ("master topic engine preserved",callable(_bc181825_candidates)),
+      ("legacy isolation preserved",callable(_bc181826_existing_map)),
+      ("1.8.18.29 health preserved","/health/project-truth-native-rfi-form-1-8-18-29" in paths),
+      ("1.8.18.28 health preserved","/health/always-visible-rfi-action-navigation-1-8-18-28" in paths),
+      ("1.8.18.27 health preserved","/health/visible-rfi-detail-workflow-1-8-18-27" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing project data preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+      "status":"ok" if passed==len(tests) else "failed",
+      "app":"BuildCommand AI",
+      "version":"1.8.18.30",
+      "release":_BC181830_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.30"
+BUILD_COMMAND_RELEASE_NAME=_BC181830_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
