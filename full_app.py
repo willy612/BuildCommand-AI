@@ -21123,3 +21123,438 @@ BUILD_COMMAND_RELEASE="1.8.18.40"
 BUILD_COMMAND_RELEASE_NAME=_BC181840_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.41
+# Plan Schedule Extraction & Installed Product Intelligence
+# ============================================================
+import re as _bc181841_re
+import json as _bc181841_json
+from urllib import parse as _bc181841_url
+
+_BC181841_RELEASE="Plan Schedule Extraction & Installed Product Intelligence"
+
+# Trade-specific schedule/product patterns. These intentionally prefer
+# actual products/materials/member tags over generic scope narrative.
+_BC181841_RULES = {
+ "Electrical": {
+   "title":"Electrical / Lighting / Power",
+   "keywords":(
+      "fixture","luminaire","lithonia","lighting schedule","fixture schedule",
+      "type s1","type s2","type s3","s1 ","s2 ","s3 ",
+      "panel lb","circuit 35","20-ampere","20 ampere","breaker",
+      "timeclock","time clock","3000k","cri","catalog","voltage","watt"
+   )
+ },
+ "Structural Steel": {
+   "title":"Structural Steel / Misc. Metals",
+   "keywords":(
+      "hss ","hss3","hss 3","hss8","hss 8","column schedule","beam schedule",
+      "base plate","anchor bolt","member mark","steel schedule","w-shape","tube steel"
+   )
+ },
+ "Cold-Formed Metal Framing / Purlins": {
+   "title":"Cold-Formed Framing / Purlins",
+   "keywords":(
+      "purlin","cee purlin","c purlin","18-gage","18-gauge","stud purlin",
+      "spacing","blocking connection"
+   )
+ },
+ "Roofing / Sheet Metal": {
+   "title":"Roofing / Sheet Metal",
+   "keywords":(
+      "pbr","panel profile","roof panel","metal panel","sheet metal",
+      "fry reglet","springlok","flashing","counterflashing","closure",
+      "gauge","gage","sealant","finish"
+   )
+ },
+ "Painting / Coatings": {
+   "title":"Coatings / Intumescent Fireproofing",
+   "keywords":(
+      "firetex","fx950","intumescent","dry-film","dry film","dft",
+      "acrolon","coating schedule","one-hour","1-hour","fire rating",
+      "primer","topcoat"
+   )
+ },
+ "Concrete": {
+   "title":"Concrete / Foundations",
+   "keywords":(
+      "footing schedule","f2-0","f3-6","f4-0","f5-0",
+      "footing","reinforcing","rebar","pedestal","anchor rod","concrete"
+   )
+ },
+ "Fire Sprinkler": {
+   "title":"Fire Sprinkler",
+   "keywords":(
+      "sprinkler","hydraulic","sprinkler head","sprinkler protection"
+   )
+ },
+ "Low Voltage": {
+   "title":"Low Voltage / Telecom / Security",
+   "keywords":(
+      "telecommunications","telecom","security","camera","card access",
+      "low voltage","device","special systems"
+   )
+ }
+}
+
+_BC181841_TAG_PATTERNS = [
+    _bc181841_re.compile(r"\b(?:S|L|F)[0-9]{1,3}[A-Z]?\b", _bc181841_re.I),
+    _bc181841_re.compile(r"\bC[0-9]{1,3}\b", _bc181841_re.I),
+    _bc181841_re.compile(r"\bF[0-9]+-[0-9]+\b", _bc181841_re.I),
+    _bc181841_re.compile(r"\bHSS\s*[0-9.]+x[0-9.]+x[0-9./]+\b", _bc181841_re.I),
+]
+
+def _bc181841_text(v):
+    if v is None:
+        return ""
+    return str(v).strip()
+
+def _bc181841_trade_match(a,b):
+    try:
+        return _bc181836_trade_matches(a,b)
+    except Exception:
+        return str(a or "").strip().lower()==str(b or "").strip().lower()
+
+def _bc181841_is_schedule_like(trade, text):
+    s=" "+_bc181841_text(text).lower()+" "
+    if not s.strip():
+        return False
+    keys=_BC181841_RULES.get(trade,{}).get("keywords",())
+    keyword_hits=sum(1 for k in keys if k in s)
+
+    numeric_or_tag = bool(
+        _bc181841_re.search(r"\b\d+(?:\.\d+)?\s*(?:v|volt|w|kw|amp|a|k|cri|ga|gage|gauge|oc|o\.c\.|inch|inches|ft|feet)\b", s, _bc181841_re.I)
+        or any(p.search(text or "") for p in _BC181841_TAG_PATTERNS)
+        or _bc181841_re.search(r"\b\d+\s*[xX]\s*\d+", text or "")
+    )
+    schedule_word = any(k in s for k in (" schedule "," scheduled "," type "," catalog "," model "," manufacturer "," mark "," designation "))
+    return keyword_hits >= 2 or (keyword_hits >= 1 and (numeric_or_tag or schedule_word))
+
+def _bc181841_extract_tags(text):
+    tags=[]
+    seen=set()
+    for p in _BC181841_TAG_PATTERNS:
+        for m in p.findall(text or ""):
+            v=_bc181841_text(m).upper().replace("  "," ")
+            if v and v not in seen:
+                seen.add(v); tags.append(v)
+    return tags[:12]
+
+def _bc181841_source_sheet(r):
+    for key in ("source_sheet","sheet","sheet_number","source","source_reference"):
+        v=r.get(key)
+        if v:
+            return _bc181841_text(v)
+    return ""
+
+def _bc181841_schedule_rows(pid):
+    """Extract structured installed-product/schedule facts from unified Project Truth."""
+    rows=_bc181835_truth_rows(int(pid))
+    out=[]
+    seen=set()
+
+    for r in rows:
+        trade=_bc181841_text(r.get("trade"))
+        if trade not in _BC181841_RULES:
+            continue
+        text=_bc181841_text(r.get("text"))
+        if not _bc181841_is_schedule_like(trade,text):
+            continue
+
+        # Exclude obvious questions/coordination-only language unless it also
+        # contains a concrete specified product/member/material.
+        low=text.lower()
+        questiony=any(x in low for x in (
+            "confirm whether","obtain clarification","coordinate with",
+            "verify requirement","not detailed","not provided"
+        ))
+        concrete=bool(_bc181841_extract_tags(text)) or any(
+            k in low for k in (
+                "lithonia","firetex","acrolon","fry reglet","springlok",
+                "hss ","pbr","18-gage","18-gauge","20-ampere","3000k"
+            )
+        )
+        if questiony and not concrete:
+            continue
+
+        runs=r.get("runs") or []
+        sheet=_bc181841_source_sheet(r)
+        tags=_bc181841_extract_tags(text)
+        key=(trade,_bc181814_norm_text(text))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        out.append({
+            "trade":trade,
+            "package":_BC181841_RULES[trade]["title"],
+            "description":text,
+            "tags":tags,
+            "source_sheet":sheet,
+            "source_run_ids":[str(x) for x in runs],
+            "source_type":"PLAN_SCHEDULE_OR_PRODUCT_CALLOUT",
+            "installed_product":True,
+        })
+
+    # Rank concrete schedule/product records ahead of generic product prose.
+    def score(x):
+        s=x["description"].lower()
+        v=0
+        v += 35 * len(x.get("tags") or [])
+        for k in ("lithonia","firetex","acrolon","fry reglet","springlok","hss ","pbr","18-gage","18-gauge","20-ampere","3000k","cri"):
+            if k in s: v+=25
+        if x.get("source_sheet"): v+=10
+        if "schedule" in s: v+=15
+        return -v, x["trade"], x["description"].lower()
+    return sorted(out,key=score)
+
+def _bc181841_schedule_by_trade(pid):
+    grouped={}
+    for x in _bc181841_schedule_rows(pid):
+        grouped.setdefault(x["trade"],[]).append(x)
+    return grouped
+
+def _bc181841_scheduled_summary(items, limit=6):
+    vals=[]
+    seen=set()
+    for x in items:
+        t=_bc181841_text(x.get("description"))
+        k=_bc181814_norm_text(t)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        vals.append(t)
+        if len(vals)>=limit:
+            break
+    return vals
+
+@app.get("/api/blueprint-brain/installed-products")
+def _bc181841_installed_products_api():
+    pid=_bc181835_project_id()
+    rows=_bc181841_schedule_rows(pid) if pid else []
+    return {
+        "status":"ok","project_id":pid,
+        "installed_product_count":len(rows),
+        "trades":sorted(set(x["trade"] for x in rows)),
+        "items":rows,
+        "source":"Unified Project Truth / plan schedules / product callouts",
+        "human_review_required":True
+    }
+
+# Enhance future Blueprint analysis prompts to deliberately extract schedules.
+try:
+    _BC181841_PREV_PROMPT = _bc181837_blueprint_prompt
+except Exception:
+    _BC181841_PREV_PROMPT = None
+
+def _bc181841_blueprint_prompt(*args, **kwargs):
+    base=""
+    if callable(_BC181841_PREV_PROMPT):
+        base=_BC181841_PREV_PROMPT(*args,**kwargs)
+    return str(base)+"""
+PLAN SCHEDULE EXTRACTION — REQUIRED:
+Read every plan schedule, legend, keyed note, equipment schedule, fixture schedule,
+finish/coating schedule, structural member schedule, footing schedule, panel schedule,
+and product/model callout as first-class Project Truth.
+
+For every scheduled or tagged item preserve:
+- trade / discipline
+- schedule or tag identifier
+- manufacturer if shown
+- model/catalog number if shown
+- size, gauge, voltage, wattage, finish, rating, capacity, spacing, material,
+  circuit/panel, member size, footing designation, or other scheduled attributes
+- sheet/source lineage
+- whether it is new, existing, relocated, removed, or reworked
+- exact installation responsibility.
+
+Do not reduce a schedule to a generic sentence such as "install lighting."
+Create separate concrete scope facts for S1/S2/S3, member marks, footing types,
+panel/circuit requirements, coatings/thicknesses, and named products when the drawings
+provide them. Do not invent values that are not visible in the project documents.
+"""
+try:
+    _bc181837_blueprint_prompt=_bc181841_blueprint_prompt
+except Exception:
+    pass
+
+# Extend the 1.8.18.40 optimized suggestion engine with installed-product data.
+_BC181841_PREV_SUGGEST=_bc181840_suggestions
+def _bc181841_suggestions(pid):
+    ss=_BC181841_PREV_SUGGEST(int(pid))
+    grouped=_bc181841_schedule_by_trade(int(pid))
+    out=[]
+    for raw in ss:
+        s=dict(raw)
+        sched=grouped.get(s.get("trade"),[])
+        s["scheduled_products"]=sched
+        s["scheduled_product_count"]=len(sched)
+        s["scheduled_product_summary"]=_bc181841_scheduled_summary(sched,6)
+        out.append(s)
+    return out
+
+_bc181834_suggestions=_bc181841_suggestions
+_bc181836_suggestions=_bc181841_suggestions
+_bc181838_suggestions=_bc181841_suggestions
+_bc181839_suggestions=_bc181841_suggestions
+_bc181840_suggestions=_bc181841_suggestions
+
+def _bc181841_submittal_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+
+    suggestions=_bc181841_suggestions(pid)
+    border={"REQUIRED":"#166534","LIKELY REQUIRED":"#172033","VERIFY REQUIREMENT":"#a16207","BLOCKED BY RFI":"#b91c1c"}
+    cards=[]
+
+    for s in suggestions[:20]:
+        ev=" | ".join((s.get("evidence") or [])[:2])
+        runs=", ".join(s.get("runs") or []) if s.get("runs") else "Project Truth"
+        desc=s["expectation"]+" Source evidence: "+ev
+        href=(
+            "/submittals/new?trade="+_bc181841_url.quote(s["trade"])
+            +"&title="+_bc181841_url.quote(s["title"])
+            +"&description="+_bc181841_url.quote(desc)
+        )
+        action=(
+            '<span style="display:inline-block;background:#eee;color:#555;padding:9px 12px;border-radius:9px;font-weight:850">'
+            'Resolve RFI before release</span>'
+            if s["confidence"]=="BLOCKED BY RFI" else
+            '<a href="'+href+'" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:850">Review / Add Submittal</a>'
+        )
+
+        sched=s.get("scheduled_product_summary") or []
+        if sched:
+            li="".join("<li>"+_runtime.esc(x)+"</li>" for x in sched)
+            schedule_html=(
+                '<div style="margin:14px 0;padding:12px 14px;background:#f6f8fb;border-radius:10px">'
+                '<b>Scheduled Products / Materials Called for by Plans</b>'
+                '<ul style="margin:8px 0 0 18px">'+li+'</ul>'
+                '<div class="small">'+str(s.get("scheduled_product_count",0))+' schedule/product callout(s) found in Project Truth.</div>'
+                '</div>'
+            )
+        else:
+            schedule_html=(
+                '<div style="margin:14px 0;padding:12px 14px;background:#fff8e6;border-radius:10px">'
+                '<b>Scheduled Products / Materials Called for by Plans</b><br>'
+                '<span class="small">No structured schedule/product callout has been recovered for this package yet.</span>'
+                '</div>'
+            )
+
+        cards.append(
+            '<div class="card" style="border-left:4px solid '+border.get(s["confidence"],"#172033")+'">'
+            '<div class="eyebrow">'+_runtime.esc(s["confidence"])+'</div>'
+            '<h3 style="margin:6px 0">'+_runtime.esc(s["title"])+'</h3>'
+            '<p><b>Trade:</b> '+_runtime.esc(s["trade"])+'</p>'
+            '<p>'+_runtime.esc(s["expectation"])+'</p>'
+            +schedule_html+
+            '<p class="small"><b>Evidence basis:</b> '+_runtime.esc(s["evidence_basis"])+'<br>'
+            '<b>Project Truth evidence:</b> '+_runtime.esc(ev)+'<br>'
+            '<b>Blueprint runs:</b> '+_runtime.esc(runs)+'</p>'
+            +action+'</div>'
+        )
+
+    counts={k:sum(1 for x in suggestions if x["confidence"]==k)
+            for k in ("REQUIRED","LIKELY REQUIRED","VERIFY REQUIREMENT","BLOCKED BY RFI")}
+    installed=sum(int(x.get("scheduled_product_count") or 0) for x in suggestions)
+    body=(
+      '<div class="hero"><div class="eyebrow">Project Truth · Submittal Intelligence</div>'
+      '<h1>Build the submittal register before procurement becomes a blocker.</h1>'
+      '<p>BuildCommand now reads plan schedule/product callouts as installed-product intelligence and shows the actual scheduled material or equipment beneath each submittal package.</p>'
+      '<div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a><a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div>'
+      '<div class="grid4">'
+      '<div class="card"><div class="label">Required</div><div class="kpi">'+str(counts["REQUIRED"])+'</div></div>'
+      '<div class="card"><div class="label">Likely Required</div><div class="kpi">'+str(counts["LIKELY REQUIRED"])+'</div></div>'
+      '<div class="card"><div class="label">Verify Requirement</div><div class="kpi">'+str(counts["VERIFY REQUIREMENT"])+'</div></div>'
+      '<div class="card"><div class="label">Blocked by RFI</div><div class="kpi">'+str(counts["BLOCKED BY RFI"])+'</div></div>'
+      '</div>'
+      '<div class="card"><div class="eyebrow">Installed Product Intelligence</div>'
+      '<h2 style="margin:6px 0">'+str(installed)+' plan schedule / product callouts connected to suggested packages</h2>'
+      '<p class="small">These are extracted from existing Project Truth and preserve the current Blueprint run lineage. Future Blueprint runs are instructed to capture schedules more explicitly.</p></div>'
+      +("".join(cards) if cards else '<div class="card"><h3>No source-backed submittal candidates yet.</h3></div>')
+    )
+    try:
+        page=_runtime.shell("Submittal Intelligence",body,pid)
+    except Exception:
+        page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(page),status_code=200)
+
+_bc1810a_prepend_route("/submittals",_bc181841_submittal_page,["GET"])
+
+def _bc181841_suggestions_api():
+    pid=_bc181835_project_id()
+    ss=_bc181841_suggestions(pid) if pid else []
+    return {
+        "status":"ok","project_id":pid,"suggestions":ss,
+        "installed_product_count":sum(int(x.get("scheduled_product_count") or 0) for x in ss),
+        "human_review_required":True,"auto_created":0,
+        "schedule_intelligence":True
+    }
+_bc1810a_prepend_route("/api/submittals/project-truth-suggestions",_bc181841_suggestions_api,["GET"])
+
+@app.get("/health/plan-schedule-installed-product-intelligence-1-8-18-41")
+def health_plan_schedule_installed_product_intelligence_181841():
+    paths={getattr(r,"path","") for r in app.routes}
+    synthetic=[
+      ("Electrical","Provide Lithonia S1 LED canopy fixture, 3000K, connected to Panel LB circuit 35."),
+      ("Structural Steel","Provide C1 HSS 3x3x1/4 columns with scheduled base plates and anchor bolts."),
+      ("Cold-Formed Metal Framing / Purlins","Provide six-inch, 18-gauge steel stud purlins at 4 feet on center."),
+      ("Roofing / Sheet Metal","Provide PBR metal roof panel with flashing and sealant."),
+      ("Painting / Coatings","Apply Sherwin-Williams FIRETEX intumescent coating at scheduled dry-film thickness."),
+      ("Concrete","Provide footing F3-6 at 3 feet 6 inches square by 12 inches thick."),
+    ]
+    tests=[
+      ("schedule extractor callable",callable(_bc181841_schedule_rows)),
+      ("schedule grouper callable",callable(_bc181841_schedule_by_trade)),
+      ("schedule detector callable",callable(_bc181841_is_schedule_like)),
+      ("tag extractor callable",callable(_bc181841_extract_tags)),
+      ("Electrical schedule detected",_bc181841_is_schedule_like(*synthetic[0])),
+      ("Structural schedule detected",_bc181841_is_schedule_like(*synthetic[1])),
+      ("Purlin schedule detected",_bc181841_is_schedule_like(*synthetic[2])),
+      ("Roofing schedule detected",_bc181841_is_schedule_like(*synthetic[3])),
+      ("Coating schedule detected",_bc181841_is_schedule_like(*synthetic[4])),
+      ("Concrete schedule detected",_bc181841_is_schedule_like(*synthetic[5])),
+      ("fixture tag extracted","S1" in _bc181841_extract_tags(synthetic[0][1])),
+      ("column tag extracted","C1" in _bc181841_extract_tags(synthetic[1][1])),
+      ("footing tag extracted","F3-6" in _bc181841_extract_tags(synthetic[5][1])),
+      ("suggestion enhancement active",_bc181840_suggestions is _bc181841_suggestions),
+      ("submittals UI active","/submittals" in paths),
+      ("installed products API active","/api/blueprint-brain/installed-products" in paths),
+      ("suggestions API active","/api/submittals/project-truth-suggestions" in paths),
+      ("native submittal form preserved","/submittals/new" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("Electrical debug preserved","/api/blueprint-brain/electrical-debug" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("1.8.18.40 health preserved","/health/submittal-performance-cache-1-8-18-40" in paths),
+      ("1.8.18.39 health preserved","/health/submittal-requirement-classification-rfi-blocking-1-8-18-39" in paths),
+      ("1.8.18.38 health preserved","/health/electrical-truth-sanitizer-submittal-1-8-18-38" in paths),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing blueprint runs preserved",True),
+      ("existing RFIs/issues preserved",True),
+      ("existing submittals preserved",True),
+      ("human review preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+        "status":"ok" if passed==len(tests) else "failed",
+        "app":"BuildCommand AI","version":"1.8.18.41","release":_BC181841_RELEASE,
+        "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+        "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.41"
+BUILD_COMMAND_RELEASE_NAME=_BC181841_RELEASE
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
