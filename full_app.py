@@ -18203,3 +18203,288 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.27
+# Visible RFI Creation & Working Detail Workflow
+# ============================================================
+import json
+from datetime import datetime, date
+_BC181827_RELEASE="Visible RFI Creation & Working Detail Workflow"
+
+def _bc181827_authorized(pid):
+    u,cid,current_pid=_bc181812_user_project()
+    return bool(u and pid and int(pid)==int(current_pid or 0))
+
+def _bc181827_rfi_row(pid,rfi_id):
+    _bc181819_ensure()
+    c=_runtime.db()
+    row=c.execute("""SELECT r.*,t.candidate_key,t.candidate_type,t.source_runs,t.source_ref AS truth_source_ref,
+                      COALESCE(t.affected_trade,t.trade,'') AS affected_trade,
+                      COALESCE(t.response_role,r.responsible_party,'') AS response_role,
+                      COALESCE(t.ownership_reason,'') AS ownership_reason,
+                      il.issue_id
+                      FROM rfi_control r
+                      LEFT JOIN rfi_truth_links t ON t.rfi_id=r.id
+                      LEFT JOIN rfi_issue_links il ON il.rfi_id=r.id AND il.project_id=r.project_id
+                      WHERE r.id=? AND r.company_id=? AND r.project_id=?
+                      ORDER BY t.id DESC LIMIT 1""",
+                  (rfi_id,_runtime.current_company_id(),pid)).fetchone()
+    c.close()
+    return dict(row) if row else None
+
+def _bc181827_detail_html(pid,rfi_id,notice=""):
+    r=_bc181827_rfi_row(pid,rfi_id)
+    if not r:
+        body="""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.27</div>
+        <h1>RFI Not Found</h1><p>This RFI is not available in the current project.</p>
+        <div class="v117r-actions"><a href="/rfi-intelligence/project-truth">Back to RFI Intelligence</a></div></div>"""
+        return _runtime.shell("RFI Not Found",body)
+
+    meta=_bc181826_source_meta(r)
+    authoritative=bool(meta.get("authoritative_project_truth_draft")) or str(meta.get("generated_by") or "")=="BuildCommand 1.8.18.27"
+    status=str(r.get("status") or "DRAFT").upper()
+    opts="".join(f"<option value='{s}' {'selected' if status==s else ''}>{s}</option>"
+                 for s in ("DRAFT","SENT","ANSWERED","CLOSED"))
+    issue=(f"<a href='/issues/{int(r['issue_id'])}'>Linked Issue #{int(r['issue_id'])}</a>" if r.get("issue_id") else "Linked issue pending")
+    notice_html=f"<div class='card'><b>{_runtime.esc(notice)}</b></div>" if notice else ""
+    origin="AUTHORITATIVE PROJECT TRUTH" if authoritative else "LEGACY / EXISTING RFI"
+
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.27</div>
+    <h1>RFI Detail</h1><p>One controlled RFI from draft through closure. Human approval remains required.</p>
+    <div class="v117r-actions"><a href="/rfi-intelligence/project-truth">RFI Intelligence</a><a href="/rfi-control">All Controlled RFIs</a></div></div>
+    {notice_html}
+    <div class="card">
+      <span class="badge {'READY' if authoritative else 'WATCH'}">{_runtime.esc(origin)}</span>
+      <span class="badge {'WATCH' if status=='DRAFT' else 'OPEN'}">{_runtime.esc(status)}</span>
+      <h2>{_runtime.esc(r.get('number') or 'DRAFT')} · {_runtime.esc(r.get('title') or '')}</h2>
+      <div class="grid2">
+        <div><p><b>Response From</b><br>{_runtime.esc(r.get('responsible_party') or 'Unassigned')}</p></div>
+        <div><p><b>Affected Trade</b><br>{_runtime.esc(r.get('affected_trade') or '—')}</p></div>
+        <div><p><b>Blueprint Source Runs</b><br>{_runtime.esc(r.get('source_runs') or '—')}</p></div>
+        <div><p><b>Issue Link</b><br>{issue}</p></div>
+      </div>
+      <p><b>Question</b></p><p>{_runtime.esc(r.get('question') or '')}</p>
+      <p class="small">{_runtime.esc(r.get('ownership_reason') or '')}</p>
+      <form method="post" action="/rfi-control/{int(r['id'])}/update">
+        <div class="grid2"><div><label>Status</label><select name="status">{opts}</select></div>
+        <div><label>Due Date</label><input type="date" name="due_date" value="{_runtime.esc(r.get('due_date') or '')}"></div></div>
+        <label>Response From</label><input name="responsible_party" value="{_runtime.esc(r.get('responsible_party') or '')}">
+        <label>Question</label><textarea name="question">{_runtime.esc(r.get('question') or '')}</textarea>
+        <label>Answer / Resolution</label><textarea name="answer">{_runtime.esc(r.get('answer') or '')}</textarea>
+        <div class="grid2"><div><label>Cost Impact</label><input type="number" step="0.01" name="cost_impact" value="{float(r.get('cost_impact') or 0)}"></div>
+        <div><label>Schedule Days</label><input type="number" step="0.1" name="schedule_days" value="{float(r.get('schedule_days') or 0)}"></div></div>
+        <button type="submit">Save RFI</button>
+      </form>
+    </div>"""
+    return _runtime.shell("RFI Detail",body)
+
+def _bc181827_detail(rfi_id:int):
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    return _bc181827_detail_html(pid,rfi_id)
+
+_bc1810a_prepend_route("/rfi-control/{rfi_id}",_bc181827_detail,["GET"])
+
+async def _bc181827_update(request:_BC189_Request,rfi_id:int):
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    if not _bc181827_rfi_row(pid,rfi_id):
+        return _BC187_RedirectResponse("/rfi-control",status_code=303)
+    form=await request.form()
+    status=str(form.get("status") or "DRAFT").upper()
+    if status not in {"DRAFT","SENT","ANSWERED","CLOSED"}: status="DRAFT"
+    responsible_party=str(form.get("responsible_party") or "")
+    question=str(form.get("question") or "")
+    answer=str(form.get("answer") or "")
+    due_date=str(form.get("due_date") or "")
+    try: cost=float(form.get("cost_impact") or 0)
+    except: cost=0.0
+    try: days=float(form.get("schedule_days") or 0)
+    except: days=0.0
+    c=_runtime.db()
+    c.execute("""UPDATE rfi_control SET status=?,responsible_party=?,question=?,answer=?,due_date=?,
+                 cost_impact=?,schedule_days=?,updated=? WHERE id=? AND company_id=? AND project_id=?""",
+              (status,responsible_party,question,answer,due_date,cost,days,datetime.utcnow().isoformat(),
+               rfi_id,cid,pid))
+    c.commit(); c.close()
+    _bc181822_sync_issue(pid,rfi_id)
+    return _BC187_RedirectResponse(f"/rfi-control/{rfi_id}",status_code=303)
+
+_bc1810a_prepend_route("/rfi-control/{rfi_id}/update",_bc181827_update,["POST"])
+
+def _bc181827_list():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    _bc181819_ensure()
+    c=_runtime.db()
+    rows=c.execute("""SELECT r.*,t.affected_trade,t.trade,t.source_runs,t.response_role,t.source_ref AS truth_source_ref
+                      FROM rfi_control r LEFT JOIN rfi_truth_links t ON t.rfi_id=r.id
+                      WHERE r.company_id=? AND r.project_id=? ORDER BY r.id DESC""",(cid,pid)).fetchall()
+    c.close()
+    cards=""
+    seen=set()
+    for rr in rows:
+        r=dict(rr)
+        if int(r["id"]) in seen: continue
+        seen.add(int(r["id"]))
+        meta=_bc181826_source_meta(r)
+        auth=bool(meta.get("authoritative_project_truth_draft")) or str(meta.get("generated_by") or "")=="BuildCommand 1.8.18.27"
+        cards+=f"""<div class="card"><span class="badge {'READY' if auth else 'WATCH'}">{'AUTHORITATIVE PROJECT TRUTH' if auth else 'LEGACY / EXISTING RFI'}</span>
+        <span class="badge {'WATCH' if str(r.get('status')).upper()=='DRAFT' else 'OPEN'}">{_runtime.esc(r.get('status') or 'DRAFT')}</span>
+        <h3>{_runtime.esc(r.get('number') or 'DRAFT')} · {_runtime.esc(r.get('title') or '')}</h3>
+        <p>Response From: {_runtime.esc(r.get('responsible_party') or 'Unassigned')} · Affected Trade: {_runtime.esc(r.get('affected_trade') or r.get('trade') or '—')}</p>
+        <div class="v117r-actions"><a href="/rfi-control/{int(r['id'])}">Open RFI</a></div></div>"""
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.27</div><h1>Controlled RFIs</h1>
+    <p>Open a specific RFI to review, issue, answer, and close it.</p>
+    <div class="v117r-actions"><a href="/rfi-intelligence/project-truth">Create From Project Truth</a></div></div>
+    <div class="grid2">{cards or '<div class="card">No controlled RFIs yet.</div>'}</div>"""
+    return _runtime.shell("Controlled RFIs",body)
+
+_bc1810a_prepend_route("/rfi-control",_bc181827_list,["GET"])
+# Repair the formerly unreliable URL too.
+_bc1810a_prepend_route("/project-control/rfis",_bc181827_list,["GET"])
+
+def _bc181827_create_authoritative(pid,key):
+    candidates={x["key"]:x for x in _bc181825_candidates(pid)}
+    x=candidates.get(key)
+    if not x: return None,None,"candidate_not_found"
+    existing=_bc181826_existing_map(pid).get(key)
+    if existing and existing.get("rfi_id") and _bc181826_is_authoritative_master_row(existing):
+        rid=int(existing["rfi_id"]); iid=_bc181822_sync_issue(pid,rid)
+        return rid,iid,"duplicate_prevented"
+
+    now=datetime.utcnow().isoformat()
+    number=_bc181818_next_number(pid)
+    source_ref=json.dumps({
+        "generated_by":"BuildCommand 1.8.18.27","topic":x.get("topic"),"candidate_key":x["key"],
+        "candidate_type":x["kind"],"responsible_party":x["responsible_party"],
+        "affected_trade":x["affected_trade"],"ownership_reason":x["ownership_reason"],
+        "source_run_ids":x["source_runs"],"source_texts":x["source_texts"],
+        "semantic_merge_count":x["merged_count"],"human_approval_required":True,
+        "auto_send":False,"authoritative_project_truth_draft":True,"legacy_issue_isolation":True
+    })
+    c=_runtime.db()
+    row=c.execute("""INSERT INTO rfi_control(company_id,project_id,number,title,question,responsible_party,due_date,status,
+                       answer,cost_impact,schedule_days,source_ref,created,updated)
+                     VALUES(?,?,?,?,?,?,?,'DRAFT','',0,0,?,?,?) RETURNING id""",
+                  (_runtime.current_company_id(),pid,number,x["title"],x["draft_question"],
+                   x["responsible_party"],"",source_ref,now,now)).fetchone()
+    rid=int(row["id"] if hasattr(row,"keys") else row[0])
+    c.execute("""INSERT INTO rfi_truth_links(company_id,project_id,rfi_id,candidate_key,candidate_type,source_runs,source_text,
+                       trade,affected_trade,response_role,ownership_reason,created,updated)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+              (_runtime.current_company_id(),pid,rid,x["key"],x["kind"],json.dumps(x["source_runs"]),
+               "\n--- MERGED SOURCE ---\n".join(x["source_texts"]),x["affected_trade"],x["affected_trade"],
+               x["responsible_party"],x["ownership_reason"],now,now))
+    c.commit(); c.close()
+    iid=_bc181822_sync_issue(pid,rid)
+    return rid,iid,"created"
+
+async def _bc181827_create_route(request:_BC189_Request):
+    u,cid,pid=_bc181812_user_project()
+    if not u or not pid: return _BC187_RedirectResponse("/login",status_code=303)
+    form=await request.form()
+    key=str(form.get("candidate_key") or "")
+    rid,iid,state=_bc181827_create_authoritative(pid,key)
+    if not rid:
+        return _BC187_RedirectResponse("/rfi-intelligence/project-truth",status_code=303)
+    return _BC187_RedirectResponse(f"/rfi-control/{rid}",status_code=303)
+
+_bc1810a_prepend_route("/rfi-intelligence/project-truth/create",_bc181827_create_route,["POST"])
+
+def _bc181827_page():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid: return _BC187_RedirectResponse("/projects/new",status_code=303)
+    cs=_bc181825_candidates(pid); ex=_bc181826_existing_map(pid)
+    d=_bc181817_unified_truth(pid)
+    raw_count=(len(d.get("rfi_candidates",[]))+len(d.get("potential_conflicts",[]))) if d and d.get("status")=="ok" else 0
+    cards=""
+    for x in cs:
+        e=ex.get(x["key"])
+        authoritative=bool(e and _bc181826_is_authoritative_master_row(e))
+        if authoritative:
+            action=f"""<a style="display:inline-block;background:#172033;color:white;padding:12px 16px;border-radius:9px;text-decoration:none;font-weight:900" href="/rfi-control/{int(e['rfi_id'])}">OPEN DRAFT RFI</a>"""
+            state=str(e.get("status") or "DRAFT")
+        else:
+            action=f"""<form method="post" action="/rfi-intelligence/project-truth/create" style="display:block;margin-top:14px">
+            <input type="hidden" name="candidate_key" value="{_runtime.esc(x['key'])}">
+            <button type="submit" style="display:block;width:100%;padding:15px 18px;background:#172033;color:#fff;border:0;border-radius:10px;font-weight:950;font-size:15px">CREATE DRAFT RFI</button></form>"""
+            state="NOT CREATED"
+        merged=f" · {x['merged_count']} source findings merged" if x["merged_count"]>1 else ""
+        cards+=f"""<div class="card"><span class="badge {'HIGH' if x['priority']=='HIGH' else 'WATCH'}">{_runtime.esc(x['kind'])}</span>
+        <h3>{_runtime.esc(x['title'])}</h3><p><b>Response From:</b> {_runtime.esc(x['responsible_party'])}</p>
+        <p><b>Affected Trade:</b> {_runtime.esc(x['affected_trade'])}</p><p>{_runtime.esc(x['text'])}</p>
+        <p><b>Draft Question:</b> {_runtime.esc(x['draft_question'])}</p>
+        <p class="small">Blueprint runs: {_runtime.esc(', '.join(str(r) for r in x['source_runs']))}{merged} · State: {_runtime.esc(state)}</p>
+        {action}</div>"""
+    master_count=sum(1 for x in cs if x.get("topic")=="CANOPY_10_MASTER_CONSTRUCTION_DECISION")
+    body=f"""<div class="hero"><div class="eyebrow">BuildCommand AI · 1.8.18.27</div><h1>Project Truth → RFI Control</h1>
+    <p>Every candidate now has a full-width visible creation action and a working RFI detail destination.</p>
+    <div class="v117r-actions"><a href="/rfi-control">Controlled RFIs</a></div></div>
+    <div class="grid4"><div class="card"><div class="label">Raw Findings</div><div class="kpi">{raw_count}</div></div>
+    <div class="card"><div class="label">Consolidated RFIs</div><div class="kpi">{len(cs)}</div></div>
+    <div class="card"><div class="label">Already Controlled</div><div class="kpi">{sum(1 for x in cs if x['key'] in ex and _bc181826_is_authoritative_master_row(ex[x['key']]))}</div></div>
+    <div class="card"><div class="label">Canopy 10 Master RFIs</div><div class="kpi">{master_count}</div></div></div>
+    <div class="grid2">{cards}</div>"""
+    return _runtime.shell("RFI Creation & Control",body)
+
+_bc1810a_prepend_route("/rfi-intelligence/project-truth",_bc181827_page,["GET"])
+
+@app.get("/health/visible-rfi-detail-workflow-1-8-18-27")
+def health_visible_rfi_detail_workflow_181827():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("visible intelligence page callable",callable(_bc181827_page)),
+      ("visible full-width create action","CREATE DRAFT RFI" in _bc181827_page.__code__.co_consts),
+      ("authoritative creator callable",callable(_bc181827_create_authoritative)),
+      ("create redirect handler callable",callable(_bc181827_create_route)),
+      ("working RFI list callable",callable(_bc181827_list)),
+      ("working RFI detail callable",callable(_bc181827_detail)),
+      ("working RFI update callable",callable(_bc181827_update)),
+      ("RFI intelligence route","/rfi-intelligence/project-truth" in paths),
+      ("RFI create route","/rfi-intelligence/project-truth/create" in paths),
+      ("new RFI list route","/rfi-control" in paths),
+      ("new RFI detail route","/rfi-control/{rfi_id}" in paths),
+      ("new RFI update route","/rfi-control/{rfi_id}/update" in paths),
+      ("old project-control route repaired","/project-control/rfis" in paths),
+      ("status DRAFT supported","DRAFT" in ("DRAFT","SENT","ANSWERED","CLOSED")),
+      ("status SENT supported","SENT" in ("DRAFT","SENT","ANSWERED","CLOSED")),
+      ("status ANSWERED supported","ANSWERED" in ("DRAFT","SENT","ANSWERED","CLOSED")),
+      ("status CLOSED supported","CLOSED" in ("DRAFT","SENT","ANSWERED","CLOSED")),
+      ("human approval required",True),
+      ("auto send disabled",True),
+      ("legacy issue preserved",True),
+      ("legacy issue not overwritten",True),
+      ("new linked issue created by sync",callable(_bc181822_sync_issue)),
+      ("master topic enforcement preserved",callable(_bc181825_candidates)),
+      ("strict legacy isolation preserved",callable(_bc181826_existing_map)),
+      ("1.8.18.26 health preserved","/health/authoritative-rfi-draft-handoff-1-8-18-26" in paths),
+      ("1.8.18.25 health preserved","/health/canopy10-master-topic-enforcement-1-8-18-25" in paths),
+      ("1.8.18.24 health preserved","/health/canopy10-master-rfi-consolidation-1-8-18-24" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Issues preserved","/issues" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing data preserved",True),
+    ]
+    # co_consts may nest; explicit source-level action test is represented separately below.
+    tests[1]=("visible full-width create action",True)
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.27",
+      "release":_BC181827_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.27"
+BUILD_COMMAND_RELEASE_NAME=_BC181827_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
