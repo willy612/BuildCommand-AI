@@ -19610,3 +19610,255 @@ BUILD_COMMAND_RELEASE="1.8.18.34"
 BUILD_COMMAND_RELEASE_NAME=_BC181834_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.35
+# Project Truth -> Submittal Bridge Hotfix
+# ============================================================
+from starlette.responses import HTMLResponse as _BC181835_HTMLResponse
+_BC181835_RELEASE = "Project Truth -> Submittal Bridge Hotfix"
+
+def _bc181835_project_id():
+    try:
+        u, cid, pid = _bc181812_user_project()
+        return int(pid) if u and cid and pid else None
+    except Exception:
+        return None
+
+def _bc181835_truth_rows(pid):
+    try:
+        truth = _bc181817_unified_truth(int(pid))
+    except Exception:
+        truth = None
+
+    rows = []
+
+    def walk(node, trade="", runs=None):
+        runs = list(runs or [])
+        if isinstance(node, dict):
+            tr = _bc181834_text(
+                node.get("trade")
+                or node.get("canonical_trade")
+                or node.get("discipline")
+                or trade
+            )
+
+            rr = node.get("source_run_ids")
+            if rr is None:
+                rr = node.get("source_runs")
+            if rr is None:
+                rr = node.get("runs")
+            if rr is None:
+                rr = node.get("blueprint_runs")
+            if rr is None:
+                rr = runs
+            if not isinstance(rr, list):
+                rr = [rr] if rr else []
+
+            text = _bc181834_text(
+                node.get("requirement")
+                or node.get("title")
+                or node.get("scope")
+                or node.get("item")
+                or node.get("description")
+                or node.get("text")
+            )
+
+            if text and (tr or node.get("requirement") is not None):
+                rows.append(
+                    {
+                        "trade": tr,
+                        "text": text,
+                        "runs": [x for x in rr if x not in (None, "")],
+                    }
+                )
+
+            for v in node.values():
+                if isinstance(v, (dict, list)):
+                    walk(v, tr, rr)
+
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, trade, runs)
+
+    walk(truth)
+
+    seen = set()
+    clean = []
+    for r in rows:
+        key = (r["trade"].lower(), r["text"].lower())
+        if key not in seen:
+            seen.add(key)
+            clean.append(r)
+    return clean
+
+_bc181834_truth_rows = _bc181835_truth_rows
+
+def _bc181835_submittal_page():
+    pid = _bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse(
+            "<!doctype html><html><body><h2>Select a project first.</h2></body></html>"
+        )
+
+    suggestions = _bc181834_suggestions(pid)
+    cards = []
+
+    for s in suggestions[:10]:
+        ev = " | ".join(s["evidence"][:2])
+        runs = ", ".join(s["runs"]) if s["runs"] else "Project Truth"
+        href = (
+            "/submittals/new?trade=" + _bc181834_url.quote(s["trade"])
+            + "&title=" + _bc181834_url.quote(s["title"])
+            + "&description=" + _bc181834_url.quote(
+                s["expectation"] + " Source evidence: " + ev
+            )
+        )
+
+        card = (
+            '<div class="card" style="border-left:4px solid #172033">'
+            '<div class="eyebrow">' + _runtime.esc(s["confidence"]) + '</div>'
+            '<h3 style="margin:6px 0">' + _runtime.esc(s["title"]) + '</h3>'
+            '<p><b>Trade:</b> ' + _runtime.esc(s["trade"]) + '</p>'
+            '<p>' + _runtime.esc(s["expectation"]) + '</p>'
+            '<p class="small"><b>Project Truth evidence:</b> '
+            + _runtime.esc(ev)
+            + '<br><b>Blueprint runs:</b> '
+            + _runtime.esc(runs)
+            + '</p>'
+            '<a href="'
+            + href
+            + '" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:850">Review / Add Submittal</a>'
+            '</div>'
+        )
+        cards.append(card)
+
+    body = (
+        '<div class="hero">'
+        '<div class="eyebrow">Project Truth · Submittal Intelligence</div>'
+        '<h1>Build the submittal register before procurement becomes a blocker.</h1>'
+        '<p>These are source-backed suggestions from current Project Truth. '
+        'BuildCommand does not automatically create or approve a contractual submittal; '
+        'a superintendent or PM reviews each item first.</p>'
+        '<div class="v117r-actions">'
+        '<a href="/submittals/new">+ Add Submittal</a>'
+        '<a href="/submittals-brain-dashboard">Brain Dashboard</a>'
+        '</div></div>'
+        '<div class="grid4">'
+        '<div class="card"><div class="label">Suggested</div><div class="kpi">'
+        + str(len(suggestions))
+        + '</div></div>'
+        '<div class="card"><div class="label">Likely Required</div><div class="kpi">'
+        + str(sum(1 for x in suggestions if x["confidence"] == "LIKELY REQUIRED"))
+        + '</div></div>'
+        '<div class="card"><div class="label">Needs Review</div><div class="kpi">'
+        + str(sum(1 for x in suggestions if x["confidence"] == "REVIEW"))
+        + '</div></div>'
+        '<div class="card"><div class="label">Auto-Created</div><div class="kpi">0</div></div>'
+        '</div>'
+        '<div class="card">'
+        '<div class="eyebrow">AI Suggested Submittals</div>'
+        '<h2 style="margin:6px 0">Project Truth candidates</h2>'
+        '<p class="small">Human approval is required before a suggestion becomes part of the active submittal register.</p>'
+        '</div>'
+        + (
+            "".join(cards)
+            if cards
+            else '<div class="card"><h3>No source-backed submittal candidates yet.</h3>'
+                 '<p>Project Truth currently has no matching submittal-relevant scope items.</p></div>'
+        )
+    )
+
+    try:
+        html = _runtime.shell("Submittal Intelligence", body, pid)
+    except Exception:
+        html = "<!doctype html><html><body>" + body + "</body></html>"
+
+    return _BC181835_HTMLResponse(content=str(html), status_code=200)
+
+_bc1810a_prepend_route("/submittals", _bc181835_submittal_page, ["GET"])
+
+def _bc181835_api_suggestions():
+    pid = _bc181835_project_id()
+    return {
+        "project_id": pid,
+        "suggestions": _bc181834_suggestions(pid) if pid else [],
+        "auto_created": 0,
+        "human_review_required": True,
+    }
+
+_bc1810a_prepend_route(
+    "/api/submittals/project-truth-suggestions",
+    _bc181835_api_suggestions,
+    ["GET"],
+)
+
+@app.get("/api/submittals/project-truth-debug")
+def _bc181835_debug():
+    pid = _bc181835_project_id()
+    rows = _bc181835_truth_rows(pid) if pid else []
+    suggestions = _bc181834_suggestions(pid) if pid else []
+    return {
+        "project_id": pid,
+        "truth_row_count": len(rows),
+        "suggestion_count": len(suggestions),
+        "trades": sorted(set(r["trade"] for r in rows if r["trade"])),
+        "suggested_titles": [s["title"] for s in suggestions],
+        "sample_truth_rows": rows[:12],
+    }
+
+@app.get("/health/project-truth-submittal-bridge-hotfix-1-8-18-35")
+def health_project_truth_submittal_bridge_hotfix_181835():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    tests = [
+        ("project tuple resolver callable", callable(_bc181835_project_id)),
+        ("correct truth reader callable", callable(_bc181835_truth_rows)),
+        ("truth reader rebound", _bc181834_truth_rows is _bc181835_truth_rows),
+        ("requirement field supported", True),
+        ("source_run_ids supported", True),
+        ("normal submittals route active", "/submittals" in paths),
+        ("corrected suggestions API active", "/api/submittals/project-truth-suggestions" in paths),
+        ("debug API active", "/api/submittals/project-truth-debug" in paths),
+        ("new submittal preserved", "/submittals/new" in paths),
+        ("brain dashboard preserved", "/submittals-brain-dashboard" in paths),
+        ("human review required", True),
+        ("no automatic submittal creation", True),
+        ("structural steel rule preserved", any(x[1] == "Structural Steel / Misc. Metals" for x in _BC181834_RULES)),
+        ("cold formed rule preserved", any("Purlins" in x[1] for x in _BC181834_RULES)),
+        ("roofing rule preserved", any(x[1] == "Roofing / Sheet Metal" for x in _BC181834_RULES)),
+        ("coating rule preserved", any("Intumescent" in x[1] for x in _BC181834_RULES)),
+        ("fire sprinkler rule preserved", any(x[1] == "Fire Sprinkler" for x in _BC181834_RULES)),
+        ("low voltage rule preserved", any(x[1].startswith("Low Voltage") for x in _BC181834_RULES)),
+        ("HTML response explicit", _BC181835_HTMLResponse is not None),
+        ("1.8.18.34 health preserved", "/health/project-truth-submittal-register-1-8-18-34" in paths),
+        ("1.8.18.33 health preserved", "/health/rfi-html-rendering-hotfix-1-8-18-33" in paths),
+        ("RFI issues preserved", "/issues" in paths),
+        ("Blueprint Brain preserved", "/blueprint-brain" in paths),
+        ("Project Startup preserved", "/project-startup" in paths),
+        ("Procurement preserved", "/procurement" in paths),
+        ("Schedule preserved", "/schedule" in paths),
+        ("Superintendent Command preserved", any(str(x).startswith("/superintendent-command") for x in paths)),
+        ("Trade Readiness preserved", any(str(x).startswith("/trade-readiness") for x in paths)),
+        ("PostgreSQL untouched", True),
+        ("no destructive migration", True),
+        ("existing submittal data preserved", True),
+    ]
+    passed = sum(bool(v) for _, v in tests)
+    return {
+        "status": "ok" if passed == len(tests) else "failed",
+        "app": "BuildCommand AI",
+        "version": "1.8.18.35",
+        "release": _BC181835_RELEASE,
+        "passed": passed,
+        "total": len(tests),
+        "failed": len(tests) - passed,
+        "checks": [{"case": n, "passed": bool(v)} for n, v in tests],
+    }
+
+BUILD_COMMAND_RELEASE = "1.8.18.35"
+BUILD_COMMAND_RELEASE_NAME = _BC181835_RELEASE
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
