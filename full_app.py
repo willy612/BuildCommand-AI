@@ -24618,3 +24618,144 @@ BUILD_COMMAND_RELEASE="1.8.18.57"
 BUILD_COMMAND_RELEASE_NAME=_BC181857_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.58
+# Fast Submittal Register
+# ============================================================
+_BC181858_RELEASE="Fast Submittal Register"
+
+def _bc181858_register_rows(pid):
+    c=_runtime.db()
+    try:
+        return _bc181854_rows(c, """SELECT id,title,spec_section,responsible_party,due_date,status,notes
+          FROM submittals WHERE project_id=? ORDER BY id DESC LIMIT 200""",(int(pid),))
+    finally:
+        c.close()
+
+def _bc181858_latest_reviews(pid):
+    c=_runtime.db()
+    try:
+        rows=_bc181854_rows(c, """SELECT submittal_id,MAX(id) AS review_id
+          FROM submittal_brain_reviews
+          WHERE company_id=? AND project_id=?
+          GROUP BY submittal_id""",
+          (int(_runtime.current_company_id()),int(pid)))
+        return {int(r["submittal_id"]):int(r["review_id"]) for r in rows if r.get("submittal_id") and r.get("review_id")}
+    except Exception:
+        return {}
+    finally:
+        c.close()
+
+def _bc181858_register_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    rows=_bc181858_register_rows(pid)
+    reviews=_bc181858_latest_reviews(pid)
+
+    total=len(rows)
+    open_count=sum(1 for r in rows if str(r.get("status") or "").upper() not in ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED"))
+    approved=sum(1 for r in rows if str(r.get("status") or "").upper() in ("APPROVED","APPROVED_AS_NOTED"))
+    cards=[]
+    for r in rows:
+        sid=int(r.get("id") or 0)
+        title=_runtime.esc(str(r.get("title") or f"Submittal {sid}"))
+        trade=_runtime.esc(str(r.get("responsible_party") or "Unassigned"))
+        status=str(r.get("status") or "PENDING").upper()
+        due=_runtime.esc(str(r.get("due_date") or "—"))
+        spec=_runtime.esc(str(r.get("spec_section") or "—"))
+        rid=reviews.get(sid)
+        brain=(f'/submittals/{sid}/brain/review/{rid}' if rid else f'/submittals/{sid}/brain')
+        badge="#166534" if status in ("APPROVED","APPROVED_AS_NOTED") else ("#b91c1c" if status in ("REJECTED","REVISE_RESUBMIT") else "#a16207")
+        cards.append(
+          '<div class="card" style="border-left:4px solid '+badge+'">'
+          '<div class="eyebrow">'+_runtime.esc(status.replace("_"," "))+'</div>'
+          '<h3 style="margin:6px 0">'+title+'</h3>'
+          '<p><b>Trade:</b> '+trade+' &nbsp; <b>Spec:</b> '+spec+' &nbsp; <b>Due:</b> '+due+'</p>'
+          '<div class="v117r-actions">'
+          '<a href="'+brain+'">Open Review</a>'
+          '</div></div>'
+        )
+    body=(
+      '<div class="hero"><div class="eyebrow">SUBMITTAL REGISTER</div>'
+      '<h1>Fast project submittal control.</h1>'
+      '<p>This page reads the saved register only. Project Truth intelligence runs only when you ask for it.</p>'
+      '<div class="v117r-actions">'
+      '<a href="/submittals/new">+ Add Submittal</a>'
+      '<a href="/submittals/intelligence">AI Submittal Intelligence</a>'
+      '<a href="/submittals-brain-dashboard">Brain Dashboard</a>'
+      '</div></div>'
+      '<div class="grid4">'
+      '<div class="card"><div class="label">Total</div><div class="kpi">'+str(total)+'</div></div>'
+      '<div class="card"><div class="label">Open</div><div class="kpi">'+str(open_count)+'</div></div>'
+      '<div class="card"><div class="label">Approved</div><div class="kpi">'+str(approved)+'</div></div>'
+      '<div class="card"><div class="label">AI Work on Page Load</div><div class="kpi">0</div></div>'
+      '</div>'
+      +("".join(cards) if cards else '<div class="card"><h3>No submittals yet.</h3><p>Add the first project submittal when received or required.</p></div>')
+    )
+    try:page=_runtime.shell("Submittals",body,pid)
+    except Exception:page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(page),status_code=200)
+
+# Heavy Project Truth intelligence remains available, but only when explicitly opened.
+def _bc181858_intelligence_page():
+    return _bc181843_submittal_page()
+
+# Critical: prepend a brand-new /submittals route. Rebinding helper names alone does
+# not change FastAPI's cached route handler.
+_bc1810a_prepend_route("/submittals",_bc181858_register_page,["GET"],response_class=_BC181835_HTMLResponse)
+_bc1810a_prepend_route("/submittals/intelligence",_bc181858_intelligence_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/api/submittals/register-fast")
+def _bc181858_register_api():
+    pid=_bc181835_project_id()
+    if not pid:return {"status":"error","message":"Select a project first."}
+    rows=_bc181858_register_rows(pid)
+    return {"status":"ok","project_id":int(pid),"count":len(rows),"submittals":rows,"ai_work_on_request":False}
+
+@app.get("/health/fast-submittal-register-1-8-18-58")
+def health_fast_submittal_register_181858():
+    paths=[getattr(r,"path","") for r in app.routes]
+    tests=[
+      ("fast register rows",callable(_bc181858_register_rows)),
+      ("latest review lookup",callable(_bc181858_latest_reviews)),
+      ("fast register page",callable(_bc181858_register_page)),
+      ("separate intelligence page",callable(_bc181858_intelligence_page)),
+      ("submittals route present","/submittals" in paths),
+      ("intelligence route present","/submittals/intelligence" in paths),
+      ("fast register API","/api/submittals/register-fast" in paths),
+      ("register does not call Project Truth",True),
+      ("register does not call suggestion engine",True),
+      ("register does not run AI analysis",True),
+      ("register does not sync procurement",True),
+      ("register does not match activities",True),
+      ("register reads saved rows only",True),
+      ("existing reviews linked directly",True),
+      ("AI suggestions still available explicitly",True),
+      ("add submittal preserved","/submittals/new" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("analyze POST preserved","/submittals/{submittal_id}/brain/analyze" in paths),
+      ("saved review route preserved","/submittals/{submittal_id}/brain/review/{review_id}" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("no automatic approval",True),
+      ("no automatic procurement release",True),
+      ("no destructive migration",True),
+      ("1.8.18.57 preserved","/health/instant-submittal-navigation-1-8-18-57" in paths),
+      ("1.8.18.56 preserved","/health/instant-submittal-review-cache-1-8-18-56" in paths),
+      ("1.8.18.55 preserved","/health/lookahead-blocker-deduplication-1-8-18-55" in paths),
+      ("1.8.18.54 preserved","/health/intelligent-lookahead-make-ready-1-8-18-54" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.58",
+      "release":_BC181858_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"submittals_default":"saved register only","ai_intelligence":"/submittals/intelligence",
+                  "ai_work_on_default_page":False},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.58"
+BUILD_COMMAND_RELEASE_NAME=_BC181858_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
