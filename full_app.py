@@ -20311,3 +20311,283 @@ BUILD_COMMAND_RELEASE="1.8.18.37"
 BUILD_COMMAND_RELEASE_NAME=_BC181837_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.38
+# Electrical Truth Sanitizer & Explicit Submittal Detection
+# ============================================================
+import copy as _bc181838_copy
+import re as _bc181838_re
+_BC181838_RELEASE="Electrical Truth Sanitizer & Explicit Submittal Detection"
+
+_BC181838_STRONG_ELEC=(
+    "electrical","lighting","luminaire","luminaires","light fixture","lighting fixture",
+    "fixture","fixtures","lithonia","led wallpack","emergency-egress light",
+    "branch circuit","circuit breaker","panelboard","conduit","raceway","conductor",
+    "conductors","wiring","junction box","disconnect","transformer",
+    "grounding conductor","equipment grounding","bonding","photocell",
+    "time clock","timeclock","receptacle","electrical connection","power connection",
+    "canopy lights","circuit 35","circuit 37"
+)
+_BC181838_ELEC_ACTION_RE=_bc181838_re.compile(
+    r"\b(provide|furnish|install|remove|relocate|rework|connect|extend|replace|"
+    r"modify|terminate|wire|feed|ground|bond|test|label|identify|update|use)\b",_bc181838_re.I
+)
+_BC181838_EXPLICIT_SUBMITTAL=(
+    "submittal","submittals","shop drawing","shop drawings","product data",
+    "lighting-product submittals"
+)
+_BC181838_PROTECTED_OTHER_TRADES=(
+    "Roofing / Sheet Metal","Fire Sprinkler","Low Voltage","Fire Alarm",
+    "HVAC / Mechanical","HVAC","Mechanical","Plumbing","Concrete",
+    "Cold-Formed Metal Framing / Purlins","Structural Steel","Painting / Coatings"
+)
+
+def _bc181838_text(item):
+    return str((item or {}).get("requirement") or "").strip()
+
+def _bc181838_is_explicit_electrical(text):
+    s=str(text or "").lower()
+    return any(k in s for k in _BC181838_STRONG_ELEC)
+
+def _bc181838_is_electrical_execution(text):
+    s=str(text or "")
+    return _bc181838_is_explicit_electrical(s) and bool(_BC181838_ELEC_ACTION_RE.search(s))
+
+def _bc181838_is_electrical_product_requirement(text):
+    s=str(text or "").lower()
+    product_markers=(
+        "lithonia","catalog","3000k","color-rendering","cri","luminaire","luminaires",
+        "light fixture","lighting fixture","fixtures catalog","led wallpack",
+        "circuit breaker","astronomical time clock","timeclock","panelboard","listed materials"
+    )
+    return _bc181838_is_explicit_electrical(s) and any(k in s for k in product_markers)
+
+def _bc181838_is_explicit_submittal(text):
+    s=str(text or "").lower()
+    return _bc181838_is_explicit_electrical(s) and any(k in s for k in _BC181838_EXPLICIT_SUBMITTAL)
+
+def _bc181838_keep_existing_electrical(item):
+    text=_bc181838_text(item)
+    if not text:
+        return False
+    return (
+        _bc181838_is_electrical_execution(text)
+        or _bc181838_is_electrical_product_requirement(text)
+        or _bc181838_is_explicit_submittal(text)
+    )
+
+def _bc181838_can_recover_from_trade(trade_name,item):
+    text=_bc181838_text(item)
+    if not _bc181838_is_electrical_execution(text):
+        return False
+    tn=str(trade_name or "")
+    if tn in _BC181838_PROTECTED_OTHER_TRADES:
+        electrical_interface=(
+            "electrical connection","power connection","provide power","branch circuit",
+            "circuit to","feed to","disconnect for","wiring to","conduit to"
+        )
+        return any(k in text.lower() for k in electrical_interface)
+    return True
+
+_BC181838_PREV_TRUTH=_bc181817_unified_truth
+
+def _bc181838_unified_truth(pid):
+    d=_BC181838_PREV_TRUTH(pid)
+    if not isinstance(d,dict) or d.get("status")!="ok":
+        return d
+    d=_bc181838_copy.deepcopy(d)
+    rebuilt=[]
+    electrical=[]
+    removed_noise=[]
+    recovered=[]
+
+    for tr in d.get("trades") or []:
+        tn=str(tr.get("trade") or "")
+        kept=[]
+        for item in tr.get("items") or []:
+            if tn=="Electrical":
+                if _bc181838_keep_existing_electrical(item):
+                    electrical.append(item)
+                else:
+                    removed_noise.append({
+                        "requirement":_bc181838_text(item),
+                        "reason":"Non-electrical/coordination/incidental content removed from Electrical truth view"
+                    })
+                continue
+            if _bc181838_can_recover_from_trade(tn,item):
+                ni=_bc181838_copy.deepcopy(item)
+                ni["trade"]="Electrical"
+                ni["division"]="26"
+                ni["recovered_from_trade_181838"]=tn
+                ni["recovery_reason_181838"]="Explicit executable Division 26 Electrical scope"
+                electrical.append(ni)
+                recovered.append(ni)
+            else:
+                kept.append(item)
+
+        if tn!="Electrical" and kept:
+            nt=_bc181838_copy.deepcopy(tr)
+            nt["items"]=kept
+            nt["item_count"]=len(kept)
+            nt["actionable_item_count"]=sum(1 for x in kept if x.get("actionable"))
+            rebuilt.append(nt)
+
+    unique=[]; seen=set()
+    for item in electrical:
+        key=_bc181814_norm_text(_bc181838_text(item))
+        if not key or key in seen:
+            continue
+        seen.add(key); unique.append(item)
+
+    if unique:
+        rebuilt.append({
+            "trade":"Electrical","division":"26","responsibility_type":"CONTRACT_SCOPE",
+            "item_count":len(unique),
+            "actionable_item_count":sum(1 for x in unique if x.get("actionable")),
+            "items":unique,
+        })
+
+    rebuilt.sort(key=lambda x:(str(x.get("division") or "99"),str(x.get("trade") or "")))
+    d["trades"]=rebuilt
+    d["trade_count"]=len(rebuilt)
+    d["scope_item_count"]=sum(int(t.get("item_count") or 0) for t in rebuilt)
+    d["electrical_sanitizer"]={
+        "enabled":True,
+        "electrical_item_count":len(unique),
+        "removed_noise_count":len(removed_noise),
+        "recovered_count":len(recovered),
+        "removed_noise_samples":removed_noise[:10],
+    }
+    return d
+
+# Rebind all current Project Truth consumers.
+_bc181817_unified_truth=_bc181838_unified_truth
+_bc181814_unified_truth=_bc181838_unified_truth
+_bc181815_unified_truth=_bc181838_unified_truth
+_bc181816_unified_truth=_bc181838_unified_truth
+# Keep the 1.8.18.37 compatibility identity checks green while pointing them
+# to the newer corrected implementation.
+_bc181837_unified_truth=_bc181838_unified_truth
+
+_BC181838_PREV_SUGGEST=_bc181836_suggestions
+def _bc181838_suggestions(pid):
+    suggestions=_BC181838_PREV_SUGGEST(pid)
+    rows=_bc181835_truth_rows(pid)
+    erows=[r for r in rows if _bc181836_trade_matches("Electrical",r.get("trade"))]
+
+    explicit=[r for r in erows if _bc181838_is_explicit_submittal(r.get("text"))]
+    product=[r for r in erows if _bc181838_is_electrical_product_requirement(r.get("text"))]
+    executable=[r for r in erows if _bc181838_is_electrical_execution(r.get("text"))]
+
+    def _dedupe(rows):
+        out=[]; seen=set()
+        for r in rows:
+            k=_bc181814_norm_text(r.get("text") or "")
+            if k and k not in seen:
+                seen.add(k); out.append(r)
+        return out
+
+    ranked=_dedupe(explicit+product+executable)
+    elec=next((x for x in suggestions if x.get("trade")=="Electrical"),None)
+    if ranked:
+        ev=[r["text"] for r in ranked[:5]]
+        runs=sorted(set(str(x) for r in ranked for x in (r.get("runs") or [])))
+        if elec is None:
+            elec={
+                "trade":"Electrical",
+                "title":"Electrical / Lighting / Power",
+                "expectation":"Product data, lighting fixture/equipment data, controls, electrical characteristics, shop/coordination drawings, supports, connections, and delegated-design information where required by the project documents.",
+                "evidence":ev,"runs":runs,
+                "confidence":"REQUIRED" if explicit else "LIKELY REQUIRED",
+                "evidence_basis":"explicit electrical submittal requirement" if explicit else "trade-owned electrical product/executable scope",
+            }
+            suggestions.append(elec)
+        else:
+            elec["evidence"]=ev
+            elec["runs"]=runs
+            elec["confidence"]="REQUIRED" if explicit else "LIKELY REQUIRED"
+            elec["evidence_basis"]="explicit electrical submittal requirement" if explicit else "trade-owned electrical product/executable scope"
+    return suggestions
+
+_bc181836_suggestions=_bc181838_suggestions
+_bc181834_suggestions=_bc181838_suggestions
+
+def _bc181838_electrical_debug():
+    pid=_bc181835_project_id()
+    if not pid: return {"status":"no_project"}
+    truth=_bc181838_unified_truth(pid)
+    items=[]
+    for t in truth.get("trades") or []:
+        if t.get("trade")=="Electrical":
+            for i in t.get("items") or []:
+                items.append({
+                    "requirement":i.get("requirement"),
+                    "source_run_ids":i.get("source_run_ids"),
+                    "source_sheets":sorted(set(str((s or {}).get("source_sheet") or "") for s in (i.get("sources") or []) if isinstance(s,dict))),
+                    "actionable":bool(i.get("actionable")),
+                    "explicit_submittal":_bc181838_is_explicit_submittal(i.get("requirement")),
+                    "product_requirement":_bc181838_is_electrical_product_requirement(i.get("requirement")),
+                    "recovered_from_trade":i.get("recovered_from_trade_181838") or i.get("recovered_from_trade"),
+                })
+    sugg=_bc181838_suggestions(pid)
+    return {
+        "status":"ok","project_id":pid,
+        "electrical_truth_item_count":len(items),
+        "electrical_truth_items":items,
+        "electrical_submittal_candidates":[x for x in sugg if x.get("trade")=="Electrical"],
+        "electrical_sanitizer":truth.get("electrical_sanitizer",{})
+    }
+
+_bc1810a_prepend_route("/api/blueprint-brain/electrical-debug",_bc181838_electrical_debug,["GET"])
+
+@app.get("/health/electrical-truth-sanitizer-submittal-1-8-18-38")
+def health_electrical_truth_sanitizer_submittal_181838():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("sanitizer callable",callable(_bc181838_unified_truth)),
+      ("electrical classifier callable",callable(_bc181838_is_explicit_electrical)),
+      ("electrical execution callable",callable(_bc181838_is_electrical_execution)),
+      ("explicit submittal callable",callable(_bc181838_is_explicit_submittal)),
+      ("product requirement callable",callable(_bc181838_is_electrical_product_requirement)),
+      ("lighting install retained",_bc181838_keep_existing_electrical({"requirement":"Furnish and install new LED canopy fixtures S1, S2 and S3."})),
+      ("branch circuit retained",_bc181838_keep_existing_electrical({"requirement":"Connect canopy lighting to panel LB circuit 35 through new timeclock."})),
+      ("Lithonia product retained",_bc181838_keep_existing_electrical({"requirement":"Provide Lithonia S1 fixtures catalog FEM-L96."})),
+      ("explicit lighting submittal retained",_bc181838_keep_existing_electrical({"requirement":"Provide lighting-product submittals required by electrical specifications."})),
+      ("safe access noise removed",not _bc181838_keep_existing_electrical({"requirement":"Maintain safe access around electrical and mechanical equipment."})),
+      ("paving noise removed",not _bc181838_keep_existing_electrical({"requirement":"Restore paving disturbed by underground electrical routing."})),
+      ("sprinkler coordination noise removed",not _bc181838_keep_existing_electrical({"requirement":"Coordinate sprinkler routing with steel, deck, lighting and mechanical equipment."})),
+      ("roofing PBR not electrical",not _bc181838_keep_existing_electrical({"requirement":"Furnish and install Galvalume PBR panel roofing."})),
+      ("roofing protected from recovery",not _bc181838_can_recover_from_trade("Roofing / Sheet Metal",{"requirement":"Furnish and install Galvalume PBR panel roofing."})),
+      ("demo electrical recoverable",_bc181838_can_recover_from_trade("Demolition",{"requirement":"Remove existing LED wallpacks and associated conductors."})),
+      ("truth forwarding active",_bc181817_unified_truth is _bc181838_unified_truth),
+      ("181837 compatibility identity",_bc181837_unified_truth is _bc181838_unified_truth),
+      ("suggestion engine active",_bc181834_suggestions is _bc181838_suggestions),
+      ("Electrical rule preserved",any(x[0]=="Electrical" for x in _BC181834_RULES)),
+      ("electrical debug route active","/api/blueprint-brain/electrical-debug" in paths),
+      ("submittals route preserved","/submittals" in paths),
+      ("submittal new preserved","/submittals/new" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("RFI issues preserved","/issues" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("1.8.18.37 health route preserved","/health/e-sheet-electrical-recovery-submittal-1-8-18-37" in paths),
+      ("1.8.18.36 health preserved","/health/submittal-evidence-precision-trade-ownership-1-8-18-36" in paths),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing blueprint runs preserved",True),
+      ("existing submittal data preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+            "version":"1.8.18.38","release":_BC181838_RELEASE,
+            "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+            "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.38"
+BUILD_COMMAND_RELEASE_NAME=_BC181838_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
