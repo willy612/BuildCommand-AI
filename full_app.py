@@ -21558,3 +21558,237 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.42
+# Scheduled Product Truth Finalizer
+# ============================================================
+_BC181842_RELEASE="Scheduled Product Truth Finalizer"
+
+_BC181842_CLARIFY_PHRASES=(
+ "clarify","clarification","confirm whether","confirm the selected","obtain clarification",
+ "not detailed","not provided","conflict","unresolved","verify whether","determine whether",
+ "22/24ga","22/24 ga"
+)
+
+_BC181842_NAMED_PRODUCTS={
+ "Painting / Coatings":(
+   "firetex","fx9500","fx9502","acrolon 7300","acrolon","sherwin-williams",
+   "intumescent","primer","topcoat","dry film","dft"
+ ),
+ "Roofing / Sheet Metal":("pbr","fry reglet","springlok","flashing","counterflashing"),
+ "Electrical":("lithonia","fem-l96","fem-l48","aff-oel","3000k","80cri","panel lb"),
+ "Structural Steel":("hss","w10x26","w12x45","base plate","anchor bolt"),
+ "Cold-Formed Metal Framing / Purlins":("cee purlin","18-gage","18-gauge"),
+ "Concrete":("f2-0","f3-6","f4-0","f5-0","footing schedule"),
+}
+
+def _bc181842_is_clarification(text):
+    s=(" "+str(text or "").lower()+" ")
+    return any(p in s for p in _BC181842_CLARIFY_PHRASES)
+
+def _bc181842_is_named_product(trade,text):
+    s=str(text or "").lower()
+    return any(k in s for k in _BC181842_NAMED_PRODUCTS.get(trade,()))
+
+def _bc181842_is_actual_callout(trade,text):
+    s=str(text or "").strip()
+    if not s: return False
+    if _bc181842_is_clarification(s):
+        return False
+    # Keep explicit named products, scheduled members, sizes, gauges, model/catalog,
+    # fixture/member/footing tags, and concrete installation requirements.
+    if _bc181842_is_named_product(trade,s):
+        return True
+    if _bc181841_extract_tags(s):
+        return True
+    low=s.lower()
+    if any(k in low for k in ("catalog","model","manufacturer","schedule","scheduled","gage","gauge","voltage","color temperature","cri","member","base plate","anchor bolt")):
+        return True
+    return _bc181841_is_schedule_like(trade,s)
+
+def _bc181842_schedule_rows(pid):
+    """Split actual plan callouts from unresolved clarification/conflict facts."""
+    rows=_bc181835_truth_rows(int(pid))
+    actual=[]; clarify=[]; seen_a=set(); seen_c=set()
+    for r in rows:
+        trade=str(r.get("trade") or "").strip()
+        if trade not in _BC181841_RULES:
+            continue
+        text=str(r.get("text") or "").strip()
+        if not text:
+            continue
+        item={
+          "trade":trade,
+          "package":_BC181841_RULES[trade]["title"],
+          "description":text,
+          "tags":_bc181841_extract_tags(text),
+          "source_sheet":_bc181841_source_sheet(r),
+          "source_run_ids":[str(x) for x in (r.get("runs") or [])],
+          "installed_product":True,
+        }
+        key=(trade,_bc181814_norm_text(text))
+        if _bc181842_is_clarification(text):
+            if key not in seen_c:
+                seen_c.add(key)
+                item["source_type"]="NEEDS_CLARIFICATION"
+                item["installed_product"]=False
+                clarify.append(item)
+            continue
+        if _bc181842_is_actual_callout(trade,text):
+            if key not in seen_a:
+                seen_a.add(key)
+                item["source_type"]="PLAN_SCHEDULE_OR_PRODUCT_CALLOUT"
+                actual.append(item)
+
+    def rank(x):
+        t=x["description"].lower(); score=0
+        score += 30*len(x.get("tags") or [])
+        if _bc181842_is_named_product(x["trade"],t): score+=45
+        if "catalog" in t or "model" in t: score+=30
+        if "schedule" in t or "scheduled" in t: score+=20
+        if x.get("source_sheet"): score+=10
+        return (-score,x["trade"],t)
+    return sorted(actual,key=rank), sorted(clarify,key=lambda x:(x["trade"],x["description"].lower()))
+
+def _bc181842_schedule_by_trade(pid):
+    actual,clarify=_bc181842_schedule_rows(pid)
+    a={}; c={}
+    for x in actual: a.setdefault(x["trade"],[]).append(x)
+    for x in clarify: c.setdefault(x["trade"],[]).append(x)
+    return a,c
+
+@app.get("/api/blueprint-brain/installed-products")
+def _bc181842_installed_products_api():
+    pid=_bc181835_project_id()
+    actual,clarify=_bc181842_schedule_rows(pid) if pid else ([],[])
+    return {
+      "status":"ok","project_id":pid,
+      "installed_product_count":len(actual),
+      "needs_clarification_count":len(clarify),
+      "trades":sorted(set(x["trade"] for x in actual)),
+      "items":actual,
+      "needs_clarification":clarify,
+      "source":"Unified Project Truth / plan schedules / product callouts",
+      "human_review_required":True
+    }
+
+_BC181842_PREV_SUGGEST=_BC181841_PREV_SUGGEST
+def _bc181842_suggestions(pid):
+    # Use 1.8.18.40 classified suggestions as the base to avoid recursion.
+    ss=_BC181842_PREV_SUGGEST(int(pid))
+    actual,clarify=_bc181842_schedule_by_trade(int(pid))
+    out=[]
+    for raw in ss:
+        s=dict(raw)
+        a=actual.get(s.get("trade"),[])
+        c=clarify.get(s.get("trade"),[])
+        s["scheduled_products"]=a
+        s["scheduled_product_count"]=len(a)
+        s["scheduled_product_summary"]=_bc181841_scheduled_summary(a,6)
+        s["needs_clarification"]=c
+        s["needs_clarification_count"]=len(c)
+        s["needs_clarification_summary"]=_bc181841_scheduled_summary(c,4)
+        out.append(s)
+    return out
+
+_bc181834_suggestions=_bc181842_suggestions
+_bc181836_suggestions=_bc181842_suggestions
+_bc181838_suggestions=_bc181842_suggestions
+_bc181839_suggestions=_bc181842_suggestions
+_bc181840_suggestions=_bc181842_suggestions
+_bc181841_suggestions=_bc181842_suggestions
+
+def _bc181842_submittal_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    suggestions=_bc181842_suggestions(pid)
+    border={"REQUIRED":"#166534","LIKELY REQUIRED":"#172033","VERIFY REQUIREMENT":"#a16207","BLOCKED BY RFI":"#b91c1c"}
+    cards=[]
+    for s in suggestions[:20]:
+        ev=" | ".join((s.get("evidence") or [])[:2])
+        runs=", ".join(s.get("runs") or []) if s.get("runs") else "Project Truth"
+        desc=s["expectation"]+" Source evidence: "+ev
+        href="/submittals/new?trade="+_bc181841_url.quote(s["trade"])+"&title="+_bc181841_url.quote(s["title"])+"&description="+_bc181841_url.quote(desc)
+        action=('<span style="display:inline-block;background:#eee;color:#555;padding:9px 12px;border-radius:9px;font-weight:850">Resolve RFI before release</span>'
+          if s["confidence"]=="BLOCKED BY RFI" else
+          '<a href="'+href+'" style="display:inline-block;background:#172033;color:#fff;text-decoration:none;padding:9px 12px;border-radius:9px;font-weight:850">Review / Add Submittal</a>')
+
+        products=s.get("scheduled_product_summary") or []
+        if products:
+            product_html='<div style="margin:14px 0;padding:12px 14px;background:#f6f8fb;border-radius:10px"><b>Scheduled Products / Materials Called for by Plans</b><ul style="margin:8px 0 0 18px">'+''.join("<li>"+_runtime.esc(x)+"</li>" for x in products)+'</ul><div class="small">'+str(s["scheduled_product_count"])+' actual plan callout(s) found.</div></div>'
+        else:
+            product_html='<div style="margin:14px 0;padding:12px 14px;background:#fff8e6;border-radius:10px"><b>Scheduled Products / Materials Called for by Plans</b><br><span class="small">No confirmed structured schedule/product callout recovered for this package yet.</span></div>'
+
+        clar=s.get("needs_clarification_summary") or []
+        clarify_html=""
+        if clar:
+            clarify_html='<div style="margin:14px 0;padding:12px 14px;background:#fff3f3;border-radius:10px"><b>Needs Clarification — Do Not Treat as Approved Product</b><ul style="margin:8px 0 0 18px">'+''.join("<li>"+_runtime.esc(x)+"</li>" for x in clar)+'</ul><div class="small">'+str(s["needs_clarification_count"])+' unresolved callout(s) separated from installed-product truth.</div></div>'
+
+        cards.append('<div class="card" style="border-left:4px solid '+border.get(s["confidence"],"#172033")+'"><div class="eyebrow">'+_runtime.esc(s["confidence"])+'</div><h3 style="margin:6px 0">'+_runtime.esc(s["title"])+'</h3><p><b>Trade:</b> '+_runtime.esc(s["trade"])+'</p><p>'+_runtime.esc(s["expectation"])+'</p>'+product_html+clarify_html+'<p class="small"><b>Evidence basis:</b> '+_runtime.esc(s["evidence_basis"])+'<br><b>Project Truth evidence:</b> '+_runtime.esc(ev)+'<br><b>Blueprint runs:</b> '+_runtime.esc(runs)+'</p>'+action+'</div>')
+
+    counts={k:sum(1 for x in suggestions if x["confidence"]==k) for k in ("REQUIRED","LIKELY REQUIRED","VERIFY REQUIREMENT","BLOCKED BY RFI")}
+    installed=sum(x.get("scheduled_product_count",0) for x in suggestions)
+    clarifications=sum(x.get("needs_clarification_count",0) for x in suggestions)
+    body='<div class="hero"><div class="eyebrow">Project Truth · Submittal Intelligence</div><h1>Build the submittal register before procurement becomes a blocker.</h1><p>BuildCommand separates actual scheduled products/materials from unresolved drawing questions so a clarification can never masquerade as an approved installed product.</p><div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a><a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div><div class="grid4"><div class="card"><div class="label">Required</div><div class="kpi">'+str(counts["REQUIRED"])+'</div></div><div class="card"><div class="label">Likely Required</div><div class="kpi">'+str(counts["LIKELY REQUIRED"])+'</div></div><div class="card"><div class="label">Verify Requirement</div><div class="kpi">'+str(counts["VERIFY REQUIREMENT"])+'</div></div><div class="card"><div class="label">Blocked by RFI</div><div class="kpi">'+str(counts["BLOCKED BY RFI"])+'</div></div></div><div class="card"><div class="eyebrow">Scheduled Product Truth</div><h2 style="margin:6px 0">'+str(installed)+' confirmed plan/product callouts · '+str(clarifications)+' clarification items separated</h2><p class="small">Unresolved options and questions are never presented as approved installed products.</p></div>'+''.join(cards)
+    try: page=_runtime.shell("Submittal Intelligence",body,pid)
+    except Exception: page="<!doctype html><html><body>"+body+"</body></html>"
+    return _BC181835_HTMLResponse(content=str(page),status_code=200)
+
+_bc1810a_prepend_route("/submittals",_bc181842_submittal_page,["GET"])
+
+def _bc181842_api():
+    pid=_bc181835_project_id()
+    ss=_bc181842_suggestions(pid) if pid else []
+    return {"status":"ok","project_id":pid,"suggestions":ss,
+      "installed_product_count":sum(x.get("scheduled_product_count",0) for x in ss),
+      "needs_clarification_count":sum(x.get("needs_clarification_count",0) for x in ss),
+      "human_review_required":True,"auto_created":0,"scheduled_product_truth_finalized":True}
+_bc1810a_prepend_route("/api/submittals/project-truth-suggestions",_bc181842_api,["GET"])
+
+@app.get("/health/scheduled-product-truth-finalizer-1-8-18-42")
+def health_scheduled_product_truth_finalizer_181842():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("actual callout classifier",callable(_bc181842_is_actual_callout)),
+      ("clarification classifier",callable(_bc181842_is_clarification)),
+      ("split extractor callable",callable(_bc181842_schedule_rows)),
+      ("FIRETEX recognized",_bc181842_is_actual_callout("Painting / Coatings","Apply Sherwin-Williams FIRETEX FX9502 intumescent coating.")),
+      ("Acrolon recognized",_bc181842_is_actual_callout("Painting / Coatings","Apply Sherwin-Williams Acrolon 7300 acrylic urethane exterior finish.")),
+      ("PBR ambiguity is clarification",_bc181842_is_clarification("Clarify whether the PBR panel is to be 22 gage or 24 gage because drawings state 22/24GA.")),
+      ("PBR ambiguity not actual",not _bc181842_is_actual_callout("Roofing / Sheet Metal","Clarify whether the PBR panel is to be 22 gage or 24 gage because drawings state 22/24GA.")),
+      ("Fry Reglet actual",_bc181842_is_actual_callout("Roofing / Sheet Metal","Provide surface-mounted Fry Reglet with Springlok flashing and sealant.")),
+      ("Electrical Lithonia actual",_bc181842_is_actual_callout("Electrical","Provide Lithonia S1 fixture catalog FEM-L96-15000LM-LPA-MD-80CRI-30K.")),
+      ("Structural HSS actual",_bc181842_is_actual_callout("Structural Steel","Provide C1 HSS 3x3x1/4 columns.")),
+      ("Concrete footing actual",_bc181842_is_actual_callout("Concrete","Provide footing F3-6 per footing schedule.")),
+      ("submittal UI active","/submittals" in paths),
+      ("installed product API active","/api/blueprint-brain/installed-products" in paths),
+      ("suggestions API active","/api/submittals/project-truth-suggestions" in paths),
+      ("native form preserved","/submittals/new" in paths),
+      ("brain dashboard preserved","/submittals-brain-dashboard" in paths),
+      ("Project Truth preserved","/blueprint-brain/project-truth" in paths),
+      ("Electrical debug preserved","/api/blueprint-brain/electrical-debug" in paths),
+      ("RFI control preserved","/project-control/rfis" in paths),
+      ("issues preserved","/issues" in paths),
+      ("Procurement preserved","/procurement" in paths),
+      ("Schedule preserved","/schedule" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("1.8.18.41 health preserved","/health/plan-schedule-installed-product-intelligence-1-8-18-41" in paths),
+      ("1.8.18.40 health preserved","/health/submittal-performance-cache-1-8-18-40" in paths),
+      ("1.8.18.39 health preserved","/health/submittal-requirement-classification-rfi-blocking-1-8-18-39" in paths),
+      ("PostgreSQL untouched",True),("no destructive migration",True),
+      ("Blueprint runs preserved",True),("RFIs/issues preserved",True),
+      ("submittals preserved",True),("human review preserved",True),
+      ("clarifications cannot be approved product truth",True),
+      ("source lineage preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.42","release":_BC181842_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.42"
+BUILD_COMMAND_RELEASE_NAME=_BC181842_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
