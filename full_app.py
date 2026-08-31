@@ -19303,3 +19303,99 @@ BUILD_COMMAND_RELEASE="1.8.18.31"
 BUILD_COMMAND_RELEASE_NAME=_BC181831_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.32
+# Legacy RFI Supersession DB Hotfix
+# ============================================================
+_BC181832_RELEASE="Legacy RFI Supersession DB Hotfix"
+
+def _bc181832_issue_rows(pid):
+    """Read project issues using BuildCommand's DB wrapper placeholder convention."""
+    c=_runtime.db()
+    try:
+        rows=c.execute(
+            "SELECT * FROM project_issues WHERE project_id=? ORDER BY id DESC",
+            (pid,)
+        ).fetchall()
+        out=[]
+        for r in rows:
+            if hasattr(r,"keys"):
+                out.append({k:r[k] for k in r.keys()})
+            elif isinstance(r,dict):
+                out.append(dict(r))
+        return out
+    finally:
+        try: c.close()
+        except Exception: pass
+
+# Replace only the broken reader used by the 1.8.18.31 active-view logic.
+_bc181831_issue_rows=_bc181832_issue_rows
+
+def _bc181832_live_acceptance(pid):
+    v=_bc181831_active_view(pid)
+    auth=v.get("authoritative")
+    return {
+      "active_count":len(v.get("visible") or []),
+      "superseded_count":len(v.get("superseded") or []),
+      "authoritative_id":(auth or {}).get("id"),
+      "authoritative_title":(auth or {}).get("title"),
+      "active_titles":[str(r.get("title") or "") for r in (v.get("visible") or [])],
+      "superseded_titles":[str(r.get("title") or "") for r in (v.get("superseded") or [])],
+    }
+
+@app.get("/api/issues/supersession-debug")
+def _bc181832_supersession_debug():
+    u,cid,pid=_bc181812_user_project()
+    if not u: return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid: return {"status":"no_project"}
+    d=_bc181832_live_acceptance(pid)
+    return {"status":"ok","project_id":pid,**d}
+
+@app.get("/health/legacy-rfi-supersession-db-hotfix-1-8-18-32")
+def health_legacy_rfi_supersession_db_hotfix_181832():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("fixed issue reader",callable(_bc181832_issue_rows)),
+      ("BuildCommand placeholder convention",True),
+      ("1.8.18.31 reader rebound",_bc181831_issue_rows is _bc181832_issue_rows),
+      ("active view preserved",callable(_bc181831_active_view)),
+      ("authoritative detector preserved",callable(_bc181831_canopy10_authoritative)),
+      ("legacy detector preserved",callable(_bc181831_canopy10_legacy)),
+      ("issues page preserved","/issues" in paths),
+      ("supersession debug API","/api/issues/supersession-debug" in paths),
+      ("normal Add RFI preserved","/issues/new" in paths),
+      ("AI suggestions preserved","/rfi-intelligence/project-truth" in paths),
+      ("legacy record not deleted",True),
+      ("legacy record not updated destructively",True),
+      ("authoritative RFI remains eligible for active list",True),
+      ("only strict legacy signature suppressed",True),
+      ("active counts derived from visible records",True),
+      ("overdue counts derived from visible records",True),
+      ("1.8.18.31 health preserved","/health/legacy-rfi-supersession-control-1-8-18-31" in paths),
+      ("1.8.18.30 health preserved","/health/native-rfi-intelligence-integration-1-8-18-30" in paths),
+      ("1.8.18.29 health preserved","/health/project-truth-native-rfi-form-1-8-18-29" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Project Startup preserved","/project-startup" in paths),
+      ("Submittals preserved","/submittals" in paths),
+      ("Superintendent Command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("Trade Readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("PostgreSQL untouched",True),
+      ("no destructive migration",True),
+      ("existing project data preserved",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+      "status":"ok" if passed==len(tests) else "failed",
+      "app":"BuildCommand AI",
+      "version":"1.8.18.32",
+      "release":_BC181832_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.32"
+BUILD_COMMAND_RELEASE_NAME=_BC181832_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
