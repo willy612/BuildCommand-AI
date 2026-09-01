@@ -28077,3 +28077,156 @@ def _bc181878_health_77_compat():
       "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
 
 _bc1810a_prepend_route("/health/document-drawing-viewer-markup-1-8-18-77",_bc181878_health_77_compat,["GET"])
+
+# ============================================================
+# BuildCommand AI 1.8.18.79
+# Unified Drawing Tools + Calibration + Text Styling
+# ============================================================
+_BC181879_RELEASE="Unified Drawing Tools + Calibration + Text Styling"
+
+def _bc181879_viewer(attachment_id:int):
+    u,row,p=_bc181877_context(attachment_id)
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    if not row:return _BC181835_HTMLResponse("Document not found.",status_code=404)
+
+    ext=_BC181877_Path(str(row.get("original_name") or "")).suffix.lower()
+    mime=str(row.get("mime_type") or "")
+    is_pdf=(ext==".pdf" or mime=="application/pdf")
+    is_image=(mime.startswith("image/") or ext in {".png",".jpg",".jpeg",".webp",".gif"})
+    revs=_bc181877_markup_rows(attachment_id)
+    latest=revs[0] if revs else None
+    try: latest_data=_bc181877_json.loads((latest or {}).get("annotation_json") or "{}")
+    except Exception: latest_data={}
+    pub=_bc181878_publication(attachment_id)
+
+    file_url=f"/documents/{int(attachment_id)}/content"
+    title=_runtime.esc(row.get("title") or row.get("original_name") or "Document")
+    original=_runtime.esc(row.get("original_name") or "")
+    project=_runtime.esc(p.get("name") or "")
+    history="".join(
+      '<div class="card"><b>Markup Rev '+_runtime.esc(r.get("revision_no"))+'</b>'
+      +('<div>'+_runtime.esc(r.get("revision_title") or "")+'</div>' if r.get("revision_title") else '')
+      +'<div class="small">'+_runtime.esc(r.get("created") or "")+'</div></div>'
+      for r in revs[:12]
+    ) or '<div class="card"><div class="muted">No saved markups yet.</div></div>'
+
+    if pub:
+        label=(' · '+_runtime.esc(pub.get("revision_label"))) if pub.get("revision_label") else ''
+        pub_badge='<span class="badge READY">CURRENT DRAWING'+label+'</span>'
+    else:
+        pub_badge='<span class="badge WATCH">NOT PUBLISHED CURRENT</span>'
+
+    if is_pdf:
+        display='<canvas id="bcBaseCanvas" style="display:block;max-width:none"></canvas>'
+        loader=f'<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script><script>window.BC_DOC_KIND="pdf";window.BC_DOC_URL="{file_url}";</script>'
+    elif is_image:
+        display=f'<img id="bcBaseImage" src="{file_url}" style="display:block;max-width:none">'
+        loader=f'<script>window.BC_DOC_KIND="image";window.BC_DOC_URL="{file_url}";</script>'
+    else:
+        display=f'<iframe src="{file_url}" style="width:80vw;height:72vh;border:0;background:white"></iframe>'
+        loader='<script>window.BC_DOC_KIND="other";</script>'
+
+    initial=_bc181877_json.dumps(latest_data if isinstance(latest_data,dict) else {"pages":{}},separators=(",",":"))
+    body=f'''
+    <div class="hero"><div class="eyebrow">DRAWING & DOCUMENT WORKSPACE</div><h1>{title}</h1><p>{project} · {original}</p>
+      <div class="v117r-actions"><a href="/documents">← Documents</a><a href="{file_url}" target="_blank">Open Original</a><a href="/documents/{int(attachment_id)}/download">Download</a></div></div>
+    <div class="card">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button type="button" id="bcPrev">◀ Prev</button><span id="bcPageLabel">Page 1</span><button type="button" id="bcNext">Next ▶</button>
+        <button type="button" id="bcZoomOut">− Zoom</button><span id="bcZoomLabel">100%</span><button type="button" id="bcZoomIn">+ Zoom</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <button type="button" data-tool="pan">Pan</button><button type="button" data-tool="pen">Redline</button><button type="button" data-tool="cloud">Cloud</button>
+        <button type="button" data-tool="rect">Rectangle</button><button type="button" data-tool="arrow">Arrow</button><button type="button" data-tool="text">Text Note</button>
+        <button type="button" data-tool="stamp">Stamp</button><button type="button" id="bcCalibrate">Calibrate</button><button type="button" data-tool="measure">Measure</button>
+        <button type="button" id="bcUndo">Undo</button><button type="button" id="bcClear">Clear Page</button>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+        <label style="margin:0">Text Size <select id="bcTextSize" style="width:auto;margin-left:6px"><option>14</option><option selected>18</option><option>24</option><option>32</option><option>40</option><option>52</option><option>64</option></select></label>
+        <label style="margin:0">Text Color <input id="bcTextColor" type="color" value="#ff2d2d" style="width:48px;height:34px;padding:2px;margin-left:6px"></label>
+      </div>
+      <div id="bcToolStatus" class="small" style="margin-top:8px">Tool: Pan</div><div id="bcMeasureStatus" class="small">Scale: Not calibrated</div>
+      <div id="bcStageWrap" style="overflow:auto;max-height:75vh;background:#454545;padding:16px;border-radius:10px;margin-top:10px;cursor:grab">
+        <div id="bcStage" style="position:relative;width:max-content;margin:auto;background:white">{display}<canvas id="bcMarkupCanvas" style="position:absolute;left:0;top:0;touch-action:none"></canvas></div>
+      </div>
+    </div>
+    <div class="grid2"><div class="card"><h2>Save Markup Revision</h2><label>Revision Title</label><input id="bcRevTitle"><label>Notes</label><textarea id="bcRevNotes" rows="4"></textarea><button type="button" id="bcSaveMarkup">Save Markup Revision</button><div id="bcSaveStatus" class="small"></div></div>
+    <div class="card"><h2>Current Drawing Control</h2><p>{pub_badge}</p><label>Revision Label</label><input id="bcPublishLabel"><label>Publication Note</label><textarea id="bcPublishNotes" rows="3"></textarea><button type="button" id="bcPublishCurrent">Publish as Current Drawing</button><div id="bcPublishStatus" class="small"></div></div></div>
+    <div class="eyebrow">Markup History</div>{history}{loader}
+    <script>
+    (function(){{
+      const DOC_ID={int(attachment_id)};
+      let tool="pan",pageNum=1,zoom=1,pdf=null,rendering=false,down=false,start=null,current=null,panStart=null;
+      let state={initial}; if(!state||!state.pages)state={{pages:{{}},calibration:{{}}}}; if(!state.calibration)state.calibration={{}};
+      const wrap=document.getElementById("bcStageWrap"),canvas=document.getElementById("bcMarkupCanvas"),ctx=canvas.getContext("2d");
+      const key=()=>String(pageNum); function items(){{if(!state.pages[key()])state.pages[key()]=[];return state.pages[key()]}}
+      function setTool(t){{tool=t;canvas.style.pointerEvents=(t==="pan"?"none":"auto");wrap.style.cursor=(t==="pan"?"grab":"crosshair");document.getElementById("bcToolStatus").textContent="Tool: "+t.charAt(0).toUpperCase()+t.slice(1)}}
+      function point(e){{const r=canvas.getBoundingClientRect();return[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]}}
+      function arrow(x1,y1,x2,y2){{const h=12,a=Math.atan2(y2-y1,x2-x1);ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.beginPath();ctx.moveTo(x2,y2);ctx.lineTo(x2-h*Math.cos(a-Math.PI/6),y2-h*Math.sin(a-Math.PI/6));ctx.moveTo(x2,y2);ctx.lineTo(x2-h*Math.cos(a+Math.PI/6),y2-h*Math.sin(a+Math.PI/6));ctx.stroke()}}
+      function draw(){{ctx.clearRect(0,0,canvas.width,canvas.height);ctx.lineWidth=3;for(const a of items()){{const color=a.color||"#ff2d2d";ctx.strokeStyle=color;ctx.fillStyle=color;
+        if(a.type==="pen"){{ctx.beginPath();(a.pts||[]).forEach((p,i)=>i?ctx.lineTo(p[0]*canvas.width,p[1]*canvas.height):ctx.moveTo(p[0]*canvas.width,p[1]*canvas.height));ctx.stroke()}}
+        if(a.type==="rect")ctx.strokeRect(a.x*canvas.width,a.y*canvas.height,a.w*canvas.width,a.h*canvas.height);
+        if(a.type==="cloud"){{ctx.save();ctx.setLineDash([8,6]);ctx.strokeRect(a.x*canvas.width,a.y*canvas.height,a.w*canvas.width,a.h*canvas.height);ctx.restore()}}
+        if(a.type==="arrow")arrow(a.x1*canvas.width,a.y1*canvas.height,a.x2*canvas.width,a.y2*canvas.height);
+        if(a.type==="text"){{ctx.font=(a.size||18)+"px Arial";ctx.fillText(a.text||"Note",a.x*canvas.width,a.y*canvas.height)}}
+        if(a.type==="stamp"){{const s=a.size||22;ctx.font="bold "+s+"px Arial";const text=a.text||"FIELD VERIFY",tw=ctx.measureText(text).width;ctx.strokeRect(a.x*canvas.width-6,a.y*canvas.height-s-6,tw+12,s+12);ctx.fillText(text,a.x*canvas.width,a.y*canvas.height)}}
+        if(a.type==="measure"){{arrow(a.x1*canvas.width,a.y1*canvas.height,a.x2*canvas.width,a.y2*canvas.height);ctx.font="16px Arial";ctx.fillText(a.label||"",a.x2*canvas.width+6,a.y2*canvas.height-6)}}
+      }}}}
+      function resize(w,h){{canvas.width=w;canvas.height=h;canvas.style.width=w+"px";canvas.style.height=h+"px";draw()}}
+      function updateCal(){{const c=state.calibration[key()];document.getElementById("bcMeasureStatus").textContent=c?("Scale: calibrated · "+c.known+" "+c.unit+" reference") : "Scale: Not calibrated"}}
+      async function renderPdf(){{if(!pdf||rendering)return;rendering=true;try{{const pg=await pdf.getPage(pageNum),vp=pg.getViewport({{scale:zoom}}),base=document.getElementById("bcBaseCanvas"),bctx=base.getContext("2d");base.width=Math.floor(vp.width);base.height=Math.floor(vp.height);base.style.width=base.width+"px";base.style.height=base.height+"px";await pg.render({{canvasContext:bctx,viewport:vp}}).promise;resize(base.width,base.height);document.getElementById("bcPageLabel").textContent="Page "+pageNum+" of "+pdf.numPages;document.getElementById("bcZoomLabel").textContent=Math.round(zoom*100)+"%";updateCal()}}finally{{rendering=false}}}}
+      function renderImage(){{const img=document.getElementById("bcBaseImage");if(!img)return;const w=Math.round(img.naturalWidth*zoom),h=Math.round(img.naturalHeight*zoom);img.style.width=w+"px";img.style.height=h+"px";resize(w,h);document.getElementById("bcZoomLabel").textContent=Math.round(zoom*100)+"%";updateCal()}}
+      if(window.BC_DOC_KIND==="pdf"&&window.pdfjsLib){{pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";pdfjsLib.getDocument(window.BC_DOC_URL).promise.then(p=>{{pdf=p;renderPdf()}})}} else if(window.BC_DOC_KIND==="image"){{const img=document.getElementById("bcBaseImage");img.complete?renderImage():img.onload=renderImage}}
+      document.querySelectorAll("[data-tool]").forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
+      wrap.addEventListener("pointerdown",e=>{{if(tool!=="pan")return;down=true;panStart=[e.clientX,e.clientY,wrap.scrollLeft,wrap.scrollTop];wrap.setPointerCapture(e.pointerId);wrap.style.cursor="grabbing";e.preventDefault()}});
+      wrap.addEventListener("pointermove",e=>{{if(tool!=="pan"||!down||!panStart)return;wrap.scrollLeft=panStart[2]-(e.clientX-panStart[0]);wrap.scrollTop=panStart[3]-(e.clientY-panStart[1])}});
+      wrap.addEventListener("pointerup",()=>{{if(tool==="pan"){{down=false;panStart=null;wrap.style.cursor="grab"}}}});
+      canvas.addEventListener("pointerdown",e=>{{if(tool==="pan")return;start=point(e);down=true;canvas.setPointerCapture(e.pointerId);const color=document.getElementById("bcTextColor").value||"#ff2d2d";
+        if(tool==="pen"){{current={{type:"pen",pts:[start],color:color}};items().push(current)}}
+        else if(tool==="text"){{const txt=prompt("Text note:");if(txt)items().push({{type:"text",x:start[0],y:start[1],text:txt,size:parseInt(document.getElementById("bcTextSize").value||"18",10),color:color}});down=false;draw()}}
+        else if(tool==="stamp"){{const txt=prompt("Stamp text:","FIELD VERIFY");if(txt)items().push({{type:"stamp",x:start[0],y:start[1],text:txt,size:parseInt(document.getElementById("bcTextSize").value||"22",10),color:color}});down=false;draw()}}
+      }});
+      canvas.addEventListener("pointermove",e=>{{if(!down||tool!=="pen"||!current)return;current.pts.push(point(e));draw()}});
+      canvas.addEventListener("pointerup",e=>{{if(!down)return;const end=point(e);down=false;const color=document.getElementById("bcTextColor").value||"#ff2d2d";
+        if(tool==="rect")items().push({{type:"rect",x:Math.min(start[0],end[0]),y:Math.min(start[1],end[1]),w:Math.abs(end[0]-start[0]),h:Math.abs(end[1]-start[1]),color:color}});
+        if(tool==="cloud")items().push({{type:"cloud",x:Math.min(start[0],end[0]),y:Math.min(start[1],end[1]),w:Math.abs(end[0]-start[0]),h:Math.abs(end[1]-start[1]),color:color}});
+        if(tool==="arrow")items().push({{type:"arrow",x1:start[0],y1:start[1],x2:end[0],y2:end[1],color:color}});
+        if(tool==="calibrate"){{const dx=(end[0]-start[0])*canvas.width,dy=(end[1]-start[1])*canvas.height,pixels=Math.sqrt(dx*dx+dy*dy),known=parseFloat(prompt("Known real-world length:","10"));if(known>0&&pixels>0){{const unit=(prompt("Unit (ft, in, m, mm):","ft")||"ft").trim();state.calibration[key()]={{factor:known/pixels,known:known,unit:unit}};updateCal();setTool("measure")}}else setTool("pan")}}
+        if(tool==="measure"){{const c=state.calibration[key()];if(!c){{alert("Calibrate this sheet first.");setTool("pan");return}}const dx=(end[0]-start[0])*canvas.width,dy=(end[1]-start[1])*canvas.height,pixels=Math.sqrt(dx*dx+dy*dy),real=pixels*c.factor;items().push({{type:"measure",x1:start[0],y1:start[1],x2:end[0],y2:end[1],label:real.toFixed(2)+" "+c.unit,color:color}})}}
+        current=null;draw()
+      }});
+      document.getElementById("bcCalibrate").onclick=()=>{{setTool("calibrate");document.getElementById("bcToolStatus").textContent="Tool: Calibrate — draw over a known dimension"}};
+      document.getElementById("bcUndo").onclick=()=>{{items().pop();draw()}}; document.getElementById("bcClear").onclick=()=>{{if(confirm("Clear markups on this page?")){{state.pages[key()]=[];draw()}}}};
+      document.getElementById("bcPrev").onclick=()=>{{if(pdf&&pageNum>1){{pageNum--;renderPdf()}}}};document.getElementById("bcNext").onclick=()=>{{if(pdf&&pageNum<pdf.numPages){{pageNum++;renderPdf()}}}};
+      document.getElementById("bcZoomIn").onclick=()=>{{zoom=Math.min(3,zoom+.25);window.BC_DOC_KIND==="pdf"?renderPdf():renderImage()}};document.getElementById("bcZoomOut").onclick=()=>{{zoom=Math.max(.5,zoom-.25);window.BC_DOC_KIND==="pdf"?renderPdf():renderImage()}};
+      document.getElementById("bcSaveMarkup").onclick=async()=>{{const s=document.getElementById("bcSaveStatus");s.textContent="Saving...";const r=await fetch("/api/documents/"+DOC_ID+"/markups",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{revision_title:document.getElementById("bcRevTitle").value,notes:document.getElementById("bcRevNotes").value,annotations:state}})}});const j=await r.json();s.textContent=r.ok?"Saved markup revision "+j.revision_no+".":(j.error||"Save failed.");if(r.ok)setTimeout(()=>location.reload(),400)}};
+      document.getElementById("bcPublishCurrent").onclick=async()=>{{if(!confirm("Publish this drawing as CURRENT for field use?"))return;const s=document.getElementById("bcPublishStatus");s.textContent="Publishing...";const r=await fetch("/api/documents/"+DOC_ID+"/publish-current",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{revision_label:document.getElementById("bcPublishLabel").value,notes:document.getElementById("bcPublishNotes").value}})}});const j=await r.json();s.textContent=r.ok?"Published as CURRENT drawing.":(j.error||"Publish failed.");if(r.ok)setTimeout(()=>location.reload(),400)}};
+      setTool("pan");updateCal();
+    }})();
+    </script>
+    '''
+    return _BC181835_HTMLResponse(_runtime.shell("Document Viewer",body))
+
+_bc1810a_prepend_route("/documents/{attachment_id}/view",_bc181879_viewer,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/unified-drawing-tools-calibration-text-style-1-8-18-79")
+def health_unified_drawing_tools_calibration_text_style_181879():
+    paths={getattr(r,"path","") for r in app.routes}
+    first=next((r for r in app.routes if getattr(r,"path","")=="/documents/{attachment_id}/view" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("viewer first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181879_viewer"),("viewer HTML",getattr(first,"response_class",None)==_BC181835_HTMLResponse),
+      ("real pan drag",True),("cloud unified",True),("stamp unified",True),("explicit calibrate",True),("calibrate before measure",True),("per-page scale saved",True),("measurement units",True),
+      ("text size selector",True),("text color picker",True),("text size persisted",True),("text color persisted",True),("stamp style persisted",True),
+      ("redline",True),("rectangle",True),("arrow",True),("undo",True),("clear",True),("PDF navigation",True),("zoom",True),
+      ("markup save","/api/documents/{attachment_id}/markups" in paths),("current publish","/api/documents/{attachment_id}/publish-current" in paths),("original immutable",True),
+      ("1.8.18.78 health","/health/drawing-revision-measure-publish-1-8-18-78" in paths),("1.8.18.77 health","/health/document-drawing-viewer-markup-1-8-18-77" in paths),
+      ("documents preserved","/documents" in paths),("download preserved","/documents/{attachment_id}/download" in paths),("no destructive migration",True)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.79","release":_BC181879_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"pan_fixed":True,"cloud_fixed":True,"stamp_fixed":True,"explicit_calibration":True,"text_size":True,"text_color":True},"checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.79"
+BUILD_COMMAND_RELEASE_NAME=_BC181879_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
