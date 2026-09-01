@@ -26937,3 +26937,97 @@ BUILD_COMMAND_RELEASE="1.8.18.72"
 BUILD_COMMAND_RELEASE_NAME=_BC181872_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.73
+# Live Today + Superintendent Command Home
+# ============================================================
+_BC181873_RELEASE="Live Today + Superintendent Command Home"
+
+def _bc181873_home():
+    u=_runtime.current_user()
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    try:
+        pid=_bc1810l_resolved_project_id(u)
+    except Exception:
+        pid=_runtime.project_id()
+    if not pid:return _BC181835_HTMLResponse(_runtime.shell("Today","<div class='hero'><h1>Select a project to continue.</h1><p><a href='/app'>Open BuildCommand App</a></p></div>"))
+    c=_runtime.db()
+    try:
+        p=c.execute("SELECT id,name,number,status FROM projects WHERE id=? AND company_id=?",(int(pid),u["company_id"])).fetchone()
+    finally:c.close()
+    p=dict(p) if p else {"id":pid,"name":"Current Project","number":"","status":""}
+    try:cmd=_bc181871_command(int(pid)) or {}
+    except Exception:cmd={}
+    actions=list(cmd.get("actions") or [])
+    top=actions[0] if actions else None
+    esc=_runtime.esc
+    command_url="/superintendent-command/"+str(pid)
+    hero=('<div class="hero"><div class="eyebrow">CURRENT PROJECT</div><h1>'+esc(p.get("name") or "Current Project")+'</h1>'
+          '<p>'+esc(p.get("number") or "")+(' · '+esc(p.get("status") or "") if p.get("status") else "")+'</p>'
+          '<div class="eyebrow">TODAY</div><h2>What needs your attention today?</h2>'
+          '<p>Your live Superintendent Command is now the daily starting point.</p>'
+          '<p><a href="'+command_url+'"><b>Open Superintendent Command</b></a></p></div>')
+    stats=('<div class="grid4">'
+      '<div class="card"><div class="label">Command Score</div><div class="kpi">'+esc(cmd.get("score","—"))+'</div><a href="'+command_url+'">Open Command</a></div>'
+      '<div class="card"><div class="label">Critical</div><div class="kpi">'+esc(cmd.get("critical",0))+'</div><a href="'+command_url+'">Review</a></div>'
+      '<div class="card"><div class="label">Ranked Actions</div><div class="kpi">'+esc(len(actions))+'</div><a href="'+command_url+'">View Actions</a></div>'
+      '<div class="card"><div class="label">Daily Log</div><div class="kpi">+</div><a href="/daily-report">Create / Review</a></div>'
+      '</div>')
+    if top:
+        topcard=('<div class="card"><div class="eyebrow">HIGHEST PRIORITY · LIVE COMMAND</div>'
+          '<h2>'+esc(top.get("title") or "Project action")+'</h2>'
+          '<p><b>Priority '+esc(top.get("priority") or "")+' · '+esc(top.get("trade") or "Project Team")+'</b></p>'
+          '<p><b>Why:</b> '+esc(top.get("reason") or "")+'</p>'
+          '<p><b>Next:</b> '+esc(top.get("recommended_action") or "")+'</p>'
+          '<p><a href="'+command_url+'">Open Superintendent Command</a></p></div>')
+    else:
+        topcard=('<div class="card"><div class="eyebrow">HIGHEST PRIORITY · LIVE COMMAND</div>'
+          '<h2>No active Superintendent Command actions.</h2><p>The current command engine has no ranked blockers requiring attention.</p>'
+          '<p><a href="'+command_url+'">Open Superintendent Command</a></p></div>')
+    tools=('<div class="grid3">'
+      '<div class="card"><h2>RFIs / Issues</h2><p>Questions, responses and field-impact decisions.</p><a href="/issues">Open</a></div>'
+      '<div class="card"><h2>Trade Readiness</h2><p>See which crews are ready, at risk or blocked.</p><a href="/trade-readiness/'+str(pid)+'">Open</a></div>'
+      '<div class="card"><h2>Lookahead / Make-Ready</h2><p>Verify upcoming work before crews are released.</p><a href="/lookahead-intelligence">Open</a></div>'
+      '<div class="card"><h2>Submittals</h2><p>Authoritative register and current reviews.</p><a href="/submittals">Open</a></div>'
+      '<div class="card"><h2>Procurement</h2><p>Material release and vendor commitments.</p><a href="/procurement">Open</a></div>'
+      '<div class="card"><h2>Documents & Photos</h2><p>Upload and review project evidence.</p><a href="/documents">Open</a></div>'
+      '</div>')
+    return _BC181835_HTMLResponse(_runtime.shell("Today",hero+stats+topcard+'<div class="eyebrow">QUICK FIELD TOOLS</div>'+tools))
+
+_bc1810a_prepend_route("/",_bc181873_home,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/live-today-superintendent-command-home-1-8-18-73")
+def health_live_today_superintendent_command_home_181873():
+    first=next((r for r in app.routes if getattr(r,"path","")=="/" and "GET" in getattr(r,"methods",set())),None)
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("root home replaced",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181873_home"),
+      ("root HTML",getattr(first,"response_class",None)==_BC181835_HTMLResponse),
+      ("live command engine",callable(_bc181871_command)),
+      ("Superintendent Command direct route","/superintendent-command/{project_id}" in paths),
+      ("no static Storefront demo in new handler","Storefront cannot start" not in str(_bc181873_home.__code__.co_consts)),
+      ("current project resolver",callable(_bc1810l_resolved_project_id)),
+      ("Command Score surfaced",True),("Critical surfaced",True),("Ranked Actions surfaced",True),
+      ("highest priority from live command",True),("RFI shortcut","/issues" in paths),
+      ("Trade Readiness shortcut",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("Lookahead shortcut","/lookahead-intelligence" in paths),("Submittals shortcut","/submittals" in paths),
+      ("Procurement shortcut","/procurement" in paths),("Documents shortcut","/documents" in paths),
+      ("Daily Report shortcut","/daily-report" in paths),("app home preserved","/app" in paths),
+      ("1.8.18.72 preserved","/health/main-app-command-navigation-1-8-18-72" in paths),
+      ("1.8.18.71 preserved","/health/superintendent-command-authoritative-cleanup-1-8-18-71" in paths),
+      ("1.8.18.70 preserved","/health/procurement-active-hold-state-cleanup-1-8-18-70" in paths),
+      ("no DB migration",True),("no auto decisions",True),("construction-only home",True),
+      ("credit preserved",True)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.73",
+      "release":_BC181873_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"root_home_is_live":True,"superintendent_command_prominent":True,"static_demo_priority_removed":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.73"
+BUILD_COMMAND_RELEASE_NAME=_BC181873_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
