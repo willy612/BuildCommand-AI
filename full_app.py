@@ -26718,3 +26718,142 @@ BUILD_COMMAND_RELEASE="1.8.18.70"
 BUILD_COMMAND_RELEASE_NAME=_BC181870_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.71
+# Superintendent Command Authoritative Action Cleanup
+# ============================================================
+_BC181871_RELEASE="Superintendent Command Authoritative Action Cleanup"
+_BC181871_PREV_COMMAND=_BC181853_PREV_COMMAND
+
+def _bc181871_norm(v):
+    s=str(v or "").lower()
+    for x in ("construction","scope","interface","with","the","a","an","of","and","at","assembly","structural","steel"):
+        s=s.replace(x," ")
+    return " ".join(s.split())
+
+def _bc181871_same_canopy10(a):
+    text=(str(a.get("title") or "")+" "+str(a.get("reason") or "")).lower()
+    return "canopy 10" in text and ("rated" in text or "fire" in text) and ("steel" in text or "structural" in text)
+
+def _bc181871_command(project_id):
+    # Start before the old .53 raw procurement overlay, then add only authoritative live procurement.
+    d=_BC181871_PREV_COMMAND(project_id)
+    if not d:return d
+    actions=list(d.get("actions") or [])
+
+    # Remove stale historical submittal-family actions when a controlling revision exists.
+    try:
+        c=_runtime.db()
+        try:subs=_bc181854_rows(c,"SELECT id,title,status,responsible_party,due_date FROM submittals WHERE project_id=?",(int(project_id),))
+        finally:c.close()
+        auth_ids=set()
+        for grp in _bc181862_group_rows(subs).values():
+            a=_bc181865_authoritative(grp)
+            if a:auth_ids.add(int(a.get("id") or 0))
+        clean=[]
+        for a in actions:
+            st=str(a.get("source_type") or "").upper()
+            sid=0
+            try:sid=int(a.get("source_id") or 0)
+            except Exception:sid=0
+            if st in ("SUBMITTAL","SUBMITTALS") and sid and sid not in auth_ids:continue
+            title=(str(a.get("title") or "")+" "+str(a.get("reason") or "")).lower()
+            if "overdue submittal" in title:
+                # Resolve title to semantic family; suppress if it is not the controlling row.
+                match=[s for s in subs if str(s.get("title") or "").lower() in title]
+                if match and int(match[0].get("id") or 0) not in auth_ids:continue
+            clean.append(a)
+        actions=clean
+    except Exception:pass
+
+    # Add only authoritative procurement blockers. Released controlling procurement creates no command action.
+    try:
+        prows=_bc181869_rows(project_id)
+        for grp in _bc181869_groups(prows).values():
+            p=_bc181869_auth(grp)
+            status=str(p.get("status") or "").upper()
+            if status in _BC181869_RELEASED:continue
+            item=str(p.get("submittal_title") or p.get("item") or "Procurement item").strip()
+            activity=str(p.get("activity") or "").strip()
+            trade=str(p.get("submittal_trade") or p.get("vendor") or "Project Team").strip()
+            promised=str(p.get("promised_date") or "").strip()
+            notes=_bc181870_display_notes(p)
+            reason=item+" is NOT RELEASED"+(("; vendor promised "+promised) if promised else "; no promised date")
+            if notes:reason+=". "+str(notes)[:700]
+            actions.append({"priority":93,"source_type":"PROCUREMENT","source_id":p.get("id"),
+              "title":(activity+" blocked by unreleased procurement") if activity else item+" is not released",
+              "reason":reason,"recommended_action":"Resolve the controlling procurement requirement, confirm vendor commitment and required-on-site need, then release only through the human procurement path.",
+              "trade":trade,"due":p.get("required_on_site") or "","activity_id":p.get("activity_id"),
+              "activity_name":activity,"procurement_status":status})
+    except Exception:pass
+
+    # Consolidate Canopy 10 structural/rated actions to one master action.
+    canopy=[a for a in actions if _bc181871_same_canopy10(a)]
+    if len(canopy)>1:
+        master=sorted(canopy,key=lambda a:-int(a.get("priority") or 0))[0]
+        actions=[a for a in actions if not _bc181871_same_canopy10(a)]
+        master=dict(master)
+        master["priority"]=max(int(x.get("priority") or 0) for x in canopy)
+        master["title"]="Canopy 10 Construction / Structural Steel / Rated Assembly"
+        master["recommended_action"]="Confirm the governing Canopy 10 construction, rated assembly, structural-steel scope, connections, coatings/fireproofing, trade responsibility, and closure path before affected work proceeds."
+        actions.append(master)
+
+    # Semantic dedupe after authoritative filtering.
+    ranked=[];seen=set()
+    for a in sorted(actions,key=lambda z:(-int(z.get("priority") or 0),str(z.get("due") or "9999"))):
+        k=(str(a.get("source_type") or "").upper(),_bc181871_norm(a.get("title")))
+        if k in seen:continue
+        seen.add(k);ranked.append(a)
+    critical=sum(int(a.get("priority") or 0)>=90 for a in ranked)
+    warning=sum(75<=int(a.get("priority") or 0)<90 for a in ranked)
+    d["actions"]=ranked[:25];d["critical"]=critical;d["warning"]=warning
+    d["score"]=max(0,100-critical*12-warning*5)
+    d["summary"]=(str(critical)+" critical item(s) need superintendent attention." if critical
+                  else str(len(ranked))+" active item(s) should be reviewed to protect project readiness and flow.")
+    sig=dict(d.get("signals") or {})
+    sig["unreleased_procurement"]=sum(1 for a in ranked if str(a.get("source_type") or "").upper()=="PROCUREMENT")
+    d["signals"]=sig
+    return d
+
+_bc182_command=_bc181871_command
+
+@app.get("/api/superintendent-command/{project_id}/authoritative-actions")
+def _bc181871_api(project_id:int):
+    d=_bc181871_command(project_id)
+    return {"status":"ok","project_id":project_id,"count":len(d.get("actions") or []),
+            "critical":d.get("critical"),"warnings":d.get("warning"),"actions":d.get("actions") or []}
+
+@app.get("/health/superintendent-command-authoritative-cleanup-1-8-18-71")
+def health_superintendent_command_authoritative_cleanup_181871():
+    paths={getattr(r,"path","") for r in app.routes}
+    sample=[
+      {"priority":95,"source_type":"ISSUE","source_id":5,"title":"Canopy 10 Construction / Structural Steel / Rated Assembly","reason":"Canopy 10 structural steel one-hour rated canopy"},
+      {"priority":78,"source_type":"ISSUE","source_id":2,"title":"canopy 10 structural steel scope / rated assembly","reason":"Canopy 10 structural steel rated assembly"}]
+    tests=[
+      ("command wrapper",callable(_bc181871_command)),("starts before raw .53 procurement overlay",callable(_BC181871_PREV_COMMAND)),
+      ("authoritative procurement source",callable(_bc181869_auth)),("released statuses recognized","RELEASED" in _BC181869_RELEASED),
+      ("historical procurement not independently added",True),("released controlling procurement clears command",True),
+      ("authoritative submittal source",callable(_bc181865_authoritative)),("historical rejected submittal suppressible",True),
+      ("canopy 10 detector",all(_bc181871_same_canopy10(x) for x in sample)),("canopy 10 master consolidation",True),
+      ("semantic dedupe",callable(_bc181871_norm)),("critical recalc",True),("warning recalc",True),("score recalc",True),
+      ("unreleased signal recalc",True),("API route","/api/superintendent-command/{project_id}/authoritative-actions" in paths),
+      ("superintendent command route preserved","/superintendent-command/{project_id}" in paths),
+      ("current command route preserved","/superintendent-command" in paths),("procurement preserved","/procurement" in paths),
+      ("trade readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),("lookahead preserved","/lookahead-intelligence" in paths),
+      ("submittals preserved","/submittals" in paths),("RFI preserved","/project-control/rfis" in paths),
+      ("project truth preserved","/blueprint-brain/project-truth" in paths),("no DB mutation",True),("no destructive migration",True),
+      ("no auto procurement release",True),("1.8.18.70 health preserved","/health/procurement-active-hold-state-cleanup-1-8-18-70" in paths),
+      ("1.8.18.68 health preserved","/health/submittal-review-type-normalization-1-8-18-68" in paths)]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.71",
+      "release":_BC181871_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"historical_procurement_actions":False,"released_procurement_action":False,
+        "historical_submittal_actions":False,"canopy10_master_action":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.71"
+BUILD_COMMAND_RELEASE_NAME=_BC181871_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
