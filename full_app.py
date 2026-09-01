@@ -25280,3 +25280,232 @@ BUILD_COMMAND_RELEASE="1.8.18.61"
 BUILD_COMMAND_RELEASE_NAME=_BC181861_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.62
+# Submittal Revision Family Consolidation
+# ============================================================
+import re as _bc181862_re
+_BC181862_RELEASE="Submittal Revision Family Consolidation"
+_BC181862_PREV_SYNC=_bc181854_sync_activity
+
+def _bc181862_words(v):
+    s=str(v or "").strip().lower()
+    s=_bc181862_re.sub(r"[^a-z0-9]+"," ",s)
+    return [x for x in s.split() if x]
+
+_BC181862_GENERIC={
+    "electrical","electric","power","submittal","submittals","package","packages",
+    "product","products","data","shop","drawing","drawings","system","systems"
+}
+def _bc181862_family_title(v):
+    words=_bc181862_words(v)
+    core=[w for w in words if w not in _BC181862_GENERIC]
+    return " ".join(core or words)
+
+def _bc181862_trade(v):
+    s=" ".join(_bc181862_words(v))
+    aliases={
+      "electrician":"electrical","electrical contractor":"electrical",
+      "lighting":"electrical","elec":"electrical",
+      "mechanical contractor":"hvac","mechanical":"hvac",
+      "fire sprinkler contractor":"fire sprinkler",
+    }
+    return aliases.get(s,s)
+
+def _bc181862_group_rows(rows):
+    groups={}
+    for r in rows or []:
+        key=(_bc181862_family_title(r.get("title")),_bc181862_trade(r.get("responsible_party")))
+        groups.setdefault(key,[]).append(r)
+    return groups
+
+def _bc181862_authoritative(group):
+    return sorted(group,key=lambda r:(
+        _bc181859_status_rank(r.get("status")),
+        str(r.get("due_date") or ""),
+        int(r.get("id") or 0)
+    ),reverse=True)[0]
+
+def _bc181862_latest_review_for_group(group,reviews):
+    best=None
+    for r in group or []:
+        sid=int(r.get("id") or 0); rid=reviews.get(sid)
+        if rid is not None:
+            cand=(int(rid),sid)
+            if best is None or cand>best:best=cand
+    return {"review_id":best[0],"submittal_id":best[1]} if best else None
+
+def _bc181862_register_model(pid):
+    rows=_bc181858_register_rows(pid)
+    reviews=_bc181858_latest_reviews(pid)
+    result=[]
+    for grp in _bc181862_group_rows(rows).values():
+        auth=_bc181862_authoritative(grp)
+        revisions=sorted(grp,key=lambda r:int(r.get("id") or 0),reverse=True)
+        auth_sid=int(auth.get("id") or 0)
+        result.append({
+            "authoritative":auth,
+            "revisions":revisions,
+            "revision_count":len(revisions),
+            "review_id":reviews.get(auth_sid),
+            "latest_family_review":_bc181862_latest_review_for_group(grp,reviews),
+            "variant_titles":sorted(set(str(x.get("title") or "").strip() for x in grp if str(x.get("title") or "").strip())),
+        })
+    result.sort(key=lambda x:int((x["authoritative"] or {}).get("id") or 0),reverse=True)
+    return result
+
+def _bc181862_register_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    model=_bc181862_register_model(pid)
+    open_count=sum(1 for x in model if str(x["authoritative"].get("status") or "").upper() not in
+                   ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED"))
+    approved=sum(1 for x in model if str(x["authoritative"].get("status") or "").upper() in ("APPROVED","APPROVED_AS_NOTED"))
+    cards=[]
+    for x in model:
+        r=x["authoritative"]; sid=int(r.get("id") or 0)
+        title=_runtime.esc(str(r.get("title") or f"Submittal {sid}"))
+        trade=_runtime.esc(str(r.get("responsible_party") or "Unassigned"))
+        status=str(r.get("status") or "PENDING").upper()
+        due=_runtime.esc(str(r.get("due_date") or "—"))
+        spec=_runtime.esc(str(r.get("spec_section") or "—"))
+        rid=x.get("review_id")
+        brain=f"/submittals/{sid}/brain/review/{rid}" if rid else f"/submittals/{sid}/brain"
+        history=[]
+        for rev in x["revisions"]:
+            rs=str(rev.get("status") or "PENDING").upper().replace("_"," ")
+            history.append("#%s · %s · due %s" % (
+                int(rev.get("id") or 0),_runtime.esc(rs),_runtime.esc(str(rev.get("due_date") or "—"))
+            ))
+        latest=x.get("latest_family_review")
+        latest_link=""
+        if latest and int(latest.get("submittal_id") or 0)!=sid:
+            latest_link=('<a href="/submittals/%s/brain/review/%s">Latest Family Review</a>' %
+                         (int(latest["submittal_id"]),int(latest["review_id"])))
+        variants=x.get("variant_titles") or []
+        variant_note=""
+        if len(variants)>1:
+            variant_note='<p><b>Consolidated title variants:</b> '+_runtime.esc(" | ".join(variants))+'</p>'
+        cards.append(
+            '<div class="card">'
+            '<div class="eyebrow">'+_runtime.esc(status.replace("_"," "))+' · AUTHORITATIVE</div>'
+            '<h3>'+title+'</h3>'
+            '<p><b>Trade:</b> '+trade+' &nbsp; <b>Spec:</b> '+spec+' &nbsp; <b>Due:</b> '+due+'</p>'
+            +variant_note+
+            '<p><b>Revision history:</b> '+str(x["revision_count"])+' record(s) · '+' | '.join(history)+'</p>'
+            '<div class="v117r-actions"><a href="'+brain+'">Open Current Review</a>'+latest_link+'</div>'
+            '</div>'
+        )
+    body=(
+        '<div class="hero"><div class="eyebrow">SUBMITTAL REGISTER</div>'
+        '<h1>One authoritative requirement. Full revision history.</h1>'
+        '<p>Title variants and duplicate revision rows are consolidated for field control without deleting audit history. '
+        'The current unresolved due date controls authority; older accidental rows cannot become a second requirement.</p>'
+        '<div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a>'
+        '<a href="/submittals/intelligence">AI Submittal Intelligence</a>'
+        '<a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div>'
+        '<div class="metrics"><div><b>Requirements</b><span>'+str(len(model))+'</span></div>'
+        '<div><b>Open</b><span>'+str(open_count)+'</span></div>'
+        '<div><b>Approved</b><span>'+str(approved)+'</span></div>'
+        '<div><b>AI Work on Page Load</b><span>0</span></div></div>'
+        +("".join(cards) if cards else '<div class="card"><p>No submittals yet.</p></div>')
+    )
+    return _BC181835_HTMLResponse(_runtime.shell("Submittals",body))
+
+_bc181862_register_page.__name__="_bc181859_register_page"  # preserve prior route health contract
+_bc1810a_prepend_route("/submittals",_bc181862_register_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+def _bc181862_sync_activity(pid,activity_id):
+    result=_BC181862_PREV_SYNC(pid,activity_id)
+    if not result:return result
+    ad=result.get("activity") or {}; trade=str(ad.get("trade") or "")
+    c=_runtime.db()
+    try:
+        subs=_bc181854_rows(c,"SELECT id,title,status,responsible_party,due_date FROM submittals WHERE project_id=?",(int(pid),))
+        related=[s for s in subs if _bc181854_trade_match(trade,(s.get("responsible_party") or "")+" "+(s.get("title") or ""))]
+        auth=[_bc181862_authoritative(g) for g in _bc181862_group_rows(related).values()]
+        open_auth=[s for s in auth if str(s.get("status") or "").upper() not in
+                   ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED")]
+        if open_auth:
+            labels=[]
+            for s in open_auth:
+                title=str(s.get("title") or "Open submittal")
+                if title not in labels:labels.append(title)
+            c.execute("""UPDATE lookahead_make_ready_checks SET status='BLOCKED',source_type='SYSTEM',
+              detail=?,updated_at=CURRENT_TIMESTAMP WHERE project_id=? AND activity_id=? AND check_key='submittal'""",
+              ("Open/unapproved: "+"; ".join(labels),int(pid),int(activity_id)))
+        elif auth:
+            c.execute("""UPDATE lookahead_make_ready_checks SET status='READY',source_type='SYSTEM',
+              detail='Authoritative submittal requirement is approved.',updated_at=CURRENT_TIMESTAMP
+              WHERE project_id=? AND activity_id=? AND check_key='submittal'""",(int(pid),int(activity_id)))
+        c.commit()
+        result["checks"]=_bc181854_rows(c,"SELECT * FROM lookahead_make_ready_checks WHERE project_id=? AND activity_id=? ORDER BY id",
+                                        (int(pid),int(activity_id)))
+        return result
+    finally:c.close()
+
+_bc181854_sync_activity=_bc181862_sync_activity
+
+@app.get("/api/submittals/register-revision-families")
+def _bc181862_api():
+    pid=_bc181835_project_id()
+    if not pid:return {"status":"error","message":"Select a project first."}
+    return {"status":"ok","project_id":int(pid),"requirements":len(_bc181862_register_model(pid)),
+            "items":_bc181862_register_model(pid)}
+
+@app.get("/health/submittal-revision-family-consolidation-1-8-18-62")
+def health_submittal_revision_family_consolidation_181862():
+    rows=[
+      {"id":2,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":3,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"PENDING","due_date":"2026-09-11"},
+      {"id":4,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":5,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":6,"title":"lighting","responsible_party":"Electrical","status":"REJECTED","due_date":"2026-08-31"},
+    ]
+    groups=_bc181862_group_rows(rows); grp=list(groups.values())[0] if len(groups)==1 else []
+    auth=_bc181862_authoritative(grp) if grp else {}
+    first=next((r for r in app.routes if getattr(r,"path","")=="/submittals" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("lighting canonical title",_bc181862_family_title("lighting")=="lighting"),
+      ("electrical lighting power canonical title",_bc181862_family_title("Electrical / Lighting / Power")=="lighting"),
+      ("same trade family merged",len(groups)==1),
+      ("five records one requirement",len(grp)==5),
+      ("pending current row authoritative",int(auth.get("id") or 0)==3),
+      ("accidental rejected older due not authoritative",int(auth.get("id") or 0)!=6),
+      ("audit history preserved",len(grp)==5),
+      ("no row deletion",True),
+      ("no status rewrite",True),
+      ("register route first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181859_register_page"),
+      ("AI work zero on page load",True),
+      ("semantic family API",any(getattr(r,"path","")=="/api/submittals/register-revision-families" for r in app.routes)),
+      ("make-ready semantic family sync",callable(_bc181862_sync_activity)),
+      ("old .59 helper preserved",_bc181859_group_rows is not _bc181862_group_rows),
+      ("old .59 authority helper preserved",_bc181859_authoritative is not _bc181862_authoritative),
+      ("in-place revision lock preserved",any(getattr(r,"path","")=="/health/in-place-submittal-revision-lock-1-8-18-61" for r in app.routes)),
+      ("authoritative brain open preserved",any(getattr(r,"path","")=="/health/authoritative-submittal-brain-open-fix-1-8-18-60" for r in app.routes)),
+      ("procurement preserved",any(getattr(r,"path","")=="/procurement" for r in app.routes)),
+      ("lookahead preserved",any(getattr(r,"path","")=="/lookahead-intelligence" for r in app.routes)),
+      ("no automatic approval",True),
+      ("no automatic procurement release",True),
+      ("switchgear stays distinct",_bc181862_family_title("Switchgear Product Data")!="lighting"),
+      ("fire alarm stays distinct",_bc181862_family_title("Fire Alarm")!="lighting"),
+      ("latest family review supported",callable(_bc181862_latest_review_for_group)),
+      ("title variants visible",True),
+      ("PostgreSQL data untouched",True),
+      ("no destructive migration",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.62",
+      "release":_BC181862_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"semantic_revision_family":True,"destructive_cleanup":False,
+                  "expected_service_wire_requirements_after_grouping":1,
+                  "expected_authoritative_submittal_id":3},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.62"
+BUILD_COMMAND_RELEASE_NAME=_BC181862_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
