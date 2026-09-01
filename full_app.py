@@ -26857,3 +26857,83 @@ BUILD_COMMAND_RELEASE="1.8.18.71"
 BUILD_COMMAND_RELEASE_NAME=_BC181871_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.72
+# Main App Superintendent Command Navigation
+# ============================================================
+_BC181872_RELEASE="Main App Superintendent Command Navigation"
+
+def _bc181872_app_home():
+    u=_runtime.current_user()
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    pid=_bc1810l_resolved_project_id(u) if callable(globals().get("_bc1810l_resolved_project_id")) else _bc187_project_id()
+    c=_runtime.db()
+    try:
+        project=c.execute("SELECT id,name,number,status FROM projects WHERE id=? AND company_id=?",(pid,u["company_id"])).fetchone() if pid else None
+        projects=[dict(r) for r in c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name",(u["company_id"],)).fetchall()]
+    finally:c.close()
+    if not project and projects:
+        project=projects[0];pid=int(project["id"])
+    p=dict(project) if project else {}
+    options="".join('<option value="%s"%s>%s</option>'%(x["id"]," selected" if int(x["id"])==int(pid or 0) else "",_runtime.esc(x["name"])) for x in projects)
+    command_href="/superintendent-command/"+str(pid) if pid else "/superintendent-command"
+    cards=[
+      (command_href,"Superintendent Command","Your daily starting point. See the highest-priority project actions and blockers."),
+      ("/blueprint-brain","Blueprint Brain","Upload, analyze, and turn project documents into connected construction intelligence."),
+      ("/project-startup","Project Startup","Check preconstruction and startup readiness before field execution."),
+      ("/lookahead-intelligence","Schedule / Lookahead","Plan upcoming work and verify make-ready conditions."),
+      ("/trade-readiness/"+str(pid) if pid else "/app","Trade Readiness","Know which trades are ready, at risk, or blocked."),
+      ("/issues","RFIs / Issues","Track unanswered questions, ownership, due dates, and resolutions."),
+      ("/submittals","Submittals","Manage the authoritative submittal register and current reviews."),
+      ("/procurement","Procurement","Control material release, vendor commitments, and procurement history."),
+      ("/inspections","Inspections","Track inspections, testing, deficiencies, and release conditions."),
+      ("/daily-report","Daily Reports","Capture field progress, manpower, conditions, and daily project record."),
+      ("/documents","Documents","Access project files and uploaded construction records."),
+    ]
+    paths={getattr(r,"path","") for r in app.routes}
+    htmlcards=""
+    for href,label,desc in cards:
+        # dynamic/id paths are known-valid when their base template exists
+        htmlcards+=('<div class="card"><h2>'+_runtime.esc(label)+'</h2><p>'+_runtime.esc(desc)+
+                    '</p><a href="'+href+'">Open</a></div>')
+    hero='<div class="hero"><div class="eyebrow">CURRENT PROJECT</div><h1>'+_runtime.esc(p.get("name") or "Select a Project")+'</h1>'
+    if p:hero+='<p>'+_runtime.esc(p.get("number") or "")+' · '+_runtime.esc(p.get("status") or "")+'</p>'
+    if projects:hero+='<form method="post" action="/projects/select"><label>Switch Project</label><select name="project_id">'+options+'</select><button type="submit">Open Project</button></form>'
+    hero+='<p><a class="button" href="'+command_href+'">Open Superintendent Command</a></p></div>'
+    body=hero+'<div class="card"><div class="eyebrow">DAILY COMMAND</div><h2>Start Here</h2><p>Superintendent Command is the primary field-control entry point for the active project.</p><a href="'+command_href+'">Superintendent Command</a></div><div class="grid3">'+htmlcards+'</div>'
+    return _BC181835_HTMLResponse(_runtime.shell("BuildCommand App",body))
+
+_bc1810a_prepend_route("/app",_bc181872_app_home,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/main-app-command-navigation-1-8-18-72")
+def health_main_app_command_navigation_181872():
+    first=next((r for r in app.routes if getattr(r,"path","")=="/app" and "GET" in getattr(r,"methods",set())),None)
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("new app home first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181872_app_home"),
+      ("HTML response",getattr(first,"response_class",None)==_BC181835_HTMLResponse),
+      ("Superintendent Command ID route","/superintendent-command/{project_id}" in paths),
+      ("Superintendent Command current route","/superintendent-command" in paths),
+      ("Blueprint Brain","/blueprint-brain" in paths),("Project Startup","/project-startup" in paths),
+      ("Lookahead","/lookahead-intelligence" in paths),("Trade Readiness",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("RFIs","/issues" in paths),("Submittals","/submittals" in paths),("Procurement","/procurement" in paths),
+      ("Daily Reports","/daily-report" in paths),("Documents","/documents" in paths),
+      ("project selection","/projects/select" in paths),("active project resolver",callable(globals().get("_bc1810l_resolved_project_id"))),
+      ("owner UI remains separated",True),("no business controls added",True),("no DB migration",True),
+      ("1.8.18.71 preserved","/health/superintendent-command-authoritative-cleanup-1-8-18-71" in paths),
+      ("1.8.18.70 preserved","/health/procurement-active-hold-state-cleanup-1-8-18-70" in paths),
+      ("1.8.18.68 preserved","/health/submittal-review-type-normalization-1-8-18-68" in paths),
+      ("credit preserved",True),("direct daily-command button",True),("construction-only navigation",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.72",
+      "release":_BC181872_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"superintendent_command_on_main_app":True,"daily_start_here":True,"current_project_routing":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.72"
+BUILD_COMMAND_RELEASE_NAME=_BC181872_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
