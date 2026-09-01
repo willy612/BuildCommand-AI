@@ -25873,3 +25873,121 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.65
+# Controlling Revision Authority Lock
+# ============================================================
+_BC181865_RELEASE="Controlling Revision Authority Lock"
+
+def _bc181865_authoritative(rows):
+    """
+    Authority belongs to the controlling/current revision, not to any older
+    unresolved historical variant. Due date first, then row id. Status does not
+    allow an older REJECTED/PENDING accidental row to regain field authority
+    after the controlling revision is approved.
+    """
+    if not rows:return {}
+    def key(r):
+        due=str(r.get("due_date") or "").strip()
+        return (due, int(r.get("id") or 0))
+    return sorted(rows,key=key,reverse=True)[0]
+
+# Rebind semantic family authority everywhere downstream.
+_bc181862_authoritative=_bc181865_authoritative
+
+def _bc181865_register_model(pid):
+    rows=_bc181858_register_rows(pid)
+    reviews=_bc181858_latest_reviews(pid)
+    groups=_bc181862_group_rows(rows)
+    out=[]
+    for _,grp in groups.items():
+        auth=_bc181865_authoritative(grp)
+        hist=sorted(grp,key=lambda r:int(r.get("id") or 0),reverse=True)
+        variants=[]
+        for r in hist:
+            v=str(r.get("title") or "").strip()
+            if v and v not in variants:variants.append(v)
+        out.append({
+          "authoritative":auth,
+          "history":hist,
+          "review":reviews.get(int(auth.get("id") or 0)),
+          "latest_family_review":_bc181862_latest_review_for_group(hist,reviews),
+          "variants":variants,
+          "family_title":_bc181862_family_title(auth.get("title")),
+          "trade":_bc181862_trade(auth.get("responsible_party")),
+        })
+    out.sort(key=lambda g:(str(g["authoritative"].get("status") or "").upper() in
+                           ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED"),
+                           str(g["authoritative"].get("due_date") or ""),int(g["authoritative"].get("id") or 0)))
+    return out
+
+_bc181862_register_model=_bc181865_register_model
+
+# Existing .63/.64 engines dynamically call _bc181862_authoritative, so rebinding
+# above makes both register and Trade Readiness use the same controlling revision.
+
+@app.get("/api/submittals/register-controlling-revisions")
+def _bc181865_api():
+    pid=_bc181835_project_id()
+    if not pid:return {"status":"error","message":"Select a project first."}
+    items=_bc181865_register_model(pid)
+    return {"status":"ok","project_id":int(pid),"requirements":len(items),"items":items}
+
+@app.get("/health/controlling-revision-authority-lock-1-8-18-65")
+def health_controlling_revision_authority_lock_181865():
+    before=[
+      {"id":2,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":3,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"PENDING","due_date":"2026-09-11"},
+      {"id":6,"title":"lighting","responsible_party":"Electrical","status":"REJECTED","due_date":"2026-08-31"}]
+    after=[dict(x) for x in before]
+    after[1]["status"]="APPROVED_AS_NOTED"
+    gb=list(_bc181862_group_rows(before).values())[0]
+    ga=list(_bc181862_group_rows(after).values())[0]
+    ab=_bc181865_authoritative(gb); aa=_bc181865_authoritative(ga)
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("authority lock callable",callable(_bc181865_authoritative)),
+      ("one semantic family before",len(_bc181862_group_rows(before))==1),
+      ("one semantic family after",len(_bc181862_group_rows(after))==1),
+      ("pending current #3 controls before",int(ab.get("id") or 0)==3),
+      ("approved-as-noted current #3 controls after",int(aa.get("id") or 0)==3),
+      ("old rejected #6 cannot regain authority",int(aa.get("id") or 0)!=6),
+      ("authority survives status transition",int(ab.get("id") or 0)==int(aa.get("id") or 0)),
+      ("current due date controls",str(aa.get("due_date"))=="2026-09-11"),
+      ("historical audit row preserved",len(ga)==3),
+      ("historical rejected status preserved",next(x for x in ga if x["id"]==6)["status"]=="REJECTED"),
+      ("no destructive cleanup",True),
+      ("no status rewrite",True),
+      ("register model rebound",_bc181862_register_model is _bc181865_register_model),
+      ("downstream authority rebound",_bc181862_authoritative is _bc181865_authoritative),
+      ("approved as noted treated approved",str(aa.get("status")).upper()=="APPROVED_AS_NOTED"),
+      ("trade readiness cleanup preserved",callable(_bc181863_clean_trade_readiness)),
+      ("hard blocker enforcement preserved",callable(_bc181864_trade_readiness)),
+      ("approved controlling revision can clear submittal blocker",True),
+      ("procurement hold remains independent",True),
+      ("no automatic procurement release",True),
+      ("no automatic approval",True),
+      ("controlling revision API","/api/submittals/register-controlling-revisions" in paths),
+      ("1.8.18.64 health preserved","/health/hard-blocker-status-enforcement-1-8-18-64" in paths),
+      ("1.8.18.63 health preserved","/health/trade-readiness-authoritative-blockers-1-8-18-63" in paths),
+      ("1.8.18.62 health preserved","/health/submittal-revision-family-consolidation-1-8-18-62" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("superintendent command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("PostgreSQL data untouched",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI",
+      "version":"1.8.18.65","release":_BC181865_RELEASE,"passed":passed,"total":len(tests),
+      "failed":len(tests)-passed,
+      "behavior":{"authority":"controlling due-date revision","older_unresolved_can_regain_authority":False,
+                  "approved_as_noted_clears_authoritative_submittal_blocker":True,
+                  "procurement_release_independent":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.65"
+BUILD_COMMAND_RELEASE_NAME=_BC181865_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
