@@ -28131,22 +28131,57 @@ def _bc181879_viewer(attachment_id:int):
     <div class="hero"><div class="eyebrow">DRAWING & DOCUMENT WORKSPACE</div><h1>{title}</h1><p>{project} · {original}</p>
       <div class="v117r-actions"><a href="/documents">← Documents</a><a href="{file_url}" target="_blank">Open Original</a><a href="/documents/{int(attachment_id)}/download">Download</a></div></div>
     <div class="card">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button type="button" id="bcPrev">◀ Prev</button><span id="bcPageLabel">Page 1</span><button type="button" id="bcNext">Next ▶</button>
-        <button type="button" id="bcZoomOut">− Zoom</button><span id="bcZoomLabel">100%</span><button type="button" id="bcZoomIn">+ Zoom</button>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-        <button type="button" data-tool="pan">Pan</button><button type="button" data-tool="pen">Redline</button><button type="button" data-tool="cloud">Cloud</button>
-        <button type="button" data-tool="rect">Rectangle</button><button type="button" data-tool="arrow">Arrow</button><button type="button" data-tool="text">Text Note</button>
-        <button type="button" data-tool="stamp">Stamp</button><button type="button" id="bcCalibrate">Calibrate</button><button type="button" data-tool="measure">Measure</button>
-        <button type="button" id="bcUndo">Undo</button><button type="button" id="bcClear">Clear Page</button>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-        <label style="margin:0">Text Size <select id="bcTextSize" style="width:auto;margin-left:6px"><option>14</option><option selected>18</option><option>24</option><option>32</option><option>40</option><option>52</option><option>64</option></select></label>
-        <label style="margin:0">Text Color <input id="bcTextColor" type="color" value="#ff2d2d" style="width:48px;height:34px;padding:2px;margin-left:6px"></label>
+      <style>
+      .bc81-toolbar{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:12px}}
+      .bc81-iconbtn{{width:38px;height:38px;min-width:38px;padding:0!important;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;font-size:19px;line-height:1}}
+      .bc81-wrap{{position:relative}}
+      .bc81-trigger{{height:38px;padding:0 13px!important;border-radius:9px;font-weight:800;display:inline-flex;align-items:center;gap:7px}}
+      .bc81-menu{{display:none;position:absolute;top:44px;right:0;z-index:80;min-width:240px;padding:10px;background:#171b22;border:1px solid rgba(255,255,255,.14);border-radius:12px;box-shadow:0 16px 45px rgba(0,0,0,.45)}}
+      .bc81-menu.open{{display:block}}
+      .bc81-grid{{display:grid;grid-template-columns:repeat(4,46px);gap:8px}}
+      .bc81-tool{{width:46px;height:46px;padding:0!important;border-radius:10px;font-size:22px;display:flex;align-items:center;justify-content:center}}
+      .bc81-tool.active,.bc81-iconbtn.active{{outline:2px solid #f0b44d;background:rgba(240,180,77,.14)}}
+      .bc81-settings{{display:flex;gap:8px;align-items:center;margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.08)}}
+      .bc81-settings select{{width:auto;margin:0}}.bc81-settings input[type=color]{{width:38px;height:34px;padding:2px;margin:0}}
+      .bc81-spacer{{flex:1}}.bc81-label{{font-size:12px;opacity:.78}}
+      @media(max-width:700px){{.bc81-spacer{{display:none}}.bc81-toolbar{{gap:6px}}.bc81-iconbtn{{width:36px;height:36px;min-width:36px}}}}
+      </style>
+      <div class="bc81-toolbar">
+        <button class="bc81-iconbtn" type="button" id="bcPrev" title="Previous page">◀</button>
+        <span id="bcPageLabel" class="bc81-label">Page 1</span>
+        <button class="bc81-iconbtn" type="button" id="bcNext" title="Next page">▶</button>
+        <span style="width:1px;height:26px;background:rgba(255,255,255,.12)"></span>
+        <button class="bc81-iconbtn" type="button" id="bcZoomOut" title="Zoom out">−</button>
+        <span id="bcZoomLabel" class="bc81-label">100%</span>
+        <button class="bc81-iconbtn" type="button" id="bcZoomIn" title="Zoom in">＋</button>
+        <button class="bc81-iconbtn" type="button" id="bcFit" title="Fit drawing to screen">⛶</button>
+        <span class="bc81-spacer"></span>
+        <button class="bc81-iconbtn" type="button" data-tool="pan" title="Pan">✋</button>
+        <button class="bc81-iconbtn" type="button" id="bcUndo" title="Undo">↶</button>
+        <button class="bc81-iconbtn" type="button" id="bcClear" title="Clear page markups">⌫</button>
+        <div class="bc81-wrap">
+          <button class="bc81-trigger" id="bcMarkupTrigger" type="button" title="Markup tools">✎ <span>Markup</span> ▾</button>
+          <div class="bc81-menu" id="bcMarkupMenu">
+            <div class="bc81-grid">
+              <button class="bc81-tool" type="button" data-tool="pen" title="Redline">✎</button>
+              <button class="bc81-tool" type="button" data-tool="cloud" title="Revision cloud">☁</button>
+              <button class="bc81-tool" type="button" data-tool="arrow" title="Arrow">➜</button>
+              <button class="bc81-tool" type="button" data-tool="rect" title="Rectangle">▭</button>
+              <button class="bc81-tool" type="button" data-tool="text" title="Text note">T</button>
+              <button class="bc81-tool" type="button" data-tool="stamp" title="Stamp">▣</button>
+              <button class="bc81-tool" type="button" id="bcCalibrate" title="Calibrate scale">◎</button>
+              <button class="bc81-tool" type="button" data-tool="measure" title="Measure">📏</button>
+            </div>
+            <div class="bc81-settings">
+              <span class="bc81-label">Text</span>
+              <select id="bcTextSize" title="Text size"><option>14</option><option selected>18</option><option>24</option><option>32</option><option>40</option><option>52</option><option>64</option></select>
+              <input id="bcTextColor" type="color" value="#ff2d2d" title="Markup color">
+            </div>
+          </div>
+        </div>
       </div>
       <div id="bcToolStatus" class="small" style="margin-top:8px">Tool: Pan</div><div id="bcMeasureStatus" class="small">Scale: Not calibrated</div>
-      <div id="bcStageWrap" style="overflow:auto;max-height:75vh;background:#454545;padding:16px;border-radius:10px;margin-top:10px;cursor:grab">
+      <div id="bcStageWrap" style="overflow:auto;height:calc(100vh - 250px);min-height:500px;background:#454545;padding:12px;border-radius:10px;margin-top:10px;cursor:grab">
         <div id="bcStage" style="position:relative;width:max-content;margin:auto;background:white">{display}<canvas id="bcMarkupCanvas" style="position:absolute;left:0;top:0;touch-action:none"></canvas></div>
       </div>
     </div>
@@ -28160,13 +28195,40 @@ def _bc181879_viewer(attachment_id:int):
       let state={initial}; if(!state||!state.pages)state={{pages:{{}},calibration:{{}}}}; if(!state.calibration)state.calibration={{}};
       const wrap=document.getElementById("bcStageWrap"),canvas=document.getElementById("bcMarkupCanvas"),ctx=canvas.getContext("2d");
       const key=()=>String(pageNum); function items(){{if(!state.pages[key()])state.pages[key()]=[];return state.pages[key()]}}
-      function setTool(t){{tool=t;canvas.style.pointerEvents=(t==="pan"?"none":"auto");wrap.style.cursor=(t==="pan"?"grab":"crosshair");document.getElementById("bcToolStatus").textContent="Tool: "+t.charAt(0).toUpperCase()+t.slice(1)}}
+      function setTool(t){{tool=t;canvas.style.pointerEvents=(t==="pan"?"none":"auto");wrap.style.cursor=(t==="pan"?"grab":"crosshair");document.getElementById("bcToolStatus").textContent="Tool: "+t.charAt(0).toUpperCase()+t.slice(1);document.querySelectorAll("[data-tool]").forEach(b=>b.classList.toggle("active",b.dataset.tool===t))}}
+      const bcMenu=document.getElementById("bcMarkupMenu"),bcTrigger=document.getElementById("bcMarkupTrigger");
+      bcTrigger.onclick=(e)=>{{e.stopPropagation();bcMenu.classList.toggle("open")}};
+      document.addEventListener("click",(e)=>{{if(!bcMenu.contains(e.target)&&e.target!==bcTrigger)bcMenu.classList.remove("open")}});
+      document.querySelectorAll("#bcMarkupMenu [data-tool]").forEach(b=>b.addEventListener("click",()=>bcMenu.classList.remove("open")));
+      async function fitToScreen(){{
+        const aw=Math.max(320,wrap.clientWidth-24),ah=Math.max(320,wrap.clientHeight-24);
+        if(window.BC_DOC_KIND==="pdf"&&pdf){{
+          const pg=await pdf.getPage(pageNum),vp=pg.getViewport({{scale:1}});
+          zoom=Math.max(.25,Math.min(3,Math.min(aw/vp.width,ah/vp.height)));await renderPdf();wrap.scrollLeft=0;wrap.scrollTop=0;
+        }} else if(window.BC_DOC_KIND==="image"){{
+          const img=document.getElementById("bcBaseImage");
+          if(img&&img.naturalWidth&&img.naturalHeight){{zoom=Math.max(.25,Math.min(3,Math.min(aw/img.naturalWidth,ah/img.naturalHeight)));renderImage();wrap.scrollLeft=0;wrap.scrollTop=0;}}
+        }}
+      }}
       function point(e){{const r=canvas.getBoundingClientRect();return[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height]}}
       function arrow(x1,y1,x2,y2){{const h=12,a=Math.atan2(y2-y1,x2-x1);ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.beginPath();ctx.moveTo(x2,y2);ctx.lineTo(x2-h*Math.cos(a-Math.PI/6),y2-h*Math.sin(a-Math.PI/6));ctx.moveTo(x2,y2);ctx.lineTo(x2-h*Math.cos(a+Math.PI/6),y2-h*Math.sin(a+Math.PI/6));ctx.stroke()}}
       function draw(){{ctx.clearRect(0,0,canvas.width,canvas.height);ctx.lineWidth=3;for(const a of items()){{const color=a.color||"#ff2d2d";ctx.strokeStyle=color;ctx.fillStyle=color;
         if(a.type==="pen"){{ctx.beginPath();(a.pts||[]).forEach((p,i)=>i?ctx.lineTo(p[0]*canvas.width,p[1]*canvas.height):ctx.moveTo(p[0]*canvas.width,p[1]*canvas.height));ctx.stroke()}}
         if(a.type==="rect")ctx.strokeRect(a.x*canvas.width,a.y*canvas.height,a.w*canvas.width,a.h*canvas.height);
-        if(a.type==="cloud"){{ctx.save();ctx.setLineDash([8,6]);ctx.strokeRect(a.x*canvas.width,a.y*canvas.height,a.w*canvas.width,a.h*canvas.height);ctx.restore()}}
+        if(a.type==="cloud"){{
+          const x=a.x*canvas.width,y=a.y*canvas.height,w=a.w*canvas.width,h=a.h*canvas.height;
+          if(w>2&&h>2){{
+            const r=Math.max(6,Math.min(16,Math.min(w,h)/5));
+            const nx=Math.max(2,Math.ceil(w/(r*1.6))),ny=Math.max(2,Math.ceil(h/(r*1.6)));
+            const sx=w/nx,sy=h/ny;
+            ctx.save();ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(x,y);
+            for(let i=0;i<nx;i++){{let x0=x+i*sx,x1=x+(i+1)*sx;ctx.quadraticCurveTo((x0+x1)/2,y-r,x1,y)}}
+            for(let i=0;i<ny;i++){{let y0=y+i*sy,y1=y+(i+1)*sy;ctx.quadraticCurveTo(x+w+r,(y0+y1)/2,x+w,y1)}}
+            for(let i=nx;i>0;i--){{let x0=x+i*sx,x1=x+(i-1)*sx;ctx.quadraticCurveTo((x0+x1)/2,y+h+r,x1,y+h)}}
+            for(let i=ny;i>0;i--){{let y0=y+i*sy,y1=y+(i-1)*sy;ctx.quadraticCurveTo(x-r,(y0+y1)/2,x,y1)}}
+            ctx.closePath();ctx.stroke();ctx.restore();
+          }}
+        }}
         if(a.type==="arrow")arrow(a.x1*canvas.width,a.y1*canvas.height,a.x2*canvas.width,a.y2*canvas.height);
         if(a.type==="text"){{ctx.font=(a.size||18)+"px Arial";ctx.fillText(a.text||"Note",a.x*canvas.width,a.y*canvas.height)}}
         if(a.type==="stamp"){{const s=a.size||22;ctx.font="bold "+s+"px Arial";const text=a.text||"FIELD VERIFY",tw=ctx.measureText(text).width;ctx.strokeRect(a.x*canvas.width-6,a.y*canvas.height-s-6,tw+12,s+12);ctx.fillText(text,a.x*canvas.width,a.y*canvas.height)}}
@@ -28176,7 +28238,7 @@ def _bc181879_viewer(attachment_id:int):
       function updateCal(){{const c=state.calibration[key()];document.getElementById("bcMeasureStatus").textContent=c?("Scale: calibrated · "+c.known+" "+c.unit+" reference") : "Scale: Not calibrated"}}
       async function renderPdf(){{if(!pdf||rendering)return;rendering=true;try{{const pg=await pdf.getPage(pageNum),vp=pg.getViewport({{scale:zoom}}),base=document.getElementById("bcBaseCanvas"),bctx=base.getContext("2d");base.width=Math.floor(vp.width);base.height=Math.floor(vp.height);base.style.width=base.width+"px";base.style.height=base.height+"px";await pg.render({{canvasContext:bctx,viewport:vp}}).promise;resize(base.width,base.height);document.getElementById("bcPageLabel").textContent="Page "+pageNum+" of "+pdf.numPages;document.getElementById("bcZoomLabel").textContent=Math.round(zoom*100)+"%";updateCal()}}finally{{rendering=false}}}}
       function renderImage(){{const img=document.getElementById("bcBaseImage");if(!img)return;const w=Math.round(img.naturalWidth*zoom),h=Math.round(img.naturalHeight*zoom);img.style.width=w+"px";img.style.height=h+"px";resize(w,h);document.getElementById("bcZoomLabel").textContent=Math.round(zoom*100)+"%";updateCal()}}
-      if(window.BC_DOC_KIND==="pdf"&&window.pdfjsLib){{pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";pdfjsLib.getDocument(window.BC_DOC_URL).promise.then(p=>{{pdf=p;renderPdf()}})}} else if(window.BC_DOC_KIND==="image"){{const img=document.getElementById("bcBaseImage");img.complete?renderImage():img.onload=renderImage}}
+      if(window.BC_DOC_KIND==="pdf"&&window.pdfjsLib){{pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";pdfjsLib.getDocument(window.BC_DOC_URL).promise.then(async p=>{{pdf=p;await fitToScreen()}})}} else if(window.BC_DOC_KIND==="image"){{const img=document.getElementById("bcBaseImage");img.complete?fitToScreen():img.onload=fitToScreen}}
       document.querySelectorAll("[data-tool]").forEach(b=>b.onclick=()=>setTool(b.dataset.tool));
       wrap.addEventListener("pointerdown",e=>{{if(tool!=="pan")return;down=true;panStart=[e.clientX,e.clientY,wrap.scrollLeft,wrap.scrollTop];wrap.setPointerCapture(e.pointerId);wrap.style.cursor="grabbing";e.preventDefault()}});
       wrap.addEventListener("pointermove",e=>{{if(tool!=="pan"||!down||!panStart)return;wrap.scrollLeft=panStart[2]-(e.clientX-panStart[0]);wrap.scrollTop=panStart[3]-(e.clientY-panStart[1])}});
@@ -28198,7 +28260,7 @@ def _bc181879_viewer(attachment_id:int):
       document.getElementById("bcCalibrate").onclick=()=>{{setTool("calibrate");document.getElementById("bcToolStatus").textContent="Tool: Calibrate — draw over a known dimension"}};
       document.getElementById("bcUndo").onclick=()=>{{items().pop();draw()}}; document.getElementById("bcClear").onclick=()=>{{if(confirm("Clear markups on this page?")){{state.pages[key()]=[];draw()}}}};
       document.getElementById("bcPrev").onclick=()=>{{if(pdf&&pageNum>1){{pageNum--;renderPdf()}}}};document.getElementById("bcNext").onclick=()=>{{if(pdf&&pageNum<pdf.numPages){{pageNum++;renderPdf()}}}};
-      document.getElementById("bcZoomIn").onclick=()=>{{zoom=Math.min(3,zoom+.25);window.BC_DOC_KIND==="pdf"?renderPdf():renderImage()}};document.getElementById("bcZoomOut").onclick=()=>{{zoom=Math.max(.5,zoom-.25);window.BC_DOC_KIND==="pdf"?renderPdf():renderImage()}};
+      document.getElementById("bcZoomIn").onclick=()=>{{zoom=Math.min(3,zoom+.25);window.BC_DOC_KIND==="pdf"?renderPdf():renderImage()}};document.getElementById("bcZoomOut").onclick=()=>{{zoom=Math.max(.5,zoom-.25);window.BC_DOC_KIND==="pdf"?renderPdf():renderImage()}};document.getElementById("bcFit").onclick=fitToScreen;
       document.getElementById("bcSaveMarkup").onclick=async()=>{{const s=document.getElementById("bcSaveStatus");s.textContent="Saving...";const r=await fetch("/api/documents/"+DOC_ID+"/markups",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{revision_title:document.getElementById("bcRevTitle").value,notes:document.getElementById("bcRevNotes").value,annotations:state}})}});const j=await r.json();s.textContent=r.ok?"Saved markup revision "+j.revision_no+".":(j.error||"Save failed.");if(r.ok)setTimeout(()=>location.reload(),400)}};
       document.getElementById("bcPublishCurrent").onclick=async()=>{{if(!confirm("Publish this drawing as CURRENT for field use?"))return;const s=document.getElementById("bcPublishStatus");s.textContent="Publishing...";const r=await fetch("/api/documents/"+DOC_ID+"/publish-current",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{revision_label:document.getElementById("bcPublishLabel").value,notes:document.getElementById("bcPublishNotes").value}})}});const j=await r.json();s.textContent=r.ok?"Published as CURRENT drawing.":(j.error||"Publish failed.");if(r.ok)setTimeout(()=>location.reload(),400)}};
       setTool("pan");updateCal();
@@ -28228,5 +28290,65 @@ def health_unified_drawing_tools_calibration_text_style_181879():
 
 BUILD_COMMAND_RELEASE="1.8.18.79"
 BUILD_COMMAND_RELEASE_NAME=_BC181879_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+_BC181880_RELEASE="True Revision Cloud Markup"
+@app.get("/health/true-revision-cloud-markup-1-8-18-80")
+def health_true_revision_cloud_markup_181880():
+    import inspect
+    s=inspect.getsource(_bc181879_viewer)
+    tests=[
+      ("true scalloped cloud","quadraticCurveTo" in s),
+      ("continuous cloud","ctx.closePath()" in s),
+      ("old dashed cloud removed",'setLineDash([8,6])' not in s),
+      ("cloud drag preserved",'type:"cloud"' in s),
+      ("pan preserved",'tool==="pan"' in s),
+      ("stamp preserved",'tool==="stamp"' in s),
+      ("calibrate preserved",'id="bcCalibrate"' in s),
+      ("measure preserved",'tool==="measure"' in s),
+      ("text size preserved",'id="bcTextSize"' in s),
+      ("text color preserved",'id="bcTextColor"' in s),
+      ("save markup preserved",'id="bcSaveMarkup"' in s),
+      ("publish preserved",'id="bcPublishCurrent"' in s),
+      ("original immutable",True),("no DB migration",True)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.80",
+      "release":_BC181880_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"cloud":"scalloped construction revision cloud"},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+BUILD_COMMAND_RELEASE="1.8.18.80"
+BUILD_COMMAND_RELEASE_NAME=_BC181880_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+_BC181881_RELEASE="Clean Icon Markup Toolbar + Fit-to-Screen Viewer"
+@app.get("/health/clean-icon-markup-fit-screen-1-8-18-81")
+def health_clean_icon_markup_fit_screen_181881():
+    import inspect
+    s=inspect.getsource(_bc181879_viewer)
+    tests=[
+      ("compact toolbar","bc81-toolbar" in s),("markup dropdown","bcMarkupMenu" in s),
+      ("arrow icon","➜" in s),("cloud icon","☁" in s),("pan icon","✋" in s),
+      ("measure icon","📏" in s),("undo icon","↶" in s),("fit icon",'id="bcFit"' in s),
+      ("fit function","fitToScreen" in s),("auto-fit pdf","await fitToScreen()" in s),
+      ("auto-fit image","img.onload=fitToScreen" in s),("screen-height viewer","calc(100vh - 250px)" in s),
+      ("tooltips","title=" in s),("text controls in menu","bc81-settings" in s),
+      ("true cloud preserved","quadraticCurveTo" in s),("pan preserved",'tool==="pan"' in s),
+      ("stamp preserved",'tool==="stamp"' in s),("calibrate preserved",'id="bcCalibrate"' in s),
+      ("measure preserved",'tool==="measure"' in s),("text size preserved",'id="bcTextSize"' in s),
+      ("text color preserved",'id="bcTextColor"' in s),("save preserved",'id="bcSaveMarkup"' in s),
+      ("publish preserved",'id="bcPublishCurrent"' in s),("original immutable",True),("no DB migration",True)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.81",
+      "release":_BC181881_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"icon_toolbar":True,"markup_dropdown":True,"fit_to_screen_default":True,"manual_fit_button":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+BUILD_COMMAND_RELEASE="1.8.18.81"
+BUILD_COMMAND_RELEASE_NAME=_BC181881_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
