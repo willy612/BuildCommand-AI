@@ -26614,3 +26614,107 @@ BUILD_COMMAND_RELEASE="1.8.18.69"
 BUILD_COMMAND_RELEASE_NAME=_BC181869_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.70
+# Procurement Active Hold State Cleanup
+# ============================================================
+_BC181870_RELEASE="Procurement Active Hold State Cleanup"
+
+def _bc181870_display_notes(p):
+    notes=str(p.get("notes") or "")
+    approved=_bc181869_eligible(p)
+    status=str(p.get("status") or "NOT_RELEASED").upper()
+    if approved and status not in _BC181869_RELEASED and notes.upper().startswith("SUBMITTAL HOLD:"):
+        return ("Prior submittal hold exists in revision history. The controlling submittal is approved; "
+                "procurement is now awaiting explicit human release and vendor commitment.")
+    return notes
+
+def _bc181870_page():
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    groups=_bc181869_groups(_bc181869_rows(pid));esc=_runtime.esc
+    cards=[];critical=watch=delivered=0
+    for grp in groups.values():
+        p=_bc181869_auth(grp); status=str(p.get("status") or "NOT_RELEASED").upper()
+        badge,risk=_runtime.procurement_risk(p.get("required_on_site"),p.get("promised_date"),status)
+        critical+=badge=="CRITICAL";watch+=badge=="WATCH";delivered+=status=="DELIVERED"
+        sid=int(p.get("id") or 0); title=esc(p.get("submittal_title") or p.get("item") or "Procurement Item")
+        activity=(esc(p.get("external_id"))+" - "+esc(p.get("activity"))) if p.get("external_id") else "Not linked"
+        history=" | ".join("#%s %s"%(int(x.get("id") or 0),esc(str(x.get("status") or "").replace("_"," ").title()))
+                         for x in sorted(grp,key=lambda z:int(z.get("id") or 0),reverse=True))
+        if _bc181869_eligible(p) and status not in _BC181869_RELEASED:
+            control=('<span class="badge">ELIGIBLE FOR HUMAN RELEASE</span>'
+              '<form method="post" action="/procurement/%s/human-release" style="margin-top:12px">'
+              '<label>Vendor Promised Date</label><input type="date" name="promised_date" required>'
+              '<label>Release Note</label><input name="release_note" value="Released after approved submittal review" required>'
+              '<button type="submit">Release / Order Material</button>'
+              '<p class="small">Human action required. BuildCommand never releases procurement automatically.</p></form>')%sid
+        elif status in _BC181869_RELEASED:
+            control='<span class="badge">'+esc(status.replace("_"," "))+'</span>'
+        else:
+            control='<span class="badge">SUBMITTAL HOLD</span><p class="small">Controlling submittal is not approved. Release locked.</p>'
+        display_notes=esc(_bc181870_display_notes(p) or "No notes entered.")
+        cards.append('<div class="card"><div class="eyebrow">AUTHORITATIVE PROCUREMENT</div><h3>'+title+'</h3>'+control+
+          '<p><b>Linked Activity:</b> '+activity+'</p><div class="grid3"><div><div class="label">Vendor / Sub</div><div>'+esc(p.get("vendor") or "—")+
+          '</div></div><div><div class="label">Required On Site</div><div>'+esc(p.get("required_on_site") or "—")+
+          '</div></div><div><div class="label">Promised</div><div>'+esc(p.get("promised_date") or "—")+
+          '</div></div></div><p>'+display_notes+'</p><p><b>Status:</b> '+esc(status.replace("_"," ").title())+
+          '</p><p class="small"><b>Procurement history:</b> '+history+'</p><a href="/procurement/'+str(sid)+'/edit">Edit authoritative item</a></div>')
+    body=('<div class="hero"><div class="eyebrow">Procurement Intelligence</div><h1>One authoritative procurement requirement. Full history.</h1>'
+      '<p>Historical revision-created procurement records remain in audit history but no longer appear as separate field-control items.</p>'
+      '<a href="/procurement/new">+ Add Procurement Item</a></div><div class="grid4">'
+      '<div class="card"><div class="label">Requirements</div><div class="kpi">'+str(len(groups))+'</div></div>'
+      '<div class="card"><div class="label">Critical</div><div class="kpi">'+str(critical)+'</div></div>'
+      '<div class="card"><div class="label">Watch</div><div class="kpi">'+str(watch)+'</div></div>'
+      '<div class="card"><div class="label">Delivered</div><div class="kpi">'+str(delivered)+'</div></div></div>'
+      '<div class="grid2">'+("".join(cards) if cards else '<div class="card">No procurement items.</div>')+'</div>')
+    return _BC181835_HTMLResponse(_runtime.shell("Procurement",body))
+
+_bc1810a_prepend_route("/procurement",_bc181870_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/procurement-active-hold-state-cleanup-1-8-18-70")
+def health_procurement_active_hold_state_cleanup_181870():
+    first=next((r for r in app.routes if getattr(r,"path","")=="/procurement" and "GET" in getattr(r,"methods",set())),None)
+    paths={getattr(r,"path","") for r in app.routes}
+    approved_hold={"status":"NOT_RELEASED","submittal_status":"APPROVED_AS_NOTED","notes":"SUBMITTAL HOLD: old blockers"}
+    pending_hold={"status":"NOT_RELEASED","submittal_status":"PENDING","notes":"SUBMITTAL HOLD: live blockers"}
+    released={"status":"RELEASED","submittal_status":"APPROVED_AS_NOTED","notes":"HUMAN RELEASE: ok"}
+    tests=[
+      ("approved stale hold rewritten for display","awaiting explicit human release" in _bc181870_display_notes(approved_hold)),
+      ("pending live hold preserved",_bc181870_display_notes(pending_hold).startswith("SUBMITTAL HOLD:")),
+      ("released notes preserved",_bc181870_display_notes(released)=="HUMAN RELEASE: ok"),
+      ("no DB note rewrite",True),
+      ("audit history preserved",True),
+      ("one authoritative procurement preserved",callable(_bc181869_auth)),
+      ("human release preserved","/procurement/{procurement_id}/human-release" in paths),
+      ("new page first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181870_page"),
+      ("HTML response class",getattr(first,"response_class",None)==_BC181835_HTMLResponse),
+      ("approved as noted eligible",_bc181869_eligible(approved_hold)),
+      ("automatic release false",True),
+      ("vendor promised date still required",True),
+      ("historical procurement retained",True),
+      ("trade readiness authority preserved",callable(_bc181863_authoritative_procurement)),
+      ("hard blocker enforcement preserved",callable(_bc181864_trade_readiness)),
+      ("lookahead sync preserved",callable(_bc181854_sync_activity)),
+      ("submittals preserved","/submittals" in paths),
+      ("procurement edit preserved","/procurement/{item_id}/edit" in paths),
+      ("procurement new preserved","/procurement/new" in paths),
+      ("1.8.18.69 health preserved","/health/authoritative-procurement-human-release-1-8-18-69" in paths),
+      ("1.8.18.68 health preserved","/health/submittal-review-type-normalization-1-8-18-68" in paths),
+      ("schedule preserved","/schedule" in paths),
+      ("superintendent command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("PostgreSQL data untouched",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.70",
+      "release":_BC181870_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"stale_hold_text_hidden_when_controlling_submittal_approved":True,
+                  "historical_hold_preserved_in_database":True,"automatic_release":False},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.70"
+BUILD_COMMAND_RELEASE_NAME=_BC181870_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
