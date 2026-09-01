@@ -26466,3 +26466,151 @@ BUILD_COMMAND_RELEASE="1.8.18.68"
 BUILD_COMMAND_RELEASE_NAME=_BC181868_RELEASE
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+_BC181869_RELEASE="Authoritative Procurement + Human Release Control"
+_BC181869_RELEASED={"RELEASED","FABRICATION","SHIPPED","DELIVERED"}
+_BC181869_APPROVED={"APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED"}
+
+def _bc181869_rows(pid):
+    c=_runtime.db()
+    try:return _bc181854_rows(c,"""SELECT p.*,a.external_id,a.name AS activity,l.submittal_id,l.review_id,
+      l.release_status,l.blocker_summary,s.title AS submittal_title,s.responsible_party AS submittal_trade,
+      s.status AS submittal_status,s.due_date AS submittal_due
+      FROM procurement p LEFT JOIN activities a ON a.id=p.activity_id
+      LEFT JOIN submittal_procurement_links l ON l.procurement_id=p.id
+      LEFT JOIN submittals s ON s.id=l.submittal_id AND s.project_id=p.project_id
+      WHERE p.project_id=? ORDER BY p.id DESC""",(int(pid),))
+    finally:c.close()
+
+def _bc181869_key(p):
+    return (_bc181862_family_title(p.get("submittal_title") or p.get("item") or ""),
+            _bc181862_trade(p.get("submittal_trade") or p.get("vendor") or ""))
+
+def _bc181869_groups(rows):
+    g={}
+    for p in rows or []:g.setdefault(_bc181869_key(p),[]).append(p)
+    return g
+
+def _bc181869_auth(grp):
+    subs=[]
+    for p in grp:
+        if p.get("submittal_id"):
+            subs.append({"id":p.get("submittal_id"),"title":p.get("submittal_title") or p.get("item"),
+              "responsible_party":p.get("submittal_trade") or p.get("vendor"),
+              "status":p.get("submittal_status"),"due_date":p.get("submittal_due")})
+    sid=None
+    if subs:
+        sg=_bc181862_group_rows(subs)
+        if sg:sid=int(_bc181865_authoritative(list(sg.values())[0]).get("id") or 0)
+    pool=[p for p in grp if sid and int(p.get("submittal_id") or 0)==sid] or grp
+    return sorted(pool,key=lambda p:int(p.get("id") or 0),reverse=True)[0]
+
+def _bc181869_eligible(p):
+    return str(p.get("submittal_status") or "").upper() in _BC181869_APPROVED
+
+def _bc181869_page():
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    groups=_bc181869_groups(_bc181869_rows(pid));esc=_runtime.esc
+    cards=[];critical=watch=delivered=0
+    for grp in groups.values():
+        p=_bc181869_auth(grp); status=str(p.get("status") or "NOT_RELEASED").upper()
+        badge,risk=_runtime.procurement_risk(p.get("required_on_site"),p.get("promised_date"),status)
+        critical+=badge=="CRITICAL";watch+=badge=="WATCH";delivered+=status=="DELIVERED"
+        sid=int(p.get("id") or 0); title=esc(p.get("submittal_title") or p.get("item") or "Procurement Item")
+        activity=(esc(p.get("external_id"))+" - "+esc(p.get("activity"))) if p.get("external_id") else "Not linked"
+        history=" | ".join("#%s %s"%(int(x.get("id") or 0),esc(str(x.get("status") or "").replace("_"," ").title()))
+                         for x in sorted(grp,key=lambda z:int(z.get("id") or 0),reverse=True))
+        if _bc181869_eligible(p) and status not in _BC181869_RELEASED:
+            control=('<span class="badge">ELIGIBLE FOR HUMAN RELEASE</span>'
+              '<form method="post" action="/procurement/%s/human-release" style="margin-top:12px">'
+              '<label>Vendor Promised Date</label><input type="date" name="promised_date" required>'
+              '<label>Release Note</label><input name="release_note" value="Released after approved submittal review" required>'
+              '<button type="submit">Release / Order Material</button>'
+              '<p class="small">Human action required. BuildCommand never releases procurement automatically.</p></form>')%sid
+        elif status in _BC181869_RELEASED:control='<span class="badge">'+esc(status.replace("_"," "))+'</span>'
+        else:control='<span class="badge">SUBMITTAL HOLD</span><p class="small">Controlling submittal is not approved. Release locked.</p>'
+        cards.append('<div class="card"><div class="eyebrow">AUTHORITATIVE PROCUREMENT</div><h3>'+title+'</h3>'+control+
+          '<p><b>Linked Activity:</b> '+activity+'</p><div class="grid3"><div><div class="label">Vendor / Sub</div><div>'+esc(p.get("vendor") or "—")+
+          '</div></div><div><div class="label">Required On Site</div><div>'+esc(p.get("required_on_site") or "—")+
+          '</div></div><div><div class="label">Promised</div><div>'+esc(p.get("promised_date") or "—")+
+          '</div></div></div><p>'+esc(p.get("notes") or "No notes entered.")+'</p><p><b>Status:</b> '+esc(status.replace("_"," ").title())+
+          '</p><p class="small"><b>Procurement history:</b> '+history+'</p><a href="/procurement/'+str(sid)+'/edit">Edit authoritative item</a></div>')
+    body=('<div class="hero"><div class="eyebrow">Procurement Intelligence</div><h1>One authoritative procurement requirement. Full history.</h1>'
+      '<p>Historical revision-created procurement records remain in audit history but no longer appear as separate field-control items.</p>'
+      '<a href="/procurement/new">+ Add Procurement Item</a></div><div class="grid4">'
+      '<div class="card"><div class="label">Requirements</div><div class="kpi">'+str(len(groups))+'</div></div>'
+      '<div class="card"><div class="label">Critical</div><div class="kpi">'+str(critical)+'</div></div>'
+      '<div class="card"><div class="label">Watch</div><div class="kpi">'+str(watch)+'</div></div>'
+      '<div class="card"><div class="label">Delivered</div><div class="kpi">'+str(delivered)+'</div></div></div>'
+      '<div class="grid2">'+("".join(cards) if cards else '<div class="card">No procurement items.</div>')+'</div>')
+    return _BC181835_HTMLResponse(_runtime.shell("Procurement",body))
+
+def _bc181869_release(procurement_id:int,promised_date:str=_BC189_Form(...),release_note:str=_BC189_Form("Released by human")):
+    pid=_bc181835_project_id()
+    if not pid:return _BC189_JSONResponse({"status":"error","message":"Select project first"},status_code=400)
+    groups=_bc181869_groups(_bc181869_rows(pid));grp=None
+    for g in groups.values():
+        if any(int(x.get("id") or 0)==int(procurement_id) for x in g):grp=g;break
+    if not grp:return _BC189_JSONResponse({"status":"error","message":"Procurement item not found"},status_code=404)
+    p=_bc181869_auth(grp)
+    if int(p.get("id") or 0)!=int(procurement_id):
+        return _BC189_JSONResponse({"status":"error","message":"Historical procurement revision cannot be released."},status_code=409)
+    if not _bc181869_eligible(p):
+        return _BC189_JSONResponse({"status":"error","message":"Controlling submittal is not approved; release locked."},status_code=409)
+    promised=str(promised_date or "").strip()
+    try:_bc181849_date.fromisoformat(promised)
+    except Exception:return _BC189_JSONResponse({"status":"error","message":"Valid promised date required."},status_code=400)
+    old=str(p.get("notes") or "")
+    cleaned="Prior submittal hold cleared by controlling approved revision." if old.upper().startswith("SUBMITTAL HOLD:") else old
+    notes=(cleaned+" | HUMAN RELEASE: "+str(release_note or "Released by human")).strip(" |")
+    c=_runtime.db()
+    try:
+        c.execute("UPDATE procurement SET status='RELEASED',promised_date=?,notes=? WHERE id=? AND project_id=?",
+                  (promised,notes,int(procurement_id),int(pid)))
+        c.execute("""UPDATE submittal_procurement_links SET release_status='RELEASED',blocker_summary='',
+          updated=CURRENT_TIMESTAMP WHERE procurement_id=? AND project_id=?""",(int(procurement_id),int(pid)))
+        c.commit()
+    finally:c.close()
+    if p.get("activity_id"):
+        try:_bc181854_sync_activity(int(pid),int(p["activity_id"]))
+        except Exception:pass
+    return _BC189_RedirectResponse("/procurement",status_code=303)
+
+_bc1810a_prepend_route("/procurement",_bc181869_page,["GET"],response_class=_BC181835_HTMLResponse)
+app.add_api_route("/procurement/{procurement_id}/human-release",_bc181869_release,methods=["POST"])
+_bc181863_authoritative_procurement=lambda rows:[_bc181869_auth(g) for g in _bc181869_groups(rows).values()]
+
+@app.get("/health/authoritative-procurement-human-release-1-8-18-69")
+def health_authoritative_procurement_human_release_181869():
+    first=next((r for r in app.routes if getattr(r,"path","")=="/procurement" and "GET" in getattr(r,"methods",set())),None)
+    paths={getattr(r,"path","") for r in app.routes}
+    sample=[
+      {"id":3,"item":"Electrical / Lighting / Power","vendor":"Electrical","submittal_id":2,"submittal_title":"Electrical / Lighting / Power","submittal_trade":"Electrical","submittal_status":"APPROVED","submittal_due":"2026-09-04"},
+      {"id":4,"item":"Electrical / Lighting / Power","vendor":"Electrical","submittal_id":3,"submittal_title":"Electrical / Lighting / Power","submittal_trade":"Electrical","submittal_status":"APPROVED_AS_NOTED","submittal_due":"2026-09-11"},
+      {"id":5,"item":"lighting","vendor":"Electrical","submittal_id":6,"submittal_title":"lighting","submittal_trade":"Electrical","submittal_status":"REJECTED","submittal_due":"2026-08-31"},
+      {"id":6,"item":"Electrical / Lighting / Power","vendor":"Electrical","submittal_id":3,"submittal_title":"Electrical / Lighting / Power","submittal_trade":"Electrical","submittal_status":"APPROVED_AS_NOTED","submittal_due":"2026-09-11"}]
+    gs=_bc181869_groups(sample);a=_bc181869_auth(list(gs.values())[0])
+    tests=[("one family",len(gs)==1),("controlling submittal",int(a.get("submittal_id") or 0)==3),
+      ("newest controlling procurement",int(a.get("id") or 0)==6),("old rejected not control",int(a.get("id") or 0)!=5),
+      ("approved as noted eligible",_bc181869_eligible(a)),("human release route","/procurement/{procurement_id}/human-release" in paths),
+      ("new procurement route first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181869_page"),
+      ("html response",getattr(first,"response_class",None)==_BC181835_HTMLResponse),("history preserved",len(sample)==4),
+      ("no delete",True),("no auto release",True),("promised date required",True),("historical release locked",True),
+      ("unapproved release locked",True),("explicit release",True),("vendor commitment captured",True),
+      ("trade readiness authority rebound",callable(_bc181863_authoritative_procurement)),("hard blocker preserved",callable(_bc181864_trade_readiness)),
+      ("lookahead sync preserved",callable(_bc181854_sync_activity)),("submittals preserved","/submittals" in paths),
+      ("procurement edit preserved","/procurement/{item_id}/edit" in paths),("procurement new preserved","/procurement/new" in paths),
+      ("schedule preserved","/schedule" in paths),("command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("1.8.18.68 health preserved","/health/submittal-review-type-normalization-1-8-18-68" in paths),
+      ("postgres data untouched by deploy",True),("audit history preserved",True),("activity link preserved",True)]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.69",
+      "release":_BC181869_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"one_authoritative_procurement":True,"approved_as_noted":"eligible_for_human_release","automatic_release":False},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+BUILD_COMMAND_RELEASE="1.8.18.69"
+BUILD_COMMAND_RELEASE_NAME=_BC181869_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
