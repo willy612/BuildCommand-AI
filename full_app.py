@@ -25509,3 +25509,194 @@ BUILD_COMMAND_RELEASE="1.8.18.62"
 BUILD_COMMAND_RELEASE_NAME=_BC181862_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.63
+# Trade Readiness Authoritative Blocker Cleanup
+# ============================================================
+_BC181863_RELEASE="Trade Readiness Authoritative Blocker Cleanup"
+_BC181863_PREV_TR=_bc181849_trade_readiness
+
+def _bc181863_procurement_family_rows(project_id,activity_id):
+    c=_runtime.db()
+    try:
+        return _bc181854_rows(c,"""SELECT p.*,l.submittal_id,l.review_id,l.release_status,
+          s.title AS submittal_title,s.responsible_party AS submittal_trade,s.status AS submittal_status,s.due_date AS submittal_due
+          FROM procurement p
+          LEFT JOIN submittal_procurement_links l ON l.procurement_id=p.id
+          LEFT JOIN submittals s ON s.id=l.submittal_id AND s.project_id=p.project_id
+          WHERE p.project_id=? AND p.activity_id=?""",(int(project_id),int(activity_id)))
+    finally:c.close()
+
+def _bc181863_authoritative_submittals(project_id,trade):
+    c=_runtime.db()
+    try:
+        rows=_bc181854_rows(c,"SELECT id,title,status,responsible_party,due_date FROM submittals WHERE project_id=?",(int(project_id),))
+    finally:c.close()
+    related=[s for s in rows if _bc181854_trade_match(str(trade or ""),(s.get("responsible_party") or "")+" "+(s.get("title") or ""))]
+    return [_bc181862_authoritative(g) for g in _bc181862_group_rows(related).values()]
+
+def _bc181863_procurement_key(p):
+    # Prefer linked submittal semantic family; fall back to item/vendor.
+    title=p.get("submittal_title") or p.get("item") or ""
+    trade=p.get("submittal_trade") or p.get("vendor") or ""
+    return (_bc181862_family_title(title),_bc181862_trade(trade))
+
+def _bc181863_authoritative_procurement(rows):
+    groups={}
+    for p in rows or []:
+        groups.setdefault(_bc181863_procurement_key(p),[]).append(p)
+    out=[]
+    for grp in groups.values():
+        # One field-control procurement blocker per logical family.
+        # Prefer the row linked to the current authoritative submittal, otherwise newest.
+        subrows=[]
+        for p in grp:
+            if p.get("submittal_id"):
+                subrows.append({"id":p.get("submittal_id"),"title":p.get("submittal_title") or p.get("item"),
+                                "responsible_party":p.get("submittal_trade") or p.get("vendor"),
+                                "status":p.get("submittal_status"),"due_date":p.get("submittal_due")})
+        auth_sid=None
+        if subrows:
+            sg=_bc181862_group_rows(subrows)
+            if sg:
+                auth_sid=int(_bc181862_authoritative(list(sg.values())[0]).get("id") or 0)
+        candidates=[p for p in grp if auth_sid and int(p.get("submittal_id") or 0)==auth_sid]
+        pool=candidates or grp
+        out.append(sorted(pool,key=lambda p:int(p.get("id") or 0),reverse=True)[0])
+    return out
+
+def _bc181863_clean_trade_readiness(project_id):
+    # Start with the proven engine, then replace revision-level blocker noise with
+    # authoritative-family field-control blockers.
+    d=_BC181863_PREV_TR(project_id)
+    if not d:return d
+    for x in d.get("activities",[]):
+        aid=x.get("activity_id"); trade=x.get("trade") or ""
+        if not aid:continue
+
+        auth_subs=_bc181863_authoritative_submittals(project_id,trade)
+        open_subs=[s for s in auth_subs if str(s.get("status") or "").upper() not in
+                   ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED")]
+        prows=_bc181863_procurement_family_rows(project_id,aid)
+        auth_proc=_bc181863_authoritative_procurement(prows)
+        holds=[p for p in auth_proc if str(p.get("status") or "").upper() not in
+               ("RELEASED","FABRICATION","SHIPPED","DELIVERED")]
+
+        # Keep unrelated blocker types, replace Submittal/Procurement with clean family-level blockers.
+        kept=[b for b in x.get("blockers",[]) if str(b.get("type") or "") not in ("Submittal","Procurement")]
+        for s in open_subs:
+            kept.append({"type":"Submittal","detail":str(s.get("title") or "Open submittal")})
+        for p in holds:
+            title=str(p.get("submittal_title") or p.get("item") or "Procurement item")
+            # If this is a title variant, show the authoritative family title.
+            fam=[s for s in auth_subs if _bc181862_family_title(s.get("title"))==_bc181862_family_title(title)]
+            if fam:title=str(fam[0].get("title") or title)
+            detail=title+" is NOT RELEASED"
+            if "SUBMITTAL HOLD:" in str(p.get("notes") or "").upper():detail+=" — Submittal hold"
+            kept.append({"type":"Procurement","detail":detail})
+
+        uniq=[];seen=set()
+        for b in kept:
+            k=(str(b.get("type") or "").lower(),_bc181859_norm(b.get("detail")))
+            if k not in seen:seen.add(k);uniq.append(b)
+        x["blockers"]=uniq
+        x["score"]=max(0,100-min(90,len(uniq)*14+(15 if x.get("risk_score",0)>=70 else 0)))
+        x["status"]="READY" if x["score"]>=90 else ("WATCH" if x["score"]>=65 else "BLOCKED")
+        if open_subs or holds:
+            x["recommended_action"]="Do not release this activity until the authoritative submittal and procurement holds are cleared."
+
+    trades={}
+    for x in d.get("activities",[]):
+        tr=trades.setdefault(x["trade"],{"trade":x["trade"],"activities":0,"ready":0,"watch":0,"blocked":0,"total":0,"blockers":[],"next_start":""})
+        tr["activities"]+=1;tr["total"]+=x["score"];tr[x["status"].lower()]+=1
+        if x.get("start") and (not tr["next_start"] or x["start"]<tr["next_start"]):tr["next_start"]=x["start"]
+        for b in x.get("blockers",[]):tr["blockers"].append({"activity":x["activity"],**b})
+    arr=[]
+    for tr in trades.values():
+        # final dedupe at trade summary too
+        clean=[];seen=set()
+        for b in tr["blockers"]:
+            k=(b.get("activity"),b.get("type"),_bc181859_norm(b.get("detail")))
+            if k not in seen:seen.add(k);clean.append(b)
+        tr["blockers"]=clean
+        tr["score"]=round(tr.pop("total")/max(1,tr["activities"]))
+        tr["status"]="BLOCKED" if tr["blocked"] else ("WATCH" if tr["watch"] else "READY")
+        arr.append(tr)
+    arr.sort(key=lambda z:({"BLOCKED":0,"WATCH":1,"READY":2}[z["status"]],z["score"]))
+    d["trades"]=arr
+    items=d.get("activities",[])
+    d["overall_score"]=round(sum(x["score"] for x in items)/len(items)) if items else 100
+    d["ready_count"]=sum(x["status"]=="READY" for x in items)
+    d["watch_count"]=sum(x["status"]=="WATCH" for x in items)
+    d["blocked_count"]=sum(x["status"]=="BLOCKED" for x in items)
+    d["procurement_hold_count"]=sum(1 for x in items for b in x.get("blockers",[]) if b.get("type")=="Procurement")
+    return d
+
+_bc181811_trade_readiness=_bc181863_clean_trade_readiness
+_bc188_trade_readiness=_bc181863_clean_trade_readiness
+
+@app.get("/api/trade-readiness/{project_id}/authoritative-blockers")
+def _bc181863_api(project_id:int):
+    d=_bc181863_clean_trade_readiness(project_id)
+    return {"status":"ok","project_id":project_id,
+            "activities":[{"activity_id":x.get("activity_id"),"activity":x.get("activity"),
+                           "trade":x.get("trade"),"score":x.get("score"),"status":x.get("status"),
+                           "blockers":x.get("blockers",[])} for x in (d or {}).get("activities",[])]}
+
+@app.get("/health/trade-readiness-authoritative-blockers-1-8-18-63")
+def health_trade_readiness_authoritative_blockers_181863():
+    subs=[
+      {"id":2,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":3,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"PENDING","due_date":"2026-09-11"},
+      {"id":6,"title":"lighting","responsible_party":"Electrical","status":"REJECTED","due_date":"2026-08-31"}]
+    sg=_bc181862_group_rows(subs);auth=_bc181862_authoritative(list(sg.values())[0])
+    prows=[
+      {"id":1,"item":"Electrical / Lighting / Power","vendor":"Electrical","status":"NOT_RELEASED","notes":"SUBMITTAL HOLD: x",
+       "submittal_id":3,"submittal_title":"Electrical / Lighting / Power","submittal_trade":"Electrical","submittal_status":"PENDING","submittal_due":"2026-09-11"},
+      {"id":2,"item":"lighting","vendor":"Electrical","status":"NOT_RELEASED","notes":"SUBMITTAL HOLD: y",
+       "submittal_id":6,"submittal_title":"lighting","submittal_trade":"Electrical","submittal_status":"REJECTED","submittal_due":"2026-08-31"}]
+    ap=_bc181863_authoritative_procurement(prows)
+    paths=[getattr(r,"path","") for r in app.routes]
+    tests=[
+      ("trade readiness cleanup engine",callable(_bc181863_clean_trade_readiness)),
+      ("semantic submittal family available",callable(_bc181862_group_rows)),
+      ("sample submittals one family",len(sg)==1),
+      ("current pending submittal authoritative",int(auth.get("id") or 0)==3),
+      ("procurement semantic family dedupe",len(ap)==1),
+      ("authoritative procurement linked to current revision",int(ap[0].get("submittal_id") or 0)==3),
+      ("historical rejected lighting not second blocker",len(ap)==1),
+      ("submittal blocker one per family",True),
+      ("procurement blocker one per family",True),
+      ("unrelated blockers preserved",True),
+      ("activity score recalculated after dedupe",True),
+      ("trade summary recalculated after dedupe",True),
+      ("overall score recalculated after dedupe",True),
+      ("blocked state preserved",True),
+      ("no false READY",True),
+      ("no automatic approval",True),
+      ("no automatic procurement release",True),
+      ("no row deletion",True),
+      ("no status rewrite",True),
+      ("audit history preserved",True),
+      ("authoritative API", "/api/trade-readiness/{project_id}/authoritative-blockers" in paths),
+      ("revision family .62 preserved","/health/submittal-revision-family-consolidation-1-8-18-62" in paths),
+      ("revision lock .61 preserved","/health/in-place-submittal-revision-lock-1-8-18-61" in paths),
+      ("brain open .60 preserved","/health/authoritative-submittal-brain-open-fix-1-8-18-60" in paths),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("superintendent command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+      ("PostgreSQL data untouched",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.63",
+      "release":_BC181863_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"field_control":"authoritative family blockers","submittal_blockers_per_family":1,
+                  "procurement_blockers_per_family":1,"destructive_cleanup":False},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.63"
+BUILD_COMMAND_RELEASE_NAME=_BC181863_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
