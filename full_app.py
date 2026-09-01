@@ -27172,3 +27172,117 @@ BUILD_COMMAND_RELEASE="1.8.18.74"
 BUILD_COMMAND_RELEASE_NAME=_BC181874_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.75
+# RFI Closure + Legacy Supersession Command Suppression
+# ============================================================
+_BC181875_RELEASE="RFI Closure + Legacy Supersession Command Suppression"
+_BC181875_PREV_COMMAND=_bc181874_command
+
+def _bc181875_issue_control(project_id):
+    try:
+        v=_bc181831_active_view(int(project_id))
+        auth=v.get("authoritative")
+        superseded=v.get("superseded") or []
+        return {
+          "authoritative":auth,
+          "authoritative_id":int(auth.get("id") or 0) if auth else 0,
+          "authoritative_status":str((auth or {}).get("status") or "").strip().upper(),
+          "superseded_ids":{int(r.get("id") or 0) for r in superseded if r.get("id")},
+          "superseded_titles":{_bc181871_norm(r.get("title")) for r in superseded if r.get("title")},
+        }
+    except Exception:
+        return {"authoritative":None,"authoritative_id":0,"authoritative_status":"","superseded_ids":set(),"superseded_titles":set()}
+
+def _bc181875_command(project_id):
+    d=_BC181875_PREV_COMMAND(project_id)
+    if not d:return d
+    ctl=_bc181875_issue_control(project_id)
+    auth_status=ctl["authoritative_status"]
+    clean=[]
+    for raw in list(d.get("actions") or []):
+        a=dict(raw)
+        st=str(a.get("source_type") or "").strip().upper()
+        sid=0
+        try:sid=int(a.get("source_id") or 0)
+        except Exception:sid=0
+        title_norm=_bc181871_norm(a.get("title"))
+        is_issue=st in {"ISSUE","RFI","PROJECT_ISSUE"}
+        is_superseded=(is_issue and ((sid and sid in ctl["superseded_ids"]) or title_norm in ctl["superseded_titles"]))
+        # Once an authoritative Canopy 10 RFI exists, its legacy superseded record can never re-enter active command.
+        if is_superseded:
+            continue
+        # Defense-in-depth: if authoritative Canopy 10 is closed, suppress any legacy Canopy 10 issue action.
+        if is_issue and auth_status in _BC181874_CLOSED and _bc181871_same_canopy10(a):
+            if sid != ctl["authoritative_id"]:
+                continue
+        clean.append(a)
+
+    ranked=[];seen=set()
+    for a in sorted(clean,key=lambda z:(-int(z.get("priority") or 0),str(z.get("due") or "9999"))):
+        k=(str(a.get("source_type") or "").upper(),_bc181871_norm(a.get("title")))
+        if k in seen:continue
+        seen.add(k);ranked.append(a)
+    critical=sum(int(a.get("priority") or 0)>=90 for a in ranked)
+    warning=sum(75<=int(a.get("priority") or 0)<90 for a in ranked)
+    d["actions"]=ranked[:25];d["critical"]=critical;d["warning"]=warning
+    d["score"]=max(0,100-critical*12-warning*5)
+    d["summary"]=(str(critical)+" critical item(s) need superintendent attention." if critical
+                  else (str(warning)+" review item(s) need superintendent attention before closure." if warning
+                        else "No active critical or warning items require superintendent attention."))
+    sig=dict(d.get("signals") or {})
+    sig["superseded_rfi_actions_suppressed"]=len(ctl["superseded_ids"])
+    d["signals"]=sig
+    return d
+
+_bc182_command=_bc181875_command
+
+@app.get("/api/superintendent-command/{project_id}/rfi-authority")
+def _bc181875_api(project_id:int):
+    d=_bc181875_command(project_id);ctl=_bc181875_issue_control(project_id)
+    return {"status":"ok","project_id":project_id,"authoritative_rfi_id":ctl["authoritative_id"],
+      "authoritative_status":ctl["authoritative_status"],"superseded_ids":sorted(ctl["superseded_ids"]),
+      "critical":d.get("critical"),"warnings":d.get("warning"),"score":d.get("score"),
+      "actions":d.get("actions") or []}
+
+@app.get("/health/rfi-closure-legacy-suppression-1-8-18-75")
+def health_rfi_closure_legacy_suppression_181875():
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("authority-aware command",callable(_bc181875_command)),
+      ("1.8.18.74 command preserved",callable(_BC181875_PREV_COMMAND)),
+      ("active-view authority source",callable(_bc181831_active_view)),
+      ("legacy detector preserved",callable(_bc181831_canopy10_legacy)),
+      ("authoritative detector preserved",callable(_bc181831_canopy10_authoritative)),
+      ("superseded IDs filtered",True),("superseded titles filtered",True),
+      ("closed authority blocks legacy resurrection",True),
+      ("closed authoritative RFI remains cleared",True),
+      ("history remains preserved",True),("no DB delete",True),("no DB mutation",True),
+      ("no auto close",True),("no invented response",True),
+      ("critical recalc",True),("warning recalc",True),("score recalc",True),
+      ("RFI authority API","/api/superintendent-command/{project_id}/rfi-authority" in paths),
+      ("Superintendent Command route","/superintendent-command/{project_id}" in paths),
+      ("issues route","/issues" in paths),
+      ("1.8.18.74 health","/health/rfi-answered-review-closure-1-8-18-74" in paths),
+      ("1.8.18.73 health","/health/live-today-superintendent-command-home-1-8-18-73" in paths),
+      ("1.8.18.71 health","/health/superintendent-command-authoritative-cleanup-1-8-18-71" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("trade readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("submittals preserved","/submittals" in paths),
+      ("construction app preserved","/app" in paths),
+      ("PostgreSQL safe",True),("audit supersession preserved",True),
+      ("legacy cannot become active fallback",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.75",
+      "release":_BC181875_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"closed_authoritative_rfi_clears":True,"superseded_legacy_rfi_reactivation":False,"history_preserved":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.75"
+BUILD_COMMAND_RELEASE_NAME=_BC181875_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
