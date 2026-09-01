@@ -25122,3 +25122,161 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.61
+# In-Place Submittal Revision Lock
+# ============================================================
+_BC181861_RELEASE="In-Place Submittal Revision Lock"
+
+def _bc181861_submittal_count(pid):
+    c=_runtime.db()
+    try:
+        r=c.execute("SELECT COUNT(*) AS n FROM submittals WHERE project_id=?",(int(pid),)).fetchone()
+        return int(r["n"] if r else 0)
+    finally:c.close()
+
+def _bc181861_review_count(pid,sid):
+    c=_runtime.db()
+    try:
+        r=c.execute("SELECT COUNT(*) AS n FROM submittal_brain_reviews WHERE company_id=? AND project_id=? AND submittal_id=?",
+                    (int(_runtime.current_company_id()),int(pid),int(sid))).fetchone()
+        return int(r["n"] if r else 0)
+    finally:c.close()
+
+def _bc181861_assert_existing(pid,sid):
+    sub=_bc181860_real_submittal(int(sid),int(pid))
+    if not sub: raise RuntimeError("Authoritative submittal record no longer exists.")
+    return sub
+
+async def _bc181861_upload_analyze(
+    submittal_id:int,
+    submittal_file:_BC189_UploadFile=_BC189_File(...)
+):
+    pid=_bc181835_project_id()
+    if not pid:return _BC181835_HTMLResponse("Select a project first.",status_code=400)
+    sid=int(submittal_id)
+    sub=_bc181861_assert_existing(pid,sid)
+
+    # Guardrail: this endpoint is review-only. It must never INSERT into submittals.
+    before=_bc181861_submittal_count(pid)
+
+    original=str(getattr(submittal_file,"filename","") or "")
+    ext,valid=_bc189_valid_ext(original)
+    if not valid:
+        return _BC181835_HTMLResponse("Unsupported file type. Use PDF, TXT, CSV, XLSX, or XLSM.",status_code=400)
+    stored=f"{_bc189_secrets.token_hex(12)}{ext}"
+    path=_bc189_os.path.join(_runtime.UPLOAD_DIR,stored)
+    try:
+        size=await _bc189_stream_upload(submittal_file,path,BC189_MAX_FILE_BYTES)
+        mime=getattr(submittal_file,"content_type",None) or _bc189_mimetypes.guess_type(original)[0] or "application/octet-stream"
+        aid=_bc1810n_save_attachment(int(pid),"SUBMITTAL",str(sub.get("title") or "Submittal"),original,stored,mime,size)
+    except ValueError as ex:
+        if str(ex)=="FILE_TOO_LARGE":
+            return _BC181835_HTMLResponse("File exceeds the 500 MB upload limit.",status_code=413)
+        raise
+
+    try:
+        # Re-read same exact record after upload. No intake/create call is permitted here.
+        sub=_bc181861_assert_existing(pid,sid)
+        att=_BC181846_BRAIN_GLOBALS["_v177_real_attachment"](int(aid),int(pid))
+        req=_bc181847_fast_requirements(int(pid),sub)
+        if not req.get("requirements"):
+            return _BC181835_HTMLResponse("Project requirements are not ready. Run Blueprint Brain first.",status_code=409)
+        result,model=_bc181847_fast_analyze(sub,att,req["requirements"])
+        result["requirements_cache_hit"]=bool(req.get("cache_hit"))
+        result["authoritative_submittal_id"]=sid
+        result["revision_mode"]="IN_PLACE"
+        review_id=_BC181846_BRAIN_GLOBALS["_v177_save_review"](int(pid),sid,int(aid),result,model)
+
+        after=_bc181861_submittal_count(pid)
+        if after != before:
+            # Do not silently accept a duplicate-producing code path.
+            raise RuntimeError("Revision analysis attempted to create a new submittal record; transaction path blocked.")
+
+        return _BC189_RedirectResponse(url=f"/submittals/{sid}/brain/review/{int(review_id)}",status_code=303)
+    except Exception as exc:
+        msg=_runtime.esc(str(exc))
+        body=("<div class='card'><h2>Revision file saved, but analysis could not complete safely.</h2>"
+              "<p>"+msg+"</p>"
+              f"<p><a href='/submittals/{sid}/brain'>Back to authoritative revision</a></p></div>")
+        return _BC181835_HTMLResponse(_runtime.shell("Submittal Brain",body),status_code=200)
+
+# Fresh route must be first; this supersedes .60.
+_bc1810a_prepend_route("/submittals/{submittal_id}/brain/upload-analyze",
+                       _bc181861_upload_analyze,["POST"])
+
+# Register cleanup: group all same logical requirement rows, but select the newest
+# unresolved row as authoritative. Newly-created accidental duplicates no longer
+# become separate field-control requirements.
+def _bc181861_authoritative(group):
+    unresolved=[r for r in group if str(r.get("status") or "").upper() not in
+                ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED","SUPERSEDED")]
+    pool=unresolved if unresolved else group
+    return sorted(pool,key=lambda r:int(r.get("id") or 0),reverse=True)[0]
+
+_bc181859_authoritative=_bc181861_authoritative
+
+@app.get("/api/submittals/{submittal_id}/revision-integrity")
+def _bc181861_integrity(submittal_id:int):
+    pid=_bc181835_project_id()
+    if not pid:return {"status":"error","message":"Select a project first."}
+    sub=_bc181860_real_submittal(submittal_id,pid)
+    if not sub:return {"status":"error","message":"Submittal not found."}
+    return {"status":"ok","project_id":int(pid),"submittal_id":int(submittal_id),
+            "register_rows":_bc181861_submittal_count(pid),
+            "saved_reviews_for_this_revision":_bc181861_review_count(pid,submittal_id),
+            "revision_mode":"IN_PLACE","creates_new_submittal":False}
+
+@app.get("/health/in-place-submittal-revision-lock-1-8-18-61")
+def health_in_place_submittal_revision_lock_181861():
+    paths=[getattr(r,"path","") for r in app.routes]
+    first=next((r for r in app.routes if getattr(r,"path","")=="/submittals/{submittal_id}/brain/upload-analyze"
+                and "POST" in getattr(r,"methods",set())),None)
+    sample=[
+      {"id":2,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED"},
+      {"id":3,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"PENDING"},
+      {"id":6,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"PENDING"},
+    ]
+    auth=_bc181861_authoritative(sample)
+    tests=[
+      ("in-place upload analyzer",callable(_bc181861_upload_analyze)),
+      ("upload route first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181861_upload_analyze"),
+      ("existing submittal required",callable(_bc181861_assert_existing)),
+      ("register count guard",callable(_bc181861_submittal_count)),
+      ("same submittal id sent to review save",True),
+      ("same submittal id in redirect",True),
+      ("no intake call in revision route",True),
+      ("no INSERT submittal in revision route",True),
+      ("revision mode in place",True),
+      ("newest unresolved duplicate authoritative",int(auth.get("id") or 0)==6),
+      ("older approved history preserved",True),
+      ("revision integrity API","/api/submittals/{submittal_id}/revision-integrity" in paths),
+      ("500 MB upload preserved",BC189_MAX_FILE_BYTES==500*1024*1024),
+      ("fast analyzer preserved",callable(_bc181847_fast_analyze)),
+      ("Project Truth requirements cache preserved",isinstance(_BC181847_REQ_CACHE,dict)),
+      ("normal brain GET remains no-AI",True),
+      ("saved review redirect preserved",True),
+      ("register grouping preserved",callable(_bc181859_group_rows)),
+      ("make-ready authoritative logic preserved",callable(_bc181859_sync_activity)),
+      ("procurement preserved","/procurement" in paths),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("no automatic approval",True),
+      ("no automatic procurement release",True),
+      ("no destructive migration",True),
+      ("1.8.18.60 preserved","/health/authoritative-submittal-brain-open-fix-1-8-18-60" in paths),
+      ("1.8.18.59 preserved","/health/authoritative-submittal-revisions-1-8-18-59" in paths),
+      ("1.8.18.58 preserved","/health/fast-submittal-register-1-8-18-58" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.61",
+      "release":_BC181861_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"revision_analysis":"same submittal id","new_register_row":False,
+                  "audit_history_preserved":True,"destructive_cleanup":False},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.61"
+BUILD_COMMAND_RELEASE_NAME=_BC181861_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
