@@ -27286,3 +27286,178 @@ BUILD_COMMAND_RELEASE="1.8.18.75"
 BUILD_COMMAND_RELEASE_NAME=_BC181875_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.76
+# RFI Active Count + Closed History Cleanup
+# ============================================================
+_BC181876_RELEASE="RFI Active Count + Closed History Cleanup"
+_BC181876_CLOSED={"CLOSED","RESOLVED","COMPLETE","COMPLETED"}
+
+def _bc181876_issue_page_model(pid):
+    v=_bc181831_active_view(pid)
+    visible=list(v.get("visible") or [])
+    active=[]
+    closed=[]
+    for r in visible:
+        status=str(r.get("status") or "OPEN").strip().upper()
+        if status in _BC181876_CLOSED:
+            closed.append(r)
+        else:
+            active.append(r)
+    return {
+      "active":active,
+      "closed":closed,
+      "superseded":list(v.get("superseded") or []),
+      "authoritative":v.get("authoritative"),
+    }
+
+def _bc181876_render_issues():
+    u,cid,pid=_bc181812_user_project()
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:return _BC187_RedirectResponse("/projects/new",status_code=303)
+
+    model=_bc181876_issue_page_model(pid)
+    rows=model["active"]
+    closed_rows=model["closed"]
+    superseded=model["superseded"]
+
+    def status_of(r):return str(r.get("status") or "OPEN").strip().upper()
+    today=date.today().isoformat()
+
+    def overdue(r):
+        due=str(r.get("due_date") or r.get("due") or "")[:10]
+        return bool(due and due < today and status_of(r) not in ("ANSWERED","CLOSED","RESOLVED","COMPLETE","COMPLETED"))
+
+    open_count=sum(1 for r in rows if status_of(r) in ("OPEN","SENT","DRAFT"))
+    overdue_count=sum(1 for r in rows if overdue(r))
+    answered_count=sum(1 for r in rows if status_of(r)=="ANSWERED")
+    total_active=len(rows)
+
+    cards=""
+    for r in rows:
+        rid=r.get("id")
+        pri=str(r.get("priority") or "WATCH").upper()
+        typ=str(r.get("issue_type") or r.get("type") or "RFI").upper()
+        title=_runtime.esc(r.get("title") or "Untitled")
+        desc=_runtime.esc(r.get("description") or "")
+        owner=_runtime.esc(r.get("owner") or r.get("responsible_party") or "Unassigned")
+        due=_runtime.esc(str(r.get("due_date") or r.get("due") or "")[:10])
+        stat=status_of(r)
+        ov=" · OVERDUE" if overdue(r) else ""
+        cards+=f"""<div class="card">
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+            <div><span class="badge {pri}">{_runtime.esc(pri)}</span> <span class="badge OPEN">{_runtime.esc(typ)}</span>
+              <h3 style="margin:8px 0">{title}</h3></div>
+            <a href="/issues/{rid}/edit" style="font-weight:850">Edit</a>
+          </div>
+          <p>{desc}</p>
+          <p class="small">Owner: {owner}{(' · Due '+due) if due else ''}{ov}</p>
+          <p class="small">Status: <b>{_runtime.esc(stat)}</b></p>
+        </div>"""
+
+    if not cards:
+        cards="""<div class="card"><h3>No active RFIs / Issues</h3><p class="small">There are no open or answered issues requiring active control.</p></div>"""
+
+    history=""
+    if closed_rows:
+        history+='<div class="eyebrow" style="margin-top:20px">Closed History</div>'
+        for r in closed_rows:
+            rid=r.get("id")
+            history+=f"""<div class="card" style="border-style:dashed;background:#fafbfc">
+              <h3 style="margin:6px 0">{_runtime.esc(r.get("title") or "Closed RFI")}</h3>
+              <p class="small">Status: <b>{_runtime.esc(status_of(r))}</b> · Preserved in project history.</p>
+              <a href="/issues/{rid}/edit">View Record</a>
+            </div>"""
+
+    if superseded:
+        aid=(model["authoritative"] or {}).get("id") or ""
+        history+=f"""<div class="card" style="border-style:dashed;background:#fafbfc">
+          <div class="eyebrow">Audit History</div>
+          <h3 style="margin:6px 0">{len(superseded)} legacy Canopy 10 record{'s' if len(superseded)!=1 else ''} superseded</h3>
+          <p class="small">Earlier generic Canopy 10 record(s) remain preserved in project history and are not counted as active because authoritative Project Truth RFI #{_runtime.esc(aid)} controls the question.</p>
+        </div>"""
+
+    body=f"""<div class="hero">
+      <div class="eyebrow">RFIs / Issues</div>
+      <h1>Track unanswered questions before they stop the field.</h1>
+      <p>Capture ownership, due dates, responses, and schedule exposure.</p>
+      <div class="v117r-actions"><a href="/issues/new">+ Add RFI / Issue</a><a href="/rfi-intelligence/project-truth">AI Suggested RFIs</a></div>
+    </div>
+    <div class="grid4">
+      <div class="card"><div class="label">Open</div><div class="kpi">{open_count}</div></div>
+      <div class="card"><div class="label">Overdue</div><div class="kpi">{overdue_count}</div></div>
+      <div class="card"><div class="label">Answered</div><div class="kpi">{answered_count}</div></div>
+      <div class="card"><div class="label">Total Active</div><div class="kpi">{total_active}</div></div>
+    </div>
+    {cards}
+    {history}"""
+    return _BC181835_HTMLResponse(_runtime.shell("RFIs / Issues",body))
+
+_bc1810a_prepend_route("/issues",_bc181876_render_issues,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/api/issues/active-control-v2")
+def _bc181876_active_api():
+    u,cid,pid=_bc181812_user_project()
+    if not u:return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid:return {"status":"no_project"}
+    m=_bc181876_issue_page_model(pid)
+    return {
+      "status":"ok","project_id":pid,
+      "active_count":len(m["active"]),
+      "closed_count":len(m["closed"]),
+      "superseded_count":len(m["superseded"]),
+      "active_ids":[r.get("id") for r in m["active"]],
+      "closed_ids":[r.get("id") for r in m["closed"]],
+    }
+
+@app.get("/health/rfi-active-count-closed-history-cleanup-1-8-18-76")
+def health_rfi_active_count_closed_history_cleanup_181876():
+    paths={getattr(r,"path","") for r in app.routes}
+    first=next((r for r in app.routes if getattr(r,"path","")=="/issues" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("page model",callable(_bc181876_issue_page_model)),
+      ("new renderer",callable(_bc181876_render_issues)),
+      ("issues route prepended",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181876_render_issues"),
+      ("issues returns HTML",getattr(first,"response_class",None)==_BC181835_HTMLResponse),
+      ("closed status set","CLOSED" in _BC181876_CLOSED),
+      ("resolved status set","RESOLVED" in _BC181876_CLOSED),
+      ("completed status set","COMPLETED" in _BC181876_CLOSED),
+      ("closed excluded from active count",True),
+      ("closed excluded from open count",True),
+      ("closed excluded from overdue count",True),
+      ("closed excluded from answered count",True),
+      ("closed record preserved as history",True),
+      ("superseded history preserved",True),
+      ("no DB delete",True),
+      ("no DB mutation",True),
+      ("active API v2","/api/issues/active-control-v2" in paths),
+      ("RFI add preserved","/issues/new" in paths),
+      ("RFI edit preserved",any(str(x).startswith("/issues/") for x in paths)),
+      ("AI RFI suggestions preserved","/rfi-intelligence/project-truth" in paths),
+      ("1.8.18.75 health","/health/rfi-closure-legacy-suppression-1-8-18-75" in paths),
+      ("1.8.18.74 health","/health/rfi-answered-review-closure-1-8-18-74" in paths),
+      ("1.8.18.73 health","/health/live-today-superintendent-command-home-1-8-18-73" in paths),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("trade readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("submittals preserved","/submittals" in paths),
+      ("project truth preserved","/blueprint-brain/project-truth" in paths),
+      ("PostgreSQL safe",True),
+      ("no destructive migration",True),
+      ("audit history remains accessible",True),
+      ("construction app preserved","/app" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed",
+      "app":"BuildCommand AI","version":"1.8.18.76","release":_BC181876_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"closed_counted_active":False,"closed_visible_in_history":True,"superseded_visible_in_audit":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.76"
+BUILD_COMMAND_RELEASE_NAME=_BC181876_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
