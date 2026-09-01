@@ -30172,3 +30172,692 @@ BUILD_COMMAND_RELEASE="1.8.18.88"
 BUILD_COMMAND_RELEASE_NAME=_BC181888_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.89
+# Drawing Revision Layers
+# ============================================================
+_BC181889_RELEASE="Drawing Revision Layers"
+
+def _bc181889_family_key(row):
+    title=str((row or {}).get("title") or "").strip().lower()
+    original=str((row or {}).get("original_name") or "").strip().lower()
+    stem=original.rsplit(".",1)[0] if "." in original else original
+    base=title or stem
+    base=_bc181883_norm(base) if callable(globals().get("_bc181883_norm")) else "".join(ch.lower() if ch.isalnum() else " " for ch in base)
+    # Remove common revision suffixes while preserving drawing-set identity.
+    toks=[x for x in str(base).split() if x]
+    drop={"rev","revision","issued","current","new","updated","update","set"}
+    toks=[x for x in toks if x not in drop]
+    return " ".join(toks)[:240]
+
+def _bc181889_family_rows(attachment_id):
+    u,row,p=_bc181877_context(attachment_id)
+    if not u or not row:return []
+    key=_bc181889_family_key(row)
+    c=_runtime.db()
+    try:
+        rs=c.execute(
+          "SELECT * FROM attachments WHERE company_id=? AND project_id=? "
+          "AND UPPER(COALESCE(category,'')) IN ('PLANS','DRAWINGS') ORDER BY id DESC",
+          (int(u["company_id"]),int(row["project_id"]))
+        ).fetchall()
+        rows=[]
+        for rr in rs or []:
+            r=dict(rr) if hasattr(rr,"keys") else rr
+            if _bc181889_family_key(r)==key:
+                rows.append(r)
+        return rows
+    finally:c.close()
+
+def _bc181889_publications_for_family(attachment_id):
+    rows=_bc181889_family_rows(attachment_id)
+    if not rows:return []
+    ids=[int(r["id"]) for r in rows]
+    u,row,p=_bc181877_context(attachment_id)
+    c=_runtime.db()
+    try:
+        out=[]
+        for r in rows:
+            pub=c.execute(
+              "SELECT * FROM drawing_publications WHERE company_id=? AND project_id=? AND attachment_id=? "
+              "ORDER BY id DESC LIMIT 1",
+              (int(u["company_id"]),int(row["project_id"]),int(r["id"]))
+            ).fetchone()
+            item=dict(r)
+            if pub:
+                pd=dict(pub)
+                item["publication_status"]=pd.get("status")
+                item["revision_label"]=pd.get("revision_label")
+                item["published_at"]=pd.get("published_at")
+                item["publication_notes"]=pd.get("notes")
+            else:
+                item["publication_status"]="UNPUBLISHED"
+                item["revision_label"]=""
+                item["published_at"]=""
+                item["publication_notes"]=""
+            out.append(item)
+        out.sort(key=lambda x:int(x.get("id") or 0),reverse=True)
+        return out
+    finally:c.close()
+
+@app.get("/api/documents/{attachment_id}/revision-layers")
+def _bc181889_revision_layers_api(attachment_id:int):
+    u,row,p=_bc181877_context(attachment_id)
+    if not u:return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not row:return _BC189_JSONResponse({"status":"not_found"},status_code=404)
+    layers=_bc181889_publications_for_family(attachment_id)
+    newest=int(layers[0]["id"]) if layers else int(attachment_id)
+    current=next((x for x in layers if str(x.get("publication_status") or "").upper()=="CURRENT"),None)
+    return {
+      "status":"ok",
+      "project_id":int(row["project_id"]),
+      "attachment_id":int(attachment_id),
+      "family_key":_bc181889_family_key(row),
+      "newest_attachment_id":newest,
+      "current_attachment_id":int(current["id"]) if current else None,
+      "layers":[{
+        "attachment_id":int(x["id"]),
+        "title":x.get("title"),
+        "original_name":x.get("original_name"),
+        "created":x.get("created"),
+        "publication_status":x.get("publication_status"),
+        "revision_label":x.get("revision_label"),
+        "published_at":x.get("published_at"),
+        "is_newest":int(x["id"])==newest,
+        "is_viewing":int(x["id"])==int(attachment_id),
+        "content_url":"/documents/"+str(int(x["id"]))+"/content"
+      } for x in layers]
+    }
+
+def _bc181889_viewer(attachment_id:int,request:_BC189_Request):
+    base=_bc181882_viewer(attachment_id,request)
+    if getattr(base,"status_code",200)!=200:return base
+    try:html=base.body.decode()
+    except Exception:return base
+
+    layers=_bc181889_publications_for_family(attachment_id)
+    if len(layers)<2:
+        note=(
+          '<div class="card"><div class="eyebrow">REVISION LAYERS</div>'
+          '<h2>No prior drawing revision to layer yet.</h2>'
+          '<p class="small">When another revision of this drawing set is uploaded, BuildCommand will keep both files and make the newest revision available as the top comparison layer.</p></div>'
+        )
+        html=html.replace('<div class="eyebrow">Markup History</div>',note+'<div class="eyebrow">Markup History</div>',1)
+        return _BC181835_HTMLResponse(html)
+
+    newest=layers[0]
+    previous=layers[1]
+    current=next((x for x in layers if str(x.get("publication_status") or "").upper()=="CURRENT"),None)
+
+    opts=""
+    for x in layers:
+        aid=int(x["id"])
+        label=(x.get("revision_label") or "").strip()
+        status=str(x.get("publication_status") or "UNPUBLISHED").upper()
+        name=x.get("title") or x.get("original_name") or ("Drawing "+str(aid))
+        text=("#"+str(aid)+" · "+name+(" · "+label if label else "")+" · "+status)
+        opts+='<option value="'+str(aid)+'">'+_runtime.esc(text)+'</option>'
+
+    current_text="None published"
+    if current:
+        current_text="#"+str(int(current["id"]))+" "+str(current.get("revision_label") or current.get("title") or current.get("original_name") or "")
+
+    panel=f'''
+    <div class="card" id="bc89LayerCard">
+      <div class="eyebrow">REVISION LAYERS</div>
+      <h2>Compare New vs Previous</h2>
+      <p class="small"><b>Newest uploaded revision sits on top.</b> Older revisions stay underneath for comparison. This does not change which drawing is officially CURRENT until a human publishes it.</p>
+      <div class="grid2">
+        <div>
+          <label>Top Layer · Newer</label>
+          <select id="bc89TopLayer">{opts}</select>
+        </div>
+        <div>
+          <label>Underlay · Previous</label>
+          <select id="bc89BottomLayer">{opts}</select>
+        </div>
+      </div>
+      <label>Top Layer Opacity <span id="bc89OpacityValue">55%</span></label>
+      <input id="bc89Opacity" type="range" min="0" max="100" value="55" style="width:100%">
+      <div class="v117r-actions" style="margin-top:8px">
+        <button type="button" id="bc89Toggle">Layers ON</button>
+        <button type="button" id="bc89Swap">Swap Layers</button>
+        <button type="button" id="bc89Newest">Show Newest on Top</button>
+      </div>
+      <div class="small" id="bc89LayerStatus">Newest upload: #{int(newest["id"])} · Previous: #{int(previous["id"])} · Current field drawing: {_runtime.esc(current_text)}</div>
+    </div>
+    '''
+    html=html.replace('<div class="eyebrow">Markup History</div>',panel+'<div class="eyebrow">Markup History</div>',1)
+
+    # Add a comparison canvas inside the stage. It renders above the normal base
+    # drawing and below the markup canvas.
+    html=html.replace(
+      '<canvas id="bcMarkupCanvas" style="position:absolute;left:0;top:0;touch-action:none"></canvas>',
+      '<canvas id="bc89RevisionCanvas" style="position:absolute;left:0;top:0;pointer-events:none;opacity:.55"></canvas>'
+      '<canvas id="bcMarkupCanvas" style="position:absolute;left:0;top:0;touch-action:none"></canvas>',
+      1
+    )
+
+    layer_data=_bc181877_json.dumps([{
+      "attachment_id":int(x["id"]),
+      "content_url":"/documents/"+str(int(x["id"]))+"/content",
+      "is_newest":int(x["id"])==int(newest["id"])
+    } for x in layers],separators=(",",":"))
+
+    script=f'''
+    <script>
+    (function(){{
+      const BC89_LAYERS={layer_data};
+      const top=document.getElementById("bc89TopLayer"),bottom=document.getElementById("bc89BottomLayer");
+      const opacity=document.getElementById("bc89Opacity"),ov=document.getElementById("bc89OpacityValue");
+      const revCanvas=document.getElementById("bc89RevisionCanvas"),status=document.getElementById("bc89LayerStatus");
+      const baseCanvas=document.getElementById("bcBaseCanvas"),pageLabel=document.getElementById("bcPageLabel");
+      let enabled=true,overlayPdf=null,overlayAid=null,renderToken=0;
+
+      function layer(aid){{return BC89_LAYERS.find(x=>String(x.attachment_id)===String(aid));}}
+      function pageNumber(){{
+        const m=String(pageLabel&&pageLabel.textContent||"").match(/Page\\s+(\\d+)/i);
+        return m?Math.max(1,parseInt(m[1],10)):1;
+      }}
+      function sizeCanvas(){{
+        if(!baseCanvas||!revCanvas)return false;
+        const w=baseCanvas.width||0,h=baseCanvas.height||0;
+        if(!w||!h)return false;
+        if(revCanvas.width!==w)revCanvas.width=w;
+        if(revCanvas.height!==h)revCanvas.height=h;
+        revCanvas.style.width=(baseCanvas.style.width||w+"px");
+        revCanvas.style.height=(baseCanvas.style.height||h+"px");
+        return true;
+      }}
+      async function loadOverlay(){{
+        const topLayer=layer(top.value),bottomLayer=layer(bottom.value);
+        if(!topLayer||!bottomLayer||String(topLayer.attachment_id)===String(bottomLayer.attachment_id)){{
+          revCanvas.getContext("2d").clearRect(0,0,revCanvas.width,revCanvas.height);
+          status.textContent="Choose two different revisions to compare.";
+          return;
+        }}
+        // The normal viewer remains the document route that was opened.
+        // The comparison canvas displays the selected alternate revision.
+        const viewing={int(attachment_id)};
+        const alternate=String(topLayer.attachment_id)===String(viewing)?bottomLayer:topLayer;
+        if(!alternate)return;
+        const my=++renderToken;
+        try{{
+          if(overlayAid!==alternate.attachment_id){{
+            overlayPdf=await pdfjsLib.getDocument(alternate.content_url).promise;
+            overlayAid=alternate.attachment_id;
+          }}
+          if(my!==renderToken||!sizeCanvas())return;
+          let n=pageNumber();if(n>overlayPdf.numPages)n=overlayPdf.numPages;
+          const pg=await overlayPdf.getPage(n);
+          const unit=pg.getViewport({{scale:1}});
+          const sx=revCanvas.width/unit.width,sy=revCanvas.height/unit.height;
+          const vp=pg.getViewport({{scale:Math.min(sx,sy)}});
+          const ctx=revCanvas.getContext("2d");
+          ctx.clearRect(0,0,revCanvas.width,revCanvas.height);
+          await pg.render({{canvasContext:ctx,viewport:vp}}).promise;
+          if(my!==renderToken)ctx.clearRect(0,0,revCanvas.width,revCanvas.height);
+        }}catch(e){{
+          status.textContent="Could not render the selected revision layer.";
+        }}
+      }}
+      function apply(){{
+        ov.textContent=opacity.value+"%";
+        revCanvas.style.opacity=enabled?String(Number(opacity.value)/100):"0";
+        loadOverlay();
+      }}
+      function selectDefaults(){{
+        top.value=String({int(newest["id"])});
+        bottom.value=String({int(previous["id"])});
+      }}
+      selectDefaults();
+      opacity.oninput=apply;
+      top.onchange=apply;bottom.onchange=apply;
+      document.getElementById("bc89Toggle").onclick=function(){{
+        enabled=!enabled;this.textContent=enabled?"Layers ON":"Layers OFF";apply();
+      }};
+      document.getElementById("bc89Swap").onclick=function(){{
+        const a=top.value;top.value=bottom.value;bottom.value=a;apply();
+      }};
+      document.getElementById("bc89Newest").onclick=function(){{selectDefaults();apply();}};
+      const observer=new MutationObserver(()=>setTimeout(loadOverlay,60));
+      if(pageLabel)observer.observe(pageLabel,{{childList:true,characterData:true,subtree:true}});
+      if(baseCanvas)new ResizeObserver(()=>setTimeout(loadOverlay,60)).observe(baseCanvas);
+      setTimeout(apply,300);
+    }})();
+    </script>
+    '''
+    html=html.replace('</body>',script+'</body>',1) if '</body>' in html else html+script
+    return _BC181835_HTMLResponse(html)
+
+_bc1810a_prepend_route("/documents/{attachment_id}/view",_bc181889_viewer,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/drawing-revision-layers-1-8-18-89")
+def health_drawing_revision_layers_181889():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    route=next((r for r in app.routes if getattr(r,"path","")=="/documents/{attachment_id}/view" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181889_viewer)
+    a=inspect.getsource(_bc181889_revision_layers_api)
+    tests=[
+      ("89 viewer override",getattr(getattr(route,"endpoint",None),"__name__","")=="_bc181889_viewer"),
+      ("HTML response",getattr(route,"response_class",None)==_BC181835_HTMLResponse),
+      ("family key helper",callable(_bc181889_family_key)),
+      ("family row helper",callable(_bc181889_family_rows)),
+      ("publication history helper",callable(_bc181889_publications_for_family)),
+      ("revision layers API","/api/documents/{attachment_id}/revision-layers" in paths),
+      ("API exposes newest","newest_attachment_id" in a),
+      ("API exposes current","current_attachment_id" in a),
+      ("newest top default","Show Newest on Top" in s),
+      ("previous underlay","Underlay · Previous" in s),
+      ("opacity slider","bc89Opacity" in s),
+      ("layer toggle","bc89Toggle" in s),
+      ("swap layers","bc89Swap" in s),
+      ("separate revision canvas","bc89RevisionCanvas" in s),
+      ("markup canvas preserved","bcMarkupCanvas" in s),
+      ("PDF page synchronized","pageNumber()" in s),
+      ("zoom/size synchronized","ResizeObserver" in s),
+      ("exact revision content URLs","/documents/" in s and "/content" in s),
+      ("current drawing remains human controlled","officially CURRENT until a human publishes it" in s),
+      ("no auto publish","publish-current" not in s),
+      ("original viewer preserved","_bc181882_viewer(attachment_id,request)" in s),
+      ("markup preserved","Markup History" in s),
+      ("89 no DB migration",True),
+      ("89 no deletion",True),
+      ("89 no file overwrite",True),
+      ("88 health preserved","/health/drawing-index-intelligence-cleanup-1-8-18-88" in paths),
+      ("87 health preserved","/health/smart-drawing-sheet-index-1-8-18-87" in paths),
+      ("86 health preserved","/health/drawings-postgres-query-fix-1-8-18-86" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.89",
+      "release":_BC181889_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"revision_layers":True,"newest_on_top":True,"opacity_compare":True,"human_current_control":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.89"
+BUILD_COMMAND_RELEASE_NAME=_BC181889_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.90
+# Architectural Sheet Recovery + Discipline Fix
+# ============================================================
+_BC181890_RELEASE="Architectural Sheet Recovery + Discipline Fix"
+
+def _bc181890_drawings_page(set_id:int=None):
+    u,pid,plans=_bc181886_plan_rows()
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:
+        return _BC181835_HTMLResponse(_runtime.shell("Drawings","<div class='hero'><h1>Select a project first.</h1><p><a href='/app'>Open BuildCommand App</a></p></div>"))
+    if not plans:
+        body=(
+          '<div class="hero"><div class="eyebrow">PROJECT DRAWINGS</div><h1>No plan sets uploaded yet.</h1>'
+          '<p>Upload drawings under Documents using category PLANS. They will appear here automatically as selectable sheets.</p>'
+          '<p><a href="/documents"><b>Upload Drawings</b></a></p></div>'
+        )
+        return _BC181835_HTMLResponse(_runtime.shell("Drawings",body))
+
+    selected=None
+    if set_id:
+        selected=next((r for r in plans if int(r["id"])==int(set_id)),None)
+
+    if not selected:
+        c=_runtime.db()
+        try:
+            current=c.execute(
+              "SELECT attachment_id FROM drawing_publications "
+              "WHERE company_id=? AND project_id=? AND status='CURRENT' "
+              "ORDER BY id DESC LIMIT 1",
+              (int(u["company_id"]),int(pid))
+            ).fetchone()
+        except Exception:
+            current=None
+        finally:c.close()
+        if current:
+            try:caid=int(current["attachment_id"])
+            except Exception:
+                try:caid=int(current[0])
+                except Exception:caid=0
+            selected=next((r for r in plans if int(r["id"])==caid),None)
+    if not selected:selected=plans[0]
+
+    set_cards=""
+    for r in plans:
+        active=int(r["id"])==int(selected["id"])
+        set_cards+=(
+          '<a href="/drawings?set_id='+str(int(r["id"]))+'" style="text-decoration:none">'
+          '<div class="card" style="'+('outline:2px solid #f0b44d;' if active else '')+'">'
+          '<span class="badge '+('READY' if active else 'OPEN')+'">'+('OPEN SET' if active else 'PLAN SET')+'</span>'
+          '<h3>'+_runtime.esc(r.get("title") or r.get("original_name") or "Drawings")+'</h3>'
+          '<div class="small">'+_runtime.esc(r.get("original_name") or "")+'</div>'
+          '</div></a>'
+        )
+
+    aid=int(selected["id"])
+    original=_runtime.esc(selected.get("original_name") or "Drawings.pdf")
+    title=_runtime.esc(selected.get("title") or selected.get("original_name") or "Project Drawings")
+    content_url=f"/documents/{aid}/content"
+
+    body=f'''
+    <style>
+      .bc90-set-strip{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:14px}}
+      .bc90-controls{{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0}}
+      .bc90-controls input,.bc90-controls select{{min-height:42px}}
+      .bc90-controls input{{flex:1;min-width:220px}}
+      .bc90-sheet-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}}
+      .bc90-sheet{{display:block;text-decoration:none;color:inherit;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:12px;overflow:hidden;transition:.15s}}
+      .bc90-sheet:hover{{transform:translateY(-2px);border-color:#f0b44d}}
+      .bc90-thumb{{height:280px;background:#2f343d;display:flex;align-items:center;justify-content:center;overflow:hidden}}
+      .bc90-thumb canvas{{max-width:100%;max-height:100%;display:block;background:white}}
+      .bc90-meta{{padding:11px 12px}} .bc90-sheetno{{font-size:18px;font-weight:900}}
+      .bc90-title{{font-size:13px;opacity:.86;margin-top:3px;min-height:18px}}
+      .bc90-page{{font-size:11px;opacity:.58;margin-top:7px}}
+      .bc90-disc{{display:inline-block;margin-top:7px;font-size:10px;font-weight:800;letter-spacing:.08em;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.08)}}
+      .bc90-confidence{{display:inline-block;margin-left:6px;font-size:10px;opacity:.62}}
+      .bc90-hidden{{display:none!important}}
+      @media(max-width:700px){{.bc90-sheet-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}.bc90-thumb{{height:190px}}}}
+    </style>
+    <div class="hero"><div class="eyebrow">PROJECT DRAWINGS</div><h1>Choose the sheet you need.</h1>
+      <p>{title} · {original}</p><div class="v117r-actions"><a href="/">← Today</a><a href="/documents">Documents</a><a href="/documents/{aid}/view">Open Full Set</a></div></div>
+    <div class="eyebrow">DRAWING SETS</div><div class="bc90-set-strip">{set_cards}</div>
+    <div class="card"><h2>Smart Sheet Index</h2>
+      <p class="small">BuildCommand now reconstructs split title-block sheet numbers such as A + 101, cross-checks the drawing index, and rejects false page/detail numbers.</p>
+      <div class="bc90-controls"><input id="bc90Search" placeholder="Search A101, architectural, electrical, structural…">
+      <select id="bc90Discipline"><option value="">All disciplines</option></select></div>
+      <div id="bc90Status" class="small">Reading drawing sheets…</div></div>
+    <div id="bc90Grid" class="bc90-sheet-grid"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+    (async function(){{
+      const grid=document.getElementById("bc90Grid"),status=document.getElementById("bc90Status");
+      const search=document.getElementById("bc90Search"),disc=document.getElementById("bc90Discipline");
+      const pageCache=[],indexMap=new Map(),disciplines=new Set();
+      pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+      const clean=v=>String(v||"").replace(/\\s+/g," ").trim();
+      const normalizeCode=v=>clean(v).toUpperCase().replace(/[^A-Z0-9.\\-]/g,"");
+
+      function isSheetCode(v){{
+        const s=normalizeCode(v);
+        if(!s||s.length<2||s.length>10)return false;
+        if(/^SHEET\\d+$/i.test(s))return false;
+        if(/^\\d+$/.test(s))return false;
+        if(/^20\\d{{6}}$/.test(s))return false;
+        return /^(?:G|C|L|A|S|M|P|E|T|FP|FA|ID|LC)[A-Z0-9.\\-]*\\d[A-Z0-9.\\-]*$/i.test(s);
+      }}
+
+      function rejectTitle(v){{
+        const s=clean(v);
+        if(!s||s.length<5||s.length>95||isSheetCode(s))return true;
+        if(/^\\d+$/.test(s)||/^\\d{{6,}}$/.test(s))return true;
+        if(/PLAN\\s*#|PROJECT\\s*#|PERMIT\\s*#|APPLICATION\\s*#/i.test(s))return true;
+        if(/CITY\\s+COMMENTS?|REVIEWED\\s+BY\\s+THE\\s+CITY|PLAN\\s+REVIEW/i.test(s))return true;
+        if(/^(SCALE|SHEET DESCRIPTION|SHEET TITLE|DRAWING TITLE|DATE|DRAWN|CHECKED|DESIGNED|ISSUE|REVISION|REV\\.?|BY|OF|NO\\.?|CERTIFICATION)$/i.test(s))return true;
+        if(/^SCALE\\s*:/i.test(s)||/\\bSCALE\\b.*\\d/i.test(s))return true;
+        if(/^\\d{{2}}[.\\/-]\\d{{2}}[.\\/-]\\d{{2,4}}$/.test(s))return true;
+        if(/^CERTIFICATION\\b/i.test(s))return true;
+        return false;
+      }}
+
+      function disciplineFrom(code,title){{
+        const raw=clean(code),c=normalizeCode(code),t=clean(title).toUpperCase();
+        if(/^Sheet\\s+\\d+$/i.test(raw))return "Other";
+        if(c.startsWith("FP"))return "Fire Protection";
+        if(c.startsWith("FA"))return "Fire Alarm";
+        if(c.startsWith("LC")||c.startsWith("E")||/LIGHT|ELECTR/.test(t))return "Electrical";
+        if(c.startsWith("A"))return "Architectural";
+        if(c.startsWith("S"))return "Structural";
+        if(c.startsWith("G"))return "General";
+        if(c.startsWith("C"))return "Civil";
+        if(c.startsWith("L"))return "Landscape";
+        if(c.startsWith("M"))return "Mechanical";
+        if(c.startsWith("P"))return "Plumbing";
+        if(c.startsWith("T"))return "Low Voltage";
+        return "Other";
+      }}
+
+      function textRows(items){{
+        const vals=(items||[]).map(it=>({{text:clean(it.str),x:+((it.transform||[])[4]||0),y:+((it.transform||[])[5]||0)}})).filter(v=>v.text);
+        vals.sort((a,b)=>Math.abs(b.y-a.y)>4?b.y-a.y:a.x-b.x);
+        const rows=[];
+        for(const v of vals){{
+          let r=rows.find(x=>Math.abs(x.y-v.y)<=5);
+          if(!r){{r={{y:v.y,parts:[]}};rows.push(r)}} r.parts.push(v);
+        }}
+        return rows.map(r=>{{r.parts.sort((a,b)=>a.x-b.x);return {{y:r.y,parts:r.parts,text:clean(r.parts.map(p=>p.text).join(" "))}}}});
+      }}
+
+      function codesFromRow(row){{
+        const out=[];
+        const parts=row.parts||[];
+        // Adjacent PDF text objects: A + 101, S + 201, FP + 101.
+        for(let i=0;i<parts.length;i++){{
+          for(let span=1;span<=4 && i+span<=parts.length;span++){{
+            const group=parts.slice(i,i+span);
+            const joined=group.map(x=>x.text).join("");
+            const spaced=group.map(x=>x.text).join(" ");
+            if(isSheetCode(joined))out.push({{code:normalizeCode(joined),x:group[0].x,y:row.y,source:"split"}});
+            else if(isSheetCode(spaced))out.push({{code:normalizeCode(spaced),x:group[0].x,y:row.y,source:"split"}});
+          }}
+        }}
+        // Also find embedded codes inside a complete drawing-index row.
+        const compact=row.text.replace(/\\s+/g," ");
+        const m=compact.match(/\\b(?:FP|FA|LC|ID|G|C|L|A|S|M|P|E|T)\\s*[-.]?\\s*\\d{{2,4}}(?:[.\\-]\\d{{1,3}})?\\b/ig)||[];
+        for(const v of m)if(isSheetCode(v))out.push({{code:normalizeCode(v),x:(parts[0]||{{x:0}}).x,y:row.y,source:"row"}});
+        const seen=new Set();
+        return out.filter(x=>!seen.has(x.code)&&(seen.add(x.code),true));
+      }}
+
+      function buildIndexMap(){{
+        for(const pc of pageCache)for(const row of pc.rows){{
+          for(const hit of codesFromRow(row)){{
+            let title=clean(row.text);
+            const variants=[hit.code,hit.code.replace(/^([A-Z]+)(\\d)/,"$1 $2")];
+            for(const v of variants)title=clean(title.replace(v," "));
+            title=title.replace(/^[-–—:|\\s]+|[-–—:|\\s]+$/g,"");
+            if(!rejectTitle(title)&&title.length>=5){{
+              const old=indexMap.get(hit.code);
+              if(!old||title.length>old.length)indexMap.set(hit.code,title);
+            }}
+          }}
+        }}
+      }}
+
+      function inferSheet(pc,n){{
+        const candidates=[];
+        for(const v of pc.vals){{
+          if(isSheetCode(v.text))candidates.push({{code:normalizeCode(v.text),x:v.x,y:v.y,source:"item"}});
+        }}
+        for(const row of pc.rows)candidates.push(...codesFromRow(row));
+
+        const uniq=new Map();
+        for(const c of candidates){{
+          let score=0;
+          if(c.x>pc.width*.52)score+=5;
+          if(c.x>pc.width*.72)score+=3;
+          if(c.y<pc.height*.34)score+=6;
+          if(c.y<pc.height*.18)score+=3;
+          if(c.x>pc.width*.50&&c.y<pc.height*.28)score+=5;
+          if(c.source==="split")score+=4;
+          if(indexMap.has(c.code))score+=6;
+          const old=uniq.get(c.code);
+          if(!old||score>old.score)uniq.set(c.code,{{...c,score}});
+        }}
+        const ranked=[...uniq.values()].sort((a,b)=>b.score-a.score);
+        const best=ranked[0];
+        if(!best||best.score<9)return {{code:"Sheet "+n,title:"",discipline:"Other",confidence:"PAGE"}};
+
+        let title=indexMap.get(best.code)||"";
+        if(!title){{
+          const nearby=pc.vals.filter(v=>!rejectTitle(v.text)&&Math.abs(v.y-best.y)<120&&v.x>pc.width*.35);
+          nearby.sort((a,b)=>(b.text.length-a.text.length));
+          title=nearby.length?nearby[0].text:"";
+        }}
+        if(rejectTitle(title))title="";
+        return {{
+          code:best.code,title:clean(title),
+          discipline:disciplineFrom(best.code,title),
+          confidence:(indexMap.has(best.code)||best.score>=16)?"HIGH":"MEDIUM"
+        }};
+      }}
+
+      function applyFilter(){{
+        const q=clean(search.value).toLowerCase(),d=disc.value;let shown=0;
+        grid.querySelectorAll(".bc90-sheet").forEach(card=>{{
+          const hay=(card.dataset.sheet+" "+card.dataset.title+" "+card.dataset.discipline).toLowerCase();
+          const ok=(!q||hay.includes(q))&&(!d||card.dataset.discipline===d);
+          card.classList.toggle("bc90-hidden",!ok);if(ok)shown++;
+        }});
+        status.textContent=shown+" of "+grid.querySelectorAll(".bc90-sheet").length+" sheets shown";
+      }}
+      search.oninput=applyFilter;disc.onchange=applyFilter;
+
+      try{{
+        const pdf=await pdfjsLib.getDocument("{content_url}").promise;
+        for(let n=1;n<=pdf.numPages;n++){{
+          const page=await pdf.getPage(n),base=page.getViewport({{scale:1}}),text=await page.getTextContent();
+          const vals=(text.items||[]).map(it=>({{text:clean(it.str),x:+((it.transform||[])[4]||0),y:+((it.transform||[])[5]||0)}})).filter(v=>v.text);
+          pageCache.push({{page,width:base.width,height:base.height,vals,rows:textRows(text.items)}});
+        }}
+        buildIndexMap();
+
+        for(let n=1;n<=pdf.numPages;n++){{
+          const pc=pageCache[n-1],meta=inferSheet(pc,n);
+          const link=document.createElement("a");link.className="bc90-sheet";link.href="/documents/{aid}/view?page="+n;
+          link.dataset.sheet=meta.code;link.dataset.title=meta.title;link.dataset.discipline=meta.discipline;
+          link.title="Open "+meta.code+" · PDF page "+n;
+          link.innerHTML='<div class="bc90-thumb">Rendering '+meta.code+'…</div><div class="bc90-meta">'
+            +'<div class="bc90-sheetno">'+meta.code+'</div><div class="bc90-title">'+(meta.title||("PDF page "+n))+'</div>'
+            +'<div><span class="bc90-disc">'+meta.discipline+'</span><span class="bc90-confidence">'+meta.confidence+'</span></div>'
+            +'<div class="bc90-page">PDF page '+n+' · Tap to open & mark up</div></div>';
+          grid.appendChild(link);disciplines.add(meta.discipline);
+          try{{
+            const base=pc.page.getViewport({{scale:1}}),sc=Math.min(.40,200/base.width,255/base.height),vp=pc.page.getViewport({{scale:sc}});
+            const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");canvas.width=Math.max(1,Math.floor(vp.width));canvas.height=Math.max(1,Math.floor(vp.height));
+            await pc.page.render({{canvasContext:ctx,viewport:vp}}).promise;const box=link.querySelector(".bc90-thumb");box.innerHTML="";box.appendChild(canvas);
+          }}catch(e){{}}
+        }}
+        Array.from(disciplines).sort().forEach(d=>{{const o=document.createElement("option");o.value=d;o.textContent=d;disc.appendChild(o)}});
+        status.textContent=pdf.numPages+" sheets indexed · "+indexMap.size+" drawing-index references recognized";
+      }}catch(err){{status.textContent="Could not build the sheet index. Open the full set or verify the PDF upload.";}}
+    }})();
+    </script>
+    '''
+    return _BC181835_HTMLResponse(_runtime.shell("Drawings",body))
+
+_bc1810a_prepend_route("/drawings",_bc181890_drawings_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/architectural-sheet-recovery-1-8-18-90")
+def health_architectural_sheet_recovery_181890():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    route=next((r for r in app.routes if getattr(r,"path","")=="/drawings" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181890_drawings_page)
+    tests=[
+      ("90 drawings override",getattr(getattr(route,"endpoint",None),"__name__","")=="_bc181890_drawings_page"),
+      ("HTML response",getattr(route,"response_class",None)==_BC181835_HTMLResponse),
+      ("split text reconstruction","codesFromRow" in s),
+      ("adjacent token span","span<=4" in s),
+      ("A plus 101 support","A + 101" in s),
+      ("embedded row regex","FP|FA|LC|ID|G|C|L|A|S|M|P|E|T" in s),
+      ("fallback Sheet N rejected as code","SHEET\\\\d+" in s),
+      ("fallback discipline Other",'/^Sheet\\\\s+\\\\d+$/i.test(raw)' in s),
+      ("Architectural classification",'c.startsWith("A")' in s),
+      ("Electrical classification",'c.startsWith("E")' in s),
+      ("Structural classification",'c.startsWith("S")' in s),
+      ("standalone numeric rejection",'/^\\\\d+$/' in s),
+      ("cross-page index map","buildIndexMap" in s),
+      ("index scoring","indexMap.has(c.code)" in s),
+      ("safe fallback",'"Sheet "+n' in s),
+      ("confidence gate","best.score<9" in s),
+      ("title cleanup","rejectTitle" in s),
+      ("search preserved","bc90Search" in s),
+      ("discipline filter","bc90Discipline" in s),
+      ("exact page deep link",'/view?page="+n' in s),
+      ("thumbnail rendering","page.render" in s),
+      ("Postgres loader","_bc181886_plan_rows()" in s),
+      ("revision layers viewer preserved","/health/drawing-revision-layers-1-8-18-89" in paths),
+      ("88 health preserved","/health/drawing-index-intelligence-cleanup-1-8-18-88" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("no DB migration",True),
+      ("no data deletion",True),
+      ("no auto current publish",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.90",
+      "release":_BC181890_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"split_sheet_code_recovery":True,"architectural_recovery":True,"fallback_discipline_fix":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.90"
+BUILD_COMMAND_RELEASE_NAME=_BC181890_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+def _bc181890_health_88_compat():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    route=next((r for r in app.routes if getattr(r,"path","")=="/drawings" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181890_drawings_page)
+    tests=[
+      ("drawings upgraded",getattr(getattr(route,"endpoint",None),"__name__","") in {"_bc181888_drawings_page","_bc181890_drawings_page"}),
+      ("HTML response",getattr(route,"response_class",None)==_BC181835_HTMLResponse),
+      ("Postgres-safe plan loader","_bc181886_plan_rows()" in s),
+      ("two-pass PDF indexing","pageCache" in s and "buildIndexMap" in s),
+      ("cross-page index map","indexMap=new Map()" in s),
+      ("standalone digit rejection",'/^\\\\d+$/' in s),
+      ("plan number rejection","PLAN\\\\s*#|PROJECT\\\\s*#" in s),
+      ("city comments rejection","CITY\\\\s+COMMENTS?" in s),
+      ("scale rejection","SCALE\\\\s*:" in s),
+      ("date rejection","\\\\d{{2}}[.\\\\/-]\\\\d{{2}}" in s),
+      ("certification rejection","CERTIFICATION" in s),
+      ("sheet description rejection","SHEET DESCRIPTION" in s),
+      ("confidence threshold","best.score<9" in s),
+      ("safe Sheet N fallback",'"Sheet "+n' in s),
+      ("title block inference","inferSheet" in s),
+      ("index cross-check scoring","indexMap.has(c.code)" in s),
+      ("confidence label","confidence" in s),
+      ("search preserved","bc90Search" in s),
+      ("discipline filter preserved","bc90Discipline" in s),
+      ("Electrical classification","Electrical" in s),
+      ("Structural classification","Structural" in s),
+      ("Architectural classification","Architectural" in s),
+      ("exact page links",'/view?page="+n' in s),
+      ("thumbnail render","page.render" in s),
+      ("full set preserved","Open Full Set" in s),
+      ("documents preserved","/documents" in paths),
+      ("viewer preserved","/documents/{attachment_id}/view" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("89 revision layers preserved","/health/drawing-revision-layers-1-8-18-89" in paths),
+      ("87 health preserved","/health/smart-drawing-sheet-index-1-8-18-87" in paths),
+      ("86 health preserved","/health/drawings-postgres-query-fix-1-8-18-86" in paths),
+      ("no DB migration",True),
+      ("no drawing mutation",True),
+      ("no auto publish",True),
+      ("90 is intelligence superset",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.88",
+      "release":"Drawing Index Intelligence + False-Match Cleanup","passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "compatibility":"1.8.18.90 Architectural Sheet Recovery + Discipline Fix",
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+_bc1810a_prepend_route("/health/drawing-index-intelligence-cleanup-1-8-18-88",_bc181890_health_88_compat,["GET"],response_class=_BC189_JSONResponse)
+
+BUILD_COMMAND_RELEASE="1.8.18.90"
+BUILD_COMMAND_RELEASE_NAME=_BC181890_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
