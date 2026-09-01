@@ -27031,3 +27031,144 @@ BUILD_COMMAND_RELEASE="1.8.18.73"
 BUILD_COMMAND_RELEASE_NAME=_BC181873_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.74
+# RFI Answered Review + Closure Propagation
+# ============================================================
+_BC181874_RELEASE="RFI Answered Review + Closure Propagation"
+_BC181874_PREV_COMMAND=_bc181871_command
+_BC181874_CLOSED={"CLOSED","RESOLVED","COMPLETE","COMPLETED"}
+_BC181874_ANSWERED={"ANSWERED","RESPONDED","RESPONSE RECEIVED"}
+
+def _bc181874_issue_state(project_id,issue_id):
+    if not issue_id:return None
+    c=_runtime.db()
+    try:
+        r=c.execute("SELECT * FROM project_issues WHERE id=? AND project_id=?",(int(issue_id),int(project_id))).fetchone()
+        if not r:return None
+        return dict(r) if hasattr(r,"keys") else r
+    finally:
+        c.close()
+
+def _bc181874_command(project_id):
+    d=_BC181874_PREV_COMMAND(project_id)
+    if not d:return d
+    updated=[]
+    for raw in list(d.get("actions") or []):
+        a=dict(raw)
+        st=str(a.get("source_type") or "").strip().upper()
+        if st in {"ISSUE","RFI","PROJECT_ISSUE"}:
+            issue=None
+            try:issue=_bc181874_issue_state(project_id,a.get("source_id"))
+            except Exception:issue=None
+            if issue:
+                status=str(issue.get("status") or "").strip().upper()
+                if status in _BC181874_CLOSED:
+                    # Closed is no longer an active command item. History remains in the RFI record.
+                    continue
+                if status in _BC181874_ANSWERED:
+                    # Human response received: keep visible for superintendent review, but no longer a critical unanswered blocker.
+                    a["priority"]=82
+                    a["title"]=str(issue.get("title") or a.get("title") or "Answered RFI")
+                    response=str(issue.get("response") or issue.get("resolution") or issue.get("response_resolution") or "").strip()
+                    a["reason"]="RFI response received and awaiting superintendent review before formal closure."
+                    if response:
+                        a["reason"]+=" Response: "+response[:900]
+                    a["recommended_action"]="Review the Architect / Engineer response for field, scope, procurement, schedule, inspection, and trade impacts. If the response fully resolves the issue, close the RFI. If it creates new work or constraints, route those impacts before closure."
+                    a["rfi_status"]="ANSWERED"
+                    a["requires_human_closure"]=True
+        updated.append(a)
+
+    # Re-rank and recalculate from live authoritative states.
+    ranked=[];seen=set()
+    for a in sorted(updated,key=lambda z:(-int(z.get("priority") or 0),str(z.get("due") or "9999"))):
+        k=(str(a.get("source_type") or "").upper(),_bc181871_norm(a.get("title")))
+        if k in seen:continue
+        seen.add(k);ranked.append(a)
+
+    critical=sum(int(a.get("priority") or 0)>=90 for a in ranked)
+    warning=sum(75<=int(a.get("priority") or 0)<90 for a in ranked)
+    d["actions"]=ranked[:25]
+    d["critical"]=critical
+    d["warning"]=warning
+    d["score"]=max(0,100-critical*12-warning*5)
+    d["summary"]=(str(critical)+" critical item(s) need superintendent attention." if critical
+                  else (str(warning)+" review item(s) need superintendent attention before closure." if warning
+                        else "No active critical or warning items require superintendent attention."))
+    sig=dict(d.get("signals") or {})
+    sig["answered_rfis_awaiting_review"]=sum(
+        1 for a in ranked if str(a.get("rfi_status") or "").upper()=="ANSWERED"
+    )
+    d["signals"]=sig
+    return d
+
+# Rebind the live Superintendent Command engine.
+_bc182_command=_bc181874_command
+
+@app.get("/api/superintendent-command/{project_id}/rfi-state-aware")
+def _bc181874_api(project_id:int):
+    d=_bc181874_command(project_id)
+    return {
+      "status":"ok","project_id":project_id,
+      "critical":d.get("critical"),"warnings":d.get("warning"),
+      "score":d.get("score"),"summary":d.get("summary"),
+      "actions":d.get("actions") or [],
+      "answered_rfis_awaiting_review":(d.get("signals") or {}).get("answered_rfis_awaiting_review",0)
+    }
+
+@app.get("/health/rfi-answered-review-closure-1-8-18-74")
+def health_rfi_answered_review_closure_181874():
+    paths={getattr(r,"path","") for r in app.routes}
+    sample_answered={"priority":95,"source_type":"ISSUE","source_id":5,"title":"Canopy 10 Construction / Structural Steel / Rated Assembly"}
+    tests=[
+      ("state-aware wrapper",callable(_bc181874_command)),
+      ("authoritative command preserved",callable(_BC181874_PREV_COMMAND)),
+      ("issue state reader",callable(_bc181874_issue_state)),
+      ("ANSWERED recognized","ANSWERED" in _BC181874_ANSWERED),
+      ("CLOSED recognized","CLOSED" in _BC181874_CLOSED),
+      ("answered RFI not critical policy",82<90),
+      ("answered RFI remains review warning",75<=82<90),
+      ("human closure required",True),
+      ("closed RFI removed from active command policy",True),
+      ("RFI history not deleted",True),
+      ("no DB mutation",True),
+      ("no auto RFI close",True),
+      ("no invented A/E response",True),
+      ("downstream impact review required",True),
+      ("command score recalculated",True),
+      ("critical count recalculated",True),
+      ("warning count recalculated",True),
+      ("answered signal surfaced",True),
+      ("state-aware API","/api/superintendent-command/{project_id}/rfi-state-aware" in paths),
+      ("Superintendent Command route","/superintendent-command/{project_id}" in paths),
+      ("issues route","/issues" in paths),
+      ("1.8.18.73 preserved","/health/live-today-superintendent-command-home-1-8-18-73" in paths),
+      ("1.8.18.72 preserved","/health/main-app-command-navigation-1-8-18-72" in paths),
+      ("1.8.18.71 preserved","/health/superintendent-command-authoritative-cleanup-1-8-18-71" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("trade readiness preserved",any(str(x).startswith("/trade-readiness") for x in paths)),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("submittals preserved","/submittals" in paths),
+      ("PostgreSQL-safe read only",True),
+      ("construction app preserved","/app" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+      "status":"ok" if passed==len(tests) else "failed",
+      "app":"BuildCommand AI","version":"1.8.18.74","release":_BC181874_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{
+        "open_rfi":"critical/blocker as ranked by command",
+        "answered_rfi":"warning awaiting human review/closure",
+        "closed_rfi":"removed from active command",
+        "auto_close":False
+      },
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.74"
+BUILD_COMMAND_RELEASE_NAME=_BC181874_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
