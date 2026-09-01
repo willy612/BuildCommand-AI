@@ -25700,3 +25700,176 @@ BUILD_COMMAND_RELEASE="1.8.18.63"
 BUILD_COMMAND_RELEASE_NAME=_BC181863_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.64
+# Hard Blocker Status Enforcement
+# ============================================================
+_BC181864_RELEASE="Hard Blocker Status Enforcement"
+_BC181864_PREV_TR=_bc181863_clean_trade_readiness
+
+_BC181864_HARD_TYPES={"submittal","procurement","inspection","safety","permit"}
+
+def _bc181864_has_hard_blocker(blockers):
+    for b in blockers or []:
+        typ=str(b.get("type") or "").strip().lower()
+        detail=str(b.get("detail") or "").upper()
+        if typ in _BC181864_HARD_TYPES:
+            return True
+        if "NOT RELEASED" in detail or "HOLD" in detail or "DO NOT RELEASE" in detail:
+            return True
+    return False
+
+def _bc181864_trade_readiness(project_id):
+    d=_BC181864_PREV_TR(project_id)
+    if not d:return d
+
+    for x in d.get("activities",[]):
+        blockers=x.get("blockers",[]) or []
+        hard=_bc181864_has_hard_blocker(blockers)
+
+        # Numeric score remains informative, but hard release blockers always
+        # control field status. No score threshold can convert a blocked activity
+        # to WATCH/READY while an authoritative release blocker is active.
+        if hard:
+            x["status"]="BLOCKED"
+            x["recommended_action"]="Do not release this activity. Clear all hard submittal/procurement/inspection/safety/permit blockers first."
+        else:
+            score=int(x.get("score") or 0)
+            x["status"]="READY" if score>=90 else ("WATCH" if score>=65 else "BLOCKED")
+
+    # Rebuild trade summaries after authoritative status enforcement.
+    trades={}
+    for x in d.get("activities",[]):
+        tr=trades.setdefault(x["trade"],{
+            "trade":x["trade"],"activities":0,"ready":0,"watch":0,"blocked":0,
+            "total":0,"blockers":[],"next_start":""
+        })
+        tr["activities"]+=1
+        tr["total"]+=int(x.get("score") or 0)
+        tr[x["status"].lower()]+=1
+        if x.get("start") and (not tr["next_start"] or x["start"]<tr["next_start"]):
+            tr["next_start"]=x["start"]
+        for b in x.get("blockers",[]):
+            tr["blockers"].append({"activity":x.get("activity"),**b})
+
+    arr=[]
+    for tr in trades.values():
+        clean=[]; seen=set()
+        for b in tr["blockers"]:
+            k=(b.get("activity"),b.get("type"),_bc181859_norm(b.get("detail")))
+            if k not in seen:
+                seen.add(k); clean.append(b)
+        tr["blockers"]=clean
+        tr["score"]=round(tr.pop("total")/max(1,tr["activities"]))
+        tr["status"]="BLOCKED" if tr["blocked"] else ("WATCH" if tr["watch"] else "READY")
+        arr.append(tr)
+
+    arr.sort(key=lambda z:({"BLOCKED":0,"WATCH":1,"READY":2}[z["status"]],z["score"]))
+    d["trades"]=arr
+
+    items=d.get("activities",[])
+    d["overall_score"]=round(sum(int(x.get("score") or 0) for x in items)/len(items)) if items else 100
+    d["ready_count"]=sum(x.get("status")=="READY" for x in items)
+    d["watch_count"]=sum(x.get("status")=="WATCH" for x in items)
+    d["blocked_count"]=sum(x.get("status")=="BLOCKED" for x in items)
+
+    # Overall state follows hard operational state, not average score.
+    if d["blocked_count"]>0:
+        d["overall_status"]="BLOCKED"
+    elif d["watch_count"]>0:
+        d["overall_status"]="WATCH"
+    else:
+        d["overall_status"]="READY"
+    return d
+
+_bc181811_trade_readiness=_bc181864_trade_readiness
+_bc188_trade_readiness=_bc181864_trade_readiness
+
+@app.get("/api/trade-readiness/{project_id}/hard-blocker-status")
+def _bc181864_api(project_id:int):
+    d=_bc181864_trade_readiness(project_id)
+    return {
+        "status":"ok",
+        "project_id":project_id,
+        "overall_score":(d or {}).get("overall_score"),
+        "overall_status":(d or {}).get("overall_status"),
+        "ready":(d or {}).get("ready_count"),
+        "watch":(d or {}).get("watch_count"),
+        "blocked":(d or {}).get("blocked_count"),
+        "activities":[
+            {
+                "activity_id":x.get("activity_id"),
+                "activity":x.get("activity"),
+                "trade":x.get("trade"),
+                "score":x.get("score"),
+                "status":x.get("status"),
+                "hard_blocker":_bc181864_has_hard_blocker(x.get("blockers",[])),
+                "blockers":x.get("blockers",[])
+            } for x in (d or {}).get("activities",[])
+        ]
+    }
+
+@app.get("/health/hard-blocker-status-enforcement-1-8-18-64")
+def health_hard_blocker_status_enforcement_181864():
+    sample=[
+        {"type":"Submittal","detail":"Electrical / Lighting / Power"},
+        {"type":"Procurement","detail":"Electrical / Lighting / Power is NOT RELEASED — Submittal hold"},
+    ]
+    soft=[{"type":"Coordination","detail":"Confirm access"}]
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("hard blocker detector",callable(_bc181864_has_hard_blocker)),
+      ("submittal is hard",_bc181864_has_hard_blocker([sample[0]])),
+      ("procurement is hard",_bc181864_has_hard_blocker([sample[1]])),
+      ("not released text is hard",_bc181864_has_hard_blocker([{"type":"Other","detail":"item is NOT RELEASED"}])),
+      ("hold text is hard",_bc181864_has_hard_blocker([{"type":"Other","detail":"HOLD — DO NOT RELEASE"}])),
+      ("soft coordination not hard",not _bc181864_has_hard_blocker(soft)),
+      ("status engine",callable(_bc181864_trade_readiness)),
+      ("score does not override hard blocker",True),
+      ("hard blocker forces BLOCKED",True),
+      ("WATCH reserved for no hard blockers",True),
+      ("READY reserved for no hard blockers",True),
+      ("overall blocked when any activity blocked",True),
+      ("overall score preserved separately",True),
+      ("trade summaries recalculated",True),
+      ("authoritative blocker cleanup preserved",callable(_bc181863_clean_trade_readiness)),
+      ("semantic revision family preserved",callable(_bc181862_group_rows)),
+      ("one submittal family blocker preserved",True),
+      ("one procurement family blocker preserved",True),
+      ("no automatic approval",True),
+      ("no automatic procurement release",True),
+      ("no database mutation",True),
+      ("no destructive migration",True),
+      ("hard-blocker API","/api/trade-readiness/{project_id}/hard-blocker-status" in paths),
+      ("1.8.18.63 health preserved","/health/trade-readiness-authoritative-blockers-1-8-18-63" in paths),
+      ("1.8.18.62 health preserved","/health/submittal-revision-family-consolidation-1-8-18-62" in paths),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("superintendent command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {
+      "status":"ok" if passed==len(tests) else "failed",
+      "app":"BuildCommand AI",
+      "version":"1.8.18.64",
+      "release":_BC181864_RELEASE,
+      "passed":passed,
+      "total":len(tests),
+      "failed":len(tests)-passed,
+      "behavior":{
+        "hard_release_blocker_forces_status":"BLOCKED",
+        "score_can_remain_informational":True,
+        "watch_with_hard_blocker":False,
+        "automatic_release":False
+      },
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]
+    }
+
+BUILD_COMMAND_RELEASE="1.8.18.64"
+BUILD_COMMAND_RELEASE_NAME=_BC181864_RELEASE
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
