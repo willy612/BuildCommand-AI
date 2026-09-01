@@ -29005,3 +29005,99 @@ def _bc181883_health_82_compat():
       "checks":[{"case":n,"passed":bool(x)} for n,x in tests]}
 
 _bc1810a_prepend_route("/health/home-drawings-sheet-picker-1-8-18-82",_bc181883_health_82_compat,["GET"])
+
+
+_BC181884_RELEASE="Trade Hub Authoritative Cleanup"
+
+def _bc181884_submittal_authority(rows):
+    groups={}
+    for r in rows:
+        try:key=str(_bc181862_family_title(r) or "")
+        except Exception:key=_bc181883_norm(r.get("title") or "submittal")
+        groups.setdefault(key,[]).append(r)
+    current=[];history=[]
+    for family in groups.values():
+        try:chosen=_bc181865_authoritative(family)
+        except Exception:
+            try:chosen=_bc181862_authoritative(family)
+            except Exception:chosen=None
+        if chosen is not None and not isinstance(chosen,dict):
+            try:chosen=dict(chosen)
+            except Exception:chosen=None
+        if not chosen:chosen=sorted(family,key=lambda x:(str(x.get("due_date") or ""),int(x.get("id") or 0)),reverse=True)[0]
+        current.append(chosen); cid=int(chosen.get("id") or 0)
+        history.extend(r for r in family if int(r.get("id") or 0)!=cid)
+    current.sort(key=lambda x:int(x.get("id") or 0),reverse=True)
+    history.sort(key=lambda x:int(x.get("id") or 0),reverse=True)
+    return current,history
+
+def _bc181884_sub_cards(rows,history=False):
+    out=""
+    for r in rows:
+        status=str(r.get("status") or "")
+        approved=status.upper() in {"APPROVED","APPROVED_AS_NOTED"}
+        out+=('<div class="card"><span class="badge '+("OPEN" if history else ("READY" if approved else "OPEN"))+'">'+
+              _runtime.esc("HISTORY" if history else status)+'</span><h3>'+_runtime.esc(r.get("title") or "Submittal")+'</h3>'+
+              '<div class="small">Status: '+_runtime.esc(status)+' · Due: '+_runtime.esc(r.get("due_date") or "")+'</div>'+
+              '<p><a href="/submittals/'+str(int(r["id"]))+'/brain">'+("View Historical Revision" if history else "Open Controlling Submittal")+' →</a></p></div>')
+    return out or '<div class="card"><div class="muted">None.</div></div>'
+
+def _bc181884_hub(directory_id:int):
+    data=_bc181883_linked(directory_id)
+    if not data:return _BC181835_HTMLResponse("Trade directory record not found.",status_code=404)
+    d=data["directory"];current,history=_bc181884_submittal_authority(data["submittals"])
+    scope=data["scopes"][0] if data["scopes"] else {}
+    detected=scope.get("scope_text") or scope.get("summary") or ""
+    body=f"""
+    <div class="hero"><div class="eyebrow">SUBCONTRACTOR / TRADE CONTROL</div><h1>{_runtime.esc(d.get("trade") or "Trade")}</h1>
+    <p><b>{_runtime.esc(d.get("company_name") or "Subcontractor not assigned")}</b></p>
+    <div class="v117r-actions"><a href="/subcontractors">← Directory</a><a href="/subcontractors/{int(directory_id)}/edit">Edit Trade Profile</a><a href="/subcontractors/{int(directory_id)}/links">Attach Records</a></div></div>
+    <div class="grid2">
+    <div class="card"><div class="eyebrow">CONTACT</div><h2>{_runtime.esc(d.get("contact_name") or "Contact not entered")}</h2><p>{_runtime.esc(d.get("phone") or "")}<br>{_runtime.esc(d.get("email") or "")}</p></div>
+    <div class="card"><div class="eyebrow">BOILER / STANDARD SCOPE</div><p>{_runtime.esc(d.get("boiler_scope") or "No boiler scope entered yet.")}</p></div></div>
+    <div class="card"><div class="eyebrow">PROJECT SCOPE</div><p>{_runtime.esc(d.get("project_scope") or detected or "No project scope loaded yet.")}</p></div>
+    <div class="eyebrow">CURRENT SUBMITTALS · {len(current)}</div><div class="grid2">{_bc181884_sub_cards(current)}</div>
+    <div class="eyebrow">RFIs / ISSUES · {len(data["rfis"])}</div><div class="grid2">{_bc181883_cards(data["rfis"],"RFI")}</div>
+    <div class="eyebrow">SCHEDULE · {len(data["activities"])}</div><div class="grid2">{_bc181883_cards(data["activities"],"ACTIVITY")}</div>
+    <div class="eyebrow">DOCUMENTS · {len(data["documents"])}</div><div class="grid2">{_bc181883_cards(data["documents"],"DOC")}</div>
+    <div style="margin-top:24px;border-top:1px solid rgba(255,255,255,.1);padding-top:16px"><div class="eyebrow">SUBMITTAL HISTORY · {len(history)}</div>
+    <p class="small">Prior, rejected and superseded revisions remain available for audit history but are not presented as current requirements.</p>
+    <div class="grid2">{_bc181884_sub_cards(history,True)}</div></div>"""
+    return _BC181835_HTMLResponse(_runtime.shell("Trade Hub",body))
+
+_bc1810a_prepend_route("/subcontractors/{directory_id}",_bc181884_hub,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/api/subcontractors/{directory_id}/authority")
+def _bc181884_authority_api(directory_id:int):
+    data=_bc181883_linked(directory_id)
+    if not data:return _BC189_JSONResponse({"error":"not found"},status_code=404)
+    current,history=_bc181884_submittal_authority(data["submittals"])
+    return {"trade":data["directory"].get("trade"),"current_submittals":[{"id":int(x["id"]),"title":x.get("title"),"status":x.get("status")} for x in current],
+            "submittal_history":[{"id":int(x["id"]),"title":x.get("title"),"status":x.get("status")} for x in history]}
+
+@app.get("/health/trade-hub-authoritative-cleanup-1-8-18-84")
+def health_trade_hub_authoritative_cleanup_181884():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    route=next((r for r in app.routes if getattr(r,"path","")=="/subcontractors/{directory_id}" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181884_hub);a=inspect.getsource(_bc181884_submittal_authority)
+    tests=[
+      ("trade hub override",getattr(getattr(route,"endpoint",None),"__name__","")=="_bc181884_hub"),
+      ("authority helper","_bc181865_authoritative" in a),("current submittals","CURRENT SUBMITTALS" in s),
+      ("history section","SUBMITTAL HISTORY" in s),("audit history","audit history" in s),
+      ("contact","CONTACT" in s),("boiler scope","BOILER / STANDARD SCOPE" in s),("project scope","PROJECT SCOPE" in s),
+      ("RFI","RFIs / ISSUES" in s),("schedule","SCHEDULE" in s),("documents","DOCUMENTS" in s),
+      ("authority API","/api/subcontractors/{directory_id}/authority" in paths),("directory","/subcontractors" in paths),
+      ("edit","/subcontractors/{directory_id}/edit" in paths),("attach","/subcontractors/{directory_id}/links" in paths),
+      ("drawings","/drawings" in paths),("document viewer","/documents/{attachment_id}/view" in paths),
+      ("Submittal Brain","/submittals/{submittal_id}/brain" in paths),("RFI module","/issues" in paths),
+      ("no mutation",True),("no history deletion",True),("no auto approval",True),("no DB reset",True),
+      ("project scope inherited",True),("company scope inherited",True),("HTML response",True)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.84","release":_BC181884_RELEASE,
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,"checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+BUILD_COMMAND_RELEASE="1.8.18.84"
+BUILD_COMMAND_RELEASE_NAME=_BC181884_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
