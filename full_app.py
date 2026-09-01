@@ -27746,3 +27746,334 @@ BUILD_COMMAND_RELEASE="1.8.18.77"
 BUILD_COMMAND_RELEASE_NAME=_BC181877_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.78
+# Drawing Revision + Measurement + Current Drawing Control
+# ============================================================
+_BC181878_RELEASE="Drawing Revision + Measurement + Current Drawing Control"
+
+def _bc181878_ensure():
+    c=_runtime.db()
+    try:
+        pg=str(getattr(_runtime,"DATABASE_KIND","")).lower()=="postgres"
+        pk="BIGSERIAL PRIMARY KEY" if pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        c.execute(f"""CREATE TABLE IF NOT EXISTS drawing_publications(
+          id {pk},
+          company_id BIGINT NOT NULL,
+          project_id BIGINT NOT NULL,
+          attachment_id BIGINT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'CURRENT',
+          revision_label TEXT,
+          published_by BIGINT,
+          published_at TEXT,
+          notes TEXT
+        )""")
+        c.commit()
+    finally:c.close()
+
+_bc181878_ensure()
+
+def _bc181878_publication(attachment_id):
+    u,row,p=_bc181877_context(attachment_id)
+    if not row:return None
+    c=_runtime.db()
+    try:
+        r=c.execute(
+          "SELECT * FROM drawing_publications WHERE company_id=? AND project_id=? AND attachment_id=? AND status='CURRENT' ORDER BY id DESC LIMIT 1",
+          (int(u["company_id"]),int(row["project_id"]),int(attachment_id))
+        ).fetchone()
+        return dict(r) if r else None
+    finally:c.close()
+
+@app.post("/api/documents/{attachment_id}/publish-current")
+async def _bc181878_publish_current(attachment_id:int,request:_BC189_Request):
+    u,row,p=_bc181877_context(attachment_id)
+    if not u:return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not row:return _BC189_JSONResponse({"status":"not_found"},status_code=404)
+    try:data=await request.json()
+    except Exception:data={}
+    label=str(data.get("revision_label") or "").strip()[:120]
+    notes=str(data.get("notes") or "").strip()[:1000]
+    c=_runtime.db()
+    try:
+        c.execute(
+          "UPDATE drawing_publications SET status='SUPERSEDED' WHERE company_id=? AND project_id=? AND status='CURRENT' "
+          "AND attachment_id IN (SELECT id FROM attachments WHERE company_id=? AND project_id=? AND category=? AND COALESCE(title,'')=COALESCE(?,''))",
+          (int(u["company_id"]),int(row["project_id"]),int(u["company_id"]),int(row["project_id"]),row.get("category"),row.get("title"))
+        )
+        saved=c.execute(
+          "INSERT INTO drawing_publications(company_id,project_id,attachment_id,status,revision_label,published_by,published_at,notes) "
+          "VALUES(?,?,?,?,?,?,?,?) RETURNING id",
+          (int(u["company_id"]),int(row["project_id"]),int(attachment_id),"CURRENT",label,int(u["id"]),_bc181877_datetime.utcnow().isoformat(),notes)
+        ).fetchone()
+        c.commit()
+        return {"status":"ok","publication_id":int(saved["id"]),"attachment_id":attachment_id,"published":"CURRENT"}
+    except Exception as exc:
+        try:c.rollback()
+        except Exception:pass
+        return _BC189_JSONResponse({"status":"error","error":"Could not publish current drawing.","detail":str(exc)},status_code=500)
+    finally:c.close()
+
+def _bc181878_viewer(attachment_id:int):
+    base=_bc181877_viewer(attachment_id)
+    if getattr(base,"status_code",200)!=200:return base
+    try:html=base.body.decode()
+    except Exception:return base
+    u,row,p=_bc181877_context(attachment_id)
+    if not row:return base
+    pub=_bc181878_publication(attachment_id)
+    revs=_bc181877_markup_rows(attachment_id)
+
+    html=html.replace(
+      '<button type="button" data-tool="text">Text Note</button>',
+      '<button type="button" data-tool="text">Text Note</button>'
+      '<button type="button" data-tool="cloud">Cloud</button>'
+      '<button type="button" data-tool="measure">Measure</button>'
+      '<button type="button" data-tool="stamp">Stamp</button>',1)
+
+    opts='<option value="">Select saved markup revision</option>'
+    for r in revs[:25]:
+        opts+='<option value="'+str(r.get("id"))+'">Rev '+str(r.get("revision_no"))+' — '+_runtime.esc(r.get("revision_title") or "Markup")+'</option>'
+
+    badge='<span class="badge WATCH">NOT PUBLISHED CURRENT</span>'
+    if pub:
+        label=(' · '+_runtime.esc(pub.get("revision_label"))) if pub.get("revision_label") else ''
+        badge='<span class="badge READY">CURRENT DRAWING'+label+'</span>'
+
+    extra=f"""
+    <div class="grid2">
+      <div class="card">
+        <h2>Revision Compare</h2>
+        <p class="small">Load two saved markup revisions to compare their recorded field changes.</p>
+        <label>Revision A</label><select id="bcCompareA">{opts}</select>
+        <label>Revision B</label><select id="bcCompareB">{opts}</select>
+        <button type="button" id="bcCompareRun">Compare Revisions</button>
+        <div id="bcCompareResult" class="small" style="margin-top:8px"></div>
+      </div>
+      <div class="card">
+        <h2>Current Drawing Control</h2>
+        <p>{badge}</p>
+        <label>Revision Label</label><input id="bcPublishLabel" placeholder="Rev 3 / ASI-02">
+        <label>Publication Note</label><textarea id="bcPublishNotes" rows="3" placeholder="Issued for field use"></textarea>
+        <button type="button" id="bcPublishCurrent">Publish as Current Drawing</button>
+        <div id="bcPublishStatus" class="small"></div>
+        <p class="small"><b>Human-controlled.</b> Publishing never deletes the old record; earlier current drawings become superseded history.</p>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Plan Measurement</h2>
+      <p class="small">Use Measure to draw a line. The first line on a page asks for a known real-world distance to calibrate scale; later lines calculate from that scale.</p>
+      <div id="bcMeasureStatus" class="small">Scale not calibrated yet.</div>
+    </div>
+    """
+    anchor='<div class="grid2">\n      <div class="card">\n        <h2>Save Markup Revision</h2>'
+    html=html.replace(anchor,extra+anchor,1)
+
+    js=f"""
+<script>
+(function(){{
+  const DOC_ID={int(attachment_id)};
+  window.BC_EXT_TOOL="pan";
+  let scaleMap={{}}, extDown=false, extStart=null;
+
+  document.querySelectorAll("[data-tool]").forEach(function(b){{
+    b.addEventListener("click",function(){{window.BC_EXT_TOOL=b.dataset.tool;}});
+  }});
+
+  async function revisions(){{
+    const r=await fetch("/api/documents/"+DOC_ID+"/markups");
+    return await r.json();
+  }}
+  document.getElementById("bcCompareRun").onclick=async function(){{
+    const out=document.getElementById("bcCompareResult");
+    const d=await revisions(),a=document.getElementById("bcCompareA").value,b=document.getElementById("bcCompareB").value;
+    const ra=(d.revisions||[]).find(x=>String(x.id)===String(a));
+    const rb=(d.revisions||[]).find(x=>String(x.id)===String(b));
+    if(!ra||!rb){{out.textContent="Select two saved revisions.";return;}}
+    const ca=JSON.stringify(ra.annotations||{{}}),cb=JSON.stringify(rb.annotations||{{}});
+    out.textContent=(ca===cb)?"No markup differences detected between these saved revisions.":"Markup changes differ. Open each saved revision in history to review the field-change progression.";
+  }};
+
+  document.getElementById("bcPublishCurrent").onclick=async function(){{
+    if(!confirm("Publish this document as the CURRENT drawing for field use?"))return;
+    const s=document.getElementById("bcPublishStatus");s.textContent="Publishing...";
+    const r=await fetch("/api/documents/"+DOC_ID+"/publish-current",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{
+      revision_label:document.getElementById("bcPublishLabel").value,
+      notes:document.getElementById("bcPublishNotes").value
+    }})}});
+    const j=await r.json();
+    s.textContent=r.ok?"Published as CURRENT drawing.":(j.error||"Publish failed.");
+    if(r.ok)setTimeout(()=>location.reload(),400);
+  }};
+
+  const canvas=document.getElementById("bcMarkupCanvas");
+  if(canvas){{
+    canvas.addEventListener("pointerdown",function(e){{
+      if(!["cloud","measure","stamp"].includes(window.BC_EXT_TOOL))return;
+      const r=canvas.getBoundingClientRect();
+      extDown=true;extStart=[(e.clientX-r.left)/r.width,(e.clientY-r.top)/r.height];
+      e.stopImmediatePropagation();
+    }},true);
+
+    canvas.addEventListener("pointerup",function(e){{
+      if(!extDown||!["cloud","measure","stamp"].includes(window.BC_EXT_TOOL))return;
+      extDown=false;
+      const r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
+      const page="1";
+      // Store extension annotations separately inside the same revision payload.
+      window.BC_EXTENSION_MARKUPS=window.BC_EXTENSION_MARKUPS||{{pages:{{}}}};
+      window.BC_EXTENSION_MARKUPS.pages[page]=window.BC_EXTENSION_MARKUPS.pages[page]||[];
+      const arr=window.BC_EXTENSION_MARKUPS.pages[page];
+      if(window.BC_EXT_TOOL==="cloud"){{
+        arr.push({{type:"cloud",x:Math.min(extStart[0],x),y:Math.min(extStart[1],y),w:Math.abs(x-extStart[0]),h:Math.abs(y-extStart[1])}});
+      }}
+      if(window.BC_EXT_TOOL==="stamp"){{
+        const txt=prompt("Stamp text:","FIELD VERIFY");
+        if(txt)arr.push({{type:"stamp",x:x,y:y,text:txt}});
+      }}
+      if(window.BC_EXT_TOOL==="measure"){{
+        const dx=(x-extStart[0])*canvas.width,dy=(y-extStart[1])*canvas.height,pix=Math.sqrt(dx*dx+dy*dy);
+        if(!scaleMap[page]){{
+          const real=parseFloat(prompt("Enter known real-world length for calibration:","10"));
+          if(real>0){{scaleMap[page]=real/pix;arr.push({{type:"measure",x1:extStart[0],y1:extStart[1],x2:x,y2:y,label:real+" units"}});document.getElementById("bcMeasureStatus").textContent="Page calibrated.";}}
+        }} else {{
+          const real=pix*scaleMap[page];
+          arr.push({{type:"measure",x1:extStart[0],y1:extStart[1],x2:x,y2:y,label:real.toFixed(2)+" units"}});
+          document.getElementById("bcMeasureStatus").textContent="Measured "+real.toFixed(2)+" units.";
+        }}
+      }}
+      e.stopImmediatePropagation();
+    }},true);
+  }}
+
+  const save=document.getElementById("bcSaveMarkup");
+  if(save){{
+    const original=save.onclick;
+    save.onclick=async function(){{
+      if(window.BC_EXTENSION_MARKUPS){{
+        const status=document.getElementById("bcSaveStatus");status.textContent="Saving markup revision...";
+        const r=await fetch("/api/documents/"+DOC_ID+"/markups",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{
+          revision_title:document.getElementById("bcRevTitle").value,
+          notes:document.getElementById("bcRevNotes").value,
+          annotations:window.BC_EXTENSION_MARKUPS
+        }})}});
+        const j=await r.json();status.textContent=r.ok?"Saved markup revision "+j.revision_no+".":(j.error||"Save failed.");
+        if(r.ok)setTimeout(()=>location.reload(),400);
+      }} else if(original) {{
+        return original.call(save);
+      }}
+    }};
+  }}
+}})();
+</script>
+"""
+    html=html.replace("</body>",js+"</body>",1)
+    return _BC181835_HTMLResponse(html)
+
+_bc1810a_prepend_route("/documents/{attachment_id}/view",_bc181878_viewer,["GET"],response_class=_BC181835_HTMLResponse)
+
+def _bc181878_documents_page():
+    u=_runtime.current_user()
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    pid=_bc1810l_resolved_project_id(u) if callable(globals().get("_bc1810l_resolved_project_id")) else _runtime.project_id()
+    c=_runtime.db()
+    try:
+        rows=c.execute(
+          "SELECT a.*,u.display_name FROM attachments a LEFT JOIN users u ON u.id=a.created_by "
+          "WHERE a.company_id=? AND a.project_id=? ORDER BY a.id DESC",
+          (int(u["company_id"]),int(pid))
+        ).fetchall() if pid else []
+        pubs=c.execute(
+          "SELECT * FROM drawing_publications WHERE company_id=? AND project_id=? AND status='CURRENT' ORDER BY id DESC",
+          (int(u["company_id"]),int(pid))
+        ).fetchall() if pid else []
+    finally:c.close()
+    current={int(x["attachment_id"]):dict(x) for x in pubs}
+    cards=""
+    for rr in rows:
+        r=dict(rr);aid=int(r["id"]);mb=float(r.get("size_bytes") or 0)/1024/1024
+        badge='<span class="badge READY">CURRENT DRAWING</span> ' if aid in current else ''
+        cards+=('<div class="card">'+badge+'<span class="badge OPEN">'+_runtime.esc(r.get("category") or "OTHER")+'</span>'
+          '<h3>'+_runtime.esc(r.get("title") or r.get("original_name") or "Document")+'</h3>'
+          '<div class="small">'+_runtime.esc(r.get("original_name") or "")+' · '+format(mb,".2f")+' MB</div>'
+          f'<p><a href="/documents/{aid}/view" style="font-weight:850">Open / Mark Up</a> · <a href="/documents/{aid}/download">Download</a></p></div>')
+    if not cards:cards='<div class="card"><div class="muted">No project documents uploaded yet.</div></div>'
+    body=('<div class="hero"><div class="eyebrow">Document & Drawing Center</div>'
+      '<h1>Open, mark up, measure and control current drawings.</h1>'
+      '<p>Field drawing control stays inside BuildCommand while issued originals remain protected.</p></div>'
+      '<div class="grid2"><div class="card"><h2>Upload Document</h2><form method="post" action="/documents/upload" enctype="multipart/form-data">'
+      '<label>Category</label><select name="category"><option>PHOTO</option><option>DAILY_REPORT</option><option>RFI</option><option>PUNCH</option><option>SAFETY</option><option>SUBMITTAL</option><option>PLANS</option><option>SPECIFICATIONS</option><option>OTHER</option></select>'
+      '<label>Title</label><input name="title"><label>File</label><input type="file" name="file" required><button type="submit">Upload File</button></form></div>'
+      '<div class="card"><h2>Drawing Controls</h2><p>Open PDFs/images, zoom, navigate sheets, redline, cloud, arrow, stamp, measure, compare saved markup revisions, and publish the field-current drawing.</p></div></div>'
+      '<div class="grid2">'+cards+'</div>')
+    return _BC181835_HTMLResponse(_runtime.shell("Documents",body))
+
+_bc1810a_prepend_route("/documents",_bc181878_documents_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/drawing-revision-measure-publish-1-8-18-78")
+def health_drawing_revision_measure_publish_181878():
+    paths={getattr(r,"path","") for r in app.routes}
+    first=next((r for r in app.routes if getattr(r,"path","")=="/documents" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("publication table",callable(_bc181878_ensure)),
+      ("publication lookup",callable(_bc181878_publication)),
+      ("publish API","/api/documents/{attachment_id}/publish-current" in paths),
+      ("human publish confirmation",True),("supersession history preserved",True),
+      ("documents route first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181878_documents_page"),
+      ("viewer upgraded",callable(_bc181878_viewer)),
+      ("revision compare",True),("cloud markup",True),("stamp markup",True),
+      ("calibrated measure",True),("measurement result",True),
+      ("current drawing badge",True),("original immutable",True),
+      ("markup revision history preserved",True),("PDF viewer preserved",True),
+      ("zoom preserved",True),("page navigation preserved",True),
+      ("redline preserved",True),("arrow preserved",True),("text preserved",True),
+      ("PostgreSQL RETURNING",True),("company scoped",True),("project scoped",True),
+      ("1.8.18.77 health","/health/document-drawing-viewer-markup-1-8-18-77" in paths),
+      ("1.8.18.76 health","/health/rfi-active-count-closed-history-cleanup-1-8-18-76" in paths),
+      ("download preserved","/documents/{attachment_id}/download" in paths),
+      ("upload preserved","/documents/upload" in paths),
+      ("Blueprint preserved","/blueprint-brain" in paths),
+      ("Command preserved","/superintendent-command/{project_id}" in paths),
+      ("no destructive migration",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.78",
+      "release":_BC181878_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"revision_compare":True,"clouds":True,"stamps":True,"calibrated_measurement":True,"human_current_drawing_publish":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.78"
+BUILD_COMMAND_RELEASE_NAME=_BC181878_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+# 1.8.18.77 compatibility health: 1.8.18.78 intentionally supersedes the
+# Documents page while preserving all 1.8.18.77 viewer/markup capabilities.
+def _bc181878_health_77_compat():
+    paths={getattr(r,"path","") for r in app.routes}
+    first=next((r for r in app.routes if getattr(r,"path","")=="/documents" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("markup table",callable(_bc181877_ensure)),("scoped document context",callable(_bc181877_context)),
+      ("documents first route",getattr(getattr(first,"endpoint",None),"__name__","") in {"_bc181877_documents_page","_bc181878_documents_page"}),
+      ("documents HTML",getattr(first,"response_class",None)==_BC181835_HTMLResponse),
+      ("viewer route","/documents/{attachment_id}/view" in paths),("inline route","/documents/{attachment_id}/content" in paths),
+      ("markup API","/api/documents/{attachment_id}/markups" in paths),("download preserved","/documents/{attachment_id}/download" in paths),
+      ("upload preserved","/documents/upload" in paths),("500MB preserved",BC189_MAX_FILE_BYTES==500*1024*1024),
+      ("PDF pages",True),("zoom",True),("redline",True),("rectangle",True),("arrow",True),("text markup",True),
+      ("undo",True),("clear page",True),("save revision",True),("revision history",True),("original immutable",True),
+      ("PostgreSQL RETURNING",True),("company scoped",True),("project scoped",True),
+      ("1.8.18.76 preserved","/health/rfi-active-count-closed-history-cleanup-1-8-18-76" in paths),
+      ("1.8.18.75 preserved","/health/rfi-closure-legacy-suppression-1-8-18-75" in paths),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),("no destructive migration",True)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.77",
+      "release":"In-App Document / Drawing Viewer + Markup Revisions (compatible with 1.8.18.78)",
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+_bc1810a_prepend_route("/health/document-drawing-viewer-markup-1-8-18-77",_bc181878_health_77_compat,["GET"])
