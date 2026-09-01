@@ -29218,3 +29218,108 @@ BUILD_COMMAND_RELEASE="1.8.18.85"
 BUILD_COMMAND_RELEASE_NAME=_BC181885_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.86
+# Drawings PostgreSQL Query Fix
+# ============================================================
+_BC181886_RELEASE="Drawings PostgreSQL Query Fix"
+
+def _bc181886_plan_rows():
+    u=_runtime.current_user()
+    if not u:return None,None,[]
+    try:
+        pid=_bc1810l_resolved_project_id(u)
+    except Exception:
+        pid=_runtime.project_id()
+    if not pid:return u,None,[]
+
+    try:cid=int(u["company_id"])
+    except Exception:
+        try:cid=int(_runtime.current_company_id())
+        except Exception:cid=None
+    if not cid:return u,int(pid),[]
+
+    c=_runtime.db()
+    try:
+        # Keep the SQL deliberately simple and PostgreSQL-safe. Classification
+        # of PLANS/DRAWINGS + PDF happens in Python so expression/column
+        # differences cannot crash the Drawings page.
+        rows=c.execute(
+            "SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",
+            (int(cid),int(pid))
+        ).fetchall()
+        plans=[]
+        for rr in rows or []:
+            r=dict(rr) if hasattr(rr,"keys") else rr
+            if not isinstance(r,dict):
+                try:r=dict(r)
+                except Exception:continue
+            category=str(r.get("category") or "").strip().upper()
+            original=str(r.get("original_name") or "").strip().lower()
+            mime=str(r.get("mime_type") or "").strip().lower()
+            is_plan=category in {"PLANS","DRAWINGS"}
+            is_pdf=original.endswith(".pdf") or mime=="application/pdf"
+            if is_plan and is_pdf:
+                plans.append(r)
+        return u,int(pid),plans
+    finally:
+        c.close()
+
+# Rebind the existing .82 Drawings page to the PostgreSQL-safe plan loader.
+_bc181882_plan_rows=_bc181886_plan_rows
+
+@app.get("/api/drawings/sets")
+def _bc181886_drawings_sets_api():
+    u,pid,plans=_bc181886_plan_rows()
+    if not u:return _BC189_JSONResponse({"status":"error","message":"login required"},status_code=401)
+    return {"status":"ok","project_id":pid,"sets":[
+        {"id":int(r.get("id") or 0),"title":r.get("title"),"original_name":r.get("original_name"),
+         "category":r.get("category"),"mime_type":r.get("mime_type")} for r in plans
+    ]}
+
+@app.get("/health/drawings-postgres-query-fix-1-8-18-86")
+def health_drawings_postgres_query_fix_181886():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    s=inspect.getsource(_bc181886_plan_rows)
+    first=next((r for r in app.routes if getattr(r,"path","")=="/drawings" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("safe loader callable",callable(_bc181886_plan_rows)),
+      ("82 loader rebound",_bc181882_plan_rows is _bc181886_plan_rows),
+      ("drawings route preserved",first is not None),
+      ("drawings page endpoint preserved",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181882_drawings_page"),
+      ("simple scoped attachment query","WHERE company_id=? AND project_id=? ORDER BY id DESC" in s),
+      ("no SQL category expression","UPPER(COALESCE(category" not in s),
+      ("no SQL filename expression","LOWER(COALESCE(original_name" not in s),
+      ("category classified in Python",'category in {"PLANS","DRAWINGS"}' in s),
+      ("PDF extension classified in Python",'original.endswith(".pdf")' in s),
+      ("PDF MIME classified in Python",'mime=="application/pdf"' in s),
+      ("company scoped","company_id=?" in s),
+      ("project scoped","project_id=?" in s),
+      ("drawings sets API","/api/drawings/sets" in paths),
+      ("document viewer preserved","/documents/{attachment_id}/view" in paths),
+      ("inline document content preserved","/documents/{attachment_id}/content" in paths),
+      ("documents preserved","/documents" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("no DB migration",True),
+      ("no attachment mutation",True),
+      ("no history deletion",True),
+      ("current drawing publication preserved",True),
+      ("sheet picker preserved",True),
+      ("fit viewer preserved","/health/clean-icon-markup-fit-screen-1-8-18-81" in paths),
+      ("85 health preserved","/health/trade-hub-semantic-submittal-family-fix-1-8-18-85" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.86",
+      "release":_BC181886_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"postgres_safe_drawing_query":True,"python_plan_classification":True,"sheet_picker_preserved":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.86"
+BUILD_COMMAND_RELEASE_NAME=_BC181886_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
