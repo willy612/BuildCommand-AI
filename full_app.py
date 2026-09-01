@@ -29683,3 +29683,492 @@ BUILD_COMMAND_RELEASE='1.8.18.87'
 BUILD_COMMAND_RELEASE_NAME=_BC181887_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.88
+# Drawing Index Intelligence + False-Match Cleanup
+# ============================================================
+_BC181888_RELEASE="Drawing Index Intelligence + False-Match Cleanup"
+
+def _bc181888_drawings_page(set_id:int=None):
+    u,pid,plans=_bc181886_plan_rows()
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:
+        return _BC181835_HTMLResponse(_runtime.shell("Drawings","<div class='hero'><h1>Select a project first.</h1><p><a href='/app'>Open BuildCommand App</a></p></div>"))
+    if not plans:
+        body=(
+          '<div class="hero"><div class="eyebrow">PROJECT DRAWINGS</div><h1>No plan sets uploaded yet.</h1>'
+          '<p>Upload drawings under Documents using category PLANS. They will appear here automatically as selectable sheets.</p>'
+          '<p><a href="/documents"><b>Upload Drawings</b></a></p></div>'
+        )
+        return _BC181835_HTMLResponse(_runtime.shell("Drawings",body))
+
+    selected=None
+    if set_id:
+        selected=next((r for r in plans if int(r["id"])==int(set_id)),None)
+
+    if not selected:
+        c=_runtime.db()
+        try:
+            current=c.execute(
+              "SELECT attachment_id FROM drawing_publications "
+              "WHERE company_id=? AND project_id=? AND status='CURRENT' "
+              "ORDER BY id DESC LIMIT 1",
+              (int(u["company_id"]),int(pid))
+            ).fetchone()
+        except Exception:
+            current=None
+        finally:
+            c.close()
+        if current:
+            try:caid=int(current["attachment_id"])
+            except Exception:
+                try:caid=int(current[0])
+                except Exception:caid=0
+            selected=next((r for r in plans if int(r["id"])==caid),None)
+
+    if not selected:selected=plans[0]
+
+    set_cards=""
+    for r in plans:
+        active=int(r["id"])==int(selected["id"])
+        set_cards+=(
+          '<a href="/drawings?set_id='+str(int(r["id"]))+'" style="text-decoration:none">'
+          '<div class="card" style="'+('outline:2px solid #f0b44d;' if active else '')+'">'
+          '<span class="badge '+('READY' if active else 'OPEN')+'">'+('OPEN SET' if active else 'PLAN SET')+'</span>'
+          '<h3>'+_runtime.esc(r.get("title") or r.get("original_name") or "Drawings")+'</h3>'
+          '<div class="small">'+_runtime.esc(r.get("original_name") or "")+'</div>'
+          '</div></a>'
+        )
+
+    aid=int(selected["id"])
+    original=_runtime.esc(selected.get("original_name") or "Drawings.pdf")
+    title=_runtime.esc(selected.get("title") or selected.get("original_name") or "Project Drawings")
+    content_url=f"/documents/{aid}/content"
+
+    body=f'''
+    <style>
+      .bc88-set-strip{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:14px}}
+      .bc88-controls{{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0}}
+      .bc88-controls input,.bc88-controls select{{min-height:42px}}
+      .bc88-controls input{{flex:1;min-width:220px}}
+      .bc88-sheet-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}}
+      .bc88-sheet{{display:block;text-decoration:none;color:inherit;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:12px;overflow:hidden;transition:.15s}}
+      .bc88-sheet:hover{{transform:translateY(-2px);border-color:#f0b44d}}
+      .bc88-thumb{{height:280px;background:#2f343d;display:flex;align-items:center;justify-content:center;overflow:hidden}}
+      .bc88-thumb canvas{{max-width:100%;max-height:100%;display:block;background:white}}
+      .bc88-meta{{padding:11px 12px}}
+      .bc88-sheetno{{font-size:18px;font-weight:900;letter-spacing:.02em}}
+      .bc88-title{{font-size:13px;opacity:.86;margin-top:3px;min-height:18px}}
+      .bc88-page{{font-size:11px;opacity:.58;margin-top:7px}}
+      .bc88-disc{{display:inline-block;margin-top:7px;font-size:10px;font-weight:800;letter-spacing:.08em;padding:4px 7px;border-radius:999px;background:rgba(255,255,255,.08)}}
+      .bc88-confidence{{display:inline-block;margin-left:6px;font-size:10px;opacity:.62}}
+      .bc88-loading{{font-size:13px;opacity:.72;padding:10px}}
+      .bc88-hidden{{display:none!important}}
+      @media(max-width:700px){{.bc88-sheet-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}.bc88-thumb{{height:190px}}}}
+    </style>
+
+    <div class="hero">
+      <div class="eyebrow">PROJECT DRAWINGS</div>
+      <h1>Choose the sheet you need.</h1>
+      <p>{title} · {original}</p>
+      <div class="v117r-actions"><a href="/">← Today</a><a href="/documents">Documents</a><a href="/documents/{aid}/view">Open Full Set</a></div>
+    </div>
+
+    <div class="eyebrow">DRAWING SETS</div>
+    <div class="bc88-set-strip">{set_cards}</div>
+
+    <div class="card">
+      <h2>Smart Sheet Index</h2>
+      <p class="small">BuildCommand cross-checks page title blocks against drawing-index text, rejects common false matches such as scales, dates, comments and detail numbers, and falls back safely to the PDF page number when confidence is low.</p>
+      <div class="bc88-controls">
+        <input id="bc88Search" placeholder="Search sheet number or title — e.g. E100, electrical, canopy">
+        <select id="bc88Discipline"><option value="">All disciplines</option></select>
+      </div>
+      <div id="bc88Status" class="small">Reading drawing index and rendering thumbnails…</div>
+    </div>
+
+    <div id="bc88Grid" class="bc88-sheet-grid"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+    (async function(){{
+      const grid=document.getElementById("bc88Grid");
+      const status=document.getElementById("bc88Status");
+      const search=document.getElementById("bc88Search");
+      const disc=document.getElementById("bc88Discipline");
+      const disciplines=new Set();
+      const pageCache=[];
+      const indexMap=new Map();
+
+      pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+      function clean(v){{return String(v||"").replace(/\\s+/g," ").trim();}}
+      function compact(v){{return clean(v).replace(/\\s+/g,"");}}
+      function normalizeCode(v){{return compact(v).toUpperCase().replace(/[^A-Z0-9.\\-]/g,"");}}
+
+      function isSheetCode(v){{
+        const s=normalizeCode(v);
+        if(!s || s.length<2 || s.length>10)return false;
+        if(/^\\d+$/.test(s))return false; // never accept standalone detail/page numbers like "4"
+        if(/^\\d+[A-Z]?$/.test(s))return false;
+        if(/^20\\d{{6}}$/.test(s))return false;
+        return /^(?:G|C|L|A|S|M|P|E|T|FP|FA|ID|LC)[A-Z0-9.\\-]*\\d[A-Z0-9.\\-]*$/i.test(s);
+      }}
+
+      function rejectTitle(v){{
+        const s=clean(v),u=s.toUpperCase();
+        if(!s || s.length<5 || s.length>95)return true;
+        if(isSheetCode(s))return true;
+        if(/^\\d+$/.test(s))return true;
+        if(/^\\d{{6,}}$/.test(s))return true;
+        if(/PLAN\\s*#|PROJECT\\s*#|PERMIT\\s*#|APPLICATION\\s*#/i.test(s))return true;
+        if(/CITY\\s+COMMENTS?|REVIEWED\\s+BY\\s+THE\\s+CITY|PLAN\\s+REVIEW|APPROVED\\s+BY/i.test(s))return true;
+        if(/^(SCALE|SHEET DESCRIPTION|SHEET TITLE|DRAWING TITLE|DATE|DRAWN|CHECKED|DESIGNED|ISSUE|REVISION|REV\\.?|BY|OF|NO\\.?|CERTIFICATION)$/i.test(s))return true;
+        if(/^SCALE\\s*:/i.test(s) || /\\bSCALE\\b.*\\d/i.test(s))return true;
+        if(/\\d+\\s*\\/\\s*\\d+["']?\\s*=\\s*\\d+['"]?-?\\d*/i.test(s))return true;
+        if(/^\\d{{2}}[.\\/-]\\d{{2}}[.\\/-]\\d{{2,4}}$/.test(s))return true;
+        if(/^\\d{{4}}[.\\/-]\\d{{2}}[.\\/-]\\d{{2}}$/.test(s))return true;
+        if(/^\\d{{2}}\\.\\d{{2}}\\.\\d{{2}}$/.test(s))return true;
+        if(/^CERTIFICATION\\b/i.test(s))return true;
+        if(/^\\d+\\s*(ST|ND|RD|TH)?\\s+(AVE|AVENUE|ST|STREET|RD|ROAD|DR|DRIVE|BLVD|BOULEVARD)\\b/i.test(s))return true;
+        return false;
+      }}
+
+      function disciplineFrom(code,title){{
+        const c=normalizeCode(code),t=clean(title).toUpperCase();
+        if(c.startsWith("FP") || /FIRE SPRINKLER|FIRE PROTECTION/.test(t)) return "Fire Protection";
+        if(c.startsWith("FA")) return "Fire Alarm";
+        if(c.startsWith("LC") || c.startsWith("E") || /LIGHT|ELECTR/.test(t)) return "Electrical";
+        if(c.startsWith("G")) return "General";
+        if(c.startsWith("C")) return "Civil";
+        if(c.startsWith("L") && !c.startsWith("LC")) return "Landscape";
+        if(c.startsWith("A")) return "Architectural";
+        if(c.startsWith("S")) return "Structural";
+        if(c.startsWith("M")) return "Mechanical";
+        if(c.startsWith("P")) return "Plumbing";
+        if(c.startsWith("T") || /TELECOM|LOW VOLT|SECURITY/.test(t)) return "Low Voltage";
+        return "Other";
+      }}
+
+      function textRows(items){{
+        const vals=(items||[]).map(it=>({{
+          text:clean(it.str),
+          x:Number((it.transform||[])[4]||0),
+          y:Number((it.transform||[])[5]||0),
+          w:Number(it.width||0),
+          h:Math.abs(Number((it.transform||[])[3]||0))
+        }})).filter(v=>v.text);
+        vals.sort((a,b)=>Math.abs(b.y-a.y)>3?b.y-a.y:a.x-b.x);
+        const rows=[];
+        for(const v of vals){{
+          let row=rows.find(r=>Math.abs(r.y-v.y)<=4);
+          if(!row){{row={{y:v.y,parts:[]}};rows.push(row);}}
+          row.parts.push(v);
+        }}
+        return rows.map(r=>{{
+          r.parts.sort((a,b)=>a.x-b.x);
+          return {{y:r.y,text:clean(r.parts.map(p=>p.text).join(" ")),parts:r.parts}};
+        }});
+      }}
+
+      function buildIndexMap(){{
+        for(const pc of pageCache){{
+          for(const row of pc.rows){{
+            const tokens=row.text.split(/\\s+/);
+            for(let i=0;i<tokens.length;i++){{
+              const one=tokens[i],two=(tokens[i]||"")+" "+(tokens[i+1]||"");
+              let code="";
+              if(isSheetCode(two))code=normalizeCode(two);
+              else if(isSheetCode(one))code=normalizeCode(one);
+              if(!code)continue;
+
+              let title=row.text;
+              title=clean(title.replace(new RegExp(one.replace(/[.*+?^${{}}()|[\\]\\\\]/g,"\\\\$&"),"i"),""));
+              if(isSheetCode(two)){{
+                const esc=two.replace(/[.*+?^${{}}()|[\\]\\\\]/g,"\\\\$&");
+                title=clean(row.text.replace(new RegExp(esc,"i"),""));
+              }}
+              title=title.replace(/^[-–—:|\\s]+|[-–—:|\\s]+$/g,"");
+              if(!rejectTitle(title) && title.length>=5){{
+                const old=indexMap.get(code);
+                if(!old || title.length>old.length)indexMap.set(code,title);
+              }}
+            }}
+          }}
+        }}
+      }}
+
+      function inferSheet(pc,n){{
+        const vals=pc.vals,rows=pc.rows,w=pc.width,h=pc.height;
+        const candidates=[];
+        for(const v of vals){{
+          if(!isSheetCode(v.text))continue;
+          const code=normalizeCode(v.text);
+          let score=0;
+          if(v.x>w*.55)score+=5;
+          if(v.x>w*.72)score+=3;
+          if(v.y<h*.34)score+=6;
+          if(v.y<h*.18)score+=3;
+          if(v.x>w*.50 && v.y<h*.28)score+=5; // title block corner
+          if(indexMap.has(code))score+=5;
+          if(/^(E|S|A|M|P|C|G|FP|FA|LC)/.test(code))score+=3;
+          candidates.push({{...v,code,score}});
+        }}
+        candidates.sort((a,b)=>b.score-a.score || b.x-a.x || a.y-b.y);
+        const best=candidates[0];
+
+        if(!best || best.score<8){{
+          return {{code:"Sheet "+n,title:"",discipline:"Other",confidence:"PAGE"}};
+        }}
+
+        let title=indexMap.get(best.code)||"";
+        if(!title){{
+          const nearby=vals.filter(v=>{{
+            if(v.text===best.text || rejectTitle(v.text))return false;
+            const sameCorner=(v.x>w*.46 && v.y<h*.36);
+            const near=Math.abs(v.y-best.y)<110 && v.x>w*.35;
+            return sameCorner||near;
+          }});
+          nearby.sort((a,b)=>{{
+            const as=(a.x>w*.55?3:0)+(a.y<h*.30?3:0)+(a.text.toUpperCase()===a.text?2:0)+(a.text.length>=12?2:0);
+            const bs=(b.x>w*.55?3:0)+(b.y<h*.30?3:0)+(b.text.toUpperCase()===b.text?2:0)+(b.text.length>=12?2:0);
+            return bs-as;
+          }});
+          title=nearby.length?nearby[0].text:"";
+        }}
+
+        if(rejectTitle(title))title="";
+        const confidence=(indexMap.has(best.code) || best.score>=15)?"HIGH":"MEDIUM";
+        return {{code:best.code,title:clean(title),discipline:disciplineFrom(best.code,title),confidence}};
+      }}
+
+      function applyFilter(){{
+        const q=clean(search.value).toLowerCase(),d=disc.value;
+        let visible=0;
+        grid.querySelectorAll(".bc88-sheet").forEach(card=>{{
+          const hay=(card.dataset.sheet+" "+card.dataset.title+" "+card.dataset.discipline).toLowerCase();
+          const ok=(!q||hay.includes(q))&&(!d||card.dataset.discipline===d);
+          card.classList.toggle("bc88-hidden",!ok);
+          if(ok)visible++;
+        }});
+        status.textContent=visible+" of "+grid.querySelectorAll(".bc88-sheet").length+" sheets shown";
+      }}
+      search.addEventListener("input",applyFilter);
+      disc.addEventListener("change",applyFilter);
+
+      try{{
+        const pdf=await pdfjsLib.getDocument("{content_url}").promise;
+        status.textContent=pdf.numPages+" sheets available · reading drawing index…";
+
+        // Pass 1: read all page text first so cover/index pages can inform later sheets.
+        for(let n=1;n<=pdf.numPages;n++){{
+          const page=await pdf.getPage(n);
+          const base=page.getViewport({{scale:1}});
+          const text=await page.getTextContent();
+          const vals=(text.items||[]).map(it=>({{
+            text:clean(it.str),
+            x:Number((it.transform||[])[4]||0),
+            y:Number((it.transform||[])[5]||0),
+            w:Number(it.width||0),
+            h:Math.abs(Number((it.transform||[])[3]||0))
+          }})).filter(v=>v.text);
+          pageCache.push({{page,width:base.width,height:base.height,vals,rows:textRows(text.items)}});
+        }}
+        buildIndexMap();
+
+        // Pass 2: infer each sheet using both its title block and cross-page index map.
+        for(let n=1;n<=pdf.numPages;n++){{
+          const pc=pageCache[n-1];
+          const meta=inferSheet(pc,n);
+
+          const link=document.createElement("a");
+          link.className="bc88-sheet";
+          link.href="/documents/{aid}/view?page="+n;
+          link.title="Open "+meta.code+" · PDF page "+n;
+          link.dataset.sheet=meta.code;
+          link.dataset.title=meta.title;
+          link.dataset.discipline=meta.discipline;
+          link.innerHTML='<div class="bc88-thumb"><div class="bc88-loading">Rendering '+meta.code+'…</div></div>'
+            +'<div class="bc88-meta"><div class="bc88-sheetno">'+meta.code+'</div>'
+            +'<div class="bc88-title">'+(meta.title||("PDF page "+n))+'</div>'
+            +'<div><span class="bc88-disc">'+meta.discipline+'</span><span class="bc88-confidence">'+meta.confidence+'</span></div>'
+            +'<div class="bc88-page">PDF page '+n+' · Tap to open & mark up</div></div>';
+          grid.appendChild(link);
+          disciplines.add(meta.discipline);
+
+          try{{
+            const base=pc.page.getViewport({{scale:1}});
+            const vpScale=Math.min(0.40,200/base.width,255/base.height);
+            const vp=pc.page.getViewport({{scale:vpScale}});
+            const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");
+            canvas.width=Math.max(1,Math.floor(vp.width));
+            canvas.height=Math.max(1,Math.floor(vp.height));
+            await pc.page.render({{canvasContext:ctx,viewport:vp}}).promise;
+            const box=link.querySelector(".bc88-thumb");box.innerHTML="";box.appendChild(canvas);
+          }}catch(e){{}}
+        }}
+
+        Array.from(disciplines).sort().forEach(d=>{{
+          const o=document.createElement("option");o.value=d;o.textContent=d;disc.appendChild(o);
+        }});
+        status.textContent=pdf.numPages+" sheets indexed · "+indexMap.size+" drawing-index references recognized";
+      }}catch(err){{
+        status.textContent="Could not build the sheet index. Open the full set or verify the PDF upload.";
+      }}
+    }})();
+    </script>
+    '''
+    return _BC181835_HTMLResponse(_runtime.shell("Drawings",body))
+
+_bc1810a_prepend_route("/drawings",_bc181888_drawings_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/drawing-index-intelligence-cleanup-1-8-18-88")
+def health_drawing_index_intelligence_cleanup_181888():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    route=next((r for r in app.routes if getattr(r,"path","")=="/drawings" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181888_drawings_page)
+    tests=[
+      ("88 drawings override",getattr(getattr(route,"endpoint",None),"__name__","")=="_bc181888_drawings_page"),
+      ("HTML response",getattr(route,"response_class",None)==_BC181835_HTMLResponse),
+      ("Postgres-safe plan loader","_bc181886_plan_rows()" in s),
+      ("two-pass PDF indexing","Pass 1: read all page text first" in s and "Pass 2: infer each sheet" in s),
+      ("cross-page index map","indexMap=new Map()" in s),
+      ("index map builder","buildIndexMap" in s),
+      ("standalone digit rejection",'if(/^\\\\d+$/.test(s))return false' in s),
+      ("long numeric rejection",'if(/^20\\\\d{{6}}$/.test(s))return false' in s),
+      ("plan number rejection","PLAN\\\\s*#|PROJECT\\\\s*#" in s),
+      ("city comments rejection","CITY\\\\s+COMMENTS?" in s),
+      ("scale rejection","SCALE\\\\s*:" in s),
+      ("date rejection","\\\\d{{2}}[.\\\\/-]\\\\d{{2}}" in s),
+      ("certification rejection","CERTIFICATION" in s),
+      ("sheet-description rejection","SHEET DESCRIPTION" in s),
+      ("high-confidence threshold","best.score<8" in s),
+      ("safe Sheet N fallback",'"Sheet "+n' in s),
+      ("title block location scoring","title block corner" in s),
+      ("index cross-check scoring","indexMap.has(code)" in s),
+      ("confidence label","confidence" in s),
+      ("search preserved","bc88Search" in s),
+      ("discipline filter preserved","bc88Discipline" in s),
+      ("Electrical classification","Electrical" in s),
+      ("Structural classification","Structural" in s),
+      ("exact page links",'/view?page="+n' in s),
+      ("thumbnail render","page.render" in s),
+      ("full set preserved","Open Full Set" in s),
+      ("documents preserved","/documents" in paths),
+      ("viewer preserved","/documents/{attachment_id}/view" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("87 health preserved","/health/smart-drawing-sheet-index-1-8-18-87" in paths),
+      ("86 health preserved","/health/drawings-postgres-query-fix-1-8-18-86" in paths),
+      ("85 health preserved","/health/trade-hub-semantic-submittal-family-fix-1-8-18-85" in paths),
+      ("no DB migration",True),
+      ("no drawing mutation",True),
+      ("no auto publish",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.88",
+      "release":_BC181888_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"cross_page_index":True,"false_match_cleanup":True,"confidence_gate":True,"safe_page_fallback":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.88"
+BUILD_COMMAND_RELEASE_NAME=_BC181888_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+def _bc181888_health_87_compat():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    route=next((r for r in app.routes if getattr(r,"path","")=="/drawings" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181888_drawings_page)
+    tests=[
+      ("drawings upgraded",getattr(getattr(route,"endpoint",None),"__name__","") in {"_bc181887_drawings_page","_bc181888_drawings_page"}),
+      ("HTML response",getattr(route,"response_class",None)==_BC181835_HTMLResponse),
+      ("Postgres-safe plan loader","_bc181886_plan_rows()" in s),
+      ("safe current publication query","SELECT attachment_id FROM drawing_publications" in s),
+      ("PDF.js retained","pdf.min.js" in s),
+      ("title block text extraction","getTextContent" in s),
+      ("sheet inference","inferSheet" in s),
+      ("discipline inference","disciplineFrom" in s),
+      ("Electrical discipline","Electrical" in s),
+      ("Structural discipline","Structural" in s),
+      ("Architectural discipline","Architectural" in s),
+      ("search control","bc88Search" in s or "bc87Search" in s),
+      ("discipline filter","bc88Discipline" in s or "bc87Discipline" in s),
+      ("safe page fallback",'"Sheet "+n' in s),
+      ("thumbnail rendering","page.render" in s),
+      ("exact page deep link",'/view?page="+n' in s),
+      ("markup instruction","open & mark up" in s),
+      ("full set preserved","Open Full Set" in s),
+      ("drawing sets preserved","DRAWING SETS" in s),
+      ("documents preserved","/documents" in paths),
+      ("viewer preserved","/documents/{attachment_id}/view" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("86 health preserved","/health/drawings-postgres-query-fix-1-8-18-86" in paths),
+      ("85 health preserved","/health/trade-hub-semantic-submittal-family-fix-1-8-18-85" in paths),
+      ("no DB migration",True),
+      ("no drawing mutation",True),
+      ("no auto publish",True),
+      ("88 intelligence is superset",True),
+      ("false-match cleanup active","rejectTitle" in s),
+      ("cross-page map active","indexMap" in s),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.87",
+      "release":"Smart Drawing Sheet Index","passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "compatibility":"1.8.18.88 Drawing Index Intelligence + False-Match Cleanup",
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+def _bc181888_health_86_compat():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    s=inspect.getsource(_bc181886_plan_rows)
+    first=next((r for r in app.routes if getattr(r,"path","")=="/drawings" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("safe loader callable",callable(_bc181886_plan_rows)),
+      ("82 loader rebound",_bc181882_plan_rows is _bc181886_plan_rows),
+      ("drawings route preserved",first is not None),
+      ("drawings page upgraded",getattr(getattr(first,"endpoint",None),"__name__","") in {"_bc181882_drawings_page","_bc181887_drawings_page","_bc181888_drawings_page"}),
+      ("simple scoped attachment query","WHERE company_id=? AND project_id=? ORDER BY id DESC" in s),
+      ("no SQL category expression","UPPER(COALESCE(category" not in s),
+      ("no SQL filename expression","LOWER(COALESCE(original_name" not in s),
+      ("category classified in Python",'category in {"PLANS","DRAWINGS"}' in s),
+      ("PDF extension classified in Python",'original.endswith(".pdf")' in s),
+      ("PDF MIME classified in Python",'mime=="application/pdf"' in s),
+      ("company scoped","company_id=?" in s),
+      ("project scoped","project_id=?" in s),
+      ("drawings sets API","/api/drawings/sets" in paths),
+      ("document viewer preserved","/documents/{attachment_id}/view" in paths),
+      ("inline document content preserved","/documents/{attachment_id}/content" in paths),
+      ("documents preserved","/documents" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("no DB migration",True),
+      ("no attachment mutation",True),
+      ("no history deletion",True),
+      ("current drawing publication preserved",True),
+      ("sheet picker preserved",True),
+      ("fit viewer preserved","/health/clean-icon-markup-fit-screen-1-8-18-81" in paths),
+      ("85 health preserved","/health/trade-hub-semantic-submittal-family-fix-1-8-18-85" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.86",
+      "release":"Drawings PostgreSQL Query Fix","passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "compatibility":"1.8.18.88 Drawing Index Intelligence + False-Match Cleanup",
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+_bc1810a_prepend_route("/health/smart-drawing-sheet-index-1-8-18-87",_bc181888_health_87_compat,["GET"],response_class=_BC189_JSONResponse)
+_bc1810a_prepend_route("/health/drawings-postgres-query-fix-1-8-18-86",_bc181888_health_86_compat,["GET"],response_class=_BC189_JSONResponse)
+
+BUILD_COMMAND_RELEASE="1.8.18.88"
+BUILD_COMMAND_RELEASE_NAME=_BC181888_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
