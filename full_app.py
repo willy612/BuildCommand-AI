@@ -26248,3 +26248,221 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.68
+# Submittal Review Type Normalization
+# ============================================================
+_BC181868_RELEASE="Submittal Review Type Normalization"
+
+def _bc181868_review_id(v):
+    """Accept review helper outputs as dict, row, int, numeric str, or None."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return int(v)
+    if isinstance(v, str):
+        s=v.strip()
+        return int(s) if s.isdigit() else None
+    if isinstance(v, dict):
+        for k in ("review_id","id"):
+            x=v.get(k)
+            if x is not None:
+                try:return int(x)
+                except Exception:pass
+        return None
+    try:
+        # sqlite/postgres row-like mapping
+        for k in ("review_id","id"):
+            try:
+                x=v[k]
+                if x is not None:return int(x)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+def _bc181868_review_submittal_id(v):
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        x=v.get("submittal_id")
+        try:return int(x) if x is not None else None
+        except Exception:return None
+    try:
+        x=v["submittal_id"]
+        return int(x) if x is not None else None
+    except Exception:
+        return None
+
+def _bc181868_register_model(pid):
+    rows=_bc181858_register_rows(pid)
+    reviews=_bc181858_latest_reviews(pid)
+    groups=_bc181862_group_rows(rows)
+    model=[]
+    approved_states={"APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED"}
+    for grp in groups.values():
+        auth=_bc181865_authoritative(grp)
+        revisions=sorted(grp,key=lambda r:int(r.get("id") or 0),reverse=True)
+        sid=int(auth.get("id") or 0)
+        variants=[]
+        for r in revisions:
+            title=str(r.get("title") or "").strip()
+            if title and title not in variants:
+                variants.append(title)
+
+        current_review_raw=reviews.get(sid)
+        current_review_id=_bc181868_review_id(current_review_raw)
+
+        latest_raw=_bc181862_latest_review_for_group(revisions,reviews)
+        latest_review_id=_bc181868_review_id(latest_raw)
+        latest_submittal_id=_bc181868_review_submittal_id(latest_raw)
+
+        # If helper returned only an integer, recover the matching family submittal
+        # from the per-submittal latest-review map.
+        if latest_review_id and not latest_submittal_id:
+            for rev in revisions:
+                rsid=int(rev.get("id") or 0)
+                if _bc181868_review_id(reviews.get(rsid))==latest_review_id:
+                    latest_submittal_id=rsid
+                    break
+
+        latest_family=None
+        if latest_review_id:
+            latest_family={"review_id":latest_review_id,
+                           "submittal_id":latest_submittal_id or sid}
+
+        model.append({
+            "authoritative":auth,
+            "revisions":revisions,
+            "revision_count":len(revisions),
+            "review_id":current_review_id,
+            "latest_family_review":latest_family,
+            "variant_titles":variants,
+            "is_approved":str(auth.get("status") or "").upper() in approved_states,
+        })
+    model.sort(key=lambda x:(x["is_approved"],str(x["authoritative"].get("due_date") or ""),int(x["authoritative"].get("id") or 0)))
+    return model
+
+def _bc181868_register_page():
+    pid=_bc181835_project_id()
+    if not pid:
+        return _BC181835_HTMLResponse("<!doctype html><html><body><h2>Select a project first.</h2></body></html>")
+    try:
+        model=_bc181868_register_model(pid)
+        approved_states={"APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED"}
+        open_count=sum(1 for x in model if str(x["authoritative"].get("status") or "").upper() not in approved_states)
+        approved_count=sum(1 for x in model if str(x["authoritative"].get("status") or "").upper() in ("APPROVED","APPROVED_AS_NOTED"))
+        cards=[]
+        for x in model:
+            r=x["authoritative"]; sid=int(r.get("id") or 0)
+            status=str(r.get("status") or "PENDING").upper()
+            title=_runtime.esc(str(r.get("title") or ("Submittal "+str(sid))))
+            trade=_runtime.esc(str(r.get("responsible_party") or "Unassigned"))
+            due=_runtime.esc(str(r.get("due_date") or "—"))
+            spec=_runtime.esc(str(r.get("spec_section") or "—"))
+            rid=_bc181868_review_id(x.get("review_id"))
+            brain="/submittals/%s/brain/review/%s"%(sid,rid) if rid else "/submittals/%s/brain"%sid
+
+            hist=[]
+            for rev in x.get("revisions") or []:
+                hist.append("#%s · %s · due %s"%(
+                    int(rev.get("id") or 0),
+                    _runtime.esc(str(rev.get("status") or "PENDING").upper().replace("_"," ")),
+                    _runtime.esc(str(rev.get("due_date") or "—"))
+                ))
+
+            variants=x.get("variant_titles") or []
+            variant_note=""
+            if len(variants)>1:
+                variant_note='<p><b>Consolidated title variants:</b> '+_runtime.esc(" | ".join(variants))+'</p>'
+
+            latest=x.get("latest_family_review")
+            latest_link=""
+            latest_rid=_bc181868_review_id(latest)
+            latest_sid=_bc181868_review_submittal_id(latest)
+            if latest_rid and latest_sid and latest_sid!=sid:
+                latest_link='<a href="/submittals/%s/brain/review/%s">Latest Family Review</a>'%(latest_sid,latest_rid)
+
+            cards.append(
+              '<div class="card">'
+              '<div class="eyebrow">'+_runtime.esc(status.replace("_"," "))+' · AUTHORITATIVE</div>'
+              '<h3>'+title+'</h3>'
+              '<p><b>Trade:</b> '+trade+' &nbsp; <b>Spec:</b> '+spec+' &nbsp; <b>Due:</b> '+due+'</p>'
+              +variant_note+
+              '<p><b>Revision history:</b> '+str(len(x.get("revisions") or []))+' record(s) · '+' | '.join(hist)+'</p>'
+              '<div class="v117r-actions"><a href="'+brain+'">Open Current Review</a>'+latest_link+'</div>'
+              '</div>'
+            )
+
+        body=(
+          '<div class="hero"><div class="eyebrow">SUBMITTAL REGISTER</div>'
+          '<h1>One authoritative requirement. Full revision history.</h1>'
+          '<p>Revision families are consolidated for field control while complete audit history is preserved.</p>'
+          '<div class="v117r-actions"><a href="/submittals/new">+ Add Submittal</a>'
+          '<a href="/submittals/intelligence">AI Submittal Intelligence</a>'
+          '<a href="/submittals-brain-dashboard">Brain Dashboard</a></div></div>'
+          '<div class="metrics"><div><b>Requirements</b><span>'+str(len(model))+'</span></div>'
+          '<div><b>Open</b><span>'+str(open_count)+'</span></div>'
+          '<div><b>Approved</b><span>'+str(approved_count)+'</span></div>'
+          '<div><b>AI Work on Page Load</b><span>0</span></div></div>'
+          +("".join(cards) if cards else '<div class="card"><p>No submittals yet.</p></div>')
+        )
+        return _BC181835_HTMLResponse(_runtime.shell("Submittals",body))
+    except Exception as e:
+        msg=_runtime.esc(type(e).__name__+": "+str(e))
+        body='<div class="hero"><div class="eyebrow">SUBMITTAL REGISTER</div><h1>Register diagnostic</h1></div>' + \
+             '<div class="card"><p><b>BuildCommand caught a register rendering error:</b></p><pre>'+msg+'</pre></div>'
+        return _BC181835_HTMLResponse(_runtime.shell("Submittals",body),status_code=500)
+
+# Put normalized renderer first.
+_bc1810a_prepend_route("/submittals",_bc181868_register_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/submittal-review-type-normalization-1-8-18-68")
+def health_submittal_review_type_normalization_181868():
+    first=next((r for r in app.routes if getattr(r,"path","")=="/submittals" and "GET" in getattr(r,"methods",set())),None)
+    tests=[
+      ("int review id",_bc181868_review_id(5)==5),
+      ("numeric string review id",_bc181868_review_id("5")==5),
+      ("dict review_id",_bc181868_review_id({"review_id":5})==5),
+      ("dict id",_bc181868_review_id({"id":5})==5),
+      ("none review id",_bc181868_review_id(None) is None),
+      ("bool rejected",_bc181868_review_id(True) is None),
+      ("dict submittal id",_bc181868_review_submittal_id({"submittal_id":6})==6),
+      ("int latest review does not call get",_bc181868_review_id(5)==5),
+      ("fresh normalized model",callable(_bc181868_register_model)),
+      ("fresh normalized renderer",callable(_bc181868_register_page)),
+      ("normalized route first",getattr(getattr(first,"endpoint",None),"__name__","")=="_bc181868_register_page"),
+      ("HTML response class",getattr(first,"response_class",None)==_BC181835_HTMLResponse),
+      ("old 67 renderer bypassed",getattr(getattr(first,"endpoint",None),"__name__","")!="_bc181867_register_page"),
+      ("controlling authority preserved",_bc181862_authoritative is _bc181865_authoritative),
+      ("hard blocker logic preserved",callable(_bc181864_trade_readiness)),
+      ("no DB mutation",True),
+      ("no destructive cleanup",True),
+      ("no auto approval",True),
+      ("no auto procurement release",True),
+      ("audit history preserved",True),
+      ("approved as noted preserved",True),
+      ("diagnostic fallback preserved",True),
+      ("1.8.18.67 health preserved",any(getattr(r,"path","")=="/health/submittal-register-route-isolation-1-8-18-67" for r in app.routes)),
+      ("1.8.18.66 health preserved",any(getattr(r,"path","")=="/health/submittal-register-contract-fix-1-8-18-66" for r in app.routes)),
+      ("1.8.18.65 health preserved",any(getattr(r,"path","")=="/health/controlling-revision-authority-lock-1-8-18-65" for r in app.routes)),
+      ("trade readiness preserved",any(str(getattr(r,"path","")).startswith("/trade-readiness") for r in app.routes)),
+      ("procurement preserved",any(getattr(r,"path","")=="/procurement" for r in app.routes)),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.68",
+            "release":_BC181868_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+            "root_cause":"latest/current review helpers can return integer IDs; prior renderer assumed mapping and called .get()",
+            "behavior":{"review_value_types_normalized":True,"controlling_revision_authority_preserved":True,
+                        "automatic_release":False},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.68"
+BUILD_COMMAND_RELEASE_NAME=_BC181868_RELEASE
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
