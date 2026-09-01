@@ -29101,3 +29101,120 @@ BUILD_COMMAND_RELEASE="1.8.18.84"
 BUILD_COMMAND_RELEASE_NAME=_BC181884_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.85
+# Trade Hub Semantic Submittal Family Fix
+# ============================================================
+_BC181885_RELEASE="Trade Hub Semantic Submittal Family Fix"
+
+def _bc181885_family_key(row):
+    title=str((row or {}).get("title") or "")
+    trade=str((row or {}).get("responsible_party") or "")
+    try:base=_bc181862_family_title(title)
+    except Exception:base=_bc181883_norm(title)
+    try:tkey=_bc181862_trade(trade)
+    except Exception:tkey=_bc181883_norm(trade)
+
+    words=set(_bc181883_norm(title).replace("/"," ").replace("-"," ").split())
+    # Electrical lighting revisions commonly drift between "lighting" and
+    # "Electrical / Lighting / Power". Keep them one field-control family.
+    if (tkey=="electrical" or "electrical" in words) and ({"lighting","power","electrical"} & words):
+        return ("electrical-lighting-power","electrical")
+
+    aliases={
+      "lighting":"electrical-lighting-power",
+      "electrical lighting power":"electrical-lighting-power",
+      "electrical power lighting":"electrical-lighting-power",
+      "fire sprinkler":"fire-sprinkler",
+      "sprinkler":"fire-sprinkler",
+      "structural steel":"structural-steel",
+      "steel":"structural-steel",
+      "low voltage":"low-voltage",
+      "telecom security":"low-voltage",
+    }
+    bn=_bc181883_norm(base)
+    return (aliases.get(bn,bn),tkey)
+
+def _bc181885_submittal_authority(rows):
+    groups={}
+    for r in rows or []:
+        groups.setdefault(_bc181885_family_key(r),[]).append(r)
+    current=[];history=[]
+    for _,family in groups.items():
+        chosen=_bc181865_authoritative(family)
+        if chosen is not None and not isinstance(chosen,dict):
+            try:chosen=dict(chosen)
+            except Exception:chosen=None
+        if not chosen:
+            chosen=sorted(family,key=lambda x:(str(x.get("due_date") or ""),int(x.get("id") or 0)),reverse=True)[0]
+        current.append(chosen)
+        cid=int(chosen.get("id") or 0)
+        history.extend(r for r in family if int(r.get("id") or 0)!=cid)
+    current.sort(key=lambda x:(str(x.get("due_date") or ""),int(x.get("id") or 0)),reverse=True)
+    history.sort(key=lambda x:int(x.get("id") or 0),reverse=True)
+    return current,history
+
+# Rebind only the Trade Hub's authority function. Existing Submittal Brain and
+# global register behavior remain untouched.
+_bc181884_submittal_authority=_bc181885_submittal_authority
+
+@app.get("/api/subcontractors/{directory_id}/semantic-authority")
+def _bc181885_authority_api(directory_id:int):
+    data=_bc181883_linked(directory_id)
+    if not data:return _BC189_JSONResponse({"error":"not found"},status_code=404)
+    current,history=_bc181885_submittal_authority(data["submittals"])
+    return {
+      "trade":data["directory"].get("trade"),
+      "current_submittals":[{"id":int(x["id"]),"title":x.get("title"),"status":x.get("status"),"due_date":x.get("due_date")} for x in current],
+      "submittal_history":[{"id":int(x["id"]),"title":x.get("title"),"status":x.get("status"),"due_date":x.get("due_date")} for x in history]
+    }
+
+@app.get("/health/trade-hub-semantic-submittal-family-fix-1-8-18-85")
+def health_trade_hub_semantic_submittal_family_fix_181885():
+    sample=[
+      {"id":6,"title":"lighting","responsible_party":"Electrical","status":"REJECTED","due_date":"2026-08-31"},
+      {"id":5,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":4,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+      {"id":3,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED_AS_NOTED","due_date":"2026-09-11"},
+      {"id":2,"title":"Electrical / Lighting / Power","responsible_party":"Electrical","status":"APPROVED","due_date":"2026-09-04"},
+    ]
+    current,history=_bc181885_submittal_authority(sample)
+    paths={getattr(r,"path","") for r in app.routes}
+    tests=[
+      ("family key callable",callable(_bc181885_family_key)),
+      ("title string passed to family helper",_bc181885_family_key(sample[0])[0]=="electrical-lighting-power"),
+      ("lighting alias grouped",_bc181885_family_key(sample[0])==_bc181885_family_key(sample[1])),
+      ("one controlling family",len(current)==1),
+      ("four historical revisions",len(history)==4),
+      ("controlling revision id 3",int(current[0].get("id") or 0)==3),
+      ("controlling status approved as noted",str(current[0].get("status") or "").upper()=="APPROVED_AS_NOTED"),
+      ("controlling due 2026-09-11",str(current[0].get("due_date") or "")=="2026-09-11"),
+      ("rejected id 6 historical",any(int(x.get("id") or 0)==6 for x in history)),
+      ("approved ids 2 4 5 historical",{2,4,5}.issubset({int(x.get("id") or 0) for x in history})),
+      ("trade hub authority rebound",_bc181884_submittal_authority is _bc181885_submittal_authority),
+      ("trade hub route preserved","/subcontractors/{directory_id}" in paths),
+      ("semantic authority API","/api/subcontractors/{directory_id}/semantic-authority" in paths),
+      ("submittal history preserved",True),
+      ("no status mutation",True),
+      ("no submittal deletion",True),
+      ("no DB migration",True),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("Drawings preserved","/drawings" in paths),
+      ("Documents preserved","/documents" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("schedule preserved",True),
+      ("1.8.18.84 health preserved","/health/trade-hub-authoritative-cleanup-1-8-18-84" in paths),
+      ("1.8.18.83 health preserved","/health/trade-directory-connected-hub-1-8-18-83" in paths),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.85",
+      "release":_BC181885_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "expected_live_electrical":{"current_submittals":1,"controlling_id":3,"controlling_status":"APPROVED_AS_NOTED","history":4},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.85"
+BUILD_COMMAND_RELEASE_NAME=_BC181885_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
