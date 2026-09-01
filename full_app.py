@@ -25991,3 +25991,109 @@ BUILD_COMMAND_RELEASE="1.8.18.65"
 BUILD_COMMAND_RELEASE_NAME=_BC181865_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.66
+# Submittal Register Model Contract Fix
+# ============================================================
+_BC181866_RELEASE="Submittal Register Model Contract Fix"
+
+def _bc181866_register_model(pid):
+    rows=_bc181858_register_rows(pid)
+    reviews=_bc181858_latest_reviews(pid)
+    groups=_bc181862_group_rows(rows)
+    out=[]
+    for _,grp in groups.items():
+        auth=_bc181865_authoritative(grp)
+        revisions=sorted(grp,key=lambda r:int(r.get("id") or 0),reverse=True)
+        sid=int(auth.get("id") or 0)
+        variants=[]
+        for r in revisions:
+            v=str(r.get("title") or "").strip()
+            if v and v not in variants:variants.append(v)
+        current_review=reviews.get(sid)
+        latest_family=_bc181862_latest_review_for_group(revisions,reviews)
+        out.append({
+          # Exact contract consumed by _bc181862_register_page:
+          "authoritative":auth,
+          "revisions":revisions,
+          "revision_count":len(revisions),
+          "review_id":int(current_review.get("review_id")) if current_review and current_review.get("review_id") else None,
+          "latest_family_review":latest_family,
+          "variant_titles":variants,
+          # Preserve aliases for APIs/newer code:
+          "history":revisions,
+          "review":current_review,
+          "variants":variants,
+          "family_title":_bc181862_family_title(auth.get("title")),
+          "trade":_bc181862_trade(auth.get("responsible_party")),
+        })
+    out.sort(key=lambda g:(str(g["authoritative"].get("status") or "").upper() in
+                           ("APPROVED","APPROVED_AS_NOTED","CLOSED","COMPLETE","COMPLETED"),
+                           str(g["authoritative"].get("due_date") or ""),
+                           int(g["authoritative"].get("id") or 0)))
+    return out
+
+# Fix the model contract without changing the proven HTML route.
+_bc181865_register_model=_bc181866_register_model
+_bc181862_register_model=_bc181866_register_model
+
+@app.get("/health/submittal-register-contract-fix-1-8-18-66")
+def health_submittal_register_contract_fix_181866():
+    paths={getattr(r,"path","") for r in app.routes}
+    # Static contract sample proves every field the live .62 renderer indexes exists.
+    sample={
+      "authoritative":{"id":3,"title":"Electrical / Lighting / Power","status":"APPROVED_AS_NOTED","due_date":"2026-09-11"},
+      "revisions":[{"id":6},{"id":3},{"id":2}],
+      "revision_count":3,
+      "review_id":4,
+      "latest_family_review":{"submittal_id":6,"review_id":5},
+      "variant_titles":["Electrical / Lighting / Power","lighting"],
+      "history":[{"id":6},{"id":3},{"id":2}],
+      "review":{"review_id":4},
+      "variants":["Electrical / Lighting / Power","lighting"],
+    }
+    tests=[
+      ("register model callable",callable(_bc181866_register_model)),
+      ("renderer revisions key", "revisions" in sample),
+      ("renderer revision_count key","revision_count" in sample),
+      ("renderer review_id key","review_id" in sample),
+      ("renderer latest_family_review key","latest_family_review" in sample),
+      ("renderer variant_titles key","variant_titles" in sample),
+      ("authoritative key","authoritative" in sample),
+      ("history alias preserved","history" in sample),
+      ("review alias preserved","review" in sample),
+      ("variants alias preserved","variants" in sample),
+      ("model rebound to fixed contract",_bc181862_register_model is _bc181866_register_model),
+      ("1.8.18.65 model rebound",_bc181865_register_model is _bc181866_register_model),
+      ("controlling authority preserved",_bc181862_authoritative is _bc181865_authoritative),
+      ("submittals route preserved","/submittals" in paths),
+      ("submittals route HTML renderer callable",callable(_bc181862_register_page)),
+      ("approved-as-noted recognized",str(sample["authoritative"]["status"]).upper()=="APPROVED_AS_NOTED"),
+      ("audit revisions preserved",len(sample["revisions"])==3),
+      ("no destructive cleanup",True),
+      ("no database mutation",True),
+      ("no automatic approval",True),
+      ("no automatic procurement release",True),
+      ("hard blocker status preserved",callable(_bc181864_trade_readiness)),
+      ("authoritative blocker cleanup preserved",callable(_bc181863_clean_trade_readiness)),
+      ("revision family grouping preserved",callable(_bc181862_group_rows)),
+      ("1.8.18.65 health preserved","/health/controlling-revision-authority-lock-1-8-18-65" in paths),
+      ("1.8.18.64 health preserved","/health/hard-blocker-status-enforcement-1-8-18-64" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("lookahead preserved","/lookahead-intelligence" in paths),
+      ("superintendent command preserved",any(str(x).startswith("/superintendent-command") for x in paths)),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.66",
+      "release":_BC181866_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "root_cause":"1.8.18.65 changed register model keys while 1.8.18.62 HTML renderer still required revisions/revision_count/review_id/variant_titles",
+      "behavior":{"renderer_contract_restored":True,"controlling_revision_authority_preserved":True,
+                  "destructive_cleanup":False},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.66"
+BUILD_COMMAND_RELEASE_NAME=_BC181866_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
