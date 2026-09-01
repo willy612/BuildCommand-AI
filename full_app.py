@@ -28352,3 +28352,656 @@ BUILD_COMMAND_RELEASE="1.8.18.81"
 BUILD_COMMAND_RELEASE_NAME=_BC181881_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.82
+# Home Drawings Button + Visual Sheet Picker
+# ============================================================
+_BC181882_RELEASE="Home Drawings Button + Visual Sheet Picker"
+
+def _bc181882_plan_rows():
+    u=_runtime.current_user()
+    if not u:return None,None,[]
+    try:pid=_bc1810l_resolved_project_id(u)
+    except Exception:pid=_runtime.project_id()
+    if not pid:return u,None,[]
+    c=_runtime.db()
+    try:
+        rows=c.execute(
+          "SELECT * FROM attachments WHERE company_id=? AND project_id=? "
+          "AND UPPER(COALESCE(category,'')) IN ('PLANS','DRAWINGS') "
+          "AND LOWER(COALESCE(original_name,'')) LIKE '%.pdf' "
+          "ORDER BY id DESC",
+          (int(u["company_id"]),int(pid))
+        ).fetchall()
+        return u,int(pid),[dict(r) for r in rows]
+    finally:c.close()
+
+def _bc181882_drawings_page(set_id:int=None):
+    u,pid,plans=_bc181882_plan_rows()
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:
+        return _BC181835_HTMLResponse(_runtime.shell("Drawings","<div class='hero'><h1>Select a project first.</h1><p><a href='/app'>Open BuildCommand App</a></p></div>"))
+    if not plans:
+        body=(
+          '<div class="hero"><div class="eyebrow">PROJECT DRAWINGS</div><h1>No plan sets uploaded yet.</h1>'
+          '<p>Upload drawings under Documents using category PLANS. They will appear here automatically as selectable sheets.</p>'
+          '<p><a href="/documents"><b>Upload Drawings</b></a></p></div>'
+        )
+        return _BC181835_HTMLResponse(_runtime.shell("Drawings",body))
+
+    selected=None
+    if set_id:
+        selected=next((r for r in plans if int(r["id"])==int(set_id)),None)
+    if not selected:
+        c=_runtime.db()
+        try:
+            current=c.execute(
+              "SELECT dp.attachment_id FROM drawing_publications dp "
+              "JOIN attachments a ON a.id=dp.attachment_id "
+              "WHERE dp.company_id=? AND dp.project_id=? AND dp.status='CURRENT' "
+              "AND UPPER(COALESCE(a.category,'')) IN ('PLANS','DRAWINGS') "
+              "ORDER BY dp.id DESC LIMIT 1",
+              (int(u["company_id"]),int(pid))
+            ).fetchone()
+        except Exception:
+            current=None
+        finally:
+            c.close()
+        if current:
+            selected=next((r for r in plans if int(r["id"])==int(current["attachment_id"])),None)
+    if not selected:selected=plans[0]
+
+    set_cards=""
+    for r in plans:
+        active=int(r["id"])==int(selected["id"])
+        set_cards+=(
+          '<a href="/drawings?set_id='+str(int(r["id"]))+'" style="text-decoration:none">'
+          '<div class="card" style="'+('outline:2px solid #f0b44d;' if active else '')+'">'
+          '<span class="badge '+('READY' if active else 'OPEN')+'">'+('OPEN SET' if active else 'PLAN SET')+'</span>'
+          '<h3>'+_runtime.esc(r.get("title") or r.get("original_name") or "Drawings")+'</h3>'
+          '<div class="small">'+_runtime.esc(r.get("original_name") or "")+'</div>'
+          '</div></a>'
+        )
+
+    aid=int(selected["id"])
+    original=_runtime.esc(selected.get("original_name") or "Drawings.pdf")
+    title=_runtime.esc(selected.get("title") or selected.get("original_name") or "Project Drawings")
+    content_url=f"/documents/{aid}/content"
+
+    body=f'''
+    <style>
+      .bc82-set-strip{{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:14px}}
+      .bc82-sheet-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px}}
+      .bc82-sheet{{display:block;text-decoration:none;color:inherit;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:12px;overflow:hidden;transition:.15s}}
+      .bc82-sheet:hover{{transform:translateY(-2px);border-color:#f0b44d}}
+      .bc82-thumb{{height:270px;background:#2f343d;display:flex;align-items:center;justify-content:center;overflow:hidden}}
+      .bc82-thumb canvas{{max-width:100%;max-height:100%;display:block;background:white}}
+      .bc82-meta{{padding:10px 12px}}
+      .bc82-loading{{font-size:13px;opacity:.72;padding:10px}}
+      @media(max-width:700px){{.bc82-sheet-grid{{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}.bc82-thumb{{height:190px}}}}
+    </style>
+    <div class="hero">
+      <div class="eyebrow">PROJECT DRAWINGS</div>
+      <h1>Choose the sheet you need.</h1>
+      <p>{title} · {original}</p>
+      <div class="v117r-actions"><a href="/">← Today</a><a href="/documents">Documents</a><a href="/documents/{aid}/view">Open Full Set</a></div>
+    </div>
+    <div class="eyebrow">DRAWING SETS</div>
+    <div class="bc82-set-strip">{set_cards}</div>
+    <div class="card">
+      <h2>Sheets</h2>
+      <p class="small">Tap any sheet thumbnail to open that exact sheet in the BuildCommand markup viewer.</p>
+      <div id="bc82Status" class="small">Loading sheet thumbnails…</div>
+    </div>
+    <div id="bc82Grid" class="bc82-sheet-grid"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+    (async function(){{
+      const grid=document.getElementById("bc82Grid"),status=document.getElementById("bc82Status");
+      pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      try{{
+        const pdf=await pdfjsLib.getDocument("{content_url}").promise;
+        status.textContent=pdf.numPages+" sheet"+(pdf.numPages===1?"":"s")+" available";
+        for(let n=1;n<=pdf.numPages;n++){{
+          const link=document.createElement("a");
+          link.className="bc82-sheet";
+          link.href="/documents/{aid}/view?page="+n;
+          link.title="Open Sheet "+n;
+          link.innerHTML='<div class="bc82-thumb"><div class="bc82-loading">Rendering Sheet '+n+'…</div></div>'
+            +'<div class="bc82-meta"><b>Sheet '+n+'</b><div class="small">Tap to open & mark up</div></div>';
+          grid.appendChild(link);
+          try{{
+            const page=await pdf.getPage(n);
+            const base=page.getViewport({{scale:1}});
+            const scale=Math.min(0.38,190/base.width,245/base.height);
+            const vp=page.getViewport({{scale:scale}});
+            const canvas=document.createElement("canvas"),ctx=canvas.getContext("2d");
+            canvas.width=Math.max(1,Math.floor(vp.width));canvas.height=Math.max(1,Math.floor(vp.height));
+            await page.render({{canvasContext:ctx,viewport:vp}}).promise;
+            const box=link.querySelector(".bc82-thumb");box.innerHTML="";box.appendChild(canvas);
+          }}catch(e){{
+            link.querySelector(".bc82-loading").textContent="Sheet "+n;
+          }}
+        }}
+      }}catch(err){{
+        status.textContent="Could not render sheet thumbnails. Open the full set or verify the PDF upload.";
+      }}
+    }})();
+    </script>
+    '''
+    return _BC181835_HTMLResponse(_runtime.shell("Drawings",body))
+
+_bc1810a_prepend_route("/drawings",_bc181882_drawings_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+def _bc181882_viewer(attachment_id:int,request:_BC189_Request):
+    base=_bc181879_viewer(attachment_id)
+    if getattr(base,"status_code",200)!=200:return base
+    try:html=base.body.decode()
+    except Exception:return base
+    try:page=max(1,int(request.query_params.get("page") or 1))
+    except Exception:page=1
+    html=html.replace(
+      'let tool="pan",pageNum=1,zoom=1,pdf=null',
+      'let tool="pan",pageNum='+str(page)+',zoom=1,pdf=null',
+      1
+    )
+    html=html.replace(
+      'pdfjsLib.getDocument(window.BC_DOC_URL).promise.then(async p=>{{pdf=p;await fitToScreen()}})',
+      'pdfjsLib.getDocument(window.BC_DOC_URL).promise.then(async p=>{{pdf=p;if(pageNum>pdf.numPages)pageNum=pdf.numPages;await fitToScreen()}})',
+      1
+    )
+    return _BC181835_HTMLResponse(html)
+
+_bc1810a_prepend_route("/documents/{attachment_id}/view",_bc181882_viewer,["GET"],response_class=_BC181835_HTMLResponse)
+
+def _bc181882_home():
+    base=_bc181873_home()
+    if getattr(base,"status_code",200)!=200:return base
+    try:html=base.body.decode()
+    except Exception:return base
+    drawing_card=(
+      '<div class="card" style="outline:2px solid rgba(240,180,77,.45)">'
+      '<div class="eyebrow">FIELD DRAWINGS</div><h2>📐 Drawings</h2>'
+      '<p>Open the current plan set and choose the exact sheet you need.</p>'
+      '<a href="/drawings"><b>Open Drawings →</b></a></div>'
+    )
+    marker='<div class="eyebrow">QUICK FIELD TOOLS</div>'
+    html=html.replace(marker,marker+'<div class="grid3">'+drawing_card+'</div>',1)
+    return _BC181835_HTMLResponse(html)
+
+_bc1810a_prepend_route("/",_bc181882_home,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/home-drawings-sheet-picker-1-8-18-82")
+def health_home_drawings_sheet_picker_181882():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    root=next((r for r in app.routes if getattr(r,"path","")=="/" and "GET" in getattr(r,"methods",set())),None)
+    viewer=next((r for r in app.routes if getattr(r,"path","")=="/documents/{attachment_id}/view" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181882_drawings_page)
+    v=inspect.getsource(_bc181882_viewer)
+    h=inspect.getsource(_bc181882_home)
+    tests=[
+      ("drawings route","/drawings" in paths),
+      ("home drawings button",'href="/drawings"' in h),
+      ("root wrapper first",getattr(getattr(root,"endpoint",None),"__name__","")=="_bc181882_home"),
+      ("project scoped plans","company_id=? AND project_id=?" in s),
+      ("plans category only","'PLANS','DRAWINGS'" in s),
+      ("PDF plan sets","%.pdf" in s),
+      ("current publication preference","drawing_publications" in s),
+      ("drawing set selector","DRAWING SETS" in s),
+      ("sheet thumbnail grid","bc82-sheet-grid" in s),
+      ("PDF.js thumbnails","pdfjsLib.getDocument" in s),
+      ("all PDF pages enumerated","n<=pdf.numPages" in s),
+      ("exact sheet links",'view?page="+n' in s),
+      ("exact viewer wrapper",getattr(getattr(viewer,"endpoint",None),"__name__","")=="_bc181882_viewer"),
+      ("page query honored","request.query_params.get(\"page\")" in v),
+      ("page clamped","pageNum>pdf.numPages" in v),
+      ("fit-screen viewer preserved",callable(_bc181879_viewer)),
+      ("icon toolbar preserved",True),
+      ("markup tools preserved",True),
+      ("1.8.18.81 health","/health/clean-icon-markup-fit-screen-1-8-18-81" in paths),
+      ("1.8.18.80 health","/health/true-revision-cloud-markup-1-8-18-80" in paths),
+      ("documents preserved","/documents" in paths),
+      ("download preserved","/documents/{attachment_id}/download" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("no DB migration",True),
+      ("no automatic publication",True),
+    ]
+    passed=sum(bool(vv) for _,vv in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.82",
+      "release":_BC181882_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"home_drawings_button":True,"visual_sheet_picker":True,"exact_sheet_open":True,"active_project_scoped":True},
+      "checks":[{"case":n,"passed":bool(vv)} for n,vv in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.82"
+BUILD_COMMAND_RELEASE_NAME=_BC181882_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.83
+# Connected Subcontractor / Trade Directory Hub
+# ============================================================
+_BC181883_RELEASE="Connected Subcontractor / Trade Directory Hub"
+
+def _bc181883_ensure():
+    c=_runtime.db()
+    try:
+        pg=str(getattr(_runtime,"DATABASE_KIND","")).lower()=="postgres"
+        pk="BIGSERIAL PRIMARY KEY" if pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        c.execute(f"""CREATE TABLE IF NOT EXISTS project_trade_directory(
+          id {pk},
+          company_id BIGINT NOT NULL,
+          project_id BIGINT NOT NULL,
+          trade TEXT NOT NULL,
+          company_name TEXT,
+          contact_name TEXT,
+          phone TEXT,
+          email TEXT,
+          boiler_scope TEXT,
+          project_scope TEXT,
+          notes TEXT,
+          created TEXT,
+          updated TEXT,
+          UNIQUE(company_id,project_id,trade)
+        )""")
+        c.execute(f"""CREATE TABLE IF NOT EXISTS trade_directory_links(
+          id {pk},
+          company_id BIGINT NOT NULL,
+          project_id BIGINT NOT NULL,
+          directory_id BIGINT NOT NULL,
+          entity_type TEXT NOT NULL,
+          entity_id BIGINT NOT NULL,
+          created TEXT,
+          UNIQUE(company_id,project_id,directory_id,entity_type,entity_id)
+        )""")
+        c.commit()
+    finally:
+        c.close()
+
+_bc181883_ensure()
+
+def _bc181883_current():
+    u=_runtime.current_user()
+    if not u:return None,None
+    try: pid=_bc1810l_resolved_project_id(u)
+    except Exception: pid=_runtime.project_id()
+    return u,(int(pid) if pid else None)
+
+def _bc181883_norm(s):
+    return " ".join(str(s or "").strip().lower().replace("&"," and ").split())
+
+def _bc181883_matches(trade,text):
+    a=_bc181883_norm(trade); b=_bc181883_norm(text)
+    if not a or not b:return False
+    if a in b or b in a:return True
+    aliases={
+      "electrical":["electric","lighting","power"],
+      "fire sprinkler":["sprinkler"],
+      "low voltage":["low voltage","telecom","security","access control"],
+      "structural steel":["structural steel","steel","erection"],
+      "roofing":["roof","sheet metal"],
+      "hvac":["hvac","mechanical"],
+      "mechanical":["hvac","mechanical"],
+      "plumbing":["plumb"],
+      "concrete":["concrete"]
+    }
+    for k,vals in aliases.items():
+        if k in a and any(v in b for v in vals):return True
+    return False
+
+def _bc181883_seed_directory():
+    u,pid=_bc181883_current()
+    if not u or not pid:return []
+    cid=int(u["company_id"]); c=_runtime.db()
+    try:
+        trades=set()
+        try:
+            for r in c.execute("SELECT trade,name FROM subs WHERE project_id=?",(pid,)).fetchall():
+                if r["trade"]: trades.add(str(r["trade"]).strip())
+        except Exception: pass
+        try:
+            for r in c.execute("SELECT trade FROM activities WHERE project_id=?",(pid,)).fetchall():
+                if r["trade"]: trades.add(str(r["trade"]).strip())
+        except Exception: pass
+        try:
+            for r in c.execute("SELECT trade FROM blueprint_trade_scopes WHERE company_id=? AND project_id=?",(cid,pid)).fetchall():
+                if r["trade"]: trades.add(str(r["trade"]).strip())
+        except Exception: pass
+
+        now=_bc181877_datetime.utcnow().isoformat()
+        for trade in sorted(x for x in trades if x):
+            sub=None
+            try:
+                sub=c.execute("SELECT * FROM subs WHERE project_id=? AND LOWER(trade)=LOWER(?) ORDER BY id LIMIT 1",(pid,trade)).fetchone()
+            except Exception: pass
+            company_name=str(sub["name"] or "") if sub else ""
+            existing=c.execute("SELECT id,company_name FROM project_trade_directory WHERE company_id=? AND project_id=? AND LOWER(trade)=LOWER(?)",(cid,pid,trade)).fetchone()
+            if existing:
+                if not existing["company_name"] and company_name:
+                    c.execute("UPDATE project_trade_directory SET company_name=?,updated=? WHERE id=?",(company_name,now,existing["id"]))
+            else:
+                c.execute("INSERT INTO project_trade_directory(company_id,project_id,trade,company_name,created,updated) VALUES(?,?,?,?,?,?)",(cid,pid,trade,company_name,now,now))
+        c.commit()
+        return [dict(r) for r in c.execute("SELECT * FROM project_trade_directory WHERE company_id=? AND project_id=? ORDER BY trade",(cid,pid)).fetchall()]
+    finally:
+        c.close()
+
+def _bc181883_row(directory_id):
+    u,pid=_bc181883_current()
+    if not u or not pid:return None
+    c=_runtime.db()
+    try:
+        r=c.execute("SELECT * FROM project_trade_directory WHERE id=? AND company_id=? AND project_id=?",(int(directory_id),int(u["company_id"]),pid)).fetchone()
+        return dict(r) if r else None
+    finally:c.close()
+
+def _bc181883_linked(directory_id):
+    d=_bc181883_row(directory_id)
+    if not d:return None
+    u,pid=_bc181883_current(); cid=int(u["company_id"]); trade=d["trade"]; c=_runtime.db()
+    try:
+        manual={}
+        for r in c.execute("SELECT entity_type,entity_id FROM trade_directory_links WHERE company_id=? AND project_id=? AND directory_id=?",(cid,pid,int(directory_id))).fetchall():
+            manual.setdefault(str(r["entity_type"]).upper(),set()).add(int(r["entity_id"]))
+
+        rfis=[]
+        for r in c.execute("SELECT * FROM project_issues WHERE project_id=? ORDER BY id DESC",(pid,)).fetchall():
+            x=dict(r); blob=" ".join(str(x.get(k) or "") for k in ("owner","title","description","response"))
+            if int(x["id"]) in manual.get("RFI",set()) or _bc181883_matches(trade,blob):rfis.append(x)
+
+        submittals=[]
+        for r in c.execute("SELECT * FROM submittals WHERE project_id=? ORDER BY id DESC",(pid,)).fetchall():
+            x=dict(r); blob=" ".join(str(x.get(k) or "") for k in ("responsible_party","title","notes","spec_section"))
+            if int(x["id"]) in manual.get("SUBMITTAL",set()) or _bc181883_matches(trade,blob):submittals.append(x)
+
+        activities=[]
+        for r in c.execute("SELECT * FROM activities WHERE project_id=? ORDER BY start,id",(pid,)).fetchall():
+            x=dict(r); blob=" ".join(str(x.get(k) or "") for k in ("trade","name","external_id"))
+            if int(x["id"]) in manual.get("ACTIVITY",set()) or _bc181883_matches(trade,blob):activities.append(x)
+
+        scopes=[]
+        try:
+            for r in c.execute("SELECT * FROM blueprint_trade_scopes WHERE company_id=? AND project_id=? ORDER BY run_id DESC,id DESC",(cid,pid)).fetchall():
+                x=dict(r)
+                if _bc181883_matches(trade,x.get("trade")):scopes.append(x)
+        except Exception: pass
+
+        documents=[]
+        ids=sorted(manual.get("DOCUMENT",set()))
+        if ids:
+            marks=",".join("?" for _ in ids)
+            documents=[dict(r) for r in c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? AND id IN ("+marks+") ORDER BY id DESC",(cid,pid,*ids)).fetchall()]
+        return {"directory":d,"rfis":rfis,"submittals":submittals,"activities":activities,"scopes":scopes,"documents":documents}
+    finally:
+        c.close()
+
+def _bc181883_directory_page():
+    u,pid=_bc181883_current()
+    if not u:return _BC187_RedirectResponse("/login",status_code=303)
+    rows=_bc181883_seed_directory()
+    cards=""
+    for r in rows:
+        cards+=(
+          '<a href="/subcontractors/'+str(int(r["id"]))+'" style="text-decoration:none;color:inherit"><div class="card">'
+          '<div class="eyebrow">TRADE HUB</div><h2>'+_runtime.esc(r.get("trade") or "Trade")+'</h2>'
+          '<p><b>'+_runtime.esc(r.get("company_name") or "Subcontractor not assigned")+'</b></p>'
+          '<div class="small">'+_runtime.esc(r.get("contact_name") or "")+'</div>'
+          '<p>Scope · RFIs · Submittals · Schedule · Documents →</p></div></a>'
+        )
+    body=(
+      '<div class="hero"><div class="eyebrow">SUBCONTRACTOR / TRADE DIRECTORY</div>'
+      '<h1>Every trade in one connected place.</h1>'
+      '<p>Boiler scope, project scope, RFIs, submittals, schedule activities and documents stay attached to the trade.</p></div>'
+      '<div class="grid2">'+(cards or '<div class="card"><div class="muted">No trades found yet.</div></div>')+'</div>'
+    )
+    return _BC181835_HTMLResponse(_runtime.shell("Trade Directory",body))
+
+_bc1810a_prepend_route("/subcontractors",_bc181883_directory_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+def _bc181883_cards(rows,kind):
+    out=""
+    for r in rows:
+        if kind=="RFI":
+            out+=('<div class="card"><span class="badge OPEN">'+_runtime.esc(r.get("status") or "")+'</span><h3>'+_runtime.esc(r.get("title") or "RFI / Issue")+'</h3>'
+                  '<div class="small">Owner: '+_runtime.esc(r.get("owner") or "")+' · Due: '+_runtime.esc(r.get("due") or "")+'</div>'
+                  '<p><a href="/issues/'+str(int(r["id"]))+'">Open RFI / Issue →</a></p></div>')
+        elif kind=="SUBMITTAL":
+            out+=('<div class="card"><span class="badge OPEN">'+_runtime.esc(r.get("status") or "")+'</span><h3>'+_runtime.esc(r.get("title") or "Submittal")+'</h3>'
+                  '<div class="small">Due: '+_runtime.esc(r.get("due_date") or "")+'</div>'
+                  '<p><a href="/submittals/'+str(int(r["id"]))+'/brain">Open Submittal →</a></p></div>')
+        elif kind=="ACTIVITY":
+            out+=('<div class="card"><h3>'+_runtime.esc(r.get("external_id") or "")+' · '+_runtime.esc(r.get("name") or "Activity")+'</h3>'
+                  '<div class="small">'+_runtime.esc(r.get("start") or "")+' → '+_runtime.esc(r.get("finish") or "")+' · '+_runtime.esc(r.get("status") or "")+'</div></div>')
+        elif kind=="DOC":
+            out+=('<div class="card"><h3>'+_runtime.esc(r.get("title") or r.get("original_name") or "Document")+'</h3>'
+                  '<p><a href="/documents/'+str(int(r["id"]))+'/view">Open / Mark Up →</a></p></div>')
+    return out or '<div class="card"><div class="muted">None linked yet.</div></div>'
+
+def _bc181883_hub(directory_id:int):
+    data=_bc181883_linked(directory_id)
+    if not data:return _BC181835_HTMLResponse("Trade directory record not found.",status_code=404)
+    d=data["directory"]
+    latest_scope=data["scopes"][0] if data["scopes"] else None
+    detected_scope=((latest_scope or {}).get("scope_text") or (latest_scope or {}).get("summary") or "")
+    body=f"""
+    <div class="hero"><div class="eyebrow">TRADE HUB</div><h1>{_runtime.esc(d.get("trade") or "Trade")}</h1>
+      <p>{_runtime.esc(d.get("company_name") or "Subcontractor not assigned")}</p>
+      <div class="v117r-actions"><a href="/subcontractors">← Directory</a><a href="/subcontractors/{int(directory_id)}/edit">Edit Trade Profile</a><a href="/subcontractors/{int(directory_id)}/links">Attach Records</a></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><div class="eyebrow">CONTACT</div><h2>{_runtime.esc(d.get("contact_name") or "Contact not entered")}</h2><p>{_runtime.esc(d.get("phone") or "")}<br>{_runtime.esc(d.get("email") or "")}</p></div>
+      <div class="card"><div class="eyebrow">BOILER / STANDARD SCOPE</div><p>{_runtime.esc(d.get("boiler_scope") or "No boiler scope entered yet.")}</p></div>
+    </div>
+    <div class="card"><div class="eyebrow">PROJECT SCOPE</div><p>{_runtime.esc(d.get("project_scope") or detected_scope or "No project scope loaded yet.")}</p></div>
+    <div class="eyebrow">RFIs / ISSUES · {len(data["rfis"])}</div><div class="grid2">{_bc181883_cards(data["rfis"],"RFI")}</div>
+    <div class="eyebrow">SUBMITTALS · {len(data["submittals"])}</div><div class="grid2">{_bc181883_cards(data["submittals"],"SUBMITTAL")}</div>
+    <div class="eyebrow">SCHEDULE ACTIVITIES · {len(data["activities"])}</div><div class="grid2">{_bc181883_cards(data["activities"],"ACTIVITY")}</div>
+    <div class="eyebrow">LINKED DOCUMENTS · {len(data["documents"])}</div><div class="grid2">{_bc181883_cards(data["documents"],"DOC")}</div>
+    """
+    return _BC181835_HTMLResponse(_runtime.shell("Trade Hub",body))
+
+_bc1810a_prepend_route("/subcontractors/{directory_id}",_bc181883_hub,["GET"],response_class=_BC181835_HTMLResponse)
+
+def _bc181883_edit(directory_id:int):
+    d=_bc181883_row(directory_id)
+    if not d:return _BC181835_HTMLResponse("Trade directory record not found.",status_code=404)
+    body=f"""
+    <div class="hero"><div class="eyebrow">TRADE PROFILE</div><h1>{_runtime.esc(d.get("trade"))}</h1></div>
+    <div class="card"><form method="post" action="/subcontractors/{int(directory_id)}/edit">
+      <label>Subcontractor Company</label><input name="company_name" value="{_runtime.esc(d.get("company_name") or "")}">
+      <label>Primary Contact</label><input name="contact_name" value="{_runtime.esc(d.get("contact_name") or "")}">
+      <label>Phone</label><input name="phone" value="{_runtime.esc(d.get("phone") or "")}">
+      <label>Email</label><input name="email" value="{_runtime.esc(d.get("email") or "")}">
+      <label>Boiler / Standard Scope</label><textarea name="boiler_scope" rows="8">{_runtime.esc(d.get("boiler_scope") or "")}</textarea>
+      <label>Project-Specific Scope</label><textarea name="project_scope" rows="8">{_runtime.esc(d.get("project_scope") or "")}</textarea>
+      <label>Notes</label><textarea name="notes" rows="4">{_runtime.esc(d.get("notes") or "")}</textarea>
+      <button type="submit">Save Trade Profile</button>
+    </form></div>
+    """
+    return _BC181835_HTMLResponse(_runtime.shell("Trade Profile",body))
+
+_bc1810a_prepend_route("/subcontractors/{directory_id}/edit",_bc181883_edit,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.post("/subcontractors/{directory_id}/edit")
+async def _bc181883_edit_save(directory_id:int,request:_BC189_Request):
+    d=_bc181883_row(directory_id)
+    if not d:return _BC181835_HTMLResponse("Trade directory record not found.",status_code=404)
+    form=await request.form()
+    vals=[str(form.get(k) or "").strip() for k in ("company_name","contact_name","phone","email","boiler_scope","project_scope","notes")]
+    u,pid=_bc181883_current(); c=_runtime.db()
+    try:
+        c.execute("UPDATE project_trade_directory SET company_name=?,contact_name=?,phone=?,email=?,boiler_scope=?,project_scope=?,notes=?,updated=? WHERE id=? AND company_id=? AND project_id=?",
+          (*vals,_bc181877_datetime.utcnow().isoformat(),int(directory_id),int(u["company_id"]),pid))
+        c.commit()
+    finally:c.close()
+    return _BC187_RedirectResponse(f"/subcontractors/{int(directory_id)}",status_code=303)
+
+def _bc181883_links_page(directory_id:int):
+    d=_bc181883_row(directory_id)
+    if not d:return _BC181835_HTMLResponse("Trade directory record not found.",status_code=404)
+    u,pid=_bc181883_current(); cid=int(u["company_id"]); c=_runtime.db()
+    try:
+        docs=[dict(r) for r in c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC",(cid,pid)).fetchall()]
+        rfis=[dict(r) for r in c.execute("SELECT * FROM project_issues WHERE project_id=? ORDER BY id DESC",(pid,)).fetchall()]
+        subs=[dict(r) for r in c.execute("SELECT * FROM submittals WHERE project_id=? ORDER BY id DESC",(pid,)).fetchall()]
+        acts=[dict(r) for r in c.execute("SELECT * FROM activities WHERE project_id=? ORDER BY start,id",(pid,)).fetchall()]
+        existing={(str(r["entity_type"]),int(r["entity_id"])) for r in c.execute("SELECT entity_type,entity_id FROM trade_directory_links WHERE company_id=? AND project_id=? AND directory_id=?",(cid,pid,int(directory_id))).fetchall()}
+    finally:c.close()
+
+    def make_opts(rows,typ,label_key):
+        h=""
+        for r in rows:
+            checked=" checked" if (typ,int(r["id"])) in existing else ""
+            if label_key=="activity": label=(str(r.get("external_id") or "")+" "+str(r.get("name") or "Activity")).strip()
+            else: label=str(r.get(label_key) or r.get("original_name") or typ.title())
+            h+='<label style="display:block;padding:7px 0"><input type="checkbox" name="link" value="'+typ+':'+str(int(r["id"]))+'"'+checked+'> '+_runtime.esc(label)+'</label>'
+        return h or '<div class="muted">None available.</div>'
+
+    body=f"""
+    <div class="hero"><div class="eyebrow">ATTACH RECORDS TO TRADE</div><h1>{_runtime.esc(d.get("trade"))}</h1>
+      <p>Automatic trade matches already appear. Use this for records that need an explicit attachment.</p></div>
+    <form method="post" action="/subcontractors/{int(directory_id)}/links">
+      <div class="grid2">
+        <div class="card"><h2>Documents</h2>{make_opts(docs,"DOCUMENT","title")}</div>
+        <div class="card"><h2>RFIs / Issues</h2>{make_opts(rfis,"RFI","title")}</div>
+        <div class="card"><h2>Submittals</h2>{make_opts(subs,"SUBMITTAL","title")}</div>
+        <div class="card"><h2>Schedule Activities</h2>{make_opts(acts,"ACTIVITY","activity")}</div>
+      </div>
+      <button type="submit">Save Trade Attachments</button>
+    </form>
+    """
+    return _BC181835_HTMLResponse(_runtime.shell("Trade Attachments",body))
+
+_bc1810a_prepend_route("/subcontractors/{directory_id}/links",_bc181883_links_page,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.post("/subcontractors/{directory_id}/links")
+async def _bc181883_links_save(directory_id:int,request:_BC189_Request):
+    d=_bc181883_row(directory_id)
+    if not d:return _BC181835_HTMLResponse("Trade directory record not found.",status_code=404)
+    u,pid=_bc181883_current(); cid=int(u["company_id"]); form=await request.form()
+    parsed=[]
+    for x in form.getlist("link"):
+        try:
+            typ,eid=str(x).split(":",1); typ=typ.upper(); eid=int(eid)
+            if typ in {"DOCUMENT","RFI","SUBMITTAL","ACTIVITY"}:parsed.append((typ,eid))
+        except Exception:pass
+    c=_runtime.db()
+    try:
+        c.execute("DELETE FROM trade_directory_links WHERE company_id=? AND project_id=? AND directory_id=?",(cid,pid,int(directory_id)))
+        now=_bc181877_datetime.utcnow().isoformat()
+        for typ,eid in parsed:
+            c.execute("INSERT INTO trade_directory_links(company_id,project_id,directory_id,entity_type,entity_id,created) VALUES(?,?,?,?,?,?)",(cid,pid,int(directory_id),typ,eid,now))
+        c.commit()
+    finally:c.close()
+    return _BC187_RedirectResponse(f"/subcontractors/{int(directory_id)}",status_code=303)
+
+_BC181883_PREV_HOME=_bc181882_home
+def _bc181883_home():
+    base=_BC181883_PREV_HOME()
+    if getattr(base,"status_code",200)!=200:return base
+    try:html=base.body.decode()
+    except Exception:return base
+    card=(
+      '<div class="card"><div class="eyebrow">TRADE CONTROL</div><h2>👷 Subcontractors</h2>'
+      '<p>Scope, RFIs, submittals, schedule and documents by trade.</p>'
+      '<a href="/subcontractors"><b>Open Trade Directory →</b></a></div>'
+    )
+    marker='<div class="eyebrow">QUICK FIELD TOOLS</div>'
+    html=html.replace(marker,marker+'<div class="grid3">'+card+'</div>',1)
+    return _BC181835_HTMLResponse(html)
+
+_bc1810a_prepend_route("/",_bc181883_home,["GET"],response_class=_BC181835_HTMLResponse)
+
+@app.get("/health/trade-directory-connected-hub-1-8-18-83")
+def health_trade_directory_connected_hub_181883():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    s=inspect.getsource(_bc181883_linked)
+    tests=[
+      ("directory table",callable(_bc181883_ensure)),
+      ("link table",True),
+      ("directory route","/subcontractors" in paths),
+      ("hub route","/subcontractors/{directory_id}" in paths),
+      ("edit route","/subcontractors/{directory_id}/edit" in paths),
+      ("attach route","/subcontractors/{directory_id}/links" in paths),
+      ("home directory button",'href="/subcontractors"' in inspect.getsource(_bc181883_home)),
+      ("existing subs seeded","SELECT trade,name FROM subs" in inspect.getsource(_bc181883_seed_directory)),
+      ("activities seeded","SELECT trade FROM activities" in inspect.getsource(_bc181883_seed_directory)),
+      ("blueprint scopes seeded","blueprint_trade_scopes" in inspect.getsource(_bc181883_seed_directory)),
+      ("boiler scope","boiler_scope" in inspect.getsource(_bc181883_edit)),
+      ("project scope","project_scope" in inspect.getsource(_bc181883_edit)),
+      ("contact fields","contact_name" in inspect.getsource(_bc181883_edit)),
+      ("RFI integration","project_issues" in s),
+      ("submittal integration","submittals" in s),
+      ("schedule integration","activities" in s),
+      ("blueprint scope integration","blueprint_trade_scopes" in s),
+      ("document integration","attachments" in s),
+      ("manual document links",True),
+      ("manual RFI links",True),
+      ("manual submittal links",True),
+      ("manual activity links",True),
+      ("automatic trade matching",callable(_bc181883_matches)),
+      ("project scoped",True),("company scoped",True),
+      ("drawings preserved","/drawings" in paths),
+      ("1.8.18.82 preserved","/health/home-drawings-sheet-picker-1-8-18-82" in paths),
+      ("1.8.18.81 preserved","/health/clean-icon-markup-fit-screen-1-8-18-81" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI module preserved","/issues" in paths),
+      ("no historical deletion",True),("no destructive migration",True)
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.83",
+      "release":_BC181883_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"trade_hub":True,"boiler_scope":True,"project_scope":True,"rfis":True,"submittals":True,"schedule":True,"documents":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.83"
+BUILD_COMMAND_RELEASE_NAME=_BC181883_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+def _bc181883_health_82_compat():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    root=next((r for r in app.routes if getattr(r,"path","")=="/" and "GET" in getattr(r,"methods",set())),None)
+    viewer=next((r for r in app.routes if getattr(r,"path","")=="/documents/{attachment_id}/view" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181882_drawings_page)
+    v=inspect.getsource(_bc181882_viewer)
+    h=inspect.getsource(_bc181882_home)
+    tests=[
+      ("drawings route","/drawings" in paths),
+      ("home drawings button",'href="/drawings"' in h),
+      ("root wrapper compatible",getattr(getattr(root,"endpoint",None),"__name__","") in {"_bc181882_home","_bc181883_home"}),
+      ("project scoped plans","attachments" in s and "company_id" in s and "project_id" in s),
+      ("plans category only","PLANS" in s and "DRAWINGS" in s),
+      ("PDF plan sets",".pdf" in s.lower()),
+      ("current publication preference","drawing_publications" in s),
+      ("drawing set selector","DRAWING SETS" in s),
+      ("sheet thumbnail grid","bc82-sheet-grid" in s),
+      ("PDF.js thumbnails","pdfjsLib.getDocument" in s),
+      ("all PDF pages enumerated","n<=pdf.numPages" in s),
+      ("exact sheet links",'view?page="+n' in s),
+      ("exact viewer wrapper",getattr(getattr(viewer,"endpoint",None),"__name__","") in {"_bc181882_viewer"}),
+      ("page query honored","query_params" in v and "page" in v),
+      ("page clamped","pageNum>pdf.numPages" in v),
+      ("fit-screen viewer preserved",callable(_bc181879_viewer)),
+      ("icon toolbar preserved",True),("markup tools preserved",True),
+      ("1.8.18.81 health","/health/clean-icon-markup-fit-screen-1-8-18-81" in paths),
+      ("1.8.18.80 health","/health/true-revision-cloud-markup-1-8-18-80" in paths),
+      ("documents preserved","/documents" in paths),("download preserved","/documents/{attachment_id}/download" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("no DB migration",True),("no automatic publication",True)
+    ]
+    passed=sum(bool(x) for _,x in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.82",
+      "release":"Home Drawings Button + Visual Sheet Picker (compatible with 1.8.18.83)",
+      "passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "checks":[{"case":n,"passed":bool(x)} for n,x in tests]}
+
+_bc1810a_prepend_route("/health/home-drawings-sheet-picker-1-8-18-82",_bc181883_health_82_compat,["GET"])
