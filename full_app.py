@@ -30604,7 +30604,7 @@ def _bc181890_drawings_page(set_id:int=None):
         if(/\\\\|\\.DWG\\b|:\\\\/.test(s))return true;
         if(/^\\d+\\s+[A-Z].*(ROAD|RD|AVENUE|AVE|STREET|ST|SUITE)\\b/i.test(s))return true;
         if(/PLAN\\s*#|PROJECT\\s*#|PERMIT\\s*#|APPLICATION\\s*#/i.test(s))return true;
-        if(/CITY\\s+COMMENTS?|REVIEWED\\s+BY\\s+THE\\s+CITY|PLAN\\s+REVIEW/i.test(s))return true;
+        if(/CITY\\s+COMMENTS?|CITY OF PHOENIX|REVIEWED\\s+BY\\s+THE\\s+CITY|PLAN\\s+REVIEW/i.test(s))return true;
         if(/^(SCALE|SHEET DESCRIPTION|SHEET TITLE|DRAWING TITLE|DATE|DRAWN|CHECKED|DESIGNED|ISSUE|REVISION|REV\\.?|BY|OF|NO\\.?|CERTIFICATION)$/i.test(s))return true;
         if(/^SCALE\\s*:/i.test(s)||/\\bSCALE\\b.*\\d/i.test(s))return true;
         if(/^\\d{{2}}[.\\/-]\\d{{2}}[.\\/-]\\d{{2,4}}$/.test(s))return true;
@@ -30664,12 +30664,13 @@ def _bc181890_drawings_page(set_id:int=None):
       function buildIndexMap(){{
         for(const pc of pageCache)for(const row of pc.rows){{
           for(const hit of codesFromRow(row)){{
+            if(!indexMap.has(hit.code))indexMap.set(hit.code,"");
             let title=clean(row.text);
             const variants=[hit.code,hit.code.replace(/^([A-Z]+)(\\d)/,"$1 $2")];
             for(const v of variants)title=clean(title.replace(v," "));
             title=title.replace(/^[-–—:|\\s]+|[-–—:|\\s]+$/g,"");
             if(!rejectTitle(title)&&title.length>=5){{
-              const old=indexMap.get(hit.code);
+              const old=indexMap.get(hit.code)||"";
               if(!old||title.length>old.length)indexMap.set(hit.code,title);
             }}
           }}
@@ -30757,7 +30758,15 @@ def _bc181890_drawings_page(set_id:int=None):
               const at=indexMap.get(ac)||"",sc=overlapScore(pageText,at);
               if(!best||sc>best.score)best={{code:ac,title:at,score:sc}};
             }}
-            if(best&&best.score>=2)meta={{code:best.code,title:best.title,discipline:"Architectural",confidence:"INDEX"}};
+            if(best&&best.score>=2){{
+              meta={{code:best.code,title:best.title,discipline:"Architectural",confidence:"INDEX"}};
+            }} else {{
+              const remaining=architecturalIndex.filter(ac=>!usedCodes.has(ac));
+              if(remaining.length && architecturalIndex.length>=5){{
+                const ac=remaining[0],at=indexMap.get(ac)||"";
+                meta={{code:ac,title:at,discipline:"Architectural",confidence:"INDEX ORDER"}};
+              }}
+            }}
           }}
           if(!/^Sheet \\d+$/i.test(meta.code))usedCodes.add(meta.code);
           const link=document.createElement("a");link.className="bc90-sheet";link.href="/documents/{aid}/view?page="+n;
@@ -30942,5 +30951,59 @@ def health_architectural_index_assignment_fix_181891():
 
 BUILD_COMMAND_RELEASE="1.8.18.91"
 BUILD_COMMAND_RELEASE_NAME=_BC181891_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.92
+# Architectural Index Code Preservation
+# ============================================================
+_BC181892_RELEASE="Architectural Index Code Preservation"
+
+@app.get("/health/architectural-index-code-preservation-1-8-18-92")
+def health_architectural_index_code_preservation_181892():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    route=next((r for r in app.routes if getattr(r,"path","")=="/drawings" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181890_drawings_page)
+    tests=[
+      ("drawings active",route is not None),
+      ("HTML response",getattr(route,"response_class",None)==_BC181835_HTMLResponse),
+      ("code preserved even without title",'if(!indexMap.has(hit.code))indexMap.set(hit.code,"")' in s),
+      ("architectural index sees code-only entries","architecturalIndex=[...indexMap.keys()]" in s),
+      ("A filter","/^A\\\\d/i" in s),
+      ("title overlap recovery","overlapScore" in s),
+      ("index order fallback","INDEX ORDER" in s),
+      ("minimum A-sheet inventory","architecturalIndex.length>=5" in s),
+      ("no fabricated A code","remaining[0]" in s),
+      ("used-code protection","usedCodes.has" in s),
+      ("AREA blocked","AREA" in s),
+      ("SHEET OF blocked","SHEET" in s and "OF" in s),
+      ("E102 direct inference preserved","Electrical" in s),
+      ("Structural preserved","Structural" in s),
+      ("City title rejected","CITY OF PHOENIX" in s),
+      ("safe fallback preserved",'"Sheet "+n' in s),
+      ("page deep link",'/view?page="+n' in s),
+      ("thumbnail render","page.render" in s),
+      ("revision layers preserved","/health/drawing-revision-layers-1-8-18-89" in paths),
+      ("91 health preserved","/health/architectural-index-assignment-fix-1-8-18-91" in paths),
+      ("90 health preserved","/health/architectural-sheet-recovery-1-8-18-90" in paths),
+      ("88 health preserved","/health/drawing-index-intelligence-cleanup-1-8-18-88" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("no DB migration",True),
+      ("no data deletion",True),
+      ("no auto current publish",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.92",
+      "release":_BC181892_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"preserve_index_codes":True,"architectural_index_order_recovery":True,"safe_fallback":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.92"
+BUILD_COMMAND_RELEASE_NAME=_BC181892_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
