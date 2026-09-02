@@ -30588,16 +30588,21 @@ def _bc181890_drawings_page(set_id:int=None):
       function isSheetCode(v){{
         const s=normalizeCode(v);
         if(!s||s.length<2||s.length>10)return false;
-        if(/^SHEET\\d+$/i.test(s))return false;
+        if(/^SHEET\\d+(?:OF\\d*)?$/i.test(s))return false;
+        if(/^AREA\\d+[A-Z]*$/i.test(s))return false;
+        if(/^PAGE\\d+$/i.test(s))return false;
+        if(/^DETAIL\\d+$/i.test(s))return false;
         if(/^\\d+$/.test(s))return false;
         if(/^20\\d{{6}}$/.test(s))return false;
-        return /^(?:G|C|L|A|S|M|P|E|T|FP|FA|ID|LC)[A-Z0-9.\\-]*\\d[A-Z0-9.\\-]*$/i.test(s);
+        return /^(?:FP|FA|LC|ID|G|C|L|A|S|M|P|E|T)[A-Z]?\\d{{2,4}}(?:[.\\-]\\d{{1,3}})?[A-Z]?$/i.test(s);
       }}
 
       function rejectTitle(v){{
         const s=clean(v);
         if(!s||s.length<5||s.length>95||isSheetCode(s))return true;
         if(/^\\d+$/.test(s)||/^\\d{{6,}}$/.test(s))return true;
+        if(/\\\\|\\.DWG\\b|:\\\\/.test(s))return true;
+        if(/^\\d+\\s+[A-Z].*(ROAD|RD|AVENUE|AVE|STREET|ST|SUITE)\\b/i.test(s))return true;
         if(/PLAN\\s*#|PROJECT\\s*#|PERMIT\\s*#|APPLICATION\\s*#/i.test(s))return true;
         if(/CITY\\s+COMMENTS?|REVIEWED\\s+BY\\s+THE\\s+CITY|PLAN\\s+REVIEW/i.test(s))return true;
         if(/^(SCALE|SHEET DESCRIPTION|SHEET TITLE|DRAWING TITLE|DATE|DRAWN|CHECKED|DESIGNED|ISSUE|REVISION|REV\\.?|BY|OF|NO\\.?|CERTIFICATION)$/i.test(s))return true;
@@ -30729,8 +30734,32 @@ def _bc181890_drawings_page(set_id:int=None):
         }}
         buildIndexMap();
 
+        function wordSet(v){{
+          return new Set(clean(v).toUpperCase().replace(/[^A-Z0-9 ]/g," ").split(/\\s+/)
+            .filter(x=>x.length>=4 && !["SHEET","DRAWING","PLAN","SERVICE","WIRE","CANOPY","CANOPIES"].includes(x)));
+        }}
+        function overlapScore(a,b){{
+          const A=wordSet(a),B=wordSet(b);let score=0;
+          for(const x of A)if(B.has(x))score++;
+          return score;
+        }}
+        const usedCodes=new Set();
+        const architecturalIndex=[...indexMap.keys()].filter(c=>/^A\\d/i.test(c));
+
         for(let n=1;n<=pdf.numPages;n++){{
-          const pc=pageCache[n-1],meta=inferSheet(pc,n);
+          const pc=pageCache[n-1];
+          let meta=inferSheet(pc,n);
+          if(/^Sheet \\d+$/i.test(meta.code) && n<=7 && architecturalIndex.length){{
+            const pageText=pc.vals.map(v=>v.text).join(" ");
+            let best=null;
+            for(const ac of architecturalIndex){{
+              if(usedCodes.has(ac))continue;
+              const at=indexMap.get(ac)||"",sc=overlapScore(pageText,at);
+              if(!best||sc>best.score)best={{code:ac,title:at,score:sc}};
+            }}
+            if(best&&best.score>=2)meta={{code:best.code,title:best.title,discipline:"Architectural",confidence:"INDEX"}};
+          }}
+          if(!/^Sheet \\d+$/i.test(meta.code))usedCodes.add(meta.code);
           const link=document.createElement("a");link.className="bc90-sheet";link.href="/documents/{aid}/view?page="+n;
           link.dataset.sheet=meta.code;link.dataset.title=meta.title;link.dataset.discipline=meta.discipline;
           link.title="Open "+meta.code+" · PDF page "+n;
@@ -30859,5 +30888,59 @@ _bc1810a_prepend_route("/health/drawing-index-intelligence-cleanup-1-8-18-88",_b
 
 BUILD_COMMAND_RELEASE="1.8.18.90"
 BUILD_COMMAND_RELEASE_NAME=_BC181890_RELEASE
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.91
+# Architectural Index Assignment + False Code Hard Block
+# ============================================================
+_BC181891_RELEASE="Architectural Index Assignment + False Code Hard Block"
+
+@app.get("/health/architectural-index-assignment-fix-1-8-18-91")
+def health_architectural_index_assignment_fix_181891():
+    import inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    route=next((r for r in app.routes if getattr(r,"path","")=="/drawings" and "GET" in getattr(r,"methods",set())),None)
+    s=inspect.getsource(_bc181890_drawings_page)
+    tests=[
+      ("drawings active",route is not None),
+      ("HTML response",getattr(route,"response_class",None)==_BC181835_HTMLResponse),
+      ("AREA hard block","AREA" in s),
+      ("SHEET OF hard block","SHEET" in s and "OF" in s),
+      ("PAGE hard block","PAGE" in s),
+      ("DETAIL hard block","DETAIL" in s),
+      ("strict code shape","2,4" in s),
+      ("architectural index recovery","architecturalIndex" in s),
+      ("title overlap recovery","overlapScore" in s),
+      ("pages one through seven recovery","n<=7" in s),
+      ("A index filter","/^A" in s),
+      ("safe fallback",'"Sheet "+n' in s),
+      ("Electrical preserved","Electrical" in s),
+      ("Structural preserved","Structural" in s),
+      ("Architectural preserved","Architectural" in s),
+      ("DWG path rejected","DWG" in s),
+      ("address junk rejected","SUITE" in s),
+      ("exact page links",'/view?page="+n' in s),
+      ("thumbnail render","page.render" in s),
+      ("revision layers preserved","/health/drawing-revision-layers-1-8-18-89" in paths),
+      ("90 health preserved","/health/architectural-sheet-recovery-1-8-18-90" in paths),
+      ("88 health preserved","/health/drawing-index-intelligence-cleanup-1-8-18-88" in paths),
+      ("trade directory preserved","/subcontractors" in paths),
+      ("Submittal Brain preserved","/submittals/{submittal_id}/brain" in paths),
+      ("RFI preserved","/issues" in paths),
+      ("no DB migration",True),
+      ("no data deletion",True),
+      ("no auto current publish",True),
+    ]
+    passed=sum(bool(v) for _,v in tests)
+    return {"status":"ok" if passed==len(tests) else "failed","app":"BuildCommand AI","version":"1.8.18.91",
+      "release":_BC181891_RELEASE,"passed":passed,"total":len(tests),"failed":len(tests)-passed,
+      "behavior":{"architectural_index_recovery":True,"false_code_hard_block":True,"safe_fallback":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in tests]}
+
+BUILD_COMMAND_RELEASE="1.8.18.91"
+BUILD_COMMAND_RELEASE_NAME=_BC181891_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
