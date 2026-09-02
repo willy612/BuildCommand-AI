@@ -31015,8 +31015,8 @@ except Exception:pass
 from fastapi.responses import HTMLResponse as _BC181893_HTMLResponse, JSONResponse as _BC181893_JSONResponse, RedirectResponse as _BC181893_RedirectResponse
 from datetime import datetime as _BC181893_datetime
 
-BC181893_RELEASE = "1.8.18.93"
-BC181893_RELEASE_NAME = "Payment + Owner Approval Access Gate"
+BC181893_RELEASE = "1.8.18.94"
+BC181893_RELEASE_NAME = "PostgreSQL-Safe Payment + Owner Approval Access Gate"
 
 _BC181893_EXEMPT_PREFIXES = (
     "/login", "/register", "/logout", "/health", "/static", "/favicon",
@@ -31026,49 +31026,57 @@ _BC181893_EXEMPT_PREFIXES = (
 
 def _bc181893_init():
     c = _runtime.db()
-    c.executescript("""
-    CREATE TABLE IF NOT EXISTS company_access_approvals(
-        company_id INTEGER PRIMARY KEY,
-        approved INTEGER DEFAULT 0,
-        approved_by_user_id INTEGER,
-        approved_at TEXT,
-        revoked_by_user_id INTEGER,
-        revoked_at TEXT,
-        note TEXT,
-        created TEXT,
-        updated TEXT
-    );
-    CREATE TABLE IF NOT EXISTS company_access_approval_events(
-        id INTEGER PRIMARY KEY,
-        company_id INTEGER NOT NULL,
-        actor_user_id INTEGER,
-        action TEXT NOT NULL,
-        detail TEXT,
-        created TEXT
-    );
-    """)
-    now = _BC181893_datetime.utcnow().isoformat()
+    try:
+        pg = str(getattr(_runtime, "DATABASE_KIND", "")).lower() == "postgres"
+        event_id = "BIGSERIAL PRIMARY KEY" if pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
+        company_id_type = "BIGINT" if pg else "INTEGER"
+        user_id_type = "BIGINT" if pg else "INTEGER"
 
-    # Preserve every company that existed before this build so the deployment
-    # can never unexpectedly lock out current production/staging customers.
-    # Companies registered after 1.8.18.93 deploy are created with no approval
-    # row and therefore default to NOT APPROVED.
-    existing = c.execute("SELECT id FROM companies").fetchall()
-    for row in existing:
-        cid = int(row["id"])
-        found = c.execute(
-            "SELECT company_id FROM company_access_approvals WHERE company_id=?",
-            (cid,)
-        ).fetchone()
-        if not found:
-            c.execute(
-                """INSERT INTO company_access_approvals(
-                    company_id,approved,approved_at,note,created,updated
-                ) VALUES(?,?,?,?,?,?)""",
-                (cid, 1, now, "Grandfathered during 1.8.18.93 access-gate migration", now, now)
-            )
-    c.commit()
-    c.close()
+        # PostgreSQL-safe: create each table with an individual execute(),
+        # then commit the DDL before the first SELECT/INSERT uses the table.
+        c.execute(f"""CREATE TABLE IF NOT EXISTS company_access_approvals(
+            company_id {company_id_type} PRIMARY KEY,
+            approved INTEGER DEFAULT 0,
+            approved_by_user_id {user_id_type},
+            approved_at TEXT,
+            revoked_by_user_id {user_id_type},
+            revoked_at TEXT,
+            note TEXT,
+            created TEXT,
+            updated TEXT
+        )""")
+        c.execute(f"""CREATE TABLE IF NOT EXISTS company_access_approval_events(
+            id {event_id},
+            company_id {company_id_type} NOT NULL,
+            actor_user_id {user_id_type},
+            action TEXT NOT NULL,
+            detail TEXT,
+            created TEXT
+        )""")
+        c.commit()
+
+        now = _BC181893_datetime.utcnow().isoformat()
+
+        # Existing companies remain approved so this deployment cannot
+        # unexpectedly lock out current BuildCommand users. New companies
+        # have no row until first access check and therefore default to pending.
+        existing = c.execute("SELECT id FROM companies").fetchall()
+        for row in existing:
+            cid = int(row["id"])
+            found = c.execute(
+                "SELECT company_id FROM company_access_approvals WHERE company_id=?",
+                (cid,)
+            ).fetchone()
+            if not found:
+                c.execute(
+                    """INSERT INTO company_access_approvals(
+                        company_id,approved,approved_at,note,created,updated
+                    ) VALUES(?,?,?,?,?,?)""",
+                    (cid, 1, now, "Grandfathered during 1.8.18.94 access-gate migration", now, now)
+                )
+        c.commit()
+    finally:
+        c.close()
 
 _bc181893_init()
 
@@ -31434,7 +31442,7 @@ def bc181893_account_access_state():
         "access_allowed": bool(paid and approved),
     }
 
-@app.get("/health/payment-owner-approval-gate-1-8-18-93")
+@app.get("/health/payment-owner-approval-gate-1-8-18-94")
 def bc181893_health():
     paths = {getattr(r, "path", "") for r in app.routes}
     c = _runtime.db()
