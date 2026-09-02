@@ -31007,3 +31007,477 @@ BUILD_COMMAND_RELEASE="1.8.18.92"
 BUILD_COMMAND_RELEASE_NAME=_BC181892_RELEASE
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.93 — Payment + Owner Approval Access Gate
+# ============================================================
+from fastapi.responses import HTMLResponse as _BC181893_HTMLResponse, JSONResponse as _BC181893_JSONResponse, RedirectResponse as _BC181893_RedirectResponse
+from datetime import datetime as _BC181893_datetime
+
+BC181893_RELEASE = "1.8.18.93"
+BC181893_RELEASE_NAME = "Payment + Owner Approval Access Gate"
+
+_BC181893_EXEMPT_PREFIXES = (
+    "/login", "/register", "/logout", "/health", "/static", "/favicon",
+    "/billing", "/payment-required", "/awaiting-approval",
+    "/platform", "/owner"
+)
+
+def _bc181893_init():
+    c = _runtime.db()
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS company_access_approvals(
+        company_id INTEGER PRIMARY KEY,
+        approved INTEGER DEFAULT 0,
+        approved_by_user_id INTEGER,
+        approved_at TEXT,
+        revoked_by_user_id INTEGER,
+        revoked_at TEXT,
+        note TEXT,
+        created TEXT,
+        updated TEXT
+    );
+    CREATE TABLE IF NOT EXISTS company_access_approval_events(
+        id INTEGER PRIMARY KEY,
+        company_id INTEGER NOT NULL,
+        actor_user_id INTEGER,
+        action TEXT NOT NULL,
+        detail TEXT,
+        created TEXT
+    );
+    """)
+    now = _BC181893_datetime.utcnow().isoformat()
+
+    # Preserve every company that existed before this build so the deployment
+    # can never unexpectedly lock out current production/staging customers.
+    # Companies registered after 1.8.18.93 deploy are created with no approval
+    # row and therefore default to NOT APPROVED.
+    existing = c.execute("SELECT id FROM companies").fetchall()
+    for row in existing:
+        cid = int(row["id"])
+        found = c.execute(
+            "SELECT company_id FROM company_access_approvals WHERE company_id=?",
+            (cid,)
+        ).fetchone()
+        if not found:
+            c.execute(
+                """INSERT INTO company_access_approvals(
+                    company_id,approved,approved_at,note,created,updated
+                ) VALUES(?,?,?,?,?,?)""",
+                (cid, 1, now, "Grandfathered during 1.8.18.93 access-gate migration", now, now)
+            )
+    c.commit()
+    c.close()
+
+_bc181893_init()
+
+def _bc181893_row_value(row, key, default=None):
+    if row is None:
+        return default
+    try:
+        value = row[key]
+        return default if value is None else value
+    except Exception:
+        return default
+
+def _bc181893_access_row(company_id, create=True):
+    if not company_id:
+        return None
+    c = _runtime.db()
+    row = c.execute(
+        "SELECT * FROM company_access_approvals WHERE company_id=?",
+        (int(company_id),)
+    ).fetchone()
+    if not row and create:
+        now = _BC181893_datetime.utcnow().isoformat()
+        c.execute(
+            """INSERT INTO company_access_approvals(
+                company_id,approved,note,created,updated
+            ) VALUES(?,?,?,?,?)""",
+            (int(company_id), 0, "Awaiting platform owner approval", now, now)
+        )
+        c.commit()
+        row = c.execute(
+            "SELECT * FROM company_access_approvals WHERE company_id=?",
+            (int(company_id),)
+        ).fetchone()
+    c.close()
+    return row
+
+def _bc181893_is_approved(company_id):
+    row = _bc181893_access_row(company_id, create=True)
+    return bool(int(_bc181893_row_value(row, "approved", 0) or 0) == 1)
+
+def _bc181893_subscription(company_id):
+    try:
+        return _runtime._bc174_subscription(company_id)
+    except Exception:
+        return None
+
+def _bc181893_subscription_status(company_id):
+    sub = _bc181893_subscription(company_id)
+    try:
+        return str(_runtime._bc174_effective_status(sub) or "NO_SUBSCRIPTION").upper()
+    except Exception:
+        return "NO_SUBSCRIPTION"
+
+def _bc181893_payment_ok(company_id):
+    # ACTIVE = paid subscription.
+    # LEGACY remains allowed only to preserve grandfathered pre-billing accounts.
+    return _bc181893_subscription_status(company_id) in {"ACTIVE", "LEGACY"}
+
+def _bc181893_log(company_id, actor_user_id, action, detail=""):
+    c = _runtime.db()
+    c.execute(
+        """INSERT INTO company_access_approval_events(
+            company_id,actor_user_id,action,detail,created
+        ) VALUES(?,?,?,?,?)""",
+        (
+            int(company_id),
+            actor_user_id,
+            str(action or "").upper(),
+            str(detail or ""),
+            _BC181893_datetime.utcnow().isoformat(),
+        )
+    )
+    c.commit()
+    c.close()
+
+def _bc181893_owner(user=None):
+    user = user or _runtime.current_user()
+    try:
+        return bool(user and _runtime._bc174_is_platform_owner(user))
+    except Exception:
+        return False
+
+@app.middleware("http")
+async def v181893_payment_owner_approval_gate(request, call_next):
+    path = request.url.path or "/"
+
+    if path.startswith(_BC181893_EXEMPT_PREFIXES):
+        return await call_next(request)
+
+    raw = request.cookies.get("bc_session")
+    user = _runtime.user_from_session(raw) if raw else None
+
+    # Authentication middleware remains authoritative for signed-out visitors.
+    if not user:
+        return await call_next(request)
+
+    # Platform owner can never be locked out.
+    if _bc181893_owner(user):
+        return await call_next(request)
+
+    company_id = int(user["company_id"])
+
+    if not _bc181893_payment_ok(company_id):
+        if path.startswith("/api/"):
+            return _BC181893_JSONResponse(
+                {
+                    "status": "payment_required",
+                    "subscription_status": _bc181893_subscription_status(company_id),
+                    "billing_url": "/billing",
+                },
+                status_code=402,
+            )
+        return _BC181893_RedirectResponse("/payment-required", status_code=303)
+
+    if not _bc181893_is_approved(company_id):
+        if path.startswith("/api/"):
+            return _BC181893_JSONResponse(
+                {
+                    "status": "owner_approval_required",
+                    "subscription_status": _bc181893_subscription_status(company_id),
+                    "approval_url": "/awaiting-approval",
+                },
+                status_code=403,
+            )
+        return _BC181893_RedirectResponse("/awaiting-approval", status_code=303)
+
+    return await call_next(request)
+
+def _bc181893_gate_page(title, eyebrow, heading, body, action_html=""):
+    credit = "Built By Willy LaHood © 2026"
+    return f"""<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_runtime.esc(title)}</title>
+<style>
+body{{margin:0;background:#0a1017;color:#eef4fb;font-family:Inter,system-ui,sans-serif;padding:28px}}
+.box{{max-width:650px;margin:7vh auto;background:#111923;border:1px solid #213042;border-radius:18px;padding:30px}}
+.eyebrow{{font-size:12px;letter-spacing:.13em;text-transform:uppercase;color:#f0b44d;font-weight:900}}
+h1{{margin:8px 0 12px;font-size:34px}}
+p{{line-height:1.58;color:#b9c7d6}}
+.status{{margin:18px 0;padding:14px;border:1px solid #293b50;background:#0d1620;border-radius:12px}}
+a.btn,button{{display:inline-block;background:#f0b44d;color:#0a1017;border:0;border-radius:10px;padding:12px 16px;text-decoration:none;font-weight:900;cursor:pointer}}
+a.secondary{{display:inline-block;margin-left:10px;color:#c7d4e2;text-decoration:none}}
+.credit{{text-align:center;margin-top:28px;font-size:12px;color:#7f94a9}}
+</style>
+</head>
+<body><div class="box">
+<div class="eyebrow">{_runtime.esc(eyebrow)}</div>
+<h1>{_runtime.esc(heading)}</h1>
+{body}
+{action_html}
+<div class="credit">{_runtime.esc(credit)}</div>
+</div></body></html>"""
+
+@app.get("/payment-required", response_class=_BC181893_HTMLResponse)
+def bc181893_payment_required():
+    u = _runtime.current_user()
+    if not u:
+        return _BC181893_RedirectResponse("/login", status_code=303)
+    if _bc181893_owner(u):
+        return _BC181893_RedirectResponse("/owner", status_code=303)
+
+    cid = int(u["company_id"])
+    status = _bc181893_subscription_status(cid)
+    if _bc181893_payment_ok(cid):
+        if _bc181893_is_approved(cid):
+            return _BC181893_RedirectResponse("/app", status_code=303)
+        return _BC181893_RedirectResponse("/awaiting-approval", status_code=303)
+
+    body = f"""
+    <p>Your BuildCommand AI company account has been created, but access to the construction platform is locked until payment is active.</p>
+    <div class="status"><b>Subscription status:</b> {_runtime.esc(status)}</div>
+    <p>Choose a plan and complete payment. After payment is confirmed, your account will move to owner approval.</p>
+    """
+    actions = '<a class="btn" href="/billing">Choose Plan / Pay</a><a class="secondary" href="/account/subscription">Subscription details</a>'
+    return _bc181893_gate_page(
+        "Payment Required",
+        "BuildCommand AI · Secure Access",
+        "Complete payment to continue",
+        body,
+        actions,
+    )
+
+@app.get("/awaiting-approval", response_class=_BC181893_HTMLResponse)
+def bc181893_awaiting_approval():
+    u = _runtime.current_user()
+    if not u:
+        return _BC181893_RedirectResponse("/login", status_code=303)
+    if _bc181893_owner(u):
+        return _BC181893_RedirectResponse("/owner", status_code=303)
+
+    cid = int(u["company_id"])
+    if not _bc181893_payment_ok(cid):
+        return _BC181893_RedirectResponse("/payment-required", status_code=303)
+    if _bc181893_is_approved(cid):
+        return _BC181893_RedirectResponse("/app", status_code=303)
+
+    body = """
+    <p><b>Your payment is active.</b> Your BuildCommand AI account is now waiting for platform-owner approval.</p>
+    <div class="status"><b>Access status:</b> PAID · AWAITING OWNER APPROVAL</div>
+    <p>You cannot enter projects, Blueprint Brain, Superintendent Command, RFIs, submittals, inspections, or other company tools until the account is approved.</p>
+    """
+    actions = '<form method="post" action="/logout"><button type="submit">Sign Out</button></form>'
+    return _bc181893_gate_page(
+        "Awaiting Approval",
+        "BuildCommand AI · Secure Access",
+        "Account pending approval",
+        body,
+        actions,
+    )
+
+def _bc181893_owner_rows():
+    c = _runtime.db()
+    rows = c.execute(
+        """SELECT co.id,co.name,
+                  cs.plan_code,cs.status,cs.grandfathered,
+                  ca.approved,ca.approved_at,ca.note,
+                  (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) user_count
+           FROM companies co
+           LEFT JOIN company_subscriptions cs ON cs.company_id=co.id
+           LEFT JOIN company_access_approvals ca ON ca.company_id=co.id
+           ORDER BY
+             CASE WHEN UPPER(COALESCE(cs.status,''))='ACTIVE'
+                       AND COALESCE(ca.approved,0)=0 THEN 0 ELSE 1 END,
+             co.name"""
+    ).fetchall()
+    c.close()
+    return rows
+
+@app.get("/owner/access-approvals", response_class=_BC181893_HTMLResponse)
+def bc181893_owner_access_approvals():
+    u = _runtime.current_user()
+    if not _bc181893_owner(u):
+        return _BC181893_HTMLResponse("Platform owner access required.", status_code=403)
+
+    rows = _bc181893_owner_rows()
+    tr = ""
+    pending_paid = 0
+    for r in rows:
+        cid = int(r["id"])
+        status = _bc181893_subscription_status(cid)
+        paid = _bc181893_payment_ok(cid)
+        approved = bool(int(_bc181893_row_value(r, "approved", 0) or 0))
+        if paid and not approved:
+            pending_paid += 1
+
+        if paid and not approved:
+            action = (
+                f'<form method="post" action="/owner/access-approvals/{cid}/approve">'
+                '<button type="submit">Approve Access</button></form>'
+            )
+        elif approved:
+            action = (
+                f'<form method="post" action="/owner/access-approvals/{cid}/revoke">'
+                '<button type="submit" style="background:#d8dee7">Revoke Access</button></form>'
+            )
+        else:
+            action = '<span style="color:#8fa2b5">Payment required first</span>'
+
+        approval_text = "APPROVED" if approved else ("AWAITING APPROVAL" if paid else "LOCKED")
+        tr += (
+            f'<tr><td><b>{_runtime.esc(r["name"])}</b><div class="small">Company #{cid}</div></td>'
+            f'<td>{_runtime.esc(r["plan_code"] or "—")}</td>'
+            f'<td>{_runtime.esc(status)}</td>'
+            f'<td>{"YES" if paid else "NO"}</td>'
+            f'<td>{approval_text}</td><td>{r["user_count"]}</td><td>{action}</td></tr>'
+        )
+
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">PLATFORM OWNER · CUSTOMER ACCESS</div>
+      <h1>Payment + Approval Gate</h1>
+      <p class="muted">Customers must have active payment and your approval before they can enter BuildCommand AI.</p>
+    </div>
+    <div class="grid3">
+      <div class="card"><div class="label">Companies</div><div class="kpi">{len(rows)}</div></div>
+      <div class="card"><div class="label">Paid · Awaiting You</div><div class="kpi">{pending_paid}</div></div>
+      <div class="card"><div class="label">Access Rule</div><div class="kpi" style="font-size:19px">PAID + APPROVED</div></div>
+    </div>
+    <div class="card">
+      <table>
+        <tr><th>Company</th><th>Plan</th><th>Subscription</th><th>Paid</th><th>Access</th><th>Users</th><th>Owner Action</th></tr>
+        {tr or '<tr><td colspan="7">No customer companies.</td></tr>'}
+      </table>
+    </div>
+    <p><a href="/owner">← Owner HQ</a></p>
+    """
+    return _runtime.shell("Customer Access Approvals", body)
+
+@app.post("/owner/access-approvals/{company_id}/approve")
+def bc181893_owner_approve_access(company_id: int):
+    u = _runtime.current_user()
+    if not _bc181893_owner(u):
+        return _BC181893_HTMLResponse("Platform owner access required.", status_code=403)
+    if not _bc181893_payment_ok(company_id):
+        return _BC181893_HTMLResponse(
+            "Payment must be active before customer access can be approved.",
+            status_code=409,
+        )
+
+    row = _bc181893_access_row(company_id, create=True)
+    now = _BC181893_datetime.utcnow().isoformat()
+    c = _runtime.db()
+    c.execute(
+        """UPDATE company_access_approvals
+           SET approved=1,approved_by_user_id=?,approved_at=?,
+               revoked_by_user_id=NULL,revoked_at=NULL,
+               note=?,updated=?
+           WHERE company_id=?""",
+        (u["id"], now, "Approved by platform owner after payment", now, company_id),
+    )
+    c.commit()
+    c.close()
+    _bc181893_log(company_id, u["id"], "APPROVED", "Paid customer approved for BuildCommand AI access")
+    return _BC181893_RedirectResponse("/owner/access-approvals", status_code=303)
+
+@app.post("/owner/access-approvals/{company_id}/revoke")
+def bc181893_owner_revoke_access(company_id: int):
+    u = _runtime.current_user()
+    if not _bc181893_owner(u):
+        return _BC181893_HTMLResponse("Platform owner access required.", status_code=403)
+
+    _bc181893_access_row(company_id, create=True)
+    now = _BC181893_datetime.utcnow().isoformat()
+    c = _runtime.db()
+    c.execute(
+        """UPDATE company_access_approvals
+           SET approved=0,revoked_by_user_id=?,revoked_at=?,
+               note=?,updated=?
+           WHERE company_id=?""",
+        (u["id"], now, "Access revoked by platform owner", now, company_id),
+    )
+    c.commit()
+    c.close()
+    _bc181893_log(company_id, u["id"], "REVOKED", "Platform owner revoked BuildCommand AI access")
+    return _BC181893_RedirectResponse("/owner/access-approvals", status_code=303)
+
+@app.get("/api/account/access-state")
+def bc181893_account_access_state():
+    u = _runtime.current_user()
+    if not u:
+        return _BC181893_JSONResponse({"status": "unauthorized"}, status_code=401)
+    if _bc181893_owner(u):
+        return {
+            "status": "ok",
+            "platform_owner": True,
+            "payment_active": True,
+            "owner_approved": True,
+            "access_allowed": True,
+        }
+
+    cid = int(u["company_id"])
+    paid = _bc181893_payment_ok(cid)
+    approved = _bc181893_is_approved(cid)
+    return {
+        "status": "ok",
+        "platform_owner": False,
+        "company_id": cid,
+        "subscription_status": _bc181893_subscription_status(cid),
+        "payment_active": paid,
+        "owner_approved": approved,
+        "access_allowed": bool(paid and approved),
+    }
+
+@app.get("/health/payment-owner-approval-gate-1-8-18-93")
+def bc181893_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    c = _runtime.db()
+    tables = set()
+    for t in ("company_access_approvals", "company_access_approval_events", "company_subscriptions", "billing_events"):
+        try:
+            c.execute(f"SELECT 1 FROM {t} LIMIT 1")
+            tables.add(t)
+        except Exception:
+            pass
+    c.close()
+
+    checks = [
+        ("payment-required page", "/payment-required" in paths),
+        ("awaiting-approval page", "/awaiting-approval" in paths),
+        ("owner approval dashboard", "/owner/access-approvals" in paths),
+        ("owner approve route", "/owner/access-approvals/{company_id}/approve" in paths),
+        ("owner revoke route", "/owner/access-approvals/{company_id}/revoke" in paths),
+        ("account access-state API", "/api/account/access-state" in paths),
+        ("approval table", "company_access_approvals" in tables),
+        ("approval audit table", "company_access_approval_events" in tables),
+        ("subscription table preserved", "company_subscriptions" in tables),
+        ("billing events preserved", "billing_events" in tables),
+        ("payment requires ACTIVE or LEGACY", _bc181893_payment_ok is not None),
+        ("platform owner bypass", callable(_bc181893_owner)),
+        ("existing auth preserved", callable(getattr(_runtime, "user_from_session", None))),
+        ("Stripe/billing routes preserved", "/billing" in paths),
+        ("1.8.18.92 drawing build preserved", "/health/architectural-index-code-preservation-1-8-18-92" in paths),
+    ]
+    passed = sum(1 for _, ok in checks if ok)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC181893_RELEASE,
+        "release": BC181893_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "checks": [{"case": case, "passed": bool(ok)} for case, ok in checks],
+        "rule": "Customer app access requires active payment AND platform-owner approval.",
+    }
+
+try:
+    app.version = BC181893_RELEASE
+except Exception:
+    pass
