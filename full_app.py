@@ -31948,3 +31948,379 @@ def bc181898_health():
 
 try: app.version=BC181898_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.99 — Plan Selection + Payment Portal
+# Flow: Choose Plan -> Register -> Payment -> Stripe -> Owner Approval -> App
+# ============================================================
+from fastapi import Form as _BC181899_Form, Query as _BC181899_Query
+from fastapi.responses import HTMLResponse as _BC181899_HTMLResponse, RedirectResponse as _BC181899_RedirectResponse, JSONResponse as _BC181899_JSONResponse
+from datetime import date as _BC181899_date, datetime as _BC181899_datetime
+
+BC181899_RELEASE = "1.8.18.99"
+
+# Allow the signed-in but unpaid customer to reach the payment landing page.
+try:
+    if "/payment" not in _BC181893_EXEMPT_PREFIXES:
+        _BC181893_EXEMPT_PREFIXES = tuple(_BC181893_EXEMPT_PREFIXES) + ("/payment",)
+except Exception:
+    pass
+
+def _bc181899_remove(path, method=None):
+    kept=[]
+    want=(method or "").upper()
+    for r in app.router.routes:
+        if getattr(r,"path",None) != path:
+            kept.append(r); continue
+        methods={str(x).upper() for x in (getattr(r,"methods",None) or set())}
+        if want and want not in methods:
+            kept.append(r)
+    app.router.routes[:]=kept
+
+def _bc181899_plan(code):
+    c=_runtime.db()
+    r=c.execute(
+        """SELECT * FROM platform_plans
+           WHERE UPPER(code)=UPPER(?) AND COALESCE(active,1)=1 LIMIT 1""",
+        (str(code or "").strip(),)
+    ).fetchone()
+    c.close()
+    return r
+
+def _bc181899_plans():
+    c=_runtime.db()
+    rows=c.execute(
+        """SELECT * FROM platform_plans
+           WHERE COALESCE(active,1)=1
+             AND UPPER(code) IN ('STARTER','PROFESSIONAL','COMPANY','ENTERPRISE')
+           ORDER BY monthly_price_cents"""
+    ).fetchall()
+    c.close()
+    return rows
+
+def _bc181899_money(cents):
+    return "${:,.0f}".format(int(cents or 0)/100)
+
+def _bc181899_page(title, body):
+    return f"""<!doctype html>
+<html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_runtime.esc(title)} · BuildCommand AI</title>
+<style>
+:root{{--bg:#081018;--panel:#101a25;--line:#21354b;--text:#edf4fb;--muted:#8fa5bb;--gold:#f0b44d;--green:#5cdb92}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;padding:24px}}
+.wrap{{max-width:1120px;margin:auto}}
+.brand{{font-size:22px;font-weight:900;margin:8px 0 24px}} .brand span{{color:var(--gold)}}
+.hero,.card{{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px}}
+.hero{{margin-bottom:16px}} h1{{font-size:34px;margin:5px 0 8px}} h2{{margin:5px 0}}
+.muted{{color:var(--muted)}} .eyebrow{{color:var(--gold);font-size:12px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}}
+.grid{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}}
+.plan{{display:block;cursor:pointer;position:relative}} .plan input{{position:absolute;top:18px;right:18px;transform:scale(1.35)}}
+.plan:has(input:checked){{border-color:var(--gold);box-shadow:0 0 0 2px rgba(240,180,77,.18)}}
+.price{{font-size:27px;font-weight:900;margin:8px 0}}
+button,.btn{{display:inline-block;background:var(--gold);color:#071018;border:0;border-radius:10px;padding:12px 17px;font-weight:900;text-decoration:none;cursor:pointer}}
+.btn.secondary{{background:#1c2d3d;color:#e9f1f8;border:1px solid #31475c}}
+input[type=text],input[type=email],input[type=password]{{width:100%;background:#0a141e;color:#edf4fb;border:1px solid #2a4056;border-radius:9px;padding:12px;margin:7px 0 15px}}
+form.account{{max-width:580px}}
+.summary{{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}}
+.badge{{display:inline-block;background:#173123;color:#7ee2a6;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900}}
+.notice{{border:1px solid #2b4560;background:#0b1621;padding:13px;border-radius:10px;margin:14px 0}}
+.footer{{color:#667c91;text-align:center;font-size:12px;margin:28px 0}}
+@media(max-width:900px){{.grid{{grid-template-columns:repeat(2,1fr)}}}}
+@media(max-width:560px){{.grid{{grid-template-columns:1fr}}body{{padding:14px}}}}
+</style></head>
+<body><div class="wrap">
+<div class="brand">BuildCommand <span>AI</span></div>
+{body}
+<div class="footer">Built By Willy LaHood © 2026</div>
+</div></body></html>"""
+
+# -------- 1) Real plan selector --------
+_bc181899_remove("/pricing","GET")
+
+@app.get("/pricing", response_class=_BC181899_HTMLResponse)
+def bc181899_pricing():
+    rows=_bc181899_plans()
+    cards=""
+    for p in rows:
+        code=str(p["code"]).upper()
+        checked="checked" if code=="PROFESSIONAL" else ""
+        popular='<div class="badge">MOST POPULAR</div>' if code=="PROFESSIONAL" else ""
+        cards += f"""
+        <label class="card plan">
+          <input type="radio" name="plan" value="{_runtime.esc(code)}" {checked}>
+          {popular}
+          <div class="eyebrow">{_runtime.esc(code)}</div>
+          <h2>{_runtime.esc(p["name"])}</h2>
+          <div class="price">{_bc181899_money(p["monthly_price_cents"])}/mo</div>
+          <p>{_runtime.esc(p["description"] or "")}</p>
+          <p><b>{int(p["seat_limit"] or 0)} users</b> · {int(p["project_limit"] or 0)} projects</p>
+          <p>{int(p["ai_monthly_limit"] or 0):,} included AI actions/month</p>
+          <p>{float(p["storage_gb_limit"] or 0):g} GB storage</p>
+        </label>"""
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">Choose Your BuildCommand Plan</div>
+      <h1>Select the account you want.</h1>
+      <p class="muted">Pick a plan below. Your selection follows you into account creation and secure payment.</p>
+    </div>
+    <form method="get" action="/register">
+      <div class="grid">{cards}</div>
+      <button type="submit">Continue With Selected Plan →</button>
+    </form>"""
+    return _bc181899_page("Pricing",body)
+
+# -------- 2) Registration remembers selected plan --------
+_bc181899_remove("/register","GET")
+_bc181899_remove("/register","POST")
+
+@app.get("/register", response_class=_BC181899_HTMLResponse)
+def bc181899_register_get(plan: str = _BC181899_Query("PROFESSIONAL")):
+    p=_bc181899_plan(plan) or _bc181899_plan("PROFESSIONAL")
+    if not p:
+        return _BC181899_RedirectResponse("/pricing",status_code=303)
+    code=str(p["code"]).upper()
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">Create Company Account</div>
+      <div class="summary">
+        <div><h1>Start BuildCommand AI</h1><p class="muted">Create the company owner account, then complete secure payment.</p></div>
+        <div class="card"><b>{_runtime.esc(p["name"])}</b><div class="price">{_bc181899_money(p["monthly_price_cents"])}/mo</div><a href="/pricing">Change plan</a></div>
+      </div>
+    </div>
+    <div class="card">
+      <form class="account" method="post" action="/register">
+        <input type="hidden" name="plan_code" value="{_runtime.esc(code)}">
+        <label>Company Name</label><input name="company_name" required>
+        <label>Your Name</label><input name="display_name" required>
+        <label>Email</label><input type="email" name="email" required>
+        <label>Password</label><input type="password" name="password" minlength="8" required>
+        <button type="submit">Create Account & Continue to Payment →</button>
+      </form>
+      <p><a href="/login">Already have an account? Sign in</a></p>
+    </div>"""
+    return _bc181899_page("Create Account",body)
+
+@app.post("/register")
+def bc181899_register_post(
+    company_name: str = _BC181899_Form(...),
+    display_name: str = _BC181899_Form(...),
+    email: str = _BC181899_Form(...),
+    password: str = _BC181899_Form(...),
+    plan_code: str = _BC181899_Form(...)
+):
+    p=_bc181899_plan(plan_code)
+    if not p:
+        return _BC181899_HTMLResponse("Please choose a valid BuildCommand plan.",status_code=400)
+    if len(password)<8:
+        return _BC181899_HTMLResponse("Password must be at least 8 characters.",status_code=400)
+    clean_email=email.strip().lower()
+    c=_runtime.db()
+    if c.execute("SELECT id FROM users WHERE LOWER(email)=LOWER(?)",(clean_email,)).fetchone():
+        c.close()
+        return _BC181899_HTMLResponse("That email is already registered.",status_code=400)
+
+    created=_BC181899_date.today().isoformat()
+    now=_BC181899_datetime.utcnow().isoformat()
+    c.execute("INSERT INTO companies(name,created) VALUES(?,?)",(company_name.strip(),created))
+    company_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+    c.execute(
+        """INSERT INTO users(company_id,email,display_name,password_hash,role,created)
+           VALUES(?,?,?,?,?,?)""",
+        (company_id,clean_email,display_name.strip(),_runtime.hash_password(password),"OWNER",created)
+    )
+    user_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+
+    # New customers start unpaid. No project/company data is reassigned.
+    c.execute(
+        """INSERT INTO company_subscriptions(company_id,plan_code,status,grandfathered,created,updated)
+           VALUES(?,?,?,?,?,?)""",
+        (company_id,str(p["code"]).upper(),"PENDING_PAYMENT",0,now,now)
+    )
+    # New customers must still be explicitly approved by Willy after payment.
+    try:
+        c.execute(
+            """INSERT INTO company_access_approvals(company_id,approved,note,created,updated)
+               VALUES(?,?,?,?,?)""",
+            (company_id,0,"New customer awaiting payment and owner approval",now,now)
+        )
+    except Exception:
+        pass
+    c.commit(); c.close()
+
+    raw=_runtime.create_session(user_id)
+    response=_BC181899_RedirectResponse(
+        "/payment?plan="+str(p["code"]).upper(),
+        status_code=303
+    )
+    response.set_cookie(
+        "bc_session",raw,httponly=True,
+        secure=_runtime.os.environ.get("COOKIE_SECURE","1")=="1",
+        samesite="lax",max_age=2592000
+    )
+    return response
+
+# -------- 3) Customer payment landing page --------
+@app.get("/payment", response_class=_BC181899_HTMLResponse)
+def bc181899_payment(plan: str = _BC181899_Query("")):
+    u=_runtime.current_user()
+    if not u:
+        return _BC181899_RedirectResponse("/login",status_code=303)
+
+    c=_runtime.db()
+    sub=c.execute(
+        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
+        (u["company_id"],)
+    ).fetchone()
+    c.close()
+
+    p=_bc181899_plan(plan or (sub["plan_code"] if sub else ""))
+    if not p:
+        return _BC181899_RedirectResponse("/pricing",status_code=303)
+
+    status=str(sub["status"] or "PENDING_PAYMENT").upper() if sub else "PENDING_PAYMENT"
+    if status in {"ACTIVE","LEGACY"}:
+        return _BC181899_RedirectResponse("/awaiting-approval",status_code=303)
+
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">Secure Payment</div>
+      <h1>Complete your BuildCommand subscription.</h1>
+      <p class="muted">Your account has been created, but the construction application stays locked until payment is complete and the BuildCommand owner approves access.</p>
+    </div>
+    <div class="card">
+      <div class="summary">
+        <div>
+          <div class="eyebrow">Selected Plan</div>
+          <h2>{_runtime.esc(p["name"])}</h2>
+          <p>{int(p["seat_limit"] or 0)} users · {int(p["project_limit"] or 0)} projects · {int(p["ai_monthly_limit"] or 0):,} AI actions/month</p>
+        </div>
+        <div class="price">{_bc181899_money(p["monthly_price_cents"])}/mo</div>
+      </div>
+      <div class="notice"><b>What happens next:</b> Stripe securely collects payment → BuildCommand marks the subscription active → your account waits for owner approval → access is released.</div>
+      <a class="btn" href="/billing/checkout/{_runtime.esc(str(p["code"]).upper())}">Pay Securely with Stripe →</a>
+      <a class="btn secondary" href="/pricing">Change Plan</a>
+    </div>"""
+    return _bc181899_page("Payment",body)
+
+# -------- 4) Stripe customer billing portal --------
+@app.get("/billing/portal")
+def bc181899_billing_portal():
+    u=_runtime.current_user()
+    if not u:
+        return _BC181899_RedirectResponse("/login",status_code=303)
+    try:
+        if _runtime.role_level(u["role"]) < _runtime.role_level("ADMIN"):
+            return _BC181899_HTMLResponse("Company admin/owner access required.",status_code=403)
+    except Exception:
+        pass
+
+    c=_runtime.db()
+    sub=c.execute(
+        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
+        (u["company_id"],)
+    ).fetchone()
+    c.close()
+
+    if not sub:
+        return _BC181899_RedirectResponse("/pricing",status_code=303)
+
+    customer_id=str(sub["stripe_customer_id"] or "").strip()
+    if not customer_id:
+        # Customer has not paid through Stripe yet.
+        return _BC181899_RedirectResponse(
+            "/payment?plan="+str(sub["plan_code"] or "PROFESSIONAL"),
+            status_code=303
+        )
+
+    base=_runtime.os.environ.get("APP_BASE_URL","").rstrip("/")
+    if not base:
+        return _BC181899_HTMLResponse(
+            "Set APP_BASE_URL in Render before opening the Stripe billing portal.",
+            status_code=500
+        )
+    try:
+        session=_runtime._bc174_stripe_post(
+            "/v1/billing_portal/sessions",
+            {"customer":customer_id,"return_url":base+"/billing"}
+        )
+    except Exception as e:
+        return _BC181899_HTMLResponse(
+            "Stripe billing portal error: "+_runtime.esc(str(e)),
+            status_code=502
+        )
+    if not session.get("url"):
+        return _BC181899_HTMLResponse("Stripe did not return a billing portal URL.",status_code=502)
+    return _BC181899_RedirectResponse(session["url"],status_code=303)
+
+# -------- 5) Simple customer billing hub --------
+@app.get("/billing/manage", response_class=_BC181899_HTMLResponse)
+def bc181899_manage_billing():
+    u=_runtime.current_user()
+    if not u:
+        return _BC181899_RedirectResponse("/login",status_code=303)
+    c=_runtime.db()
+    sub=c.execute(
+        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
+        (u["company_id"],)
+    ).fetchone()
+    c.close()
+    if not sub:
+        return _BC181899_RedirectResponse("/pricing",status_code=303)
+    p=_bc181899_plan(sub["plan_code"])
+    st=str(sub["status"] or "PENDING_PAYMENT").upper()
+    paid=st in {"ACTIVE","LEGACY"}
+    portal_button=(
+        '<a class="btn" href="/billing/portal">Open Secure Billing Portal →</a>'
+        if sub["stripe_customer_id"] else
+        f'<a class="btn" href="/payment?plan={_runtime.esc(str(sub["plan_code"]))}">Complete Payment →</a>'
+    )
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">Account & Billing</div>
+      <h1>Manage your BuildCommand subscription.</h1>
+      <p class="muted">Company: {_runtime.esc(u["company_name"])}</p>
+    </div>
+    <div class="card">
+      <div class="summary">
+        <div><h2>{_runtime.esc(p["name"] if p else sub["plan_code"])}</h2><p>Status: <b>{_runtime.esc(st)}</b></p></div>
+        <div class="price">{_bc181899_money(p["monthly_price_cents"])+'/mo' if p else ''}</div>
+      </div>
+      {portal_button}
+      <a class="btn secondary" href="/pricing">View Plans</a>
+    </div>"""
+    return _bc181899_page("Manage Billing",body)
+
+@app.get("/health/plan-selection-payment-portal-1-8-18-99")
+def bc181899_health():
+    paths=[(getattr(r,"path",""),{str(m).upper() for m in (getattr(r,"methods",set()) or set())}) for r in app.routes]
+    def has(path,method="GET"):
+        return any(p==path and method in methods for p,methods in paths)
+    checks={
+        "pricing_plan_selector":has("/pricing"),
+        "register_get":has("/register"),
+        "register_post":has("/register","POST"),
+        "payment_landing":has("/payment"),
+        "stripe_checkout_preserved":any(p=="/billing/checkout/{plan_code}" for p,_ in paths),
+        "stripe_webhook_preserved":any(p=="/billing/stripe/webhook" for p,_ in paths),
+        "billing_portal":has("/billing/portal"),
+        "billing_manage":has("/billing/manage"),
+        "owner_console_preserved":any(p=="/owner" for p,_ in paths),
+        "owner_approval_preserved":any("access-approvals/{company_id}/approve" in p for p,_ in paths),
+        "payment_exempt_from_gate":"/payment" in _BC181893_EXEMPT_PREFIXES,
+    }
+    passed=sum(bool(v) for v in checks.values())
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "version":BC181899_RELEASE,
+        "release":"Plan Selection + Stripe Payment Portal",
+        "passed":passed,"total":len(checks),"checks":checks,
+        "flow":["choose_plan","create_account","payment","stripe_checkout","owner_approval","app_access"]
+    }
+
+try:
+    app.version=BC181899_RELEASE
+except Exception:
+    pass
