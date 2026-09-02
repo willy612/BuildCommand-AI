@@ -31489,3 +31489,150 @@ try:
     app.version = BC181893_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.95 — Owner-Only Login Reset
+# Keeps buildcommandai@gmail.com and removes every other user login.
+# Project/company/audit data is preserved.
+# ============================================================
+BC181895_RELEASE = "1.8.18.95"
+BC181895_RELEASE_NAME = "Owner-Only Login Reset"
+BC181895_OWNER_EMAIL = "buildcommandai@gmail.com"
+
+def _bc181895_table_columns(c):
+    rows = c.execute(
+        """SELECT table_name,column_name
+           FROM information_schema.columns
+           WHERE table_schema='public'"""
+    ).fetchall()
+    out = {}
+    for r in rows:
+        out.setdefault(str(r["table_name"]), set()).add(str(r["column_name"]))
+    return out
+
+def _bc181895_reset_logins():
+    c = _runtime.db()
+    owner = c.execute(
+        "SELECT id,email,company_id FROM users WHERE LOWER(email)=LOWER(?) LIMIT 1",
+        (BC181895_OWNER_EMAIL,)
+    ).fetchone()
+
+    # Hard safety: NEVER purge accounts unless the master owner exists.
+    if not owner:
+        c.close()
+        raise RuntimeError(
+            "BuildCommand AI 1.8.18.95 safety stop: "
+            "buildcommandai@gmail.com was not found. No login accounts were erased."
+        )
+
+    before = c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    targets = c.execute(
+        "SELECT id,email FROM users WHERE LOWER(email)<>LOWER(?)",
+        (BC181895_OWNER_EMAIL,)
+    ).fetchall()
+
+    if not targets:
+        c.close()
+        return {"before": int(before), "removed": 0, "remaining": 1}
+
+    cols = _bc181895_table_columns(c)
+
+    # Delete user-only state that has no value after the login is removed.
+    for table, user_col in (
+        ("user_project_preferences", "user_id"),
+        ("user_state", "user_id"),
+    ):
+        if table in cols and user_col in cols[table]:
+            c.execute(
+                f"""DELETE FROM {table}
+                    WHERE {user_col} IN (
+                        SELECT id FROM users WHERE LOWER(email)<>LOWER(?)
+                    )""",
+                (BC181895_OWNER_EMAIL,)
+            )
+
+    # Preserve business/audit history while disconnecting deleted login IDs.
+    nullable_refs = (
+        ("customer_subscription_requests", "user_id"),
+        ("platform_company_control_events", "actor_user_id"),
+        ("platform_company_notes", "actor_user_id"),
+        ("owner_customer_actions", "actor_user_id"),
+        ("owner_sales_activities", "actor_user_id"),
+        ("company_access_approval_events", "actor_user_id"),
+        ("master_owner_events", "user_id"),
+        ("company_access_approvals", "approved_by_user_id"),
+        ("company_access_approvals", "revoked_by_user_id"),
+    )
+    for table, user_col in nullable_refs:
+        if table in cols and user_col in cols[table]:
+            c.execute(
+                f"""UPDATE {table}
+                    SET {user_col}=NULL
+                    WHERE {user_col} IN (
+                        SELECT id FROM users WHERE LOWER(email)<>LOWER(?)
+                    )""",
+                (BC181895_OWNER_EMAIL,)
+            )
+
+    # Remove every login except the master owner.
+    c.execute(
+        "DELETE FROM users WHERE LOWER(email)<>LOWER(?)",
+        (BC181895_OWNER_EMAIL,)
+    )
+    c.commit()
+
+    remaining = c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+    owner_remaining = c.execute(
+        "SELECT COUNT(*) AS n FROM users WHERE LOWER(email)=LOWER(?)",
+        (BC181895_OWNER_EMAIL,)
+    ).fetchone()["n"]
+    c.close()
+
+    if int(owner_remaining) != 1:
+        raise RuntimeError(
+            "BuildCommand AI owner-only reset verification failed: master owner count is not 1."
+        )
+
+    return {
+        "before": int(before),
+        "removed": len(targets),
+        "remaining": int(remaining),
+    }
+
+_BC181895_RESET_RESULT = _bc181895_reset_logins()
+
+@app.get("/health/owner-only-login-reset-1-8-18-95")
+def bc181895_health():
+    c = _runtime.db()
+    total = int(c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"])
+    owner_count = int(c.execute(
+        "SELECT COUNT(*) AS n FROM users WHERE LOWER(email)=LOWER(?)",
+        (BC181895_OWNER_EMAIL,)
+    ).fetchone()["n"])
+    others = int(c.execute(
+        "SELECT COUNT(*) AS n FROM users WHERE LOWER(email)<>LOWER(?)",
+        (BC181895_OWNER_EMAIL,)
+    ).fetchone()["n"])
+    c.close()
+
+    passed = (total == 1 and owner_count == 1 and others == 0)
+    return {
+        "status": "ok" if passed else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC181895_RELEASE,
+        "release": BC181895_RELEASE_NAME,
+        "owner_email": BC181895_OWNER_EMAIL,
+        "owner_account_present": owner_count == 1,
+        "other_login_accounts": others,
+        "total_login_accounts": total,
+        "access_gate_preserved": True,
+        "projects_and_company_data_preserved": True,
+        "startup_reset": _BC181895_RESET_RESULT,
+        "passed": passed,
+    }
+
+try:
+    app.version = BC181895_RELEASE
+except Exception:
+    pass
