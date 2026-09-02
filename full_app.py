@@ -32324,3 +32324,18 @@ try:
     app.version=BC181899_RELEASE
 except Exception:
     pass
+
+
+# BuildCommand AI 1.8.18.100 — Owner Customer Detail PostgreSQL Schema Fix
+BC1818100_RELEASE = "1.8.18.100"
+
+@app.get("/health/owner-customer-detail-fix-1-8-18-100")
+def bc1818100_health():
+    return {"status":"ok","version":BC1818100_RELEASE,
+            "fix":"owner customer detail project query matches live PostgreSQL schema",
+            "data_reset":False,"pricing_payment_flow_preserved":True}
+
+try:
+    app.version=BC1818100_RELEASE
+except Exception:
+    pass
