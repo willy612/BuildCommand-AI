@@ -32339,3 +32339,321 @@ try:
     app.version=BC1818100_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.101
+# Registration Session Handoff + Clean Account Creation UI
+# ============================================================
+from fastapi import Request as _BC1818101_Request
+from fastapi.responses import HTMLResponse as _BC1818101_HTMLResponse, RedirectResponse as _BC1818101_RedirectResponse
+from fastapi import Form as _BC1818101_Form, Query as _BC1818101_Query
+from datetime import date as _BC1818101_date, datetime as _BC1818101_datetime
+
+BC1818101_RELEASE = "1.8.18.101"
+
+# The core authentication middleware only treats exact PUBLIC_PATHS as public.
+# Payment must be reachable so a newly-created customer's temporary checkout
+# session can repair the normal login cookie if the browser drops it.
+try:
+    _runtime.PUBLIC_PATHS.add("/payment")
+except Exception:
+    pass
+
+def _bc1818101_remove(path, method):
+    kept=[]
+    want=method.upper()
+    for r in app.router.routes:
+        if getattr(r,"path",None)==path and want in {str(x).upper() for x in (getattr(r,"methods",set()) or set())}:
+            continue
+        kept.append(r)
+    app.router.routes[:]=kept
+
+def _bc1818101_shell(title, body):
+    return f"""<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{_runtime.esc(title)} · BuildCommand AI</title>
+<style>
+*{{box-sizing:border-box}}
+:root{{--bg:#081018;--panel:#111b26;--panel2:#0c151f;--line:#24384b;--text:#edf4fb;--muted:#91a5b9;--gold:#f0b44d;--green:#66d99a}}
+body{{margin:0;background:linear-gradient(180deg,#071018 0%,#0a121b 100%);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Arial,sans-serif}}
+.wrap{{max-width:1040px;margin:0 auto;padding:28px 18px 42px}}
+.brand{{font-size:23px;font-weight:900;margin-bottom:24px}} .brand b{{color:var(--gold)}}
+.layout{{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(280px,.85fr);gap:18px;align-items:start}}
+.card{{background:rgba(17,27,38,.97);border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:0 12px 34px rgba(0,0,0,.22)}}
+.eyebrow{{font-size:12px;color:var(--gold);font-weight:900;letter-spacing:.12em;text-transform:uppercase;margin-bottom:7px}}
+h1{{font-size:34px;line-height:1.08;margin:4px 0 10px}} h2{{font-size:22px;margin:4px 0 8px}}
+p{{line-height:1.55}} .muted{{color:var(--muted)}}
+label{{display:block;font-size:13px;font-weight:800;margin:14px 0 6px}}
+input{{width:100%;padding:13px 14px;background:#09131d;border:1px solid #2b4358;border-radius:10px;color:#fff;font-size:16px;outline:none}}
+input:focus{{border-color:var(--gold);box-shadow:0 0 0 3px rgba(240,180,77,.12)}}
+button,.btn{{display:inline-block;width:100%;border:0;border-radius:11px;padding:14px 18px;background:var(--gold);color:#071018;font-size:15px;font-weight:900;text-align:center;text-decoration:none;cursor:pointer;margin-top:18px}}
+.link{{color:var(--gold);text-decoration:none;font-weight:800}}
+.price{{font-size:34px;font-weight:950;margin:10px 0}} .price small{{font-size:14px;color:var(--muted);font-weight:700}}
+.feature{{padding:10px 0;border-bottom:1px solid #1e3041;color:#c5d3df}} .feature:last-child{{border-bottom:0}}
+.step{{display:flex;gap:10px;align-items:flex-start;margin:13px 0;color:#c3d1dd}}
+.num{{width:25px;height:25px;border-radius:50%;background:#1a3042;color:var(--gold);display:grid;place-items:center;font-weight:900;flex:0 0 25px}}
+.footer{{text-align:center;color:#60758a;font-size:12px;margin-top:28px}}
+@media(max-width:760px){{.wrap{{padding:18px 12px 30px}}.layout{{grid-template-columns:1fr}}h1{{font-size:29px}}.card{{padding:19px}}}}
+</style>
+</head>
+<body><div class="wrap">
+<div class="brand">BuildCommand <b>AI</b></div>
+{body}
+<div class="footer">Built By Willy LaHood © 2026</div>
+</div></body></html>"""
+
+# ------------------------------------------------------------
+# Rebuild registration GET + POST
+# ------------------------------------------------------------
+_bc1818101_remove("/register","GET")
+_bc1818101_remove("/register","POST")
+
+@app.get("/register", response_class=_BC1818101_HTMLResponse)
+def bc1818101_register_get(plan: str = _BC1818101_Query("PROFESSIONAL")):
+    p=_bc181899_plan(plan) or _bc181899_plan("PROFESSIONAL")
+    if not p:
+        return _BC1818101_RedirectResponse("/pricing",status_code=303)
+
+    body=f"""
+    <div class="layout">
+      <div class="card">
+        <div class="eyebrow">Create Your Company Account</div>
+        <h1>Start using BuildCommand AI.</h1>
+        <p class="muted">Set up the company owner's login. Your construction workspace remains locked until payment is completed and BuildCommand approves the account.</p>
+
+        <form method="post" action="/register" autocomplete="on">
+          <input type="hidden" name="plan_code" value="{_runtime.esc(str(p["code"]).upper())}">
+          <label>Company name</label>
+          <input name="company_name" placeholder="Example: ABC General Contractors" required>
+
+          <label>Your name</label>
+          <input name="display_name" placeholder="First and last name" required>
+
+          <label>Email address</label>
+          <input type="email" name="email" placeholder="you@company.com" required autocomplete="email">
+
+          <label>Password</label>
+          <input type="password" name="password" minlength="8" placeholder="At least 8 characters" required autocomplete="new-password">
+
+          <button type="submit">Create Account & Continue to Payment →</button>
+        </form>
+
+        <p class="muted" style="margin-top:18px">Already have an account? <a class="link" href="/login">Sign in here</a></p>
+      </div>
+
+      <aside class="card">
+        <div class="eyebrow">Selected Plan</div>
+        <h2>{_runtime.esc(p["name"])}</h2>
+        <div class="price">${int(p["monthly_price_cents"] or 0)/100:,.0f}<small>/month</small></div>
+        <div class="feature">✓ {int(p["seat_limit"] or 0)} users</div>
+        <div class="feature">✓ {int(p["project_limit"] or 0)} projects</div>
+        <div class="feature">✓ {int(p["ai_monthly_limit"] or 0):,} included AI actions/month</div>
+        <div class="feature">✓ {float(p["storage_gb_limit"] or 0):g} GB document storage</div>
+        <p style="margin-top:17px"><a class="link" href="/pricing">← Change plan</a></p>
+
+        <div style="margin-top:25px">
+          <div class="eyebrow">What happens next</div>
+          <div class="step"><span class="num">1</span><span>Create the company account.</span></div>
+          <div class="step"><span class="num">2</span><span>Complete secure Stripe payment.</span></div>
+          <div class="step"><span class="num">3</span><span>BuildCommand owner approves access.</span></div>
+          <div class="step"><span class="num">4</span><span>Your construction workspace opens.</span></div>
+        </div>
+      </aside>
+    </div>"""
+    return _BC1818101_HTMLResponse(_bc1818101_shell("Create Account",body))
+
+@app.post("/register")
+def bc1818101_register_post(
+    company_name: str = _BC1818101_Form(...),
+    display_name: str = _BC1818101_Form(...),
+    email: str = _BC1818101_Form(...),
+    password: str = _BC1818101_Form(...),
+    plan_code: str = _BC1818101_Form(...)
+):
+    p=_bc181899_plan(plan_code)
+    if not p:
+        return _BC1818101_HTMLResponse(_bc1818101_shell(
+            "Registration Error",
+            '<div class="card"><h1>Please choose a valid BuildCommand plan.</h1><a class="btn" href="/pricing">Back to Plans</a></div>'
+        ),status_code=400)
+
+    if len(password)<8:
+        return _BC1818101_HTMLResponse(_bc1818101_shell(
+            "Registration Error",
+            '<div class="card"><h1>Password is too short.</h1><p>Use at least 8 characters.</p><a class="btn" href="/register?plan='+_runtime.esc(str(p["code"]))+'">Try Again</a></div>'
+        ),status_code=400)
+
+    clean_email=email.strip().lower()
+    c=_runtime.db()
+    try:
+        if c.execute("SELECT id FROM users WHERE LOWER(email)=LOWER(?)",(clean_email,)).fetchone():
+            return _BC1818101_HTMLResponse(_bc1818101_shell(
+                "Account Exists",
+                '<div class="card"><h1>That email already has an account.</h1><p class="muted">Sign in with that email or use a different email for your test customer.</p><a class="btn" href="/login">Go to Sign In</a></div>'
+            ),status_code=400)
+
+        created=_BC1818101_date.today().isoformat()
+        now=_BC1818101_datetime.utcnow().isoformat()
+
+        c.execute("INSERT INTO companies(name,created) VALUES(?,?)",(company_name.strip(),created))
+        company_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+
+        c.execute(
+            """INSERT INTO users(company_id,email,display_name,password_hash,role,created)
+               VALUES(?,?,?,?,?,?)""",
+            (company_id,clean_email,display_name.strip(),_runtime.hash_password(password),"OWNER",created)
+        )
+        user_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+
+        c.execute(
+            """INSERT INTO company_subscriptions(company_id,plan_code,status,grandfathered,created,updated)
+               VALUES(?,?,?,?,?,?)""",
+            (company_id,str(p["code"]).upper(),"PENDING_PAYMENT",0,now,now)
+        )
+
+        try:
+            c.execute(
+                """INSERT INTO company_access_approvals(company_id,approved,note,created,updated)
+                   VALUES(?,?,?,?,?)""",
+                (company_id,0,"New customer awaiting payment and owner approval",now,now)
+            )
+        except Exception:
+            pass
+
+        c.commit()
+    finally:
+        c.close()
+
+    # Create TWO independent 30-day server-side session tokens.
+    # bc_session = normal login.
+    # bc_checkout = recovery handoff used only to reach payment if the browser
+    # did not present bc_session on the very next request.
+    normal_token=_runtime.create_session(user_id)
+    checkout_token=_runtime.create_session(user_id)
+
+    response=_BC1818101_RedirectResponse(
+        "/payment?plan="+str(p["code"]).upper(),
+        status_code=303
+    )
+    cookie_secure=_runtime.os.environ.get("COOKIE_SECURE","1")=="1"
+    response.set_cookie("bc_session",normal_token,httponly=True,secure=cookie_secure,samesite="lax",max_age=2592000,path="/")
+    response.set_cookie("bc_checkout",checkout_token,httponly=True,secure=cookie_secure,samesite="lax",max_age=1800,path="/")
+    return response
+
+# ------------------------------------------------------------
+# Rebuild payment route with session recovery
+# ------------------------------------------------------------
+_bc1818101_remove("/payment","GET")
+
+@app.get("/payment", response_class=_BC1818101_HTMLResponse)
+def bc1818101_payment(
+    request: _BC1818101_Request,
+    plan: str = _BC1818101_Query("")
+):
+    # Normal authenticated request first.
+    u=_runtime.current_user()
+    repaired_token=None
+
+    # If authentication middleware had no bc_session, /payment is public in
+    # core middleware and we can validate the temporary server-side handoff.
+    if not u:
+        recovery=request.cookies.get("bc_checkout")
+        recovered=_runtime.user_from_session(recovery) if recovery else None
+        if recovered:
+            u=recovered
+            repaired_token=_runtime.create_session(int(recovered["id"]))
+
+    if not u:
+        body="""
+        <div class="card">
+          <div class="eyebrow">Account Session</div>
+          <h1>We couldn't continue the new account session.</h1>
+          <p class="muted">Your account may already have been created. Sign in with the email and password you just entered and BuildCommand will continue to payment.</p>
+          <a class="btn" href="/login">Sign In to Continue</a>
+        </div>"""
+        return _BC1818101_HTMLResponse(_bc1818101_shell("Continue to Payment",body),status_code=401)
+
+    c=_runtime.db()
+    sub=c.execute(
+        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
+        (u["company_id"],)
+    ).fetchone()
+    c.close()
+
+    p=_bc181899_plan(plan or (sub["plan_code"] if sub else ""))
+    if not p:
+        return _BC1818101_RedirectResponse("/pricing",status_code=303)
+
+    status=str(sub["status"] or "PENDING_PAYMENT").upper() if sub else "PENDING_PAYMENT"
+    if status in {"ACTIVE","LEGACY"}:
+        response=_BC1818101_RedirectResponse("/awaiting-approval",status_code=303)
+        if repaired_token:
+            response.set_cookie("bc_session",repaired_token,httponly=True,
+                                secure=_runtime.os.environ.get("COOKIE_SECURE","1")=="1",
+                                samesite="lax",max_age=2592000,path="/")
+        return response
+
+    body=f"""
+    <div class="layout">
+      <div class="card">
+        <div class="eyebrow">Secure Payment</div>
+        <h1>Your account is created.</h1>
+        <p class="muted">Complete payment for <b>{_runtime.esc(p["name"])}</b>. Your BuildCommand workspace stays locked until payment is confirmed and the platform owner approves access.</p>
+        <div class="price">${int(p["monthly_price_cents"] or 0)/100:,.0f}<small>/month</small></div>
+        <a class="btn" href="/billing/checkout/{_runtime.esc(str(p["code"]).upper())}">Continue to Secure Stripe Checkout →</a>
+        <p style="margin-top:16px"><a class="link" href="/pricing">← Change plan</a></p>
+      </div>
+      <aside class="card">
+        <div class="eyebrow">Order Summary</div>
+        <h2>{_runtime.esc(p["name"])}</h2>
+        <div class="feature">{int(p["seat_limit"] or 0)} users</div>
+        <div class="feature">{int(p["project_limit"] or 0)} projects</div>
+        <div class="feature">{int(p["ai_monthly_limit"] or 0):,} AI actions/month</div>
+        <div class="feature">{float(p["storage_gb_limit"] or 0):g} GB storage</div>
+        <p class="muted">Payment information is handled by Stripe. BuildCommand does not need to store your card number.</p>
+      </aside>
+    </div>"""
+    response=_BC1818101_HTMLResponse(_bc1818101_shell("Secure Payment",body))
+    if repaired_token:
+        response.set_cookie("bc_session",repaired_token,httponly=True,
+                            secure=_runtime.os.environ.get("COOKIE_SECURE","1")=="1",
+                            samesite="lax",max_age=2592000,path="/")
+    response.delete_cookie("bc_checkout",path="/")
+    return response
+
+@app.get("/health/registration-checkout-fix-1-8-18-101")
+def bc1818101_health():
+    paths=[]
+    for r in app.routes:
+        paths.append((getattr(r,"path",""),{str(m).upper() for m in (getattr(r,"methods",set()) or set())}))
+    def count(path,method):
+        return sum(1 for p,methods in paths if p==path and method in methods)
+
+    checks={
+        "one_register_get":count("/register","GET")==1,
+        "one_register_post":count("/register","POST")==1,
+        "one_payment_get":count("/payment","GET")==1,
+        "payment_public_for_handoff":"/payment" in getattr(_runtime,"PUBLIC_PATHS",set()),
+        "pricing_preserved":count("/pricing","GET")==1,
+        "stripe_checkout_preserved":any(p=="/billing/checkout/{plan_code}" for p,_ in paths),
+        "owner_console_preserved":any(p=="/owner" for p,_ in paths),
+        "payment_gate_preserved":any(p=="/payment-required" for p,_ in paths),
+    }
+    passed=sum(bool(v) for v in checks.values())
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "version":BC1818101_RELEASE,
+        "passed":passed,
+        "total":len(checks),
+        "checks":checks,
+        "fixes":["registration session handoff","checkout session recovery","responsive account creation UI"],
+        "data_reset":False
+    }
+
+try:
+    app.version=BC1818101_RELEASE
+except Exception:
+    pass
