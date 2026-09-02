@@ -32657,3 +32657,420 @@ try:
     app.version=BC1818101_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.102
+# Direct Registration -> Payment + One-Time Stripe Handoff
+# ============================================================
+from fastapi import Request as _BC1818102_Request, Form as _BC1818102_Form
+from fastapi.responses import HTMLResponse as _BC1818102_HTMLResponse, RedirectResponse as _BC1818102_RedirectResponse
+from datetime import datetime as _BC1818102_datetime, timedelta as _BC1818102_timedelta
+import secrets as _BC1818102_secrets
+import hashlib as _BC1818102_hashlib
+
+BC1818102_RELEASE = "1.8.18.102"
+
+# This route must be reachable without an existing login cookie.
+try:
+    _runtime.PUBLIC_PATHS.add("/registration/checkout")
+except Exception:
+    pass
+
+try:
+    if "/registration/checkout" not in _BC181893_EXEMPT_PREFIXES:
+        _BC181893_EXEMPT_PREFIXES = tuple(_BC181893_EXEMPT_PREFIXES) + ("/registration/checkout",)
+except Exception:
+    pass
+
+# PostgreSQL/SQLite-safe handoff table. No existing data is altered.
+def _bc1818102_init_handoffs():
+    c = _runtime.db()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS registration_checkout_handoffs(
+            token_hash TEXT PRIMARY KEY,
+            user_id BIGINT NOT NULL,
+            company_id BIGINT NOT NULL,
+            plan_code TEXT NOT NULL,
+            expires TEXT NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            created TEXT NOT NULL
+        )
+    """)
+    c.commit()
+    c.close()
+
+_bc1818102_init_handoffs()
+
+def _bc1818102_remove(path, method):
+    kept=[]
+    want=method.upper()
+    for r in app.router.routes:
+        methods={str(x).upper() for x in (getattr(r,"methods",set()) or set())}
+        if getattr(r,"path",None)==path and want in methods:
+            continue
+        kept.append(r)
+    app.router.routes[:]=kept
+
+def _bc1818102_issue_handoff(user_id, company_id, plan_code):
+    raw = _BC1818102_secrets.token_urlsafe(48)
+    token_hash = _BC1818102_hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    now = _BC1818102_datetime.utcnow()
+    expires = (now + _BC1818102_timedelta(minutes=20)).isoformat()
+    c = _runtime.db()
+    c.execute(
+        """INSERT INTO registration_checkout_handoffs(
+            token_hash,user_id,company_id,plan_code,expires,used,created
+        ) VALUES(?,?,?,?,?,?,?)""",
+        (token_hash,int(user_id),int(company_id),str(plan_code).upper(),expires,0,now.isoformat())
+    )
+    c.commit(); c.close()
+    return raw
+
+def _bc1818102_validate_handoff(raw):
+    if not raw:
+        return None
+    token_hash = _BC1818102_hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    c = _runtime.db()
+    row = c.execute(
+        """SELECT * FROM registration_checkout_handoffs
+           WHERE token_hash=? AND used=0 AND expires>?""",
+        (token_hash,_BC1818102_datetime.utcnow().isoformat())
+    ).fetchone()
+    c.close()
+    return row
+
+def _bc1818102_mark_handoff_used(raw):
+    token_hash = _BC1818102_hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    c = _runtime.db()
+    c.execute(
+        "UPDATE registration_checkout_handoffs SET used=1 WHERE token_hash=?",
+        (token_hash,)
+    )
+    c.commit(); c.close()
+
+def _bc1818102_registration_payment_screen(plan, handoff_token):
+    return _bc1818101_shell(
+        "Account Created",
+        f"""
+        <div class="layout">
+          <div class="card">
+            <div class="eyebrow">Account Created Successfully</div>
+            <h1>Your BuildCommand account is ready for payment.</h1>
+            <p class="muted">You do not need to sign in again. Continue directly to secure Stripe checkout below.</p>
+            <div class="price">${int(plan["monthly_price_cents"] or 0)/100:,.0f}<small>/month</small></div>
+
+            <form method="post" action="/registration/checkout">
+              <input type="hidden" name="handoff_token" value="{_runtime.esc(handoff_token)}">
+              <button type="submit">Continue to Secure Stripe Checkout →</button>
+            </form>
+
+            <p class="muted" style="margin-top:16px">
+              Your construction workspace remains locked until payment is confirmed and BuildCommand owner approval is granted.
+            </p>
+          </div>
+
+          <aside class="card">
+            <div class="eyebrow">Selected Plan</div>
+            <h2>{_runtime.esc(plan["name"])}</h2>
+            <div class="feature">✓ {int(plan["seat_limit"] or 0)} users</div>
+            <div class="feature">✓ {int(plan["project_limit"] or 0)} projects</div>
+            <div class="feature">✓ {int(plan["ai_monthly_limit"] or 0):,} AI actions/month</div>
+            <div class="feature">✓ {float(plan["storage_gb_limit"] or 0):g} GB storage</div>
+
+            <div style="margin-top:24px">
+              <div class="eyebrow">Access Flow</div>
+              <div class="step"><span class="num">1</span><span>Account created ✓</span></div>
+              <div class="step"><span class="num">2</span><span>Secure payment</span></div>
+              <div class="step"><span class="num">3</span><span>Owner approval</span></div>
+              <div class="step"><span class="num">4</span><span>Workspace opens</span></div>
+            </div>
+          </aside>
+        </div>
+        """
+    )
+
+# Replace only POST /register. GET /register styling from 1.8.18.101 remains.
+_bc1818102_remove("/register","POST")
+
+@app.post("/register", response_class=_BC1818102_HTMLResponse)
+def bc1818102_register_post(
+    request: _BC1818102_Request,
+    company_name: str = _BC1818102_Form(...),
+    display_name: str = _BC1818102_Form(...),
+    email: str = _BC1818102_Form(...),
+    password: str = _BC1818102_Form(...),
+    plan_code: str = _BC1818102_Form(...)
+):
+    p = _bc181899_plan(plan_code)
+    if not p:
+        return _BC1818102_HTMLResponse(
+            _bc1818101_shell(
+                "Registration Error",
+                '<div class="card"><h1>Please choose a valid BuildCommand plan.</h1><a class="btn" href="/pricing">Back to Plans</a></div>'
+            ),
+            status_code=400
+        )
+
+    if len(password) < 8:
+        return _BC1818102_HTMLResponse(
+            _bc1818101_shell(
+                "Registration Error",
+                '<div class="card"><h1>Password must be at least 8 characters.</h1><a class="btn" href="/register?plan='+_runtime.esc(str(p["code"]))+'">Try Again</a></div>'
+            ),
+            status_code=400
+        )
+
+    clean_email = email.strip().lower()
+    c = _runtime.db()
+    try:
+        if c.execute(
+            "SELECT id FROM users WHERE LOWER(email)=LOWER(?)",
+            (clean_email,)
+        ).fetchone():
+            return _BC1818102_HTMLResponse(
+                _bc1818101_shell(
+                    "Account Exists",
+                    '<div class="card"><h1>That email already has an account.</h1><p class="muted">Use another email for a new test customer, or sign in with the existing account.</p><a class="btn" href="/login">Go to Sign In</a></div>'
+                ),
+                status_code=400
+            )
+
+        created = _BC1818102_datetime.utcnow().date().isoformat()
+        now = _BC1818102_datetime.utcnow().isoformat()
+
+        c.execute(
+            "INSERT INTO companies(name,created) VALUES(?,?)",
+            (company_name.strip(),created)
+        )
+        company_id = c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+
+        c.execute(
+            """INSERT INTO users(company_id,email,display_name,password_hash,role,created)
+               VALUES(?,?,?,?,?,?)""",
+            (
+                company_id,
+                clean_email,
+                display_name.strip(),
+                _runtime.hash_password(password),
+                "OWNER",
+                created
+            )
+        )
+        user_id = c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
+
+        c.execute(
+            """INSERT INTO company_subscriptions(
+                company_id,plan_code,status,grandfathered,created,updated
+            ) VALUES(?,?,?,?,?,?)""",
+            (
+                company_id,
+                str(p["code"]).upper(),
+                "PENDING_PAYMENT",
+                0,
+                now,
+                now
+            )
+        )
+
+        try:
+            c.execute(
+                """INSERT INTO company_access_approvals(
+                    company_id,approved,note,created,updated
+                ) VALUES(?,?,?,?,?)""",
+                (
+                    company_id,
+                    0,
+                    "New customer awaiting payment and owner approval",
+                    now,
+                    now
+                )
+            )
+        except Exception:
+            pass
+
+        c.commit()
+    finally:
+        c.close()
+
+    # Normal long-lived login cookie.
+    session_token = _runtime.create_session(user_id)
+
+    # Separate one-time checkout credential. This is not the password and is
+    # stored only as a SHA-256 hash in PostgreSQL.
+    handoff_token = _bc1818102_issue_handoff(
+        user_id,
+        company_id,
+        str(p["code"]).upper()
+    )
+
+    response = _BC1818102_HTMLResponse(
+        _bc1818102_registration_payment_screen(p,handoff_token),
+        status_code=200
+    )
+
+    # Infer cookie security from the public request rather than relying only
+    # on a Render env switch. On buildcommandai.com this remains Secure.
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
+    secure_cookie = (
+        forwarded_proto == "https"
+        or request.url.scheme == "https"
+        or _runtime.os.environ.get("COOKIE_SECURE","1") == "1"
+    )
+    response.set_cookie(
+        "bc_session",
+        session_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="lax",
+        max_age=2592000,
+        path="/"
+    )
+    return response
+
+# Public one-time handoff route that creates Stripe checkout without depending
+# on the browser having already returned the login cookie.
+@app.post("/registration/checkout")
+def bc1818102_registration_checkout(
+    request: _BC1818102_Request,
+    handoff_token: str = _BC1818102_Form(...)
+):
+    h = _bc1818102_validate_handoff(handoff_token)
+    if not h:
+        return _BC1818102_HTMLResponse(
+            _bc1818101_shell(
+                "Checkout Link Expired",
+                '<div class="card"><h1>This checkout handoff is no longer valid.</h1><p class="muted">Sign in to the account you just created and continue from billing.</p><a class="btn" href="/login">Sign In</a></div>'
+            ),
+            status_code=401
+        )
+
+    plan = _bc181899_plan(h["plan_code"])
+    if not plan or int(plan["monthly_price_cents"] or 0) <= 0:
+        return _BC1818102_HTMLResponse("Selected plan is not billable.",status_code=400)
+
+    base = _runtime.os.environ.get("APP_BASE_URL","").rstrip("/")
+    if not base:
+        return _BC1818102_HTMLResponse(
+            _bc1818101_shell(
+                "Payment Setup Needed",
+                '<div class="card"><h1>BuildCommand payment setup is not complete.</h1><p class="muted">APP_BASE_URL must be configured in Render before Stripe checkout can start.</p></div>'
+            ),
+            status_code=500
+        )
+
+    c = _runtime.db()
+    sub = c.execute(
+        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
+        (int(h["company_id"]),)
+    ).fetchone()
+    c.close()
+
+    fields = {
+        "mode":"subscription",
+        "success_url":base+"/billing?checkout=success",
+        "cancel_url":base+"/billing?checkout=canceled",
+        "client_reference_id":str(int(h["company_id"])),
+        "metadata[company_id]":str(int(h["company_id"])),
+        "metadata[plan_code]":str(plan["code"]),
+        "subscription_data[metadata][company_id]":str(int(h["company_id"])),
+        "subscription_data[metadata][plan_code]":str(plan["code"]),
+        "line_items[0][quantity]":"1",
+        "line_items[0][price_data][currency]":"usd",
+        "line_items[0][price_data][unit_amount]":str(int(plan["monthly_price_cents"])),
+        "line_items[0][price_data][recurring][interval]":"month",
+        "line_items[0][price_data][product_data][name]":"BuildCommand AI — "+str(plan["name"]),
+    }
+    if sub and sub["stripe_customer_id"]:
+        fields["customer"] = sub["stripe_customer_id"]
+
+    try:
+        stripe_session = _runtime._bc174_stripe_post(
+            "/v1/checkout/sessions",
+            fields
+        )
+    except Exception as e:
+        # Do not burn the one-time handoff if Stripe itself is not configured.
+        return _BC1818102_HTMLResponse(
+            _bc1818101_shell(
+                "Stripe Checkout",
+                '<div class="card"><div class="eyebrow">Payment Connection</div><h1>Stripe is not ready yet.</h1><p class="muted">'+_runtime.esc(str(e))+'</p><p>Your BuildCommand account was created successfully. No payment was collected.</p></div>'
+            ),
+            status_code=502
+        )
+
+    if not stripe_session.get("url"):
+        return _BC1818102_HTMLResponse("Stripe did not return a checkout URL.",status_code=502)
+
+    # Consume only after Stripe successfully created a checkout session.
+    _bc1818102_mark_handoff_used(handoff_token)
+
+    # Repair/create normal login cookie while redirecting to Stripe.
+    repaired_session = _runtime.create_session(int(h["user_id"]))
+    response = _BC1818102_RedirectResponse(stripe_session["url"],status_code=303)
+
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
+    secure_cookie = (
+        forwarded_proto == "https"
+        or request.url.scheme == "https"
+        or _runtime.os.environ.get("COOKIE_SECURE","1") == "1"
+    )
+    response.set_cookie(
+        "bc_session",
+        repaired_session,
+        httponly=True,
+        secure=secure_cookie,
+        samesite="lax",
+        max_age=2592000,
+        path="/"
+    )
+    return response
+
+@app.get("/health/direct-registration-payment-handoff-1-8-18-102")
+def bc1818102_health():
+    routes=[]
+    for r in app.routes:
+        routes.append(
+            (
+                getattr(r,"path",""),
+                {str(m).upper() for m in (getattr(r,"methods",set()) or set())}
+            )
+        )
+    def count(path,method):
+        return sum(1 for p,methods in routes if p==path and method in methods)
+
+    checks = {
+        "one_register_post": count("/register","POST")==1,
+        "register_get_preserved": count("/register","GET")==1,
+        "one_time_checkout_post": count("/registration/checkout","POST")==1,
+        "checkout_public": "/registration/checkout" in getattr(_runtime,"PUBLIC_PATHS",set()),
+        "owner_gate_exempt": "/registration/checkout" in _BC181893_EXEMPT_PREFIXES,
+        "pricing_preserved": count("/pricing","GET")==1,
+        "stripe_webhook_preserved": any(p=="/billing/stripe/webhook" for p,_ in routes),
+        "owner_console_preserved": any(p=="/owner" for p,_ in routes),
+        "payment_gate_preserved": any(p=="/payment-required" for p,_ in routes),
+        "handoff_table_initialized": True,
+    }
+    passed=sum(bool(v) for v in checks.values())
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "version":BC1818102_RELEASE,
+        "passed":passed,
+        "total":len(checks),
+        "checks":checks,
+        "flow":[
+            "choose_plan",
+            "create_account",
+            "payment_screen_same_response",
+            "one_time_checkout_handoff",
+            "stripe_checkout",
+            "owner_approval",
+            "app_access"
+        ],
+        "data_reset":False
+    }
+
+try:
+    app.version=BC1818102_RELEASE
+except Exception:
+    pass
