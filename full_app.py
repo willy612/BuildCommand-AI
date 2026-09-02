@@ -31846,3 +31846,23 @@ try:
     app.version = BC181896_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.97 — Separate Owner Business Console
+# owner_console.py owns business/subscription/customer controls.
+# ============================================================
+from owner_console import register_owner_console as _bc181897_register_owner_console
+
+_bc181897_register_owner_console(
+    app=app,
+    runtime=_runtime,
+    owner_email="buildcommandai@gmail.com",
+)
+
+BUILD_COMMAND_RELEASE = "1.8.18.97"
+BUILD_COMMAND_RELEASE_NAME = "Separate Real Owner Business Console"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
