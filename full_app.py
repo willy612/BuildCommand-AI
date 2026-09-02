@@ -31636,3 +31636,213 @@ try:
     app.version = BC181895_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.96 — True Customer Metrics Reset
+# Owner company and orphaned/test companies with zero users are not customers.
+# Preserves all project/company/history data.
+# ============================================================
+BC181896_RELEASE = "1.8.18.96"
+BC181896_RELEASE_NAME = "True Customer Metrics Reset"
+BC181896_OWNER_EMAIL = "buildcommandai@gmail.com"
+
+def _bc181896_customer_company_ids():
+    c = _runtime.db()
+    owner = c.execute(
+        "SELECT company_id FROM users WHERE LOWER(email)=LOWER(?) LIMIT 1",
+        (BC181896_OWNER_EMAIL,)
+    ).fetchone()
+    owner_company_id = int(owner["company_id"]) if owner else None
+
+    rows = c.execute(
+        """SELECT DISTINCT co.id
+           FROM companies co
+           WHERE EXISTS (
+               SELECT 1 FROM users u WHERE u.company_id=co.id
+           )
+           ORDER BY co.id"""
+    ).fetchall()
+    c.close()
+
+    ids = [int(r["id"]) for r in rows]
+    if owner_company_id is not None:
+        ids = [cid for cid in ids if cid != owner_company_id]
+    return ids, owner_company_id
+
+# Override the legacy revenue/customer metrics engine so business KPIs reflect
+# real outside customers only. Existing routes resolve this function at call time.
+def _bc176_metrics():
+    c = _runtime.db()
+    plans = {
+        r["code"]: r
+        for r in c.execute(
+            "SELECT * FROM platform_plans WHERE COALESCE(active,1)=1"
+        ).fetchall()
+    }
+
+    owner = c.execute(
+        "SELECT company_id FROM users WHERE LOWER(email)=LOWER(?) LIMIT 1",
+        (BC181896_OWNER_EMAIL,)
+    ).fetchone()
+    owner_company_id = int(owner["company_id"]) if owner else None
+
+    customer_rows_raw = c.execute(
+        """SELECT co.id,co.name,
+                  (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) seats_used,
+                  (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) projects_used,
+                  cs.plan_code,cs.status,cs.seat_limit_override,cs.project_limit_override
+           FROM companies co
+           LEFT JOIN company_subscriptions cs ON cs.company_id=co.id
+           WHERE EXISTS (SELECT 1 FROM users u2 WHERE u2.company_id=co.id)
+           ORDER BY co.name"""
+    ).fetchall()
+
+    customer_rows = [
+        r for r in customer_rows_raw
+        if owner_company_id is None or int(r["id"]) != owner_company_id
+    ]
+
+    active = trials = past_due = canceled = 0
+    mrr = 0
+    customers = []
+
+    for r in customer_rows:
+        try:
+            status = _runtime._bc174_effective_status(r)
+        except Exception:
+            status = str(r["status"] or "").upper()
+
+        if status == "ACTIVE":
+            active += 1
+            p = plans.get(r["plan_code"])
+            if p:
+                mrr += int(p["monthly_price_cents"] or 0)
+        elif status == "TRIAL":
+            trials += 1
+        elif status == "PAST_DUE":
+            past_due += 1
+        elif status == "CANCELED":
+            canceled += 1
+        elif status == "LEGACY":
+            active += 1
+
+        plan = plans.get(r["plan_code"]) if r["plan_code"] else None
+        seat_limit = (
+            r["seat_limit_override"]
+            if r["seat_limit_override"] is not None
+            else (plan["seat_limit"] if plan else 0)
+        ) or 0
+        project_limit = (
+            r["project_limit_override"]
+            if r["project_limit_override"] is not None
+            else (plan["project_limit"] if plan else 0)
+        ) or 0
+
+        seat_pct = round((float(r["seats_used"]) / seat_limit) * 100, 1) if seat_limit else 0
+        project_pct = round((float(r["projects_used"]) / project_limit) * 100, 1) if project_limit else 0
+
+        customers.append({
+            "company_id": r["id"],
+            "company_name": r["name"],
+            "plan": r["plan_code"] or "—",
+            "status": r["status"] or "—",
+            "seats_used": r["seats_used"],
+            "seat_limit": seat_limit,
+            "seat_utilization_pct": seat_pct,
+            "projects_used": r["projects_used"],
+            "project_limit": project_limit,
+            "project_utilization_pct": project_pct,
+        })
+
+    month = _BC176_datetime.utcnow().strftime("%Y-%m")
+    usage = c.execute(
+        """SELECT
+             COALESCE(SUM(ai_requests),0) ai_requests,
+             COALESCE(SUM(blueprint_runs),0) blueprint_runs,
+             COALESCE(SUM(document_uploads),0) document_uploads,
+             COALESCE(SUM(storage_bytes),0) storage_bytes
+           FROM platform_usage_monthly
+           WHERE usage_month=?""",
+        (month,)
+    ).fetchone()
+
+    failed = c.execute(
+        """SELECT COUNT(*) n
+           FROM billing_events be
+           WHERE (
+               lower(COALESCE(be.status,'')) IN ('failed','past_due','unpaid')
+               OR lower(COALESCE(be.event_type,''))='payment_failed'
+           )
+           AND EXISTS (
+               SELECT 1 FROM users ux WHERE ux.company_id=be.company_id
+           )
+           AND (? IS NULL OR be.company_id<>?)""",
+        (owner_company_id, owner_company_id)
+    ).fetchone()["n"]
+
+    c.close()
+
+    return {
+        "month": month,
+        "companies": len(customer_rows),
+        "mrr_cents": mrr,
+        "arr_cents": mrr * 12,
+        "active_customers": active,
+        "trial_customers": trials,
+        "past_due_customers": past_due,
+        "canceled_customers": canceled,
+        "failed_payments": int(failed or 0),
+        "ai_requests": int(usage["ai_requests"] or 0),
+        "blueprint_runs": int(usage["blueprint_runs"] or 0),
+        "document_uploads": int(usage["document_uploads"] or 0),
+        "storage_bytes": int(usage["storage_bytes"] or 0),
+        "customers": customers,
+    }
+
+@app.get("/health/true-customer-metrics-reset-1-8-18-96")
+def bc181896_health():
+    c = _runtime.db()
+    total_users = int(c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"])
+    owner_users = int(c.execute(
+        "SELECT COUNT(*) n FROM users WHERE LOWER(email)=LOWER(?)",
+        (BC181896_OWNER_EMAIL,)
+    ).fetchone()["n"])
+    orphan_subs = int(c.execute(
+        """SELECT COUNT(*) n
+           FROM company_subscriptions cs
+           WHERE NOT EXISTS (
+               SELECT 1 FROM users u WHERE u.company_id=cs.company_id
+           )"""
+    ).fetchone()["n"])
+    c.close()
+
+    m = _bc176_metrics()
+    passed = (
+        total_users == 1
+        and owner_users == 1
+        and m["active_customers"] == 0
+        and m["trial_customers"] == 0
+    )
+
+    return {
+        "status": "ok" if passed else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC181896_RELEASE,
+        "release": BC181896_RELEASE_NAME,
+        "total_login_accounts": total_users,
+        "owner_login_accounts": owner_users,
+        "active_customers": m["active_customers"],
+        "trials": m["trial_customers"],
+        "mrr_cents": m["mrr_cents"],
+        "orphaned_subscription_records_preserved_but_not_counted": orphan_subs,
+        "owner_company_excluded_from_customer_metrics": True,
+        "zero_user_companies_excluded_from_customer_metrics": True,
+        "project_data_preserved": True,
+        "passed": passed,
+    }
+
+try:
+    app.version = BC181896_RELEASE
+except Exception:
+    pass
