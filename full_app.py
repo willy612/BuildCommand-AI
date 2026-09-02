@@ -31866,3 +31866,85 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# === BuildCommand AI 1.8.18.98 — Real Pricing + AI Usage Plans ===
+BC181898_RELEASE="1.8.18.98"
+
+def _bc181898_cols(c):
+    try:
+        rows=c.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='platform_plans'").fetchall()
+        if rows: return {str(r["column_name"]) for r in rows}
+    except Exception: pass
+    try: return {str(r["name"]) for r in c.execute("PRAGMA table_info(platform_plans)").fetchall()}
+    except Exception: return set()
+
+def _bc181898_init():
+    specs=[
+      ("STARTER","Starter",24900,3,3,500,25,"For smaller construction teams getting BuildCommand AI into daily operations."),
+      ("PROFESSIONAL","Professional",49900,10,15,2000,100,"Most Popular — for active general contractors using BuildCommand AI across field and office workflows."),
+      ("COMPANY","Company",99900,25,50,6000,500,"For established contractors running multiple projects and heavier AI/document workloads."),
+      ("ENTERPRISE","Enterprise",200000,100,250,15000,1000,"Starting at $2,000/month — larger deployments, higher usage and custom commercial terms.")
+    ]
+    c=_runtime.db(); cols=_bc181898_cols(c)
+    for code,name,price,seats,projects,ai,storage,desc in specs:
+        vals={"code":code,"name":name,"monthly_price_cents":price,"seat_limit":seats,
+              "project_limit":projects,"ai_monthly_limit":ai,"storage_gb_limit":storage,
+              "description":desc,"active":1}
+        vals={k:v for k,v in vals.items() if k in cols}
+        old=c.execute("SELECT * FROM platform_plans WHERE UPPER(code)=UPPER(?) LIMIT 1",(code,)).fetchone()
+        if old:
+            ups={k:v for k,v in vals.items() if k!="code"}
+            if ups:
+                c.execute("UPDATE platform_plans SET "+",".join(k+"=?" for k in ups)+" WHERE UPPER(code)=UPPER(?)",
+                          tuple(ups.values())+(code,))
+        else:
+            ks=list(vals)
+            c.execute("INSERT INTO platform_plans("+",".join(ks)+") VALUES("+",".join("?" for _ in ks)+")",
+                      tuple(vals[k] for k in ks))
+    try:
+        c.execute("UPDATE platform_plans SET active=0 WHERE UPPER(code) NOT IN ('STARTER','PROFESSIONAL','COMPANY','ENTERPRISE') AND code NOT IN (SELECT DISTINCT plan_code FROM company_subscriptions WHERE plan_code IS NOT NULL)")
+    except Exception: pass
+    c.commit(); c.close()
+
+_bc181898_init()
+
+# Replace the public pricing route.
+app.router.routes[:]=[r for r in app.router.routes if not (getattr(r,"path",None)=="/pricing" and "GET" in (getattr(r,"methods",set()) or set()))]
+
+@app.get("/pricing",response_class=_BC181_HTMLResponse)
+def bc181898_pricing():
+    c=_runtime.db()
+    rows=c.execute("SELECT * FROM platform_plans WHERE COALESCE(active,1)=1 AND UPPER(code) IN ('STARTER','PROFESSIONAL','COMPANY','ENTERPRISE') ORDER BY monthly_price_cents").fetchall()
+    c.close(); cards=""
+    for p in rows:
+        code=str(p["code"] or "").upper(); price=int(p["monthly_price_cents"] or 0)
+        ai=int(p["ai_monthly_limit"] or 0); storage=float(p["storage_gb_limit"] or 0)
+        popular='<div style="font-weight:900;color:#f0b44d;margin-bottom:8px">MOST POPULAR</div>' if code=="PROFESSIONAL" else ""
+        start="Starting at " if code=="ENTERPRISE" else ""
+        cards += '<div class="card">'+popular+'<div class="eyebrow">'+_runtime.esc(code)+'</div><h2>'+_runtime.esc(p["name"])+'</h2>'
+        cards += '<h2>'+start+'$'+format(price/100,",.0f")+'/mo</h2><p>'+_runtime.esc(p["description"] or "")+'</p>'
+        cards += '<p><b>'+str(int(p["seat_limit"] or 0))+' users</b> · '+str(int(p["project_limit"] or 0))+' projects</p>'
+        cards += '<p>'+format(ai,",")+' included AI actions / month</p><p>'+format(storage,"g")+' GB document storage</p>'
+        cards += '<a class="btn" href="/register">Start with BuildCommand</a></div>'
+    body='<div class="eyebrow">BUILDCOMMAND AI PRICING</div><h1>Construction intelligence priced for real contractors.</h1>'
+    body+='<p>Every paid plan includes the BuildCommand construction platform. AI allowances protect performance and keep pricing sustainable as usage grows.</p>'
+    body+='<div class="grid">'+cards+'</div><p style="margin-top:18px"><b>AI usage:</b> Included AI actions are an initial operating allowance. Additional AI capacity can be added as customer usage grows.</p>'
+    return _BC181_HTMLResponse(_bc181_public_shell("Pricing",body))
+
+@app.get("/health/pricing-ai-plans-1-8-18-98")
+def bc181898_health():
+    c=_runtime.db()
+    rows=c.execute("SELECT code,name,monthly_price_cents,seat_limit,project_limit,ai_monthly_limit,storage_gb_limit FROM platform_plans WHERE COALESCE(active,1)=1 AND UPPER(code) IN ('STARTER','PROFESSIONAL','COMPANY','ENTERPRISE') ORDER BY monthly_price_cents").fetchall()
+    c.close()
+    found={str(r["code"]).upper():int(r["monthly_price_cents"] or 0) for r in rows}
+    checks={"four_real_plans":len(found)==4,"starter_249":found.get("STARTER")==24900,
+      "professional_499":found.get("PROFESSIONAL")==49900,"company_999":found.get("COMPANY")==99900,
+      "enterprise_2000":found.get("ENTERPRISE")==200000,
+      "ai_limits":all(int(r["ai_monthly_limit"] or 0)>0 for r in rows),
+      "owner_console":any(getattr(r,"path",None)=="/owner" for r in app.routes)}
+    n=sum(bool(v) for v in checks.values())
+    return {"status":"ok" if n==len(checks) else "degraded","version":BC181898_RELEASE,
+            "passed":n,"total":len(checks),"checks":checks,"plans":[dict(r) for r in rows]}
+
+try: app.version=BC181898_RELEASE
+except Exception: pass
