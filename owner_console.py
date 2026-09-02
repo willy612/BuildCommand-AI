@@ -12,7 +12,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "1.8.18.99"
+OWNER_CONSOLE_VERSION = "1.8.18.100"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -312,7 +312,7 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             (int(company_id),)
         ).fetchall()
         projects = c.execute(
-            "SELECT id,name,project_number FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 25",
+            "SELECT id,name FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 25",
             (int(company_id),)
         ).fetchall()
         bills = c.execute(
@@ -444,9 +444,9 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             for x in users
         ) or '<tr><td colspan="3" class="muted">No users.</td></tr>'
         project_rows = "".join(
-            f'<tr><td>{escape(str(x["name"]))}</td><td>{escape(str(x["project_number"] or "—"))}</td><td>#{int(x["id"])}</td></tr>'
+            f'<tr><td>{escape(str(x["name"]))}</td><td>#{int(x["id"])}</td></tr>'
             for x in projects
-        ) or '<tr><td colspan="3" class="muted">No projects.</td></tr>'
+        ) or '<tr><td colspan="2" class="muted">No projects.</td></tr>'
         bill_rows = "".join(
             f'<tr><td>{escape(str(x["event_type"] or "event"))}</td><td>{escape(str(x["status"] or "—"))}</td><td>{escape(str(x["amount_cents"] if "amount_cents" in x.keys() else "—"))}</td><td>{escape(str(x["created"] or "—"))}</td></tr>'
             for x in bills
