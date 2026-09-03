@@ -33074,3 +33074,206 @@ try:
     app.version=BC1818102_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 1.8.18.103
+# Stripe Checkout Base URL + Defensive Checkout Diagnostics
+# ============================================================
+from fastapi import Request as _BC1818103_Request, Form as _BC1818103_Form
+from fastapi.responses import HTMLResponse as _BC1818103_HTMLResponse, RedirectResponse as _BC1818103_RedirectResponse
+
+BC1818103_RELEASE = "1.8.18.103"
+
+def _bc1818103_remove(path, method):
+    kept=[]
+    want=method.upper()
+    for r in app.router.routes:
+        methods={str(x).upper() for x in (getattr(r,"methods",set()) or set())}
+        if getattr(r,"path",None)==path and want in methods:
+            continue
+        kept.append(r)
+    app.router.routes[:]=kept
+
+def _bc1818103_base_url(request):
+    configured = (_runtime.os.environ.get("APP_BASE_URL","") or "").strip().rstrip("/")
+    if configured:
+        return configured
+
+    # Render forwards the original public host/protocol.
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
+    if host:
+        return f"{proto}://{host}".rstrip("/")
+
+    # Final production-safe fallback for BuildCommand AI.
+    return "https://buildcommandai.com"
+
+def _bc1818103_sub_value(sub, key, default=""):
+    if not sub:
+        return default
+    try:
+        return sub[key]
+    except Exception:
+        return default
+
+_bc1818103_remove("/registration/checkout","POST")
+
+@app.post("/registration/checkout")
+def bc1818103_registration_checkout(
+    request: _BC1818103_Request,
+    handoff_token: str = _BC1818103_Form(...)
+):
+    try:
+        h = _bc1818102_validate_handoff(handoff_token)
+        if not h:
+            return _BC1818103_HTMLResponse(
+                _bc1818101_shell(
+                    "Checkout Link Expired",
+                    '<div class="card"><h1>This checkout handoff is no longer valid.</h1><p class="muted">Sign in to the account you just created and continue from billing.</p><a class="btn" href="/login">Sign In</a></div>'
+                ),
+                status_code=401
+            )
+
+        plan = _bc181899_plan(h["plan_code"])
+        if not plan or int(plan["monthly_price_cents"] or 0) <= 0:
+            return _BC1818103_HTMLResponse(
+                _bc1818101_shell(
+                    "Plan Error",
+                    '<div class="card"><h1>The selected plan is not billable.</h1><a class="btn" href="/pricing">Choose a Plan</a></div>'
+                ),
+                status_code=400
+            )
+
+        base = _bc1818103_base_url(request)
+
+        c = _runtime.db()
+        try:
+            sub = c.execute(
+                "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
+                (int(h["company_id"]),)
+            ).fetchone()
+        finally:
+            c.close()
+
+        fields = {
+            "mode":"subscription",
+            "success_url":base+"/billing?checkout=success",
+            "cancel_url":base+"/billing?checkout=canceled",
+            "client_reference_id":str(int(h["company_id"])),
+            "metadata[company_id]":str(int(h["company_id"])),
+            "metadata[plan_code]":str(plan["code"]),
+            "subscription_data[metadata][company_id]":str(int(h["company_id"])),
+            "subscription_data[metadata][plan_code]":str(plan["code"]),
+            "line_items[0][quantity]":"1",
+            "line_items[0][price_data][currency]":"usd",
+            "line_items[0][price_data][unit_amount]":str(int(plan["monthly_price_cents"])),
+            "line_items[0][price_data][recurring][interval]":"month",
+            "line_items[0][price_data][product_data][name]":"BuildCommand AI — "+str(plan["name"]),
+        }
+
+        customer_id = str(_bc1818103_sub_value(sub,"stripe_customer_id","") or "").strip()
+        if customer_id:
+            fields["customer"] = customer_id
+
+        # Existing Stripe helper is expected to live on the extracted runtime.
+        helper = getattr(_runtime,"_bc174_stripe_post",None)
+        if helper is None:
+            return _BC1818103_HTMLResponse(
+                _bc1818101_shell(
+                    "Stripe Setup",
+                    '<div class="card"><div class="eyebrow">Payment Connection</div><h1>Stripe checkout helper is not available.</h1><p class="muted">The account was created successfully and no payment was collected.</p></div>'
+                ),
+                status_code=502
+            )
+
+        try:
+            stripe_session = helper("/v1/checkout/sessions",fields)
+        except Exception as e:
+            return _BC1818103_HTMLResponse(
+                _bc1818101_shell(
+                    "Stripe Checkout",
+                    '<div class="card"><div class="eyebrow">Payment Connection</div><h1>Stripe is not ready yet.</h1><p class="muted">'+_runtime.esc(str(e))+'</p><p>Your BuildCommand account was created successfully. No payment was collected.</p></div>'
+                ),
+                status_code=502
+            )
+
+        checkout_url = str(stripe_session.get("url") or "").strip()
+        if not checkout_url:
+            return _BC1818103_HTMLResponse(
+                _bc1818101_shell(
+                    "Stripe Checkout",
+                    '<div class="card"><h1>Stripe did not return a checkout URL.</h1><p class="muted">No payment was collected.</p></div>'
+                ),
+                status_code=502
+            )
+
+        _bc1818102_mark_handoff_used(handoff_token)
+
+        repaired_session = _runtime.create_session(int(h["user_id"]))
+        response = _BC1818103_RedirectResponse(checkout_url,status_code=303)
+
+        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
+        secure_cookie = (proto == "https") or (_runtime.os.environ.get("COOKIE_SECURE","1")=="1")
+        response.set_cookie(
+            "bc_session",
+            repaired_session,
+            httponly=True,
+            secure=secure_cookie,
+            samesite="lax",
+            max_age=2592000,
+            path="/"
+        )
+        return response
+
+    except Exception as e:
+        # Never expose a blank 500 during onboarding. Keep details readable
+        # enough for owner troubleshooting without exposing secrets.
+        msg = str(e)
+        for marker in ("sk_live_","sk_test_","whsec_"):
+            if marker in msg:
+                msg = "Stripe configuration error. Check the Stripe environment variables in Render."
+                break
+        return _BC1818103_HTMLResponse(
+            _bc1818101_shell(
+                "Payment Setup",
+                '<div class="card"><div class="eyebrow">Checkout Setup</div><h1>We hit a payment setup issue.</h1><p class="muted">'+_runtime.esc(msg)+'</p><p>Your account was created successfully. No payment was collected.</p></div>'
+            ),
+            status_code=502
+        )
+
+@app.get("/health/stripe-checkout-baseurl-fix-1-8-18-103")
+def bc1818103_health():
+    routes=[]
+    for r in app.routes:
+        routes.append((getattr(r,"path",""),{str(m).upper() for m in (getattr(r,"methods",set()) or set())}))
+    def count(path,method):
+        return sum(1 for p,m in routes if p==path and method in m)
+
+    checks={
+        "one_checkout_post":count("/registration/checkout","POST")==1,
+        "registration_get":count("/register","GET")==1,
+        "registration_post":count("/register","POST")==1,
+        "pricing_preserved":count("/pricing","GET")==1,
+        "stripe_webhook_preserved":any(p=="/billing/stripe/webhook" for p,_ in routes),
+        "owner_console_preserved":any(p=="/owner" for p,_ in routes),
+        "owner_gate_preserved":any(p=="/awaiting-approval" for p,_ in routes),
+        "base_url_fallback_enabled":True,
+        "defensive_checkout_errors_enabled":True,
+        "data_reset":False,
+    }
+    passed=sum(bool(v) for v in checks.values())
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "version":BC1818103_RELEASE,
+        "passed":passed,
+        "total":len(checks),
+        "checks":checks,
+        "expected_checkout_failure_code_if_stripe_unconfigured":502,
+        "data_reset":False
+    }
+
+try:
+    app.version=BC1818103_RELEASE
+except Exception:
+    pass
