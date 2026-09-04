@@ -31600,7 +31600,21 @@ def _bc181895_reset_logins():
         "remaining": int(remaining),
     }
 
-_BC181895_RESET_RESULT = _bc181895_reset_logins()
+# 2.0.1 HOTFIX:
+# Never run the destructive owner-only login purge automatically on app startup.
+# It may be explicitly enabled for a controlled maintenance run only.
+_BC181895_RESET_ENABLED = str(os.getenv("BC_OWNER_ONLY_LOGIN_RESET", "")).strip().lower() in {
+    "1", "true", "yes", "on"
+}
+
+if _BC181895_RESET_ENABLED:
+    _BC181895_RESET_RESULT = _bc181895_reset_logins()
+else:
+    _BC181895_RESET_RESULT = {
+        "skipped": True,
+        "reason": "Owner-only login reset disabled at startup",
+        "enable_with": "BC_OWNER_ONLY_LOGIN_RESET=1"
+    }
 
 @app.get("/health/owner-only-login-reset-1-8-18-95")
 def bc181895_health():
@@ -31962,8 +31976,8 @@ import hashlib as _BC200_hashlib
 import json as _BC200_json
 from collections import Counter as _BC200_Counter
 
-_BC200_RELEASE = "2.0.0"
-_BC200_RELEASE_NAME = "Unified Superintendent Command Center"
+_BC200_RELEASE = "2.0.1"
+_BC200_RELEASE_NAME = "Unified Superintendent Command Center + Staging Startup Safety Hotfix"
 _BC200_PREV_COMMAND = _bc182_command
 
 def _bc200_init():
