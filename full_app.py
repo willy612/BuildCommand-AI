@@ -32826,3 +32826,332 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.0.5
+# Superintendent Daily Operations Intelligence
+# Adds Today / Tomorrow / This Week priorities, follow-up queue,
+# delay forecast, field issue capture, daily-report prefill,
+# and end-of-day handoff without disturbing stable 2.0.4 core.
+# ============================================================
+
+def _bc205_priority_bucket(action):
+    due = str(action.get("due") or "").strip()
+    p = int(action.get("priority") or 0)
+    # Date-aware bucketing when an ISO due date is present.
+    try:
+        if due:
+            dd = _BC200_date.fromisoformat(due[:10])
+            delta = (dd - _BC200_date.today()).days
+            if delta <= 0:
+                return "TODAY"
+            if delta == 1:
+                return "TOMORROW"
+            if delta <= 7:
+                return "THIS_WEEK"
+    except Exception:
+        pass
+
+    # Priority fallback when dates are not available.
+    if p >= 90:
+        return "TODAY"
+    if p >= 75:
+        return "TOMORROW"
+    return "THIS_WEEK"
+
+def _bc205_daily_ops(project_id:int):
+    d = _bc200_brain(project_id)
+    if not d:
+        return None
+
+    actions = list(d.get("actions") or [])
+    today, tomorrow, week = [], [], []
+    for a in actions:
+        b = _bc205_priority_bucket(a)
+        if b == "TODAY":
+            today.append(a)
+        elif b == "TOMORROW":
+            tomorrow.append(a)
+        else:
+            week.append(a)
+
+    # Follow-up queue = issues, RFIs, submittals, procurement, and make-ready items.
+    follow_types = {"ISSUE","RFI","PROJECT_ISSUE","SUBMITTAL","PROCUREMENT","READINESS","MAKE_READY","SCHEDULE"}
+    followup = [a for a in actions if str(a.get("source_type") or "").upper() in follow_types]
+
+    # Predictive next-delay candidates: strongest unresolved non-critical warnings/watch items.
+    delay_candidates = sorted(
+        [a for a in actions if str(a.get("state") or "OPEN").upper() not in {"DONE","CLOSED","RESOLVED"}],
+        key=lambda x: int(x.get("priority") or 0),
+        reverse=True
+    )[:8]
+
+    top_delay = delay_candidates[0] if delay_candidates else None
+    delay_statement = "No immediate next-delay candidate is being generated from connected project records."
+    if top_delay:
+        delay_statement = (
+            str(top_delay.get("title") or "Project constraint") +
+            " is the strongest current delay candidate. Recommended field command: " +
+            str(top_delay.get("recommended_action") or "")
+        )
+
+    return {
+        "status":"ok",
+        "project_id":project_id,
+        "today":today,
+        "tomorrow":tomorrow,
+        "this_week":week,
+        "followup_queue":followup,
+        "delay_candidates":delay_candidates,
+        "next_delay_statement":delay_statement,
+        "command_score":d.get("score"),
+        "critical":d.get("critical"),
+        "warning":d.get("warning"),
+        "signals":d.get("signals") or {},
+        "generated_at":_BC200_datetime.utcnow().isoformat(),
+    }
+
+@app.get("/api/superintendent-command/{project_id}/daily-operations")
+def bc205_daily_ops_api(project_id:int):
+    payload = _bc205_daily_ops(project_id)
+    if not payload:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return payload
+
+@app.get("/superintendent-command/{project_id}/daily-operations", response_class=_BC200_HTMLResponse)
+def bc205_daily_ops_page(project_id:int):
+    d = _bc205_daily_ops(project_id)
+    if not d:
+        return _BC200_HTMLResponse("Project not found or access denied.", status_code=404)
+
+    def cards(items, empty):
+        if not items:
+            return "<div class='card'><p class='muted'>"+_bc200_esc(empty)+"</p></div>"
+        s = ""
+        for a in items[:12]:
+            s += (
+                "<div class='card'>"
+                "<div class='eyebrow'>"+_bc200_esc(a.get("band"))+
+                " · PRIORITY "+_bc200_esc(a.get("priority"))+
+                " · "+_bc200_esc(a.get("trade") or "Project Team")+"</div>"
+                "<h3>"+_bc200_esc(a.get("title") or "Project action")+"</h3>"
+                "<p><b>Why:</b> "+_bc200_esc(a.get("reason") or "")+"</p>"
+                "<p><b>Do:</b> "+_bc200_esc(a.get("recommended_action") or "")+"</p>"
+                "<p><a class='btn secondary' href='"+_bc200_esc(a.get("link") or "/")+"'>Open Source</a></p>"
+                "</div>"
+            )
+        return s
+
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">BUILDCOMMAND AI 2.0.5 · SUPERINTENDENT DAILY OPERATIONS</div>
+      <h1>Run Today. Protect Tomorrow.</h1>
+      <p>{_bc200_esc(d.get("next_delay_statement"))}</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+        <a class="btn" href="/superintendent-command/{project_id}">Command Center</a>
+        <a class="btn secondary" href="/superintendent-command/{project_id}/daily-brief">Daily Field Brief</a>
+        <a class="btn secondary" href="/daily-report">Daily Report</a>
+      </div>
+    </div>
+
+    <div class="grid4">
+      <div class="card"><div class="label">Command Score</div><div class="kpi">{_bc200_esc(d.get("command_score"))}</div></div>
+      <div class="card"><div class="label">Today</div><div class="kpi">{len(d.get("today") or [])}</div></div>
+      <div class="card"><div class="label">Tomorrow</div><div class="kpi">{len(d.get("tomorrow") or [])}</div></div>
+      <div class="card"><div class="label">This Week</div><div class="kpi">{len(d.get("this_week") or [])}</div></div>
+    </div>
+
+    <div class="card"><div class="eyebrow">TODAY</div><h2>Immediate Field Priorities</h2></div>
+    {cards(d.get("today") or [], "No immediate priorities are being generated.")}
+
+    <div class="card"><div class="eyebrow">TOMORROW</div><h2>Protect the Next Workday</h2></div>
+    {cards(d.get("tomorrow") or [], "No tomorrow-level priorities are being generated.")}
+
+    <div class="card"><div class="eyebrow">THIS WEEK</div><h2>Keep the Week Moving</h2></div>
+    {cards(d.get("this_week") or [], "No weekly watch items are being generated.")}
+
+    <div class="card">
+      <div class="eyebrow">FOLLOW-UP QUEUE</div>
+      <h2>RFIs · Submittals · Procurement · Make-Ready</h2>
+    </div>
+    {cards(d.get("followup_queue") or [], "No active follow-up items are being generated.")}
+
+    <div class="card">
+      <div class="eyebrow">WHAT WILL DELAY ME NEXT?</div>
+      <h2>Predictive Delay Candidates</h2>
+      <p>{_bc200_esc(d.get("next_delay_statement"))}</p>
+    </div>
+    {cards(d.get("delay_candidates") or [], "No delay candidates are being generated.")}
+    """
+    return _BC200_HTMLResponse(_runtime.shell("Superintendent Daily Operations", body))
+
+@app.post("/api/superintendent-command/{project_id}/field-issue")
+async def bc205_create_field_issue(project_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    title = str(body.get("title") or "").strip()
+    detail = str(body.get("detail") or "").strip()
+    trade = str(body.get("trade") or "Project Team").strip()
+    priority = int(body.get("priority") or 80)
+
+    if not title:
+        return _BC200_JSONResponse({"status":"invalid_request","error":"title required"}, status_code=400)
+
+    c = _runtime.db()
+    now = _BC200_datetime.utcnow().isoformat()
+
+    # Best-effort insert into the existing issues table if compatible.
+    inserted_id = None
+    try:
+        cols = [r["name"] for r in c.execute("PRAGMA table_info(issues)").fetchall()] if getattr(_runtime,"DATABASE_KIND","sqlite") != "postgres" else []
+    except Exception:
+        cols = []
+
+    try:
+        if cols:
+            fields, vals, qs = [], [], []
+            mapping = {
+                "project_id": project_id,
+                "company_id": u["company_id"],
+                "title": title,
+                "description": detail,
+                "detail": detail,
+                "trade": trade,
+                "priority": priority,
+                "status": "OPEN",
+                "created": now,
+                "created_at": now,
+            }
+            for k,v in mapping.items():
+                if k in cols:
+                    fields.append(k); vals.append(v); qs.append("?")
+            if fields:
+                cur = c.execute(
+                    "INSERT INTO issues ("+",".join(fields)+") VALUES ("+",".join(qs)+")",
+                    tuple(vals)
+                )
+                inserted_id = getattr(cur, "lastrowid", None)
+                c.commit()
+        else:
+            # On Postgres or unknown schema, preserve safety: do not guess a write schema.
+            c.close()
+            return _BC200_JSONResponse(
+                {"status":"unsupported_schema","message":"Issue capture requires mapped issue fields for this database schema."},
+                status_code=409
+            )
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+
+    return {
+        "status":"ok",
+        "project_id":project_id,
+        "issue_id":inserted_id,
+        "title":title,
+        "priority":priority,
+        "trade":trade
+    }
+
+@app.get("/api/superintendent-command/{project_id}/daily-report-prefill")
+def bc205_daily_report_prefill(project_id:int):
+    d = _bc205_daily_ops(project_id)
+    if not d:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+
+    summary = []
+    for label, items in [("Today", d.get("today") or []), ("Follow-up", d.get("followup_queue") or [])]:
+        for a in items[:5]:
+            summary.append(
+                label + ": " + str(a.get("title") or "Project action") +
+                " — " + str(a.get("recommended_action") or "")
+            )
+
+    return {
+        "status":"ok",
+        "project_id":project_id,
+        "report_date":_BC200_date.today().isoformat(),
+        "command_score":d.get("command_score"),
+        "critical":d.get("critical"),
+        "warnings":d.get("warning"),
+        "suggested_summary":summary,
+        "next_delay_statement":d.get("next_delay_statement"),
+    }
+
+@app.get("/api/superintendent-command/{project_id}/handoff")
+def bc205_handoff(project_id:int):
+    d = _bc205_daily_ops(project_id)
+    if not d:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return {
+        "status":"ok",
+        "project_id":project_id,
+        "handoff_date":_BC200_date.today().isoformat(),
+        "unfinished_today":d.get("today") or [],
+        "tomorrow_priorities":d.get("tomorrow") or [],
+        "week_watch":(d.get("this_week") or [])[:5],
+        "next_delay_statement":d.get("next_delay_statement"),
+    }
+
+@app.get("/health/superintendent-daily-operations-2-0-5")
+def bc205_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("2.0.4 baseline preserved", "/health/superintendent-command-phase-2-2-0-4" in paths),
+        ("daily operations engine", callable(globals().get("_bc205_daily_ops"))),
+        ("daily operations API", "/api/superintendent-command/{project_id}/daily-operations" in paths),
+        ("daily operations page", "/superintendent-command/{project_id}/daily-operations" in paths),
+        ("field issue capture API", "/api/superintendent-command/{project_id}/field-issue" in paths),
+        ("daily report prefill API", "/api/superintendent-command/{project_id}/daily-report-prefill" in paths),
+        ("handoff API", "/api/superintendent-command/{project_id}/handoff" in paths),
+        ("command center preserved", "/superintendent-command/{project_id}" in paths),
+        ("daily brief preserved", "/superintendent-command/{project_id}/daily-brief" in paths),
+        ("risk pulse preserved", "/api/superintendent-command/{project_id}/risk-pulse" in paths),
+        ("Blueprint Brain preserved", "/blueprint-brain" in paths),
+        ("Unified Brain preserved", "/brain" in paths),
+        ("documents preserved", "/documents" in paths),
+        ("submittals preserved", "/submittals" in paths),
+        ("issues preserved", "/issues" in paths),
+        ("procurement preserved", "/procurement" in paths),
+        ("schedule preserved", "/schedule" in paths),
+        ("lookahead preserved", "/lookahead-intelligence" in paths),
+        ("daily report preserved", "/daily-report" in paths),
+        ("startup purge disabled", not bool(globals().get("_BC181895_RESET_ENABLED", False))),
+    ]
+    passed = sum(bool(ok) for _,ok in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.0.5",
+        "release":"Superintendent Daily Operations Intelligence",
+        "baseline":"2.0.4",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "today_tomorrow_this_week":True,
+            "followup_queue":True,
+            "predictive_next_delay":True,
+            "daily_report_prefill":True,
+            "end_of_day_handoff":True,
+            "field_issue_capture":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.0.5"
+BUILD_COMMAND_RELEASE_NAME = "Superintendent Daily Operations Intelligence"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
