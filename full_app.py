@@ -31976,8 +31976,8 @@ import hashlib as _BC200_hashlib
 import json as _BC200_json
 from collections import Counter as _BC200_Counter
 
-_BC200_RELEASE = "2.0.1"
-_BC200_RELEASE_NAME = "Unified Superintendent Command Center + Staging Startup Safety Hotfix"
+_BC200_RELEASE = "2.0.2"
+_BC200_RELEASE_NAME = "Unified Superintendent Command Center - Main Release Candidate"
 _BC200_PREV_COMMAND = _bc182_command
 
 def _bc200_init():
@@ -32471,6 +32471,86 @@ def bc200_health():
 
 BUILD_COMMAND_RELEASE = _BC200_RELEASE
 BUILD_COMMAND_RELEASE_NAME = _BC200_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 2.0.2 - Main Release Candidate Verification
+# Non-destructive checks only.
+# ============================================================
+@app.get("/health/main-release-candidate-2-0-2")
+def bc202_main_release_candidate_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    c = _runtime.db()
+    try:
+        if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
+            tables = {
+                r["table_name"] for r in c.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+                ).fetchall()
+            }
+        else:
+            tables = {
+                r["name"] for r in c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+    finally:
+        c.close()
+
+    required_routes = [
+        "/login",
+        "/app",
+        "/projects/new",
+        "/superintendent-command/{project_id}",
+        "/api/superintendent-command/{project_id}",
+        "/brain",
+        "/blueprint-brain",
+        "/documents",
+        "/daily-report",
+        "/submittals",
+        "/issues",
+        "/procurement",
+        "/schedule",
+        "/lookahead-intelligence",
+        "/pricing",
+    ]
+    required_tables = [
+        "superintendent_action_state",
+        "superintendent_daily_briefs",
+    ]
+
+    checks = []
+    for route in required_routes:
+        checks.append(("route " + route, route in paths))
+    for table in required_tables:
+        checks.append(("table " + table, table in tables))
+
+    checks.extend([
+        ("database connector", callable(getattr(_runtime, "db", None))),
+        ("superintendent command brain", callable(globals().get("_bc200_brain"))),
+        ("startup login purge disabled by default", not bool(globals().get("_BC181895_RESET_ENABLED", False))),
+        ("owner-only reset remains opt-in", "BC_OWNER_ONLY_LOGIN_RESET" in globals().get("_BC181895_RESET_RESULT", {}).get("enable_with", "BC_OWNER_ONLY_LOGIN_RESET=1")),
+    ])
+
+    passed = sum(bool(ok) for _, ok in checks)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": "2.0.2",
+        "release": "Main Release Candidate",
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "safe_for_main_candidate": passed == len(checks),
+        "checks": [{"case": name, "passed": bool(ok)} for name, ok in checks],
+    }
+
+BUILD_COMMAND_RELEASE = "2.0.2"
+BUILD_COMMAND_RELEASE_NAME = "Unified Superintendent Command Center - Main Release Candidate"
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
