@@ -34188,3 +34188,169 @@ BUILD_COMMAND_RELEASE="2.1.4"
 BUILD_COMMAND_RELEASE_NAME="Blueprint Brain Drawing Intelligence"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 2.1.5
+# Blueprint Brain Project Understanding
+# Combines drawing relationships, construction knowledge,
+# cross-document evidence, learned corrections, and downstream
+# impact awareness into one project-understanding envelope.
+# Preserves stable 2.1.4 drawing-intelligence baseline.
+# ============================================================
+
+def _bc215_location_hints(text_value):
+    txt=_bc210_norm(text_value)
+    tokens=[]
+    patterns=[
+        ("ROOF",["roof","rooftop"]),
+        ("RESTROOM",["restroom","toilet room","bathroom"]),
+        ("BREAK ROOM",["break room","breakroom"]),
+        ("CORRIDOR",["corridor","hallway"]),
+        ("MECHANICAL",["mechanical room","mech room"]),
+        ("ELECTRICAL",["electrical room","elec room"]),
+        ("EXTERIOR",["exterior","outside"]),
+        ("INTERIOR",["interior","inside"]),
+        ("CEILING",["above ceiling","ceiling"]),
+        ("SLAB",["below slab","under slab","slab"]),
+    ]
+    for label,terms in patterns:
+        if any(t in txt for t in terms):
+            tokens.append(label)
+    return tokens
+
+def _bc215_downstream_impacts(trade, subject):
+    t=str(trade or "").upper()
+    mapping={
+        "CONCRETE":["FRAMING/DRYWALL","PLUMBING","ELECTRICAL","FLOORING/TILE"],
+        "FRAMING/DRYWALL":["ELECTRICAL","PLUMBING","HVAC","CEILINGS","PAINT"],
+        "PLUMBING":["CONCRETE","FRAMING/DRYWALL","FLOORING/TILE","PAINT"],
+        "ELECTRICAL":["FRAMING/DRYWALL","CEILINGS","PAINT","LOW VOLTAGE"],
+        "HVAC":["FRAMING/DRYWALL","CEILINGS","ROOFING","ELECTRICAL"],
+        "CEILINGS":["ELECTRICAL","HVAC","FIRE SPRINKLER","LOW VOLTAGE"],
+        "ROOFING":["HVAC","ELECTRICAL"],
+        "DOORS/HARDWARE":["FRAMING/DRYWALL","PAINT","LOW VOLTAGE"],
+        "STOREFRONT/GLAZING":["LOW VOLTAGE","PAINT"],
+        "FLOORING/TILE":["PLUMBING","BATHROOM ACCESSORIES"],
+    }
+    return [{"trade":x,"reason":"Potential downstream coordination dependency; verify against project sequence."}
+            for x in mapping.get(t,[])]
+
+def _bc215_project_understanding(subject,documents,project_id=None,current_trade=None):
+    cross=_bc213_cross_document_reason(subject,documents,project_id,current_trade)
+    graph=_bc214_drawing_graph(documents)
+    trade=cross.get("recommended_trade") or "UNASSIGNED"
+    locations=_bc215_location_hints(subject+" "+" ".join(str(d.get("text") or "") for d in documents if isinstance(d,dict))[:5000])
+    downstream=_bc215_downstream_impacts(trade,subject)
+
+    knowledge=_bc212_scope_knowledge(subject)
+    missing=_bc213_missing_scope(documents,project_id)
+    revisions=_bc214_revision_ripple(documents)
+
+    risk=0
+    risk += min(30,len(cross.get("contradictions") or [])*10)
+    risk += min(20,len(graph.get("orphaned_references") or [])*4)
+    risk += min(20,len(missing)*4)
+    risk += min(20,len(revisions)*4)
+    if int(cross.get("confidence") or 0)<60: risk+=10
+    risk=min(100,risk)
+
+    if risk>=70: risk_level="HIGH"
+    elif risk>=35: risk_level="MEDIUM"
+    else: risk_level="LOW"
+
+    return {
+        "subject":str(subject),
+        "project_id":project_id,
+        "recommended_trade":trade,
+        "confidence":cross.get("confidence"),
+        "location_hints":locations,
+        "governing_evidence":cross.get("trade_evidence") or [],
+        "construction_knowledge_matches":knowledge[:8],
+        "learned_corrections":cross.get("learned_corrections") or [],
+        "drawing_relationships":{
+            "known_sheets":graph.get("known_sheets") or [],
+            "reference_count":len(graph.get("edges") or []),
+            "orphaned_references":graph.get("orphaned_references") or []
+        },
+        "cross_document_contradictions":cross.get("contradictions") or [],
+        "possible_missing_scope":missing,
+        "revision_ripple":revisions,
+        "downstream_coordination":downstream,
+        "project_understanding_risk_score":risk,
+        "project_understanding_risk_level":risk_level,
+        "review_note":"Risk and downstream impacts are coordination intelligence, not automatic project directives."
+    }
+
+@app.post("/api/blueprint-brain/project-understanding")
+async def bc215_project_understanding_api(request:_BC200_Request):
+    u=_runtime.current_user()
+    if not u:return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try: body=await request.json()
+    except Exception: body={}
+    subject=str(body.get("subject") or body.get("item") or "").strip()
+    if not subject:return _BC200_JSONResponse({"status":"invalid_request","error":"subject required"},status_code=400)
+    result=_bc215_project_understanding(subject,body.get("documents") or [],body.get("project_id"),body.get("current_trade"))
+    return {"status":"ok","version":"2.1.5",**result}
+
+@app.post("/api/blueprint-brain/project-understanding-audit")
+async def bc215_project_audit(request:_BC200_Request):
+    u=_runtime.current_user()
+    if not u:return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try: body=await request.json()
+    except Exception: body={}
+    docs=body.get("documents") or []
+    items=body.get("items") or []
+    results=[]
+    for raw in items[:500]:
+        if isinstance(raw,dict):
+            subject=str(raw.get("subject") or raw.get("item") or raw.get("text") or raw.get("description") or "")
+            current=raw.get("trade") or raw.get("current_trade")
+        else:
+            subject=str(raw); current=None
+        if subject.strip():
+            results.append(_bc215_project_understanding(subject,docs,body.get("project_id"),current))
+    high=sum(1 for r in results if r["project_understanding_risk_level"]=="HIGH")
+    medium=sum(1 for r in results if r["project_understanding_risk_level"]=="MEDIUM")
+    return {"status":"ok","version":"2.1.5","project_id":body.get("project_id"),
+            "items_reviewed":len(results),"high_risk":high,"medium_risk":medium,"results":results}
+
+@app.get("/health/blueprint-brain-project-understanding-2-1-5")
+def bc215_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+      ("2.1.4 drawing baseline preserved","/health/blueprint-brain-drawing-intelligence-2-1-4" in paths),
+      ("project understanding engine",callable(globals().get("_bc215_project_understanding"))),
+      ("location intelligence",callable(globals().get("_bc215_location_hints"))),
+      ("downstream impact engine",callable(globals().get("_bc215_downstream_impacts"))),
+      ("project understanding API","/api/blueprint-brain/project-understanding" in paths),
+      ("project understanding audit API","/api/blueprint-brain/project-understanding-audit" in paths),
+      ("drawing graph preserved","/api/blueprint-brain/drawing-graph" in paths),
+      ("revision ripple preserved","/api/blueprint-brain/revision-ripple" in paths),
+      ("cross-document reasoning preserved","/api/blueprint-brain/cross-document-reason" in paths),
+      ("missing scope preserved","/api/blueprint-brain/missing-scope-audit" in paths),
+      ("construction knowledge preserved","/api/blueprint-brain/construction-knowledge" in paths),
+      ("learned corrections preserved","/api/construction-brain/corrections" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+      ("Unified Brain preserved","/brain" in paths),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+      ("documents preserved","/documents" in paths),
+      ("submittals preserved","/submittals" in paths),
+      ("issues preserved","/issues" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("schedule preserved","/schedule" in paths),
+      ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False)))]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI","version":"2.1.5",
+      "release":"Blueprint Brain Project Understanding","baseline":"2.1.4","passed":passed,"total":len(checks),
+      "failed":len(checks)-passed,"stage_ready":passed==len(checks),
+      "features":{"project_understanding_envelope":True,"location_hints":True,"governing_evidence":True,
+      "drawing_relationship_awareness":True,"revision_awareness":True,"downstream_coordination_awareness":True,
+      "project_understanding_risk_score":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE="2.1.5"
+BUILD_COMMAND_RELEASE_NAME="Blueprint Brain Project Understanding"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
