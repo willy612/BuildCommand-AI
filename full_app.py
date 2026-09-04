@@ -34601,3 +34601,265 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.2.1
+# Unified Brain Predictive Intelligence
+# Predicts likely next project threats from unified project signals
+# and turns them into prevention-focused leadership actions.
+# Preserves stable 2.2.0 Unified Construction Brain baseline.
+# ============================================================
+
+def _bc221_signal_text(signal):
+    try:
+        return _BC200_json.dumps(signal, default=str).lower()
+    except Exception:
+        return str(signal or "").lower()
+
+def _bc221_predictive_threats(project_id:int):
+    unified = _bc220_decision_layer(project_id, "What is most likely to hurt this project next?")
+    if not unified:
+        return None
+
+    sig = _bc220_project_signals(project_id) or {}
+    signals = sig.get("signals") or []
+    actions = sig.get("actions") or []
+    threats = []
+
+    def add_threat(kind, title, probability, impact, why, prevention, sources):
+        score = min(100, int(probability * 0.55 + impact * 0.45))
+        threats.append({
+            "type":kind,
+            "title":title,
+            "probability":int(probability),
+            "impact":int(impact),
+            "predictive_risk_score":score,
+            "why":why,
+            "prevention":prevention,
+            "sources":sources[:12]
+        })
+
+    joined = " ".join(_bc221_signal_text(s) for s in signals[:200])
+    joined += " " + " ".join(_bc221_signal_text(a) for a in actions[:200])
+
+    # Schedule / sequence risk
+    schedule_terms = ["delay","late","behind","critical path","schedule","lookahead","not started","overdue"]
+    schedule_hits = [t for t in schedule_terms if t in joined]
+    if schedule_hits:
+        add_threat(
+            "SCHEDULE",
+            "Schedule slippage / sequence disruption",
+            min(95, 55 + len(schedule_hits)*7),
+            85,
+            "Unified project signals contain schedule or delay indicators: " + ", ".join(schedule_hits),
+            "Confirm the next constrained activity, responsible trade, predecessor completion, manpower, and recovery date before the next field handoff.",
+            [s for s in signals if any(t in _bc221_signal_text(s) for t in schedule_terms)]
+        )
+
+    # Procurement risk
+    procurement_terms = ["procurement","material","delivery","lead time","long lead","not ordered","purchase","equipment"]
+    procurement_hits = [t for t in procurement_terms if t in joined]
+    if procurement_hits:
+        add_threat(
+            "PROCUREMENT",
+            "Material or equipment readiness risk",
+            min(95, 50 + len(procurement_hits)*7),
+            80,
+            "Project signals indicate procurement/material exposure: " + ", ".join(procurement_hits),
+            "Verify approved selection, release status, vendor confirmation, ship date, delivery date, storage plan, and schedule need date.",
+            [s for s in signals if any(t in _bc221_signal_text(s) for t in procurement_terms)]
+        )
+
+    # Submittal / approval risk
+    submittal_terms = ["submittal","approval","review","revise and resubmit","rejected","pending"]
+    submittal_hits = [t for t in submittal_terms if t in joined]
+    if submittal_hits:
+        add_threat(
+            "SUBMITTAL",
+            "Submittal or approval constraint",
+            min(95, 48 + len(submittal_hits)*8),
+            78,
+            "Approval-related signals are present: " + ", ".join(submittal_hits),
+            "Identify the approval blocking procurement or installation, assign an owner, confirm reviewer, and establish the latest safe approval date.",
+            [s for s in signals if any(t in _bc221_signal_text(s) for t in submittal_terms)]
+        )
+
+    # Issue / RFI / coordination risk
+    issue_terms = ["issue","rfi","conflict","coordination","missing","contradiction","unresolved"]
+    issue_hits = [t for t in issue_terms if t in joined]
+    if issue_hits:
+        add_threat(
+            "COORDINATION",
+            "Unresolved coordination issue",
+            min(95, 50 + len(issue_hits)*7),
+            82,
+            "Unified signals contain unresolved coordination indicators: " + ", ".join(issue_hits),
+            "Resolve the governing document/question before affected work is covered, fabricated, or installed; document the decision and notify impacted trades.",
+            [s for s in signals if any(t in _bc221_signal_text(s) for t in issue_terms)]
+        )
+
+    # Inspection / quality readiness
+    inspection_terms = ["inspection","inspect","test","special inspection","compaction","concrete sample","failed inspection"]
+    inspection_hits = [t for t in inspection_terms if t in joined]
+    if inspection_hits:
+        add_threat(
+            "INSPECTION",
+            "Inspection or testing readiness risk",
+            min(92, 48 + len(inspection_hits)*8),
+            88,
+            "Inspection/testing signals are present: " + ", ".join(inspection_hits),
+            "Confirm prerequisite work, approved documents, required testing agency, inspection request timing, access, and correction responsibility before the scheduled inspection.",
+            [s for s in signals if any(t in _bc221_signal_text(s) for t in inspection_terms)]
+        )
+
+    # Field action / ownership risk
+    open_terms = ["open","pending","follow up","follow-up","blocked","waiting"]
+    open_hits = [t for t in open_terms if t in joined]
+    if open_hits:
+        add_threat(
+            "FIELD_ACTION",
+            "Open field action likely to become a delay",
+            min(90, 45 + len(open_hits)*7),
+            72,
+            "Open/pending field-action language is present: " + ", ".join(open_hits),
+            "Assign one accountable owner, one due date, one next action, and one escalation path. Recheck before the affected activity starts.",
+            [s for s in signals if any(t in _bc221_signal_text(s) for t in open_terms)]
+        )
+
+    # Carry forward unified/project-understanding risk even if text rules are quiet.
+    pu = unified.get("project_understanding") or {}
+    pu_score = int(pu.get("project_understanding_risk_score") or 0)
+    if pu_score >= 35:
+        add_threat(
+            "PROJECT_UNDERSTANDING",
+            "Document/scope understanding risk",
+            min(95, 40 + pu_score//2),
+            min(95, 60 + pu_score//3),
+            "Project Understanding risk is elevated due to document, scope, revision, or coordination uncertainty.",
+            "Review contradictions, missing-scope flags, drawing references, learned corrections, and affected trades before releasing or sequencing the work.",
+            (pu.get("cross_document_contradictions") or []) + (pu.get("possible_missing_scope") or [])
+        )
+
+    threats = sorted(threats, key=lambda x:(x["predictive_risk_score"],x["impact"],x["probability"]), reverse=True)
+    for i,t in enumerate(threats, start=1):
+        t["rank"] = i
+        if t["predictive_risk_score"] >= 75:
+            t["level"] = "HIGH"
+        elif t["predictive_risk_score"] >= 50:
+            t["level"] = "MEDIUM"
+        else:
+            t["level"] = "LOW"
+
+    return {
+        "status":"ok",
+        "version":"2.2.1",
+        "project_id":project_id,
+        "question":"What is most likely to hurt this project next, and what should we do before it does?",
+        "threat_count":len(threats),
+        "top_threat":threats[0] if threats else None,
+        "threats":threats[:20],
+        "unified_brain":unified,
+        "prediction_note":"Predictive scores are decision-support indicators derived from current project signals, not guarantees of future events."
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/predictive")
+def bc221_predictive_api(project_id:int):
+    result = _bc221_predictive_threats(project_id)
+    if not result:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return result
+
+@app.get("/unified-construction-brain/{project_id}/predictive", response_class=_BC200_HTMLResponse)
+def bc221_predictive_page(project_id:int):
+    d = _bc221_predictive_threats(project_id)
+    if not d:
+        return _BC200_HTMLResponse("Project not found or access denied.", status_code=404)
+
+    cards = ""
+    for t in d.get("threats") or []:
+        cards += (
+            "<div class='card'>"
+            f"<div class='eyebrow'>#{_bc200_esc(t.get('rank'))} · {_bc200_esc(t.get('type'))} · {_bc200_esc(t.get('level'))}</div>"
+            f"<h3>{_bc200_esc(t.get('title'))}</h3>"
+            f"<p><b>Predictive Risk:</b> {_bc200_esc(t.get('predictive_risk_score'))}/100 "
+            f"· Probability {_bc200_esc(t.get('probability'))} · Impact {_bc200_esc(t.get('impact'))}</p>"
+            f"<p><b>Why:</b> {_bc200_esc(t.get('why'))}</p>"
+            f"<p><b>Prevent it:</b> {_bc200_esc(t.get('prevention'))}</p>"
+            "</div>"
+        )
+    if not cards:
+        cards = "<div class='card'><h3>No strong predictive threat detected</h3><p>Continue monitoring project signals and upcoming constraints.</p></div>"
+
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">BUILDCOMMAND AI 2.2.1 · PREDICTIVE INTELLIGENCE</div>
+      <h1>See the Next Problem Before It Hits the Job.</h1>
+      <p>Unified Brain ranks likely project threats and gives the superintendent a prevention action.</p>
+    </div>
+    <div class="grid4">
+      <div class="card"><div class="label">Threats Detected</div><div class="kpi">{_bc200_esc(d.get("threat_count"))}</div></div>
+      <div class="card"><div class="label">Top Risk</div><div class="kpi">{_bc200_esc((d.get("top_threat") or {}).get("predictive_risk_score") or 0)}</div></div>
+      <div class="card"><div class="label">Unified Risk</div><div class="kpi">{_bc200_esc((d.get("unified_brain") or {}).get("unified_risk_score") or 0)}</div></div>
+      <div class="card"><div class="label">Brain Version</div><div class="kpi">2.2.1</div></div>
+    </div>
+    {cards}
+    """
+    return _BC200_HTMLResponse(_runtime.shell("Predictive Intelligence", body))
+
+@app.get("/health/unified-brain-predictive-intelligence-2-2-1")
+def bc221_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("2.2.0 unified baseline preserved","/health/unified-construction-brain-2-2-0" in paths),
+        ("predictive threat engine",callable(globals().get("_bc221_predictive_threats"))),
+        ("predictive API","/api/unified-construction-brain/project/{project_id}/predictive" in paths),
+        ("predictive page","/unified-construction-brain/{project_id}/predictive" in paths),
+        ("unified decision layer preserved",callable(globals().get("_bc220_decision_layer"))),
+        ("unified ask preserved","/api/unified-construction-brain/project/{project_id}/ask" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("project understanding preserved","/api/blueprint-brain/project-understanding" in paths),
+        ("drawing intelligence preserved","/api/blueprint-brain/drawing-graph" in paths),
+        ("cross-document intelligence preserved","/api/blueprint-brain/cross-document-reason" in paths),
+        ("construction knowledge preserved","/api/blueprint-brain/construction-knowledge" in paths),
+        ("shared learning memory preserved","/api/construction-brain/corrections" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.2.1",
+        "release":"Unified Brain Predictive Intelligence",
+        "baseline":"2.2.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "next_project_threat_prediction":True,
+            "schedule_risk_prediction":True,
+            "procurement_risk_prediction":True,
+            "submittal_constraint_prediction":True,
+            "coordination_risk_prediction":True,
+            "inspection_readiness_prediction":True,
+            "preventive_action_recommendations":True,
+            "ranked_predictive_risk":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.2.1"
+BUILD_COMMAND_RELEASE_NAME = "Unified Brain Predictive Intelligence"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
