@@ -33466,3 +33466,272 @@ BUILD_COMMAND_RELEASE="2.1.1"
 BUILD_COMMAND_RELEASE_NAME="Blueprint Brain Construction Reasoning Upgrade"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 2.1.2
+# Blueprint Brain Construction Knowledge Expansion
+# Deepens trade/scope responsibility intelligence using
+# construction-specific assignment rules and learned corrections.
+# Preserves stable 2.1.1 Blueprint Brain reasoning baseline.
+# ============================================================
+
+_BC212_SCOPE_RULES = [
+    # DEMOLITION / MEP DEMO SEPARATION
+    {"match":["demolish partition","remove partition","demolish ceiling","remove ceiling","demolish millwork","remove millwork",
+              "remove storefront","demolish storefront","restroom demolition","remove gyp board","remove flooring",
+              "remove toilet partition","remove restroom accessory"],
+     "trade":"DEMOLITION","reason":"Architectural/non-MEP demolition remains in Demolition."},
+    {"match":["demo receptacle","demo light fixture","remove electrical","demo electrical","remove panel","remove circuit"],
+     "trade":"ELECTRICAL","reason":"Electrical demolition belongs to Electrical."},
+    {"match":["demo duct","remove duct","demo diffuser","remove diffuser","demo exhaust fan","remove exhaust fan"],
+     "trade":"HVAC","reason":"Mechanical/HVAC demolition belongs to HVAC."},
+    {"match":["demo water line","remove water line","demo sanitary","remove sanitary","demo plumbing piping"],
+     "trade":"PLUMBING","reason":"Plumbing system demolition belongs to Plumbing."},
+
+    # FLOORING / TILE
+    {"match":["rubber base"],"trade":"FLOORING/TILE","reason":"Rubber base is flooring scope."},
+    {"match":["wall tile","floor tile","backsplash","wt2","brushed stainless faux tile"],"trade":"FLOORING/TILE","reason":"Tile and backsplash work belongs to Flooring/Tile."},
+
+    # FRAMING / DRYWALL
+    {"match":["wall patch","patch gypsum","patch gyp","metal stud","stud jamb","stud header","blocking","backing",
+              "resilient channel","gypsum ceiling","gyp ceiling"],"trade":"FRAMING/DRYWALL",
+     "reason":"Framing, drywall, backing, jamb/header framing, and gypsum assemblies belong to Framing/Drywall."},
+
+    # PAINT
+    {"match":["paint hollow metal door","paint hm door","prime patched surface","refinish patched surface",
+              "paint gypsum ceiling","white heron","sw 7627"],"trade":"PAINT",
+     "reason":"Painting and refinishing patched or gypsum surfaces belongs to Paint."},
+
+    # DOORS / HARDWARE vs STOREFRONT
+    {"match":["interior door","hollow metal door","door frame","door hardware","hollow metal framed window"],
+     "trade":"DOORS/HARDWARE","reason":"Interior doors, frames, hardware, and hollow-metal framed interior windows belong to Doors/Hardware."},
+    {"match":["exterior storefront","storefront glazing","glass storefront","curtain storefront"],"trade":"STOREFRONT/GLAZING",
+     "reason":"Exterior storefront and glazing remain separate from interior door scope."},
+
+    # CEILINGS / FIRE SPRINKLER
+    {"match":["acoustical ceiling tile","act ceiling","suspended acoustical","ceiling grid"],"trade":"CEILINGS",
+     "reason":"Suspended acoustical ceilings and grid coordination belong to Ceilings."},
+    {"match":["sprinkler head","fire sprinkler"],"trade":"FIRE SPRINKLER",
+     "reason":"Sprinkler heads and fire sprinkler work belong to Fire Sprinkler."},
+
+    # HVAC / ROOF
+    {"match":["ef-1","roof mounted exhaust fan","duct smoke detector","smoke detector in duct"],"trade":"HVAC",
+     "reason":"Exhaust fans and duct smoke detector test/verify belong to HVAC."},
+    {"match":["roof patch","roofing patch"],"trade":"ROOFING",
+     "reason":"Roof patching belongs to Roofing."},
+
+    # ELECTRICAL CONNECTIONS
+    {"match":["electrical connection for exhaust fan","electrical connection for ef-1","electrical connection for water heater",
+              "electrical connection for pump","electrical connection for drinking fountain","electrical connection for disposal",
+              "electrical connection for hand dryer","power connection for equipment"],"trade":"ELECTRICAL",
+     "reason":"Power and equipment electrical connections belong to Electrical."},
+
+    # PLUMBING FIXTURES / WATER HEATER
+    {"match":["water closet","urinal","lavatory","mop sink","floor drain","drinking fountain","break room sink","disposal",
+              "instantaneous water heater","iwh-1","electric water heater"],"trade":"PLUMBING",
+     "reason":"Plumbing fixtures and water-heater scope belong to Plumbing."},
+
+    # CONCRETE RESTORATION
+    {"match":["slab cutting","sawcut slab","trenching for plumbing","patch concrete","restore concrete","floor restoration"],
+     "trade":"CONCRETE","reason":"Slab cutting, trenching, and concrete/floor restoration belong to Concrete."},
+
+    # LOW VOLTAGE
+    {"match":["card access","electronic strike","access control","camera","security camera","door operator","accessible door operator"],
+     "trade":"LOW VOLTAGE","reason":"Access control, cameras, strikes, and electronic door operators belong to Low Voltage."},
+
+    # BATHROOM ACCESSORIES
+    {"match":["grab bar","toilet tissue holder","paper towel dispenser","waste receptacle","soap dispenser","robe hook","mirror",
+              "seat cover dispenser","sanitary disposal","toilet partition","urinal screen"],
+     "trade":"BATHROOM ACCESSORIES","reason":"Restroom accessories and partitions belong to Bathroom Accessories."},
+
+    # SPECIALTIES
+    {"match":["fire extinguisher cabinet"],"trade":"SPECIALTIES",
+     "reason":"Fire extinguisher cabinets belong to Specialties."},
+]
+
+def _bc212_scope_knowledge(text_value):
+    hay = _bc210_norm(text_value)
+    hits = []
+    for rule in _BC212_SCOPE_RULES:
+        matched = [m for m in rule["match"] if m in hay]
+        if matched:
+            hits.append({
+                "trade": rule["trade"],
+                "reason": rule["reason"],
+                "matched_terms": matched,
+                "score": len(matched)
+            })
+    return sorted(hits, key=lambda x:(x["score"], len(x["matched_terms"])), reverse=True)
+
+def _bc212_trade_reason(item_text, current_trade=None, project_id=None, evidence=None):
+    # Start with 2.1.1 reasoning, then layer construction-specific knowledge on top.
+    base = _bc211_trade_reason(item_text, current_trade, project_id, evidence or [])
+    knowledge = _bc212_scope_knowledge(item_text)
+
+    learned = base.get("learned_corrections") or []
+    learned_trade = str(learned[0].get("corrected_value") or "").strip().upper() if learned else ""
+    knowledge_trade = knowledge[0]["trade"] if knowledge else ""
+
+    # Priority: explicit learned correction > construction knowledge > 2.1.1 generic reasoning.
+    recommended = learned_trade or knowledge_trade or base.get("recommended_trade") or "UNASSIGNED"
+
+    confidence = int(base.get("confidence") or 45)
+    if knowledge:
+        confidence += min(20, 8 + knowledge[0]["score"] * 4)
+    if learned_trade:
+        confidence += 10
+    confidence = min(99, confidence)
+
+    explanation = list(base.get("explanation") or [])
+    if knowledge:
+        explanation.insert(0, "Construction knowledge: " + knowledge[0]["reason"])
+
+    conflicts = list(base.get("conflicts") or [])
+    if current_trade and _bc210_norm(current_trade) != _bc210_norm(recommended):
+        if not any(c.get("recommended_trade") == recommended for c in conflicts if isinstance(c, dict)):
+            conflicts.append({
+                "type":"CONSTRUCTION_KNOWLEDGE_CONFLICT",
+                "current_trade":str(current_trade),
+                "recommended_trade":recommended,
+                "reason":knowledge[0]["reason"] if knowledge else "Construction reasoning recommends a different trade."
+            })
+
+    # Flag when two specific knowledge rules compete closely.
+    if len(knowledge) > 1 and knowledge[0]["score"] == knowledge[1]["score"] and knowledge[0]["trade"] != knowledge[1]["trade"]:
+        conflicts.append({
+            "type":"MULTI_TRADE_SCOPE_REVIEW",
+            "candidate_trades":[knowledge[0]["trade"], knowledge[1]["trade"]],
+            "reason":"Multiple construction scope rules matched with equal strength; superintendent/estimator review recommended."
+        })
+
+    return {
+        **base,
+        "recommended_trade": recommended,
+        "confidence": confidence,
+        "explanation": explanation,
+        "conflicts": conflicts,
+        "construction_knowledge_matches": knowledge[:8],
+        "knowledge_version":"2.1.2"
+    }
+
+@app.post("/api/blueprint-brain/trade-reason-2")
+async def bc212_trade_reason_api(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    item = str(body.get("item") or body.get("text") or "").strip()
+    if not item:
+        return _BC200_JSONResponse({"status":"invalid_request","error":"item required"}, status_code=400)
+    result = _bc212_trade_reason(item, body.get("current_trade"), body.get("project_id"), body.get("evidence") or [])
+    return {"status":"ok","version":"2.1.2",**result}
+
+@app.post("/api/blueprint-brain/scope-audit")
+async def bc212_scope_audit(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    project_id = body.get("project_id")
+    items = body.get("items") or []
+    audited = []
+    conflict_count = 0
+    reassignment_count = 0
+
+    for raw in items[:1000]:
+        if isinstance(raw, dict):
+            txt = str(raw.get("item") or raw.get("text") or raw.get("description") or "")
+            current = raw.get("trade") or raw.get("current_trade")
+            ev = raw.get("evidence") or []
+        else:
+            txt = str(raw)
+            current = None
+            ev = []
+        if not txt.strip():
+            continue
+        r = _bc212_trade_reason(txt, current, project_id, ev)
+        audited.append(r)
+        if r.get("conflicts"):
+            conflict_count += 1
+        if current and _bc210_norm(current) != _bc210_norm(r.get("recommended_trade")):
+            reassignment_count += 1
+
+    return {
+        "status":"ok",
+        "version":"2.1.2",
+        "project_id":project_id,
+        "items_audited":len(audited),
+        "conflict_count":conflict_count,
+        "reassignment_count":reassignment_count,
+        "results":audited
+    }
+
+@app.get("/api/blueprint-brain/construction-knowledge")
+def bc212_construction_knowledge():
+    return {
+        "status":"ok",
+        "version":"2.1.2",
+        "rule_count":len(_BC212_SCOPE_RULES),
+        "rules":_BC212_SCOPE_RULES
+    }
+
+@app.get("/health/blueprint-brain-construction-knowledge-2-1-2")
+def bc212_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("2.1.1 reasoning baseline preserved","/health/blueprint-brain-construction-reasoning-2-1-1" in paths),
+        ("construction knowledge rules loaded",len(_BC212_SCOPE_RULES) >= 20),
+        ("construction knowledge matcher",callable(globals().get("_bc212_scope_knowledge"))),
+        ("enhanced trade reasoner",callable(globals().get("_bc212_trade_reason"))),
+        ("enhanced trade reason API","/api/blueprint-brain/trade-reason-2" in paths),
+        ("scope audit API","/api/blueprint-brain/scope-audit" in paths),
+        ("construction knowledge API","/api/blueprint-brain/construction-knowledge" in paths),
+        ("learned corrections preserved","/api/construction-brain/corrections" in paths),
+        ("reasoning API preserved","/api/construction-brain/reason" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.1.2",
+        "release":"Blueprint Brain Construction Knowledge Expansion",
+        "baseline":"2.1.1",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "deep_trade_scope_knowledge":True,
+            "construction_specific_reassignment":True,
+            "learned_correction_priority":True,
+            "scope_audit":True,
+            "multi_trade_conflict_flags":True,
+            "gc_level_scope_separation":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.1.2"
+BUILD_COMMAND_RELEASE_NAME = "Blueprint Brain Construction Knowledge Expansion"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
