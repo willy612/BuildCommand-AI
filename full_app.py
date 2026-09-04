@@ -35341,3 +35341,293 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.5.0
+# Outcome Learning Intelligence
+# ============================================================
+
+def _bc250_init():
+    c = _runtime.db()
+    try:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS construction_brain_outcomes(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          project_id INTEGER,
+          outcome_type TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          predicted_result TEXT,
+          actual_result TEXT NOT NULL,
+          recommended_action TEXT,
+          action_taken TEXT,
+          effectiveness_score REAL,
+          responsible_trade TEXT,
+          source_type TEXT,
+          source_id INTEGER,
+          metadata_json TEXT,
+          created_by INTEGER,
+          created TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS construction_brain_prediction_calibration(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          project_id INTEGER,
+          prediction_type TEXT NOT NULL,
+          predicted_score REAL,
+          actual_occurred INTEGER DEFAULT 0,
+          prediction_label TEXT,
+          actual_label TEXT,
+          created TEXT NOT NULL
+        );
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc250_init()
+
+def _bc250_outcomes(project_id=None, outcome_type=None, limit=250):
+    u = _runtime.current_user()
+    if not u:
+        return []
+    c = _runtime.db()
+    try:
+        sql = "SELECT * FROM construction_brain_outcomes WHERE company_id=?"
+        vals = [u["company_id"]]
+        if project_id is not None:
+            sql += " AND project_id=?"
+            vals.append(int(project_id))
+        if outcome_type:
+            sql += " AND outcome_type=?"
+            vals.append(str(outcome_type).upper())
+        sql += " ORDER BY id DESC LIMIT ?"
+        vals.append(int(limit))
+        return [dict(r) for r in c.execute(sql, tuple(vals)).fetchall()]
+    finally:
+        c.close()
+
+def _bc250_learning_summary(project_id:int):
+    rows = _bc250_outcomes(project_id, None, 500)
+    by_type, trade_results = {}, {}
+    effectiveness = []
+    prediction_hits = 0
+    prediction_total = 0
+
+    for r in rows:
+        typ = str(r.get("outcome_type") or "OTHER").upper()
+        by_type[typ] = by_type.get(typ, 0) + 1
+
+        trade = str(r.get("responsible_trade") or "").strip().upper()
+        if trade:
+            trade_results.setdefault(trade, {"count":0, "effective_actions":0})
+            trade_results[trade]["count"] += 1
+
+        score = r.get("effectiveness_score")
+        if score is not None:
+            try:
+                f = float(score)
+                effectiveness.append(f)
+                if trade and f >= 70:
+                    trade_results[trade]["effective_actions"] += 1
+            except Exception:
+                pass
+
+        pred = str(r.get("predicted_result") or "").strip().lower()
+        actual = str(r.get("actual_result") or "").strip().lower()
+        if pred:
+            prediction_total += 1
+            if pred in actual or actual in pred:
+                prediction_hits += 1
+
+    return {
+        "status":"ok",
+        "version":"2.5.0",
+        "project_id":project_id,
+        "outcome_count":len(rows),
+        "outcomes_by_type":by_type,
+        "average_action_effectiveness":round(sum(effectiveness)/len(effectiveness),1) if effectiveness else None,
+        "simple_prediction_match_rate":round((prediction_hits/prediction_total)*100,1) if prediction_total else None,
+        "trade_outcome_summary":trade_results,
+        "learning_status":"ACTIVE" if rows else "READY_FOR_OUTCOMES"
+    }
+
+def _bc250_recommendation_feedback(project_id:int, recommendation_title:str):
+    rows = _bc250_outcomes(project_id, None, 500)
+    needle = _bc210_norm(recommendation_title)
+    matches = []
+    for r in rows:
+        hay = _bc210_norm(
+            str(r.get("subject") or "") + " " +
+            str(r.get("recommended_action") or "") + " " +
+            str(r.get("action_taken") or "")
+        )
+        if needle and needle in hay:
+            matches.append(r)
+
+    scores = []
+    for r in matches:
+        try:
+            if r.get("effectiveness_score") is not None:
+                scores.append(float(r["effectiveness_score"]))
+        except Exception:
+            pass
+
+    return {
+        "match_count":len(matches),
+        "average_effectiveness":round(sum(scores)/len(scores),1) if scores else None,
+        "evidence":matches[:10]
+    }
+
+@app.post("/api/construction-brain/outcomes")
+async def bc250_record_outcome(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    subject = str(body.get("subject") or "").strip()
+    actual = str(body.get("actual_result") or "").strip()
+    if not subject or not actual:
+        return _BC200_JSONResponse(
+            {"status":"invalid_request","error":"subject and actual_result required"},
+            status_code=400
+        )
+
+    c = _runtime.db()
+    try:
+        cur = c.execute(
+            """INSERT INTO construction_brain_outcomes
+            (company_id,project_id,outcome_type,subject,predicted_result,actual_result,
+             recommended_action,action_taken,effectiveness_score,responsible_trade,
+             source_type,source_id,metadata_json,created_by,created)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                u["company_id"],
+                body.get("project_id"),
+                str(body.get("outcome_type") or "GENERAL").upper(),
+                subject,
+                str(body.get("predicted_result") or ""),
+                actual,
+                str(body.get("recommended_action") or ""),
+                str(body.get("action_taken") or ""),
+                body.get("effectiveness_score"),
+                str(body.get("responsible_trade") or ""),
+                str(body.get("source_type") or ""),
+                body.get("source_id"),
+                _BC200_json.dumps(body.get("metadata") or {}, default=str),
+                u.get("id"),
+                _BC200_datetime.utcnow().isoformat()
+            )
+        )
+        c.commit()
+        oid = getattr(cur, "lastrowid", None)
+    finally:
+        c.close()
+
+    return {"status":"ok","version":"2.5.0","outcome_id":oid,"learning_updated":True}
+
+@app.get("/api/construction-brain/project/{project_id}/outcomes")
+def bc250_project_outcomes(project_id:int, limit:int=200):
+    return {
+        "status":"ok","version":"2.5.0","project_id":project_id,
+        "outcomes":_bc250_outcomes(project_id,None,min(max(limit,1),500))
+    }
+
+@app.get("/api/construction-brain/project/{project_id}/learning-summary")
+def bc250_learning_summary_api(project_id:int):
+    return _bc250_learning_summary(project_id)
+
+@app.get("/api/unified-construction-brain/project/{project_id}/learned-recommendations")
+def bc250_learned_recommendations(project_id:int):
+    current = _bc230_recommendations(project_id)
+    if not current:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+
+    enriched = []
+    for rec in current.get("recommendations") or []:
+        title = str(rec.get("title") or rec.get("action") or "")
+        feedback = _bc250_recommendation_feedback(project_id, title)
+        enriched.append({
+            **rec,
+            "historical_feedback":feedback,
+            "learning_note":"Historical outcomes inform confidence; human approval remains required."
+        })
+
+    return {"status":"ok","version":"2.5.0","project_id":project_id,"recommendations":enriched}
+
+@app.get("/health/outcome-learning-intelligence-2-5-0")
+def bc250_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    c = _runtime.db()
+    try:
+        if getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres":
+            tables = {r["table_name"] for r in c.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            ).fetchall()}
+        else:
+            tables = {r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+    finally:
+        c.close()
+
+    checks = [
+        ("2.4.0 stable baseline preserved","/health/unified-brain-intelligence-suite-2-4-0" in paths),
+        ("outcome table","construction_brain_outcomes" in tables),
+        ("prediction calibration table","construction_brain_prediction_calibration" in tables),
+        ("outcome recorder","/api/construction-brain/outcomes" in paths),
+        ("project outcomes API","/api/construction-brain/project/{project_id}/outcomes" in paths),
+        ("learning summary API","/api/construction-brain/project/{project_id}/learning-summary" in paths),
+        ("learned recommendations API","/api/unified-construction-brain/project/{project_id}/learned-recommendations" in paths),
+        ("learning summary engine",callable(globals().get("_bc250_learning_summary"))),
+        ("recommendation feedback engine",callable(globals().get("_bc250_recommendation_feedback"))),
+        ("predictive intelligence preserved","/api/unified-construction-brain/project/{project_id}/predictive" in paths),
+        ("recommendation orchestration preserved","/api/unified-construction-brain/project/{project_id}/recommendations" in paths),
+        ("learning feedback preserved","/api/unified-construction-brain/project/{project_id}/learning-feedback" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.5.0",
+        "release":"Outcome Learning Intelligence",
+        "baseline":"2.4.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "actual_outcome_memory":True,
+            "recommendation_effectiveness_learning":True,
+            "prediction_result_comparison":True,
+            "trade_outcome_learning":True,
+            "inspection_issue_action_feedback_ready":True,
+            "historical_recommendation_feedback":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.5.0"
+BUILD_COMMAND_RELEASE_NAME = "Outcome Learning Intelligence"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
