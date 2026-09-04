@@ -33155,3 +33155,142 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 2.1.0 - Construction Brain Intelligence Upgrade
+# Shared correction memory + evidence/confidence reasoning.
+# ============================================================
+def _bc210_init():
+    c=_runtime.db()
+    try:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS construction_brain_corrections(
+          id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, project_id INTEGER,
+          brain TEXT NOT NULL, subject TEXT NOT NULL, original_value TEXT,
+          corrected_value TEXT NOT NULL, reason TEXT, context_json TEXT,
+          created_by INTEGER, created TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS construction_brain_reasoning_events(
+          id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, project_id INTEGER,
+          brain TEXT NOT NULL, question TEXT, answer TEXT, confidence REAL DEFAULT 0,
+          evidence_json TEXT, created_by INTEGER, created TEXT NOT NULL);
+        """); c.commit()
+    finally: c.close()
+_bc210_init()
+
+def _bc210_norm(v): return " ".join(str(v or "").strip().lower().split())
+
+def _bc210_corrections(project_id=None,brain=None,limit=200):
+    u=_runtime.current_user()
+    if not u:return []
+    c=_runtime.db()
+    try:
+        sql="SELECT * FROM construction_brain_corrections WHERE company_id=?"; vals=[u["company_id"]]
+        if project_id is not None: sql+=" AND (project_id=? OR project_id IS NULL)"; vals.append(int(project_id))
+        if brain: sql+=" AND brain=?"; vals.append(str(brain).upper())
+        sql+=" ORDER BY id DESC LIMIT ?"; vals.append(int(limit))
+        return [dict(r) for r in c.execute(sql,tuple(vals)).fetchall()]
+    finally:c.close()
+
+def _bc210_match_corrections(value,project_id=None,brain=None):
+    hay=_bc210_norm(value); matches=[]
+    for r in _bc210_corrections(project_id,brain,300):
+        score=0
+        if _bc210_norm(r.get("subject")) in hay and _bc210_norm(r.get("subject")): score+=60
+        if _bc210_norm(r.get("original_value")) in hay and _bc210_norm(r.get("original_value")): score+=30
+        if score:
+            rr=dict(r); rr["match_score"]=score; matches.append(rr)
+    return sorted(matches,key=lambda x:(x["match_score"],x.get("id",0)),reverse=True)
+
+def _bc210_reason(question,project_id=None,brain="UNIFIED",evidence=None):
+    evidence=list(evidence or []); hits=_bc210_match_corrections(question,project_id,brain)
+    confidence=min(99,45+min(35,len(evidence)*8)+min(20,len(hits)*7))
+    ev=[]
+    for e in evidence[:8]:
+        if isinstance(e,dict): ev.append({"label":str(e.get("label") or e.get("title") or "Project evidence"),"value":str(e.get("value") or e.get("detail") or e.get("text") or "")})
+        else: ev.append({"label":"Project evidence","value":str(e)})
+    for c in hits[:5]:
+        ev.append({"label":"Learned correction","value":f"{c.get('subject','')}: {c.get('original_value','')} → {c.get('corrected_value','')} — {c.get('reason','')}"})
+    return {"brain":str(brain).upper(),"question":str(question),"confidence":confidence,"evidence":ev,"learned_corrections":hits[:5],
+            "explainability":{"evidence_count":len(evidence),"correction_matches":len(hits),"confidence_basis":"project evidence + learned correction matches"}}
+
+@app.post("/api/construction-brain/corrections")
+async def bc210_add_correction(request:_BC200_Request):
+    u=_runtime.current_user()
+    if not u:return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try: body=await request.json()
+    except Exception: body={}
+    subject=str(body.get("subject") or "").strip(); corrected=str(body.get("corrected_value") or "").strip()
+    if not subject or not corrected:return _BC200_JSONResponse({"status":"invalid_request","error":"subject and corrected_value required"},status_code=400)
+    c=_runtime.db()
+    try:
+        cur=c.execute("""INSERT INTO construction_brain_corrections
+        (company_id,project_id,brain,subject,original_value,corrected_value,reason,context_json,created_by,created)
+        VALUES(?,?,?,?,?,?,?,?,?,?)""",(u["company_id"],body.get("project_id"),str(body.get("brain") or "BLUEPRINT").upper(),subject,
+        str(body.get("original_value") or ""),corrected,str(body.get("reason") or ""),_BC200_json.dumps(body.get("context") or {},default=str),
+        u.get("id"),_BC200_datetime.utcnow().isoformat())); c.commit(); cid=getattr(cur,"lastrowid",None)
+    finally:c.close()
+    return {"status":"ok","version":"2.1.0","correction_id":cid,"subject":subject,"corrected_value":corrected}
+
+@app.get("/api/construction-brain/corrections")
+def bc210_list_corrections(project_id:int=None,brain:str=None,limit:int=100):
+    return {"status":"ok","version":"2.1.0","corrections":_bc210_corrections(project_id,brain,min(max(limit,1),500))}
+
+@app.post("/api/construction-brain/reason")
+async def bc210_reason_api(request:_BC200_Request):
+    u=_runtime.current_user()
+    if not u:return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try: body=await request.json()
+    except Exception: body={}
+    q=str(body.get("question") or "").strip()
+    if not q:return _BC200_JSONResponse({"status":"invalid_request","error":"question required"},status_code=400)
+    result=_bc210_reason(q,body.get("project_id"),body.get("brain") or "UNIFIED",body.get("evidence") or [])
+    c=_runtime.db()
+    try:
+        c.execute("""INSERT INTO construction_brain_reasoning_events
+        (company_id,project_id,brain,question,answer,confidence,evidence_json,created_by,created)
+        VALUES(?,?,?,?,?,?,?,?,?)""",(u["company_id"],body.get("project_id"),result["brain"],q,_BC200_json.dumps(result,default=str),
+        result["confidence"],_BC200_json.dumps(result["evidence"],default=str),u.get("id"),_BC200_datetime.utcnow().isoformat())); c.commit()
+    finally:c.close()
+    return {"status":"ok","version":"2.1.0",**result}
+
+@app.get("/api/construction-brain/project/{project_id}/intelligence")
+def bc210_project_intelligence(project_id:int):
+    d=_bc200_brain(project_id)
+    if not d:return _BC200_JSONResponse({"status":"not_found"},status_code=404)
+    evidence=[{"label":str(k).replace("_"," ").title(),"value":v} for k,v in (d.get("signals") or {}).items()]
+    evidence += [{"label":a.get("source_type") or "Action","value":str(a.get("title") or "")+" — "+str(a.get("reason") or "")} for a in (d.get("actions") or [])[:10]]
+    return {"status":"ok","version":"2.1.0","project_id":project_id,"command_score":d.get("score"),"headline":d.get("headline"),
+            "reasoning":_bc210_reason(d.get("headline") or "What needs attention?",project_id,"UNIFIED",evidence),
+            "correction_memory_count":len(_bc210_corrections(project_id,None,500))}
+
+@app.get("/health/construction-brain-intelligence-2-1-0")
+def bc210_health():
+    paths={getattr(r,"path","") for r in app.routes}; c=_runtime.db()
+    try:
+        if getattr(_runtime,"DATABASE_KIND","sqlite")=="postgres":
+            tables={r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+        else: tables={r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    finally:c.close()
+    checks=[
+      ("2.0.5 baseline preserved","/health/superintendent-daily-operations-2-0-5" in paths),
+      ("correction memory table","construction_brain_corrections" in tables),("reasoning event table","construction_brain_reasoning_events" in tables),
+      ("correction API","/api/construction-brain/corrections" in paths),("reasoning API","/api/construction-brain/reason" in paths),
+      ("project intelligence API","/api/construction-brain/project/{project_id}/intelligence" in paths),
+      ("correction matcher",callable(globals().get("_bc210_match_corrections"))),("reasoning engine",callable(globals().get("_bc210_reason"))),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),("Unified Brain preserved","/brain" in paths),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+      ("documents preserved","/documents" in paths),("submittals preserved","/submittals" in paths),("issues preserved","/issues" in paths),
+      ("procurement preserved","/procurement" in paths),("schedule preserved","/schedule" in paths),
+      ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False)))]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI","version":"2.1.0",
+      "release":"Construction Brain Intelligence Upgrade","baseline":"2.0.5","passed":passed,"total":len(checks),"failed":len(checks)-passed,
+      "stage_ready":passed==len(checks),"features":{"shared_correction_memory":True,"cross_brain_learning_foundation":True,
+      "evidence_aware_reasoning":True,"confidence_scoring":True,"explainability":True,"reasoning_audit_events":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE="2.1.0"
+BUILD_COMMAND_RELEASE_NAME="Construction Brain Intelligence Upgrade"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
