@@ -35631,3 +35631,460 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.6.0
+# Adaptive Learning Intelligence Suite
+# Consolidates the next 10 intelligence upgrades into one build:
+# 2.5.1 Automatic Outcome Capture
+# 2.5.2 Prediction Calibration
+# 2.5.3 Recommendation Confidence Optimization
+# 2.5.4 Root Cause Pattern Learning
+# 2.5.5 Trade Performance Learning
+# 2.5.6 Schedule Outcome Learning
+# 2.5.7 Procurement Outcome Learning
+# 2.5.8 Inspection Outcome Learning
+# 2.5.9 Cross-Project Pattern Intelligence
+# 2.6.0 Brain Self-Evaluation & Adaptive Learning
+# Preserves stable 2.5.0 baseline.
+# ============================================================
+
+def _bc260_init():
+    c = _runtime.db()
+    try:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS construction_brain_learning_events(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          project_id INTEGER,
+          learning_type TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          signal_before TEXT,
+          outcome_after TEXT,
+          confidence_before REAL,
+          confidence_after REAL,
+          trade TEXT,
+          source_type TEXT,
+          source_id INTEGER,
+          metadata_json TEXT,
+          created_by INTEGER,
+          created TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS construction_brain_pattern_memory(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          pattern_type TEXT NOT NULL,
+          pattern_key TEXT NOT NULL,
+          occurrences INTEGER DEFAULT 1,
+          successes INTEGER DEFAULT 0,
+          failures INTEGER DEFAULT 0,
+          average_effectiveness REAL,
+          last_project_id INTEGER,
+          evidence_json TEXT,
+          updated TEXT NOT NULL,
+          UNIQUE(company_id, pattern_type, pattern_key)
+        );
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc260_init()
+
+# ------------------------------------------------------------
+# 2.5.1 - Automatic Outcome Capture
+# ------------------------------------------------------------
+def _bc251_capture_event(project_id, learning_type, subject, signal_before="", outcome_after="",
+                         confidence_before=None, confidence_after=None, trade="", source_type="",
+                         source_id=None, metadata=None):
+    u = _runtime.current_user()
+    if not u:
+        return None
+    c = _runtime.db()
+    try:
+        cur = c.execute(
+            """INSERT INTO construction_brain_learning_events
+            (company_id,project_id,learning_type,subject,signal_before,outcome_after,
+             confidence_before,confidence_after,trade,source_type,source_id,metadata_json,
+             created_by,created)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                u["company_id"], project_id, str(learning_type).upper(), str(subject),
+                str(signal_before or ""), str(outcome_after or ""),
+                confidence_before, confidence_after, str(trade or ""),
+                str(source_type or ""), source_id,
+                _BC200_json.dumps(metadata or {}, default=str),
+                u.get("id"), _BC200_datetime.utcnow().isoformat()
+            )
+        )
+        c.commit()
+        return getattr(cur, "lastrowid", None)
+    finally:
+        c.close()
+
+@app.post("/api/construction-brain/learning-events")
+async def bc251_learning_event_api(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    subject = str(body.get("subject") or "").strip()
+    if not subject:
+        return _BC200_JSONResponse({"status":"invalid_request","error":"subject required"}, status_code=400)
+    eid = _bc251_capture_event(
+        body.get("project_id"), body.get("learning_type") or "GENERAL", subject,
+        body.get("signal_before"), body.get("outcome_after"),
+        body.get("confidence_before"), body.get("confidence_after"),
+        body.get("trade"), body.get("source_type"), body.get("source_id"),
+        body.get("metadata")
+    )
+    return {"status":"ok","version":"2.6.0","learning_event_id":eid}
+
+# ------------------------------------------------------------
+# 2.5.2 - Prediction Calibration
+# ------------------------------------------------------------
+def _bc252_calibration(project_id:int=None):
+    u = _runtime.current_user()
+    if not u:
+        return {"count":0,"accuracy":None,"buckets":[]}
+    c = _runtime.db()
+    try:
+        sql = "SELECT * FROM construction_brain_prediction_calibration WHERE company_id=?"
+        vals = [u["company_id"]]
+        if project_id is not None:
+            sql += " AND project_id=?"
+            vals.append(int(project_id))
+        rows = [dict(r) for r in c.execute(sql, tuple(vals)).fetchall()]
+    finally:
+        c.close()
+
+    buckets = {"0-24":[0,0],"25-49":[0,0],"50-74":[0,0],"75-100":[0,0]}
+    correct = 0
+    for r in rows:
+        s = float(r.get("predicted_score") or 0)
+        occurred = int(r.get("actual_occurred") or 0)
+        predicted_yes = s >= 50
+        if predicted_yes == bool(occurred):
+            correct += 1
+        key = "0-24" if s < 25 else "25-49" if s < 50 else "50-74" if s < 75 else "75-100"
+        buckets[key][0] += 1
+        buckets[key][1] += occurred
+
+    return {
+        "count":len(rows),
+        "accuracy":round(correct/len(rows)*100,1) if rows else None,
+        "buckets":[
+            {"range":k,"predictions":v[0],
+             "actual_occurrence_rate":round(v[1]/v[0]*100,1) if v[0] else None}
+            for k,v in buckets.items()
+        ]
+    }
+
+@app.get("/api/construction-brain/project/{project_id}/prediction-calibration")
+def bc252_calibration_api(project_id:int):
+    return {"status":"ok","version":"2.6.0","project_id":project_id,
+            "calibration":_bc252_calibration(project_id)}
+
+# ------------------------------------------------------------
+# 2.5.3 - Recommendation Confidence Optimization
+# ------------------------------------------------------------
+def _bc253_adjust_confidence(project_id:int, title:str, base_confidence=60):
+    fb = _bc250_recommendation_feedback(project_id, title)
+    avg = fb.get("average_effectiveness")
+    adjusted = float(base_confidence)
+    if avg is not None:
+        adjusted = (adjusted * 0.6) + (float(avg) * 0.4)
+    return {
+        "base_confidence":round(float(base_confidence),1),
+        "historical_effectiveness":avg,
+        "adjusted_confidence":round(max(5,min(99,adjusted)),1),
+        "historical_match_count":fb.get("match_count")
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/adaptive-recommendations")
+def bc253_adaptive_recommendations(project_id:int):
+    current = _bc230_recommendations(project_id)
+    if not current:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    rows = []
+    for r in current.get("recommendations") or []:
+        title = str(r.get("title") or r.get("action") or "")
+        base = max(50, min(95, int(r.get("risk_score") or 60)))
+        rows.append({**r,"confidence_optimization":_bc253_adjust_confidence(project_id,title,base)})
+    return {"status":"ok","version":"2.6.0","project_id":project_id,"recommendations":rows}
+
+# ------------------------------------------------------------
+# 2.5.4 - Root Cause Pattern Learning
+# ------------------------------------------------------------
+def _bc254_root_causes(project_id:int):
+    outcomes = _bc250_outcomes(project_id,None,500)
+    terms = {
+        "LATE_APPROVAL":["approval","submittal","review","pending"],
+        "PROCUREMENT":["material","delivery","lead time","procurement"],
+        "COORDINATION":["coordination","conflict","rfi","missing"],
+        "MANPOWER":["manpower","crew","labor","staff"],
+        "INSPECTION":["inspection","test","failed inspection"],
+        "SCHEDULE":["schedule","delay","late","behind"]
+    }
+    counts = {}
+    for r in outcomes:
+        blob = _bc210_norm(
+            str(r.get("actual_result") or "")+" "+
+            str(r.get("action_taken") or "")+" "+
+            str(r.get("metadata_json") or "")
+        )
+        for cause,keys in terms.items():
+            if any(k in blob for k in keys):
+                counts[cause] = counts.get(cause,0)+1
+    ranked = sorted(counts.items(), key=lambda x:x[1], reverse=True)
+    return [{"root_cause":k,"occurrences":v} for k,v in ranked]
+
+@app.get("/api/construction-brain/project/{project_id}/root-cause-patterns")
+def bc254_root_cause_api(project_id:int):
+    return {"status":"ok","version":"2.6.0","project_id":project_id,
+            "patterns":_bc254_root_causes(project_id)}
+
+# ------------------------------------------------------------
+# 2.5.5 - Trade Performance Learning
+# ------------------------------------------------------------
+def _bc255_trade_learning(project_id:int):
+    s = _bc250_learning_summary(project_id)
+    out = []
+    for trade,data in (s.get("trade_outcome_summary") or {}).items():
+        count = int(data.get("count") or 0)
+        effective = int(data.get("effective_actions") or 0)
+        rate = round(effective/count*100,1) if count else None
+        out.append({"trade":trade,"outcomes":count,"effective_actions":effective,
+                    "effectiveness_rate":rate})
+    return sorted(out,key=lambda x:(x["outcomes"],x["effectiveness_rate"] or 0),reverse=True)
+
+@app.get("/api/construction-brain/project/{project_id}/trade-learning")
+def bc255_trade_learning_api(project_id:int):
+    return {"status":"ok","version":"2.6.0","project_id":project_id,
+            "trades":_bc255_trade_learning(project_id)}
+
+# ------------------------------------------------------------
+# 2.5.6 - Schedule Outcome Learning
+# ------------------------------------------------------------
+def _bc256_schedule_learning(project_id:int):
+    rows = _bc250_outcomes(project_id,None,500)
+    filtered = [r for r in rows if str(r.get("outcome_type") or "").upper() in {"SCHEDULE","DELAY","MILESTONE"}]
+    return {
+        "count":len(filtered),
+        "effective_recoveries":sum(1 for r in filtered if float(r.get("effectiveness_score") or 0)>=70),
+        "recent":filtered[:50]
+    }
+
+@app.get("/api/construction-brain/project/{project_id}/schedule-learning")
+def bc256_schedule_learning_api(project_id:int):
+    return {"status":"ok","version":"2.6.0","project_id":project_id,
+            "schedule_learning":_bc256_schedule_learning(project_id)}
+
+# ------------------------------------------------------------
+# 2.5.7 - Procurement Outcome Learning
+# ------------------------------------------------------------
+def _bc257_procurement_learning(project_id:int):
+    rows = _bc250_outcomes(project_id,None,500)
+    filtered = [r for r in rows if str(r.get("outcome_type") or "").upper() in {"PROCUREMENT","DELIVERY","MATERIAL"}]
+    return {
+        "count":len(filtered),
+        "effective_actions":sum(1 for r in filtered if float(r.get("effectiveness_score") or 0)>=70),
+        "recent":filtered[:50]
+    }
+
+@app.get("/api/construction-brain/project/{project_id}/procurement-learning")
+def bc257_procurement_learning_api(project_id:int):
+    return {"status":"ok","version":"2.6.0","project_id":project_id,
+            "procurement_learning":_bc257_procurement_learning(project_id)}
+
+# ------------------------------------------------------------
+# 2.5.8 - Inspection Outcome Learning
+# ------------------------------------------------------------
+def _bc258_inspection_learning(project_id:int):
+    rows = _bc250_outcomes(project_id,None,500)
+    filtered = [r for r in rows if str(r.get("outcome_type") or "").upper() in {"INSPECTION","TEST","QUALITY"}]
+    passed = sum(1 for r in filtered if "pass" in str(r.get("actual_result") or "").lower())
+    failed = sum(1 for r in filtered if "fail" in str(r.get("actual_result") or "").lower())
+    return {"count":len(filtered),"passed":passed,"failed":failed,"recent":filtered[:50]}
+
+@app.get("/api/construction-brain/project/{project_id}/inspection-learning")
+def bc258_inspection_learning_api(project_id:int):
+    return {"status":"ok","version":"2.6.0","project_id":project_id,
+            "inspection_learning":_bc258_inspection_learning(project_id)}
+
+# ------------------------------------------------------------
+# 2.5.9 - Cross-Project Pattern Intelligence
+# ------------------------------------------------------------
+def _bc259_cross_project_patterns():
+    u = _runtime.current_user()
+    if not u:
+        return []
+    c = _runtime.db()
+    try:
+        rows = [dict(r) for r in c.execute(
+            "SELECT * FROM construction_brain_outcomes WHERE company_id=? ORDER BY id DESC LIMIT 2000",
+            (u["company_id"],)
+        ).fetchall()]
+    finally:
+        c.close()
+
+    counts = {}
+    for r in rows:
+        key = str(r.get("outcome_type") or "GENERAL").upper()
+        counts.setdefault(key,{"count":0,"effectiveness":[]})
+        counts[key]["count"] += 1
+        try:
+            if r.get("effectiveness_score") is not None:
+                counts[key]["effectiveness"].append(float(r["effectiveness_score"]))
+        except Exception:
+            pass
+
+    return [
+        {"pattern_type":k,"occurrences":v["count"],
+         "average_effectiveness":round(sum(v["effectiveness"])/len(v["effectiveness"]),1) if v["effectiveness"] else None}
+        for k,v in sorted(counts.items(), key=lambda x:x[1]["count"], reverse=True)
+    ]
+
+@app.get("/api/construction-brain/cross-project-patterns")
+def bc259_cross_project_patterns_api():
+    return {"status":"ok","version":"2.6.0","patterns":_bc259_cross_project_patterns()}
+
+# ------------------------------------------------------------
+# 2.6.0 - Brain Self-Evaluation & Adaptive Learning
+# ------------------------------------------------------------
+def _bc260_self_evaluation(project_id:int):
+    summary = _bc250_learning_summary(project_id)
+    calibration = _bc252_calibration(project_id)
+    roots = _bc254_root_causes(project_id)
+    trades = _bc255_trade_learning(project_id)
+
+    outcome_count = int(summary.get("outcome_count") or 0)
+    score = 40
+    if outcome_count >= 10: score += 10
+    if outcome_count >= 50: score += 10
+    if summary.get("average_action_effectiveness") is not None:
+        score += min(20, float(summary["average_action_effectiveness"])*0.2)
+    if calibration.get("accuracy") is not None:
+        score += min(20, float(calibration["accuracy"])*0.2)
+    score = round(min(99,score),1)
+
+    return {
+        "status":"ok",
+        "version":"2.6.0",
+        "project_id":project_id,
+        "learning_maturity_score":score,
+        "outcome_count":outcome_count,
+        "prediction_calibration":calibration,
+        "top_root_causes":roots[:5],
+        "trade_learning":trades[:10],
+        "improvement_priorities":[
+            "Capture more real outcomes" if outcome_count < 25 else "Continue outcome capture",
+            "Improve prediction calibration" if (calibration.get("accuracy") or 0) < 70 else "Maintain calibrated predictions",
+            "Review low-effectiveness recommendations"
+        ],
+        "note":"Self-evaluation measures learning coverage and feedback quality; it does not retrain the underlying language model."
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/self-evaluation")
+def bc260_self_eval_api(project_id:int):
+    return _bc260_self_evaluation(project_id)
+
+@app.get("/api/unified-construction-brain/project/{project_id}/adaptive-learning-suite")
+def bc260_suite_api(project_id:int):
+    return {
+        "status":"ok",
+        "version":"2.6.0",
+        "project_id":project_id,
+        "outcome_learning":_bc250_learning_summary(project_id),
+        "prediction_calibration":_bc252_calibration(project_id),
+        "root_cause_patterns":_bc254_root_causes(project_id),
+        "trade_learning":_bc255_trade_learning(project_id),
+        "schedule_learning":_bc256_schedule_learning(project_id),
+        "procurement_learning":_bc257_procurement_learning(project_id),
+        "inspection_learning":_bc258_inspection_learning(project_id),
+        "cross_project_patterns":_bc259_cross_project_patterns(),
+        "self_evaluation":_bc260_self_evaluation(project_id),
+        "human_approval_required":True
+    }
+
+@app.get("/health/adaptive-learning-intelligence-suite-2-6-0")
+def bc260_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    c = _runtime.db()
+    try:
+        if getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres":
+            tables = {r["table_name"] for r in c.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            ).fetchall()}
+        else:
+            tables = {r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+    finally:
+        c.close()
+
+    checks = [
+        ("2.5.0 baseline preserved","/health/outcome-learning-intelligence-2-5-0" in paths),
+        ("learning events table","construction_brain_learning_events" in tables),
+        ("pattern memory table","construction_brain_pattern_memory" in tables),
+        ("automatic outcome capture foundation","/api/construction-brain/learning-events" in paths),
+        ("prediction calibration API","/api/construction-brain/project/{project_id}/prediction-calibration" in paths),
+        ("adaptive recommendations API","/api/unified-construction-brain/project/{project_id}/adaptive-recommendations" in paths),
+        ("root cause patterns API","/api/construction-brain/project/{project_id}/root-cause-patterns" in paths),
+        ("trade learning API","/api/construction-brain/project/{project_id}/trade-learning" in paths),
+        ("schedule learning API","/api/construction-brain/project/{project_id}/schedule-learning" in paths),
+        ("procurement learning API","/api/construction-brain/project/{project_id}/procurement-learning" in paths),
+        ("inspection learning API","/api/construction-brain/project/{project_id}/inspection-learning" in paths),
+        ("cross-project patterns API","/api/construction-brain/cross-project-patterns" in paths),
+        ("self evaluation API","/api/unified-construction-brain/project/{project_id}/self-evaluation" in paths),
+        ("adaptive suite API","/api/unified-construction-brain/project/{project_id}/adaptive-learning-suite" in paths),
+        ("2.4 intelligence suite preserved","/health/unified-brain-intelligence-suite-2-4-0" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.6.0",
+        "release":"Adaptive Learning Intelligence Suite",
+        "baseline":"2.5.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "automatic_outcome_capture_foundation":True,
+            "prediction_calibration":True,
+            "recommendation_confidence_optimization":True,
+            "root_cause_pattern_learning":True,
+            "trade_performance_learning":True,
+            "schedule_outcome_learning":True,
+            "procurement_outcome_learning":True,
+            "inspection_outcome_learning":True,
+            "cross_project_pattern_intelligence":True,
+            "brain_self_evaluation":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.6.0"
+BUILD_COMMAND_RELEASE_NAME = "Adaptive Learning Intelligence Suite"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
