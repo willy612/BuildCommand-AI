@@ -34354,3 +34354,250 @@ BUILD_COMMAND_RELEASE="2.1.5"
 BUILD_COMMAND_RELEASE_NAME="Blueprint Brain Project Understanding"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 2.2.0
+# Unified Construction Brain
+# Connects Blueprint, Superintendent, Schedule, Procurement,
+# Submittals, Issues, Documents, and learned correction memory
+# into one shared project decision layer.
+# Preserves stable 2.1.5 production baseline.
+# ============================================================
+
+def _bc220_project_signals(project_id:int):
+    d = _bc200_brain(project_id)
+    if not d:
+        return None
+
+    signals = []
+    raw = d.get("signals") or {}
+    for key, val in raw.items():
+        signals.append({
+            "source":"SUPERINTENDENT",
+            "type":str(key).upper(),
+            "label":str(key).replace("_"," ").title(),
+            "value":val
+        })
+
+    for a in (d.get("actions") or [])[:100]:
+        signals.append({
+            "source":str(a.get("source_type") or "PROJECT").upper(),
+            "type":"ACTION",
+            "label":str(a.get("title") or "Project action"),
+            "value":{
+                "priority":a.get("priority"),
+                "trade":a.get("trade"),
+                "reason":a.get("reason"),
+                "recommended_action":a.get("recommended_action"),
+                "state":a.get("state")
+            }
+        })
+
+    return {
+        "project":d.get("project"),
+        "command_score":d.get("score"),
+        "critical":d.get("critical"),
+        "warning":d.get("warning"),
+        "headline":d.get("headline"),
+        "signals":signals,
+        "actions":d.get("actions") or []
+    }
+
+def _bc220_decision_layer(project_id:int, question:str="What needs leadership attention now?"):
+    sig = _bc220_project_signals(project_id)
+    if not sig:
+        return None
+
+    evidence = []
+    for s in sig["signals"][:120]:
+        evidence.append({
+            "label":f'{s.get("source")} · {s.get("label")}',
+            "value":s.get("value")
+        })
+
+    project_understanding = None
+    try:
+        project_understanding = _bc215_project_understanding(
+            question,
+            [],
+            project_id,
+            None
+        )
+    except Exception:
+        project_understanding = None
+
+    reasoning = _bc210_reason(question, project_id, "UNIFIED", evidence)
+
+    ranked_actions = sorted(
+        [dict(a) for a in sig.get("actions") or []],
+        key=lambda a:int(a.get("priority") or 0),
+        reverse=True
+    )[:20]
+
+    cross_brain = []
+    for a in ranked_actions[:10]:
+        cross_brain.append({
+            "source":str(a.get("source_type") or "PROJECT"),
+            "title":a.get("title"),
+            "priority":a.get("priority"),
+            "trade":a.get("trade"),
+            "reason":a.get("reason"),
+            "recommended_action":a.get("recommended_action")
+        })
+
+    risk_score = 0
+    risk_score += min(40, int(sig.get("critical") or 0) * 12)
+    risk_score += min(30, int(sig.get("warning") or 0) * 6)
+    if project_understanding:
+        risk_score += min(30, int(project_understanding.get("project_understanding_risk_score") or 0) // 3)
+    risk_score = min(100, risk_score)
+
+    if risk_score >= 70:
+        risk_level = "HIGH"
+    elif risk_score >= 35:
+        risk_level = "MEDIUM"
+    else:
+        risk_level = "LOW"
+
+    return {
+        "status":"ok",
+        "version":"2.2.0",
+        "project_id":project_id,
+        "question":question,
+        "command_score":sig.get("command_score"),
+        "headline":sig.get("headline"),
+        "unified_risk_score":risk_score,
+        "unified_risk_level":risk_level,
+        "reasoning":reasoning,
+        "cross_brain_priorities":cross_brain,
+        "project_understanding":project_understanding,
+        "correction_memory_count":len(_bc210_corrections(project_id,None,500)),
+        "connected_sources":[
+            "BLUEPRINT","SUPERINTENDENT","SCHEDULE","PROCUREMENT",
+            "SUBMITTALS","ISSUES","DOCUMENTS","LEARNING_MEMORY"
+        ],
+        "review_note":"Unified Brain output is decision support. Field leadership should verify project-specific conditions before acting."
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}")
+def bc220_project_brain(project_id:int, question:str="What needs leadership attention now?"):
+    result = _bc220_decision_layer(project_id, question)
+    if not result:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return result
+
+@app.post("/api/unified-construction-brain/project/{project_id}/ask")
+async def bc220_project_brain_ask(project_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    q = str(body.get("question") or "What needs leadership attention now?").strip()
+    result = _bc220_decision_layer(project_id, q)
+    if not result:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return result
+
+@app.get("/unified-construction-brain/{project_id}", response_class=_BC200_HTMLResponse)
+def bc220_project_brain_page(project_id:int):
+    d = _bc220_decision_layer(project_id)
+    if not d:
+        return _BC200_HTMLResponse("Project not found or access denied.", status_code=404)
+
+    priorities = ""
+    for i,a in enumerate(d.get("cross_brain_priorities") or [], start=1):
+        priorities += (
+            "<div class='card'>"
+            f"<div class='eyebrow'>#{i} · {_bc200_esc(a.get('source'))} · PRIORITY {_bc200_esc(a.get('priority'))}</div>"
+            f"<h3>{_bc200_esc(a.get('title'))}</h3>"
+            f"<p><b>Trade:</b> {_bc200_esc(a.get('trade') or 'Project Team')}</p>"
+            f"<p><b>Why:</b> {_bc200_esc(a.get('reason') or '')}</p>"
+            f"<p><b>Command:</b> {_bc200_esc(a.get('recommended_action') or '')}</p>"
+            "</div>"
+        )
+    if not priorities:
+        priorities = "<div class='card'><p>No active cross-brain priorities are being generated.</p></div>"
+
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">BUILDCOMMAND AI 2.2.0 · UNIFIED CONSTRUCTION BRAIN</div>
+      <h1>One Brain. One Project Truth.</h1>
+      <p>{_bc200_esc(d.get("headline"))}</p>
+    </div>
+
+    <div class="grid4">
+      <div class="card"><div class="label">Command Score</div><div class="kpi">{_bc200_esc(d.get("command_score"))}</div></div>
+      <div class="card"><div class="label">Unified Risk</div><div class="kpi">{_bc200_esc(d.get("unified_risk_score"))}</div><p>{_bc200_esc(d.get("unified_risk_level"))}</p></div>
+      <div class="card"><div class="label">Correction Memory</div><div class="kpi">{_bc200_esc(d.get("correction_memory_count"))}</div></div>
+      <div class="card"><div class="label">Connected Sources</div><div class="kpi">{len(d.get("connected_sources") or [])}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">SHARED DECISION LAYER</div>
+      <h2>Blueprint + Field + Schedule + Procurement + Submittals + Issues</h2>
+      <p>BuildCommand combines the connected project signals into one ranked leadership view.</p>
+    </div>
+
+    {priorities}
+    """
+    return _BC200_HTMLResponse(_runtime.shell("Unified Construction Brain", body))
+
+@app.get("/health/unified-construction-brain-2-2-0")
+def bc220_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("2.1.5 baseline preserved","/health/blueprint-brain-project-understanding-2-1-5" in paths),
+        ("unified signal collector",callable(globals().get("_bc220_project_signals"))),
+        ("unified decision layer",callable(globals().get("_bc220_decision_layer"))),
+        ("unified project API","/api/unified-construction-brain/project/{project_id}" in paths),
+        ("unified ask API","/api/unified-construction-brain/project/{project_id}/ask" in paths),
+        ("unified brain page","/unified-construction-brain/{project_id}" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("project understanding preserved","/api/blueprint-brain/project-understanding" in paths),
+        ("drawing intelligence preserved","/api/blueprint-brain/drawing-graph" in paths),
+        ("cross-document reasoning preserved","/api/blueprint-brain/cross-document-reason" in paths),
+        ("construction knowledge preserved","/api/blueprint-brain/construction-knowledge" in paths),
+        ("shared correction memory preserved","/api/construction-brain/corrections" in paths),
+        ("shared reasoning API preserved","/api/construction-brain/reason" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.2.0",
+        "release":"Unified Construction Brain",
+        "baseline":"2.1.5",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "shared_project_decision_layer":True,
+            "cross_brain_prioritization":True,
+            "unified_risk_score":True,
+            "blueprint_field_schedule_procurement_linkage":True,
+            "shared_learning_memory":True,
+            "project_question_reasoning":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.2.0"
+BUILD_COMMAND_RELEASE_NAME = "Unified Construction Brain"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
