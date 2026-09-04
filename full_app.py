@@ -33294,3 +33294,175 @@ BUILD_COMMAND_RELEASE="2.1.0"
 BUILD_COMMAND_RELEASE_NAME="Construction Brain Intelligence Upgrade"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 2.1.1
+# Blueprint Brain Construction Reasoning Upgrade
+# Applies learned corrections to trade responsibility reasoning,
+# adds scope conflict checks and assignment confidence/explanation.
+# Preserves stable 2.1.0 intelligence baseline.
+# ============================================================
+
+_BC211_TRADE_RULES = {
+    "ELECTRICAL": ["electrical","power","receptacle","panel","circuit","disconnect","277v","120v","208v","lighting","light fixture"],
+    "PLUMBING": ["plumbing","water heater","lavatory","urinal","water closet","floor drain","mop sink","sink","domestic water","sanitary"],
+    "HVAC": ["hvac","mechanical","duct","diffuser","exhaust fan","ef-","air handler","rtu","thermostat"],
+    "FRAMING/DRYWALL": ["metal stud","stud","gypsum","gyp board","drywall","blocking","backing","jamb","header"],
+    "PAINT": ["paint","prime","refinish","coating"],
+    "CONCRETE": ["concrete","slab","trench","patch concrete","floor restoration"],
+    "ROOFING": ["roof","roofing","roof patch","waterproofing"],
+    "CEILINGS": ["acoustical","ceiling grid","ceiling tile","suspended ceiling"],
+    "DOORS/HARDWARE": ["door","frame","hardware","hollow metal"],
+    "STOREFRONT/GLAZING": ["storefront","glazing","glass"],
+    "LOW VOLTAGE": ["card access","camera","security","low voltage","door operator","access control"],
+    "FIRE SPRINKLER": ["sprinkler","sprinkler head"],
+    "BATHROOM ACCESSORIES": ["grab bar","toilet partition","urinal screen","mirror","soap dispenser","paper towel","tissue holder"],
+    "FLOORING/TILE": ["flooring","floor tile","wall tile","rubber base","backsplash"],
+    "SPECIALTIES": ["fire extinguisher cabinet","specialties"]
+}
+
+def _bc211_rule_candidates(text_value):
+    hay=_bc210_norm(text_value)
+    scores={}
+    evidence={}
+    for trade,terms in _BC211_TRADE_RULES.items():
+        hits=[t for t in terms if t in hay]
+        if hits:
+            scores[trade]=len(hits)
+            evidence[trade]=hits
+    return scores,evidence
+
+def _bc211_trade_reason(item_text, current_trade=None, project_id=None, evidence=None):
+    evidence=list(evidence or [])
+    scores,rule_evidence=_bc211_rule_candidates(item_text)
+    learned=_bc210_match_corrections(item_text,project_id,"BLUEPRINT")
+
+    learned_trade=None
+    learned_strength=0
+    learned_reason=""
+    if learned:
+        top=learned[0]
+        learned_trade=str(top.get("corrected_value") or "").strip().upper()
+        learned_strength=int(top.get("match_score") or 0)
+        learned_reason=str(top.get("reason") or "")
+
+    ranked=sorted(scores.items(),key=lambda x:x[1],reverse=True)
+    rule_trade=ranked[0][0] if ranked else None
+    assigned=learned_trade or rule_trade or (str(current_trade).strip().upper() if current_trade else "UNASSIGNED")
+
+    conflicts=[]
+    if current_trade and assigned!="UNASSIGNED" and _bc210_norm(current_trade)!=_bc210_norm(assigned):
+        conflicts.append({
+            "type":"TRADE_ASSIGNMENT_CONFLICT",
+            "current_trade":str(current_trade),
+            "recommended_trade":assigned,
+            "reason":"Blueprint reasoning disagrees with the current trade assignment."
+        })
+    if len(ranked)>1 and ranked[0][1]==ranked[1][1]:
+        conflicts.append({
+            "type":"AMBIGUOUS_SCOPE",
+            "candidate_trades":[ranked[0][0],ranked[1][0]],
+            "reason":"Multiple trade rule sets have equal evidence."
+        })
+
+    confidence=45
+    if rule_trade: confidence+=min(25,scores.get(rule_trade,0)*8)
+    if learned_trade: confidence+=min(25,max(10,learned_strength//3))
+    confidence=min(99,confidence)
+
+    explanation=[]
+    if learned_trade:
+        explanation.append("Learned correction memory recommends "+learned_trade+
+                           ((" because "+learned_reason) if learned_reason else "."))
+    if rule_trade:
+        explanation.append("Construction terms supporting "+rule_trade+": "+", ".join(rule_evidence.get(rule_trade,[])[:8])+".")
+    if evidence:
+        explanation.append(str(len(evidence))+" drawing/spec evidence item(s) were supplied for cross-checking.")
+    if not explanation:
+        explanation.append("Insufficient construction evidence for a strong trade assignment.")
+
+    reasoning=_bc210_reason(item_text,project_id,"BLUEPRINT",evidence)
+    return {
+        "item":str(item_text),
+        "current_trade":current_trade,
+        "recommended_trade":assigned,
+        "confidence":confidence,
+        "conflicts":conflicts,
+        "explanation":explanation,
+        "rule_candidates":[{"trade":t,"score":s,"matched_terms":rule_evidence.get(t,[])} for t,s in ranked],
+        "learned_corrections":learned[:5],
+        "evidence_reasoning":reasoning
+    }
+
+@app.post("/api/blueprint-brain/trade-reason")
+async def bc211_trade_reason_api(request:_BC200_Request):
+    u=_runtime.current_user()
+    if not u:return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try: body=await request.json()
+    except Exception: body={}
+    item=str(body.get("item") or body.get("text") or "").strip()
+    if not item:return _BC200_JSONResponse({"status":"invalid_request","error":"item required"},status_code=400)
+    result=_bc211_trade_reason(item,body.get("current_trade"),body.get("project_id"),body.get("evidence") or [])
+    return {"status":"ok","version":"2.1.1",**result}
+
+@app.post("/api/blueprint-brain/scope-conflicts")
+async def bc211_scope_conflicts_api(request:_BC200_Request):
+    u=_runtime.current_user()
+    if not u:return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try: body=await request.json()
+    except Exception: body={}
+    items=body.get("items") or []
+    project_id=body.get("project_id")
+    results=[]
+    for item in items[:500]:
+        if isinstance(item,dict):
+            txt=str(item.get("item") or item.get("text") or item.get("description") or "")
+            current=item.get("trade") or item.get("current_trade")
+            ev=item.get("evidence") or []
+        else:
+            txt=str(item); current=None; ev=[]
+        if txt.strip():
+            r=_bc211_trade_reason(txt,current,project_id,ev)
+            if r["conflicts"]: results.append(r)
+    return {"status":"ok","version":"2.1.1","project_id":project_id,"conflict_count":len(results),"conflicts":results}
+
+@app.get("/api/blueprint-brain/project/{project_id}/learned-rules")
+def bc211_learned_rules(project_id:int):
+    corrections=_bc210_corrections(project_id,"BLUEPRINT",500)
+    return {"status":"ok","version":"2.1.1","project_id":project_id,"count":len(corrections),"learned_rules":corrections}
+
+@app.get("/health/blueprint-brain-construction-reasoning-2-1-1")
+def bc211_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+      ("2.1.0 intelligence baseline preserved","/health/construction-brain-intelligence-2-1-0" in paths),
+      ("trade reasoning engine",callable(globals().get("_bc211_trade_reason"))),
+      ("construction trade rules",bool(globals().get("_BC211_TRADE_RULES"))),
+      ("trade reason API","/api/blueprint-brain/trade-reason" in paths),
+      ("scope conflict API","/api/blueprint-brain/scope-conflicts" in paths),
+      ("learned rules API","/api/blueprint-brain/project/{project_id}/learned-rules" in paths),
+      ("shared correction memory preserved","/api/construction-brain/corrections" in paths),
+      ("shared reasoning API preserved","/api/construction-brain/reason" in paths),
+      ("Blueprint Brain preserved","/blueprint-brain" in paths),
+      ("Unified Brain preserved","/brain" in paths),
+      ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+      ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+      ("documents preserved","/documents" in paths),
+      ("submittals preserved","/submittals" in paths),
+      ("issues preserved","/issues" in paths),
+      ("procurement preserved","/procurement" in paths),
+      ("schedule preserved","/schedule" in paths),
+      ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False)))]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI","version":"2.1.1",
+      "release":"Blueprint Brain Construction Reasoning Upgrade","baseline":"2.1.0","passed":passed,"total":len(checks),
+      "failed":len(checks)-passed,"stage_ready":passed==len(checks),
+      "features":{"learned_trade_corrections":True,"trade_responsibility_reasoning":True,"scope_conflict_detection":True,
+      "assignment_confidence":True,"assignment_explanations":True,"drawing_spec_evidence_envelope":True},
+      "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE="2.1.1"
+BUILD_COMMAND_RELEASE_NAME="Blueprint Brain Construction Reasoning Upgrade"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
