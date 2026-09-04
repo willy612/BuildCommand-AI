@@ -32657,3 +32657,172 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.0.4
+# Superintendent Command Center - Phase 2
+# Adds field-ready daily brief + risk pulse without changing stable 2.0.3 core.
+# ============================================================
+
+def _bc204_risk_pulse(project_id:int):
+    d = _bc200_brain(project_id)
+    if not d:
+        return None
+
+    actions = list(d.get("actions") or [])
+    critical = [a for a in actions if int(a.get("priority") or 0) >= 90]
+    warnings = [a for a in actions if 75 <= int(a.get("priority") or 0) < 90]
+    watch = [a for a in actions if int(a.get("priority") or 0) < 75]
+
+    top_trade = None
+    if d.get("top_trades"):
+        try:
+            top_trade = d["top_trades"][0][0]
+        except Exception:
+            top_trade = None
+
+    risk_level = "LOW"
+    if critical:
+        risk_level = "HIGH"
+    elif warnings:
+        risk_level = "MEDIUM"
+
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "risk_level": risk_level,
+        "command_score": d.get("score"),
+        "critical_count": len(critical),
+        "warning_count": len(warnings),
+        "watch_count": len(watch),
+        "top_pressure_trade": top_trade,
+        "headline": d.get("headline"),
+        "top_critical": critical[:5],
+        "top_warnings": warnings[:5],
+        "generated_at": _BC200_datetime.utcnow().isoformat(),
+    }
+
+@app.get("/api/superintendent-command/{project_id}/risk-pulse")
+def bc204_risk_pulse_api(project_id:int):
+    payload = _bc204_risk_pulse(project_id)
+    if not payload:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return payload
+
+@app.get("/superintendent-command/{project_id}/daily-brief", response_class=_BC200_HTMLResponse)
+def bc204_daily_brief_page(project_id:int):
+    d = _bc200_brain(project_id)
+    if not d:
+        return _BC200_HTMLResponse("Project not found or access denied.", status_code=404)
+
+    p = d.get("project") or {}
+    morning = d.get("morning") or []
+    midday = d.get("midday") or []
+    closeout = d.get("closeout") or []
+
+    def item_rows(items):
+        if not items:
+            return "<p class='muted'>No active command items in this block.</p>"
+        rows = ""
+        for a in items:
+            rows += (
+                "<div class='card'>"
+                "<div class='eyebrow'>"+_bc200_esc(a.get("band"))+
+                " · PRIORITY "+_bc200_esc(a.get("priority"))+
+                " · "+_bc200_esc(a.get("trade") or "Project Team")+"</div>"
+                "<h3>"+_bc200_esc(a.get("title") or "Project action")+"</h3>"
+                "<p><b>Why:</b> "+_bc200_esc(a.get("reason") or "")+"</p>"
+                "<p><b>Command:</b> "+_bc200_esc(a.get("recommended_action") or "")+"</p>"
+                "</div>"
+            )
+        return rows
+
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">BUILDCOMMAND AI 2.0.4 · DAILY FIELD BRIEF</div>
+      <h1>{_bc200_esc(p.get("name") or "Project")}</h1>
+      <p>{_bc200_esc(d.get("headline"))}</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+        <a class="btn" href="/superintendent-command/{project_id}">Back to Command Center</a>
+        <button class="btn secondary" onclick="window.print()">Print / Save Brief</button>
+      </div>
+    </div>
+
+    <div class="grid4">
+      <div class="card"><div class="label">Command Score</div><div class="kpi">{_bc200_esc(d.get("score"))}</div></div>
+      <div class="card"><div class="label">Critical</div><div class="kpi">{_bc200_esc(d.get("critical"))}</div></div>
+      <div class="card"><div class="label">Warnings</div><div class="kpi">{_bc200_esc(d.get("warning"))}</div></div>
+      <div class="card"><div class="label">Open Actions</div><div class="kpi">{len(d.get("actions") or [])}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">MORNING PLAN</div>
+      <h2>Clear the road</h2>
+      {item_rows(morning)}
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">MIDDAY PLAN</div>
+      <h2>Verify and follow through</h2>
+      {item_rows(midday)}
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">END-OF-DAY CLOSEOUT</div>
+      <h2>Protect tomorrow</h2>
+      {item_rows(closeout)}
+    </div>
+    """
+    return _BC200_HTMLResponse(_runtime.shell("Daily Field Brief", body))
+
+@app.get("/health/superintendent-command-phase-2-2-0-4")
+def bc204_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+
+    checks = [
+        ("2.0.3 production baseline preserved", "/health/production-smoke-2-0-3" in paths),
+        ("command center preserved", "/superintendent-command/{project_id}" in paths),
+        ("daily brief API preserved", "/api/superintendent-command/{project_id}/daily-brief" in paths),
+        ("action state API preserved", "/api/superintendent-command/{project_id}/action-state" in paths),
+        ("risk pulse API", "/api/superintendent-command/{project_id}/risk-pulse" in paths),
+        ("daily field brief page", "/superintendent-command/{project_id}/daily-brief" in paths),
+        ("Blueprint Brain preserved", "/blueprint-brain" in paths),
+        ("Unified Brain preserved", "/brain" in paths),
+        ("documents preserved", "/documents" in paths),
+        ("daily reports preserved", "/daily-report" in paths),
+        ("submittals preserved", "/submittals" in paths),
+        ("issues preserved", "/issues" in paths),
+        ("procurement preserved", "/procurement" in paths),
+        ("schedule preserved", "/schedule" in paths),
+        ("lookahead preserved", "/lookahead-intelligence" in paths),
+        ("startup purge disabled", not bool(globals().get("_BC181895_RESET_ENABLED", False))),
+        ("risk pulse engine", callable(globals().get("_bc204_risk_pulse"))),
+    ]
+
+    passed = sum(bool(ok) for _, ok in checks)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": "2.0.4",
+        "release": "Superintendent Command Center - Phase 2",
+        "baseline": "2.0.3",
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "stage_ready": passed == len(checks),
+        "checks": [{"case": n, "passed": bool(v)} for n, v in checks],
+        "features": {
+            "daily_field_brief_page": True,
+            "printable_brief": True,
+            "risk_pulse_api": True,
+            "morning_midday_closeout_plan": True,
+        }
+    }
+
+BUILD_COMMAND_RELEASE = "2.0.4"
+BUILD_COMMAND_RELEASE_NAME = "Superintendent Command Center - Phase 2"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
