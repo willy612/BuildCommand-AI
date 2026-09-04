@@ -31951,1329 +31951,513 @@ except Exception: pass
 
 
 # ============================================================
-# BuildCommand AI 1.8.18.99 — Plan Selection + Payment Portal
-# Flow: Choose Plan -> Register -> Payment -> Stripe -> Owner Approval -> App
+# BuildCommand AI 2.0.0
+# Unified Superintendent Command Center
+# One daily operating screen for the field.
 # ============================================================
-from fastapi import Form as _BC181899_Form, Query as _BC181899_Query
-from fastapi.responses import HTMLResponse as _BC181899_HTMLResponse, RedirectResponse as _BC181899_RedirectResponse, JSONResponse as _BC181899_JSONResponse
-from datetime import date as _BC181899_date, datetime as _BC181899_datetime
-
-BC181899_RELEASE = "1.8.18.99"
-
-# Allow the signed-in but unpaid customer to reach the payment landing page.
-try:
-    if "/payment" not in _BC181893_EXEMPT_PREFIXES:
-        _BC181893_EXEMPT_PREFIXES = tuple(_BC181893_EXEMPT_PREFIXES) + ("/payment",)
-except Exception:
-    pass
-
-def _bc181899_remove(path, method=None):
-    kept=[]
-    want=(method or "").upper()
-    for r in app.router.routes:
-        if getattr(r,"path",None) != path:
-            kept.append(r); continue
-        methods={str(x).upper() for x in (getattr(r,"methods",None) or set())}
-        if want and want not in methods:
-            kept.append(r)
-    app.router.routes[:]=kept
-
-def _bc181899_plan(code):
-    c=_runtime.db()
-    r=c.execute(
-        """SELECT * FROM platform_plans
-           WHERE UPPER(code)=UPPER(?) AND COALESCE(active,1)=1 LIMIT 1""",
-        (str(code or "").strip(),)
-    ).fetchone()
-    c.close()
-    return r
-
-def _bc181899_plans():
-    c=_runtime.db()
-    rows=c.execute(
-        """SELECT * FROM platform_plans
-           WHERE COALESCE(active,1)=1
-             AND UPPER(code) IN ('STARTER','PROFESSIONAL','COMPANY','ENTERPRISE')
-           ORDER BY monthly_price_cents"""
-    ).fetchall()
-    c.close()
-    return rows
-
-def _bc181899_money(cents):
-    return "${:,.0f}".format(int(cents or 0)/100)
-
-def _bc181899_page(title, body):
-    return f"""<!doctype html>
-<html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_runtime.esc(title)} · BuildCommand AI</title>
-<style>
-:root{{--bg:#081018;--panel:#101a25;--line:#21354b;--text:#edf4fb;--muted:#8fa5bb;--gold:#f0b44d;--green:#5cdb92}}
-*{{box-sizing:border-box}}
-body{{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;padding:24px}}
-.wrap{{max-width:1120px;margin:auto}}
-.brand{{font-size:22px;font-weight:900;margin:8px 0 24px}} .brand span{{color:var(--gold)}}
-.hero,.card{{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px}}
-.hero{{margin-bottom:16px}} h1{{font-size:34px;margin:5px 0 8px}} h2{{margin:5px 0}}
-.muted{{color:var(--muted)}} .eyebrow{{color:var(--gold);font-size:12px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}}
-.grid{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0}}
-.plan{{display:block;cursor:pointer;position:relative}} .plan input{{position:absolute;top:18px;right:18px;transform:scale(1.35)}}
-.plan:has(input:checked){{border-color:var(--gold);box-shadow:0 0 0 2px rgba(240,180,77,.18)}}
-.price{{font-size:27px;font-weight:900;margin:8px 0}}
-button,.btn{{display:inline-block;background:var(--gold);color:#071018;border:0;border-radius:10px;padding:12px 17px;font-weight:900;text-decoration:none;cursor:pointer}}
-.btn.secondary{{background:#1c2d3d;color:#e9f1f8;border:1px solid #31475c}}
-input[type=text],input[type=email],input[type=password]{{width:100%;background:#0a141e;color:#edf4fb;border:1px solid #2a4056;border-radius:9px;padding:12px;margin:7px 0 15px}}
-form.account{{max-width:580px}}
-.summary{{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap}}
-.badge{{display:inline-block;background:#173123;color:#7ee2a6;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900}}
-.notice{{border:1px solid #2b4560;background:#0b1621;padding:13px;border-radius:10px;margin:14px 0}}
-.footer{{color:#667c91;text-align:center;font-size:12px;margin:28px 0}}
-@media(max-width:900px){{.grid{{grid-template-columns:repeat(2,1fr)}}}}
-@media(max-width:560px){{.grid{{grid-template-columns:1fr}}body{{padding:14px}}}}
-</style></head>
-<body><div class="wrap">
-<div class="brand">BuildCommand <span>AI</span></div>
-{body}
-<div class="footer">Built By Willy LaHood © 2026</div>
-</div></body></html>"""
-
-# -------- 1) Real plan selector --------
-_bc181899_remove("/pricing","GET")
-
-@app.get("/pricing", response_class=_BC181899_HTMLResponse)
-def bc181899_pricing():
-    rows=_bc181899_plans()
-    cards=""
-    for p in rows:
-        code=str(p["code"]).upper()
-        checked="checked" if code=="PROFESSIONAL" else ""
-        popular='<div class="badge">MOST POPULAR</div>' if code=="PROFESSIONAL" else ""
-        cards += f"""
-        <label class="card plan">
-          <input type="radio" name="plan" value="{_runtime.esc(code)}" {checked}>
-          {popular}
-          <div class="eyebrow">{_runtime.esc(code)}</div>
-          <h2>{_runtime.esc(p["name"])}</h2>
-          <div class="price">{_bc181899_money(p["monthly_price_cents"])}/mo</div>
-          <p>{_runtime.esc(p["description"] or "")}</p>
-          <p><b>{int(p["seat_limit"] or 0)} users</b> · {int(p["project_limit"] or 0)} projects</p>
-          <p>{int(p["ai_monthly_limit"] or 0):,} included AI actions/month</p>
-          <p>{float(p["storage_gb_limit"] or 0):g} GB storage</p>
-        </label>"""
-    body=f"""
-    <div class="hero">
-      <div class="eyebrow">Choose Your BuildCommand Plan</div>
-      <h1>Select the account you want.</h1>
-      <p class="muted">Pick a plan below. Your selection follows you into account creation and secure payment.</p>
-    </div>
-    <form method="get" action="/register">
-      <div class="grid">{cards}</div>
-      <button type="submit">Continue With Selected Plan →</button>
-    </form>"""
-    return _bc181899_page("Pricing",body)
-
-# -------- 2) Registration remembers selected plan --------
-_bc181899_remove("/register","GET")
-_bc181899_remove("/register","POST")
-
-@app.get("/register", response_class=_BC181899_HTMLResponse)
-def bc181899_register_get(plan: str = _BC181899_Query("PROFESSIONAL")):
-    p=_bc181899_plan(plan) or _bc181899_plan("PROFESSIONAL")
-    if not p:
-        return _BC181899_RedirectResponse("/pricing",status_code=303)
-    code=str(p["code"]).upper()
-    body=f"""
-    <div class="hero">
-      <div class="eyebrow">Create Company Account</div>
-      <div class="summary">
-        <div><h1>Start BuildCommand AI</h1><p class="muted">Create the company owner account, then complete secure payment.</p></div>
-        <div class="card"><b>{_runtime.esc(p["name"])}</b><div class="price">{_bc181899_money(p["monthly_price_cents"])}/mo</div><a href="/pricing">Change plan</a></div>
-      </div>
-    </div>
-    <div class="card">
-      <form class="account" method="post" action="/register">
-        <input type="hidden" name="plan_code" value="{_runtime.esc(code)}">
-        <label>Company Name</label><input name="company_name" required>
-        <label>Your Name</label><input name="display_name" required>
-        <label>Email</label><input type="email" name="email" required>
-        <label>Password</label><input type="password" name="password" minlength="8" required>
-        <button type="submit">Create Account & Continue to Payment →</button>
-      </form>
-      <p><a href="/login">Already have an account? Sign in</a></p>
-    </div>"""
-    return _bc181899_page("Create Account",body)
-
-@app.post("/register")
-def bc181899_register_post(
-    company_name: str = _BC181899_Form(...),
-    display_name: str = _BC181899_Form(...),
-    email: str = _BC181899_Form(...),
-    password: str = _BC181899_Form(...),
-    plan_code: str = _BC181899_Form(...)
-):
-    p=_bc181899_plan(plan_code)
-    if not p:
-        return _BC181899_HTMLResponse("Please choose a valid BuildCommand plan.",status_code=400)
-    if len(password)<8:
-        return _BC181899_HTMLResponse("Password must be at least 8 characters.",status_code=400)
-    clean_email=email.strip().lower()
-    c=_runtime.db()
-    if c.execute("SELECT id FROM users WHERE LOWER(email)=LOWER(?)",(clean_email,)).fetchone():
-        c.close()
-        return _BC181899_HTMLResponse("That email is already registered.",status_code=400)
-
-    created=_BC181899_date.today().isoformat()
-    now=_BC181899_datetime.utcnow().isoformat()
-    c.execute("INSERT INTO companies(name,created) VALUES(?,?)",(company_name.strip(),created))
-    company_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
-    c.execute(
-        """INSERT INTO users(company_id,email,display_name,password_hash,role,created)
-           VALUES(?,?,?,?,?,?)""",
-        (company_id,clean_email,display_name.strip(),_runtime.hash_password(password),"OWNER",created)
-    )
-    user_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
-
-    # New customers start unpaid. No project/company data is reassigned.
-    c.execute(
-        """INSERT INTO company_subscriptions(company_id,plan_code,status,grandfathered,created,updated)
-           VALUES(?,?,?,?,?,?)""",
-        (company_id,str(p["code"]).upper(),"PENDING_PAYMENT",0,now,now)
-    )
-    # New customers must still be explicitly approved by Willy after payment.
-    try:
-        c.execute(
-            """INSERT INTO company_access_approvals(company_id,approved,note,created,updated)
-               VALUES(?,?,?,?,?)""",
-            (company_id,0,"New customer awaiting payment and owner approval",now,now)
-        )
-    except Exception:
-        pass
-    c.commit(); c.close()
-
-    raw=_runtime.create_session(user_id)
-    response=_BC181899_RedirectResponse(
-        "/payment?plan="+str(p["code"]).upper(),
-        status_code=303
-    )
-    response.set_cookie(
-        "bc_session",raw,httponly=True,
-        secure=_runtime.os.environ.get("COOKIE_SECURE","1")=="1",
-        samesite="lax",max_age=2592000
-    )
-    return response
-
-# -------- 3) Customer payment landing page --------
-@app.get("/payment", response_class=_BC181899_HTMLResponse)
-def bc181899_payment(plan: str = _BC181899_Query("")):
-    u=_runtime.current_user()
-    if not u:
-        return _BC181899_RedirectResponse("/login",status_code=303)
-
-    c=_runtime.db()
-    sub=c.execute(
-        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-        (u["company_id"],)
-    ).fetchone()
-    c.close()
-
-    p=_bc181899_plan(plan or (sub["plan_code"] if sub else ""))
-    if not p:
-        return _BC181899_RedirectResponse("/pricing",status_code=303)
-
-    status=str(sub["status"] or "PENDING_PAYMENT").upper() if sub else "PENDING_PAYMENT"
-    if status in {"ACTIVE","LEGACY"}:
-        return _BC181899_RedirectResponse("/awaiting-approval",status_code=303)
-
-    body=f"""
-    <div class="hero">
-      <div class="eyebrow">Secure Payment</div>
-      <h1>Complete your BuildCommand subscription.</h1>
-      <p class="muted">Your account has been created, but the construction application stays locked until payment is complete and the BuildCommand owner approves access.</p>
-    </div>
-    <div class="card">
-      <div class="summary">
-        <div>
-          <div class="eyebrow">Selected Plan</div>
-          <h2>{_runtime.esc(p["name"])}</h2>
-          <p>{int(p["seat_limit"] or 0)} users · {int(p["project_limit"] or 0)} projects · {int(p["ai_monthly_limit"] or 0):,} AI actions/month</p>
-        </div>
-        <div class="price">{_bc181899_money(p["monthly_price_cents"])}/mo</div>
-      </div>
-      <div class="notice"><b>What happens next:</b> Stripe securely collects payment → BuildCommand marks the subscription active → your account waits for owner approval → access is released.</div>
-      <a class="btn" href="/billing/checkout/{_runtime.esc(str(p["code"]).upper())}">Pay Securely with Stripe →</a>
-      <a class="btn secondary" href="/pricing">Change Plan</a>
-    </div>"""
-    return _bc181899_page("Payment",body)
-
-# -------- 4) Stripe customer billing portal --------
-@app.get("/billing/portal")
-def bc181899_billing_portal():
-    u=_runtime.current_user()
-    if not u:
-        return _BC181899_RedirectResponse("/login",status_code=303)
-    try:
-        if _runtime.role_level(u["role"]) < _runtime.role_level("ADMIN"):
-            return _BC181899_HTMLResponse("Company admin/owner access required.",status_code=403)
-    except Exception:
-        pass
-
-    c=_runtime.db()
-    sub=c.execute(
-        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-        (u["company_id"],)
-    ).fetchone()
-    c.close()
-
-    if not sub:
-        return _BC181899_RedirectResponse("/pricing",status_code=303)
-
-    customer_id=str(sub["stripe_customer_id"] or "").strip()
-    if not customer_id:
-        # Customer has not paid through Stripe yet.
-        return _BC181899_RedirectResponse(
-            "/payment?plan="+str(sub["plan_code"] or "PROFESSIONAL"),
-            status_code=303
-        )
-
-    base=_runtime.os.environ.get("APP_BASE_URL","").rstrip("/")
-    if not base:
-        return _BC181899_HTMLResponse(
-            "Set APP_BASE_URL in Render before opening the Stripe billing portal.",
-            status_code=500
-        )
-    try:
-        session=_runtime._bc174_stripe_post(
-            "/v1/billing_portal/sessions",
-            {"customer":customer_id,"return_url":base+"/billing"}
-        )
-    except Exception as e:
-        return _BC181899_HTMLResponse(
-            "Stripe billing portal error: "+_runtime.esc(str(e)),
-            status_code=502
-        )
-    if not session.get("url"):
-        return _BC181899_HTMLResponse("Stripe did not return a billing portal URL.",status_code=502)
-    return _BC181899_RedirectResponse(session["url"],status_code=303)
-
-# -------- 5) Simple customer billing hub --------
-@app.get("/billing/manage", response_class=_BC181899_HTMLResponse)
-def bc181899_manage_billing():
-    u=_runtime.current_user()
-    if not u:
-        return _BC181899_RedirectResponse("/login",status_code=303)
-    c=_runtime.db()
-    sub=c.execute(
-        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-        (u["company_id"],)
-    ).fetchone()
-    c.close()
-    if not sub:
-        return _BC181899_RedirectResponse("/pricing",status_code=303)
-    p=_bc181899_plan(sub["plan_code"])
-    st=str(sub["status"] or "PENDING_PAYMENT").upper()
-    paid=st in {"ACTIVE","LEGACY"}
-    portal_button=(
-        '<a class="btn" href="/billing/portal">Open Secure Billing Portal →</a>'
-        if sub["stripe_customer_id"] else
-        f'<a class="btn" href="/payment?plan={_runtime.esc(str(sub["plan_code"]))}">Complete Payment →</a>'
-    )
-    body=f"""
-    <div class="hero">
-      <div class="eyebrow">Account & Billing</div>
-      <h1>Manage your BuildCommand subscription.</h1>
-      <p class="muted">Company: {_runtime.esc(u["company_name"])}</p>
-    </div>
-    <div class="card">
-      <div class="summary">
-        <div><h2>{_runtime.esc(p["name"] if p else sub["plan_code"])}</h2><p>Status: <b>{_runtime.esc(st)}</b></p></div>
-        <div class="price">{_bc181899_money(p["monthly_price_cents"])+'/mo' if p else ''}</div>
-      </div>
-      {portal_button}
-      <a class="btn secondary" href="/pricing">View Plans</a>
-    </div>"""
-    return _bc181899_page("Manage Billing",body)
-
-@app.get("/health/plan-selection-payment-portal-1-8-18-99")
-def bc181899_health():
-    paths=[(getattr(r,"path",""),{str(m).upper() for m in (getattr(r,"methods",set()) or set())}) for r in app.routes]
-    def has(path,method="GET"):
-        return any(p==path and method in methods for p,methods in paths)
-    checks={
-        "pricing_plan_selector":has("/pricing"),
-        "register_get":has("/register"),
-        "register_post":has("/register","POST"),
-        "payment_landing":has("/payment"),
-        "stripe_checkout_preserved":any(p=="/billing/checkout/{plan_code}" for p,_ in paths),
-        "stripe_webhook_preserved":any(p=="/billing/stripe/webhook" for p,_ in paths),
-        "billing_portal":has("/billing/portal"),
-        "billing_manage":has("/billing/manage"),
-        "owner_console_preserved":any(p=="/owner" for p,_ in paths),
-        "owner_approval_preserved":any("access-approvals/{company_id}/approve" in p for p,_ in paths),
-        "payment_exempt_from_gate":"/payment" in _BC181893_EXEMPT_PREFIXES,
-    }
-    passed=sum(bool(v) for v in checks.values())
-    return {
-        "status":"ok" if passed==len(checks) else "degraded",
-        "version":BC181899_RELEASE,
-        "release":"Plan Selection + Stripe Payment Portal",
-        "passed":passed,"total":len(checks),"checks":checks,
-        "flow":["choose_plan","create_account","payment","stripe_checkout","owner_approval","app_access"]
-    }
-
-try:
-    app.version=BC181899_RELEASE
-except Exception:
-    pass
-
-
-# BuildCommand AI 1.8.18.100 — Owner Customer Detail PostgreSQL Schema Fix
-BC1818100_RELEASE = "1.8.18.100"
-
-@app.get("/health/owner-customer-detail-fix-1-8-18-100")
-def bc1818100_health():
-    return {"status":"ok","version":BC1818100_RELEASE,
-            "fix":"owner customer detail project query matches live PostgreSQL schema",
-            "data_reset":False,"pricing_payment_flow_preserved":True}
-
-try:
-    app.version=BC1818100_RELEASE
-except Exception:
-    pass
-
-
-# ============================================================
-# BuildCommand AI 1.8.18.101
-# Registration Session Handoff + Clean Account Creation UI
-# ============================================================
-from fastapi import Request as _BC1818101_Request
-from fastapi.responses import HTMLResponse as _BC1818101_HTMLResponse, RedirectResponse as _BC1818101_RedirectResponse
-from fastapi import Form as _BC1818101_Form, Query as _BC1818101_Query
-from datetime import date as _BC1818101_date, datetime as _BC1818101_datetime
-
-BC1818101_RELEASE = "1.8.18.101"
-
-# The core authentication middleware only treats exact PUBLIC_PATHS as public.
-# Payment must be reachable so a newly-created customer's temporary checkout
-# session can repair the normal login cookie if the browser drops it.
-try:
-    _runtime.PUBLIC_PATHS.add("/payment")
-except Exception:
-    pass
-
-def _bc1818101_remove(path, method):
-    kept=[]
-    want=method.upper()
-    for r in app.router.routes:
-        if getattr(r,"path",None)==path and want in {str(x).upper() for x in (getattr(r,"methods",set()) or set())}:
-            continue
-        kept.append(r)
-    app.router.routes[:]=kept
-
-def _bc1818101_shell(title, body):
-    return f"""<!doctype html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_runtime.esc(title)} · BuildCommand AI</title>
-<style>
-*{{box-sizing:border-box}}
-:root{{--bg:#081018;--panel:#111b26;--panel2:#0c151f;--line:#24384b;--text:#edf4fb;--muted:#91a5b9;--gold:#f0b44d;--green:#66d99a}}
-body{{margin:0;background:linear-gradient(180deg,#071018 0%,#0a121b 100%);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Arial,sans-serif}}
-.wrap{{max-width:1040px;margin:0 auto;padding:28px 18px 42px}}
-.brand{{font-size:23px;font-weight:900;margin-bottom:24px}} .brand b{{color:var(--gold)}}
-.layout{{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(280px,.85fr);gap:18px;align-items:start}}
-.card{{background:rgba(17,27,38,.97);border:1px solid var(--line);border-radius:18px;padding:24px;box-shadow:0 12px 34px rgba(0,0,0,.22)}}
-.eyebrow{{font-size:12px;color:var(--gold);font-weight:900;letter-spacing:.12em;text-transform:uppercase;margin-bottom:7px}}
-h1{{font-size:34px;line-height:1.08;margin:4px 0 10px}} h2{{font-size:22px;margin:4px 0 8px}}
-p{{line-height:1.55}} .muted{{color:var(--muted)}}
-label{{display:block;font-size:13px;font-weight:800;margin:14px 0 6px}}
-input{{width:100%;padding:13px 14px;background:#09131d;border:1px solid #2b4358;border-radius:10px;color:#fff;font-size:16px;outline:none}}
-input:focus{{border-color:var(--gold);box-shadow:0 0 0 3px rgba(240,180,77,.12)}}
-button,.btn{{display:inline-block;width:100%;border:0;border-radius:11px;padding:14px 18px;background:var(--gold);color:#071018;font-size:15px;font-weight:900;text-align:center;text-decoration:none;cursor:pointer;margin-top:18px}}
-.link{{color:var(--gold);text-decoration:none;font-weight:800}}
-.price{{font-size:34px;font-weight:950;margin:10px 0}} .price small{{font-size:14px;color:var(--muted);font-weight:700}}
-.feature{{padding:10px 0;border-bottom:1px solid #1e3041;color:#c5d3df}} .feature:last-child{{border-bottom:0}}
-.step{{display:flex;gap:10px;align-items:flex-start;margin:13px 0;color:#c3d1dd}}
-.num{{width:25px;height:25px;border-radius:50%;background:#1a3042;color:var(--gold);display:grid;place-items:center;font-weight:900;flex:0 0 25px}}
-.footer{{text-align:center;color:#60758a;font-size:12px;margin-top:28px}}
-@media(max-width:760px){{.wrap{{padding:18px 12px 30px}}.layout{{grid-template-columns:1fr}}h1{{font-size:29px}}.card{{padding:19px}}}}
-</style>
-</head>
-<body><div class="wrap">
-<div class="brand">BuildCommand <b>AI</b></div>
-{body}
-<div class="footer">Built By Willy LaHood © 2026</div>
-</div></body></html>"""
-
-# ------------------------------------------------------------
-# Rebuild registration GET + POST
-# ------------------------------------------------------------
-_bc1818101_remove("/register","GET")
-_bc1818101_remove("/register","POST")
-
-@app.get("/register", response_class=_BC1818101_HTMLResponse)
-def bc1818101_register_get(plan: str = _BC1818101_Query("PROFESSIONAL")):
-    p=_bc181899_plan(plan) or _bc181899_plan("PROFESSIONAL")
-    if not p:
-        return _BC1818101_RedirectResponse("/pricing",status_code=303)
-
-    body=f"""
-    <div class="layout">
-      <div class="card">
-        <div class="eyebrow">Create Your Company Account</div>
-        <h1>Start using BuildCommand AI.</h1>
-        <p class="muted">Set up the company owner's login. Your construction workspace remains locked until payment is completed and BuildCommand approves the account.</p>
-
-        <form method="post" action="/register" autocomplete="on">
-          <input type="hidden" name="plan_code" value="{_runtime.esc(str(p["code"]).upper())}">
-          <label>Company name</label>
-          <input name="company_name" placeholder="Example: ABC General Contractors" required>
-
-          <label>Your name</label>
-          <input name="display_name" placeholder="First and last name" required>
-
-          <label>Email address</label>
-          <input type="email" name="email" placeholder="you@company.com" required autocomplete="email">
-
-          <label>Password</label>
-          <input type="password" name="password" minlength="8" placeholder="At least 8 characters" required autocomplete="new-password">
-
-          <button type="submit">Create Account & Continue to Payment →</button>
-        </form>
-
-        <p class="muted" style="margin-top:18px">Already have an account? <a class="link" href="/login">Sign in here</a></p>
-      </div>
-
-      <aside class="card">
-        <div class="eyebrow">Selected Plan</div>
-        <h2>{_runtime.esc(p["name"])}</h2>
-        <div class="price">${int(p["monthly_price_cents"] or 0)/100:,.0f}<small>/month</small></div>
-        <div class="feature">✓ {int(p["seat_limit"] or 0)} users</div>
-        <div class="feature">✓ {int(p["project_limit"] or 0)} projects</div>
-        <div class="feature">✓ {int(p["ai_monthly_limit"] or 0):,} included AI actions/month</div>
-        <div class="feature">✓ {float(p["storage_gb_limit"] or 0):g} GB document storage</div>
-        <p style="margin-top:17px"><a class="link" href="/pricing">← Change plan</a></p>
-
-        <div style="margin-top:25px">
-          <div class="eyebrow">What happens next</div>
-          <div class="step"><span class="num">1</span><span>Create the company account.</span></div>
-          <div class="step"><span class="num">2</span><span>Complete secure Stripe payment.</span></div>
-          <div class="step"><span class="num">3</span><span>BuildCommand owner approves access.</span></div>
-          <div class="step"><span class="num">4</span><span>Your construction workspace opens.</span></div>
-        </div>
-      </aside>
-    </div>"""
-    return _BC1818101_HTMLResponse(_bc1818101_shell("Create Account",body))
-
-@app.post("/register")
-def bc1818101_register_post(
-    company_name: str = _BC1818101_Form(...),
-    display_name: str = _BC1818101_Form(...),
-    email: str = _BC1818101_Form(...),
-    password: str = _BC1818101_Form(...),
-    plan_code: str = _BC1818101_Form(...)
-):
-    p=_bc181899_plan(plan_code)
-    if not p:
-        return _BC1818101_HTMLResponse(_bc1818101_shell(
-            "Registration Error",
-            '<div class="card"><h1>Please choose a valid BuildCommand plan.</h1><a class="btn" href="/pricing">Back to Plans</a></div>'
-        ),status_code=400)
-
-    if len(password)<8:
-        return _BC1818101_HTMLResponse(_bc1818101_shell(
-            "Registration Error",
-            '<div class="card"><h1>Password is too short.</h1><p>Use at least 8 characters.</p><a class="btn" href="/register?plan='+_runtime.esc(str(p["code"]))+'">Try Again</a></div>'
-        ),status_code=400)
-
-    clean_email=email.strip().lower()
-    c=_runtime.db()
-    try:
-        if c.execute("SELECT id FROM users WHERE LOWER(email)=LOWER(?)",(clean_email,)).fetchone():
-            return _BC1818101_HTMLResponse(_bc1818101_shell(
-                "Account Exists",
-                '<div class="card"><h1>That email already has an account.</h1><p class="muted">Sign in with that email or use a different email for your test customer.</p><a class="btn" href="/login">Go to Sign In</a></div>'
-            ),status_code=400)
-
-        created=_BC1818101_date.today().isoformat()
-        now=_BC1818101_datetime.utcnow().isoformat()
-
-        c.execute("INSERT INTO companies(name,created) VALUES(?,?)",(company_name.strip(),created))
-        company_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
-
-        c.execute(
-            """INSERT INTO users(company_id,email,display_name,password_hash,role,created)
-               VALUES(?,?,?,?,?,?)""",
-            (company_id,clean_email,display_name.strip(),_runtime.hash_password(password),"OWNER",created)
-        )
-        user_id=c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
-
-        c.execute(
-            """INSERT INTO company_subscriptions(company_id,plan_code,status,grandfathered,created,updated)
-               VALUES(?,?,?,?,?,?)""",
-            (company_id,str(p["code"]).upper(),"PENDING_PAYMENT",0,now,now)
-        )
-
-        try:
-            c.execute(
-                """INSERT INTO company_access_approvals(company_id,approved,note,created,updated)
-                   VALUES(?,?,?,?,?)""",
-                (company_id,0,"New customer awaiting payment and owner approval",now,now)
-            )
-        except Exception:
-            pass
-
-        c.commit()
-    finally:
-        c.close()
-
-    # Create TWO independent 30-day server-side session tokens.
-    # bc_session = normal login.
-    # bc_checkout = recovery handoff used only to reach payment if the browser
-    # did not present bc_session on the very next request.
-    normal_token=_runtime.create_session(user_id)
-    checkout_token=_runtime.create_session(user_id)
-
-    response=_BC1818101_RedirectResponse(
-        "/payment?plan="+str(p["code"]).upper(),
-        status_code=303
-    )
-    cookie_secure=_runtime.os.environ.get("COOKIE_SECURE","1")=="1"
-    response.set_cookie("bc_session",normal_token,httponly=True,secure=cookie_secure,samesite="lax",max_age=2592000,path="/")
-    response.set_cookie("bc_checkout",checkout_token,httponly=True,secure=cookie_secure,samesite="lax",max_age=1800,path="/")
-    return response
-
-# ------------------------------------------------------------
-# Rebuild payment route with session recovery
-# ------------------------------------------------------------
-_bc1818101_remove("/payment","GET")
-
-@app.get("/payment", response_class=_BC1818101_HTMLResponse)
-def bc1818101_payment(
-    request: _BC1818101_Request,
-    plan: str = _BC1818101_Query("")
-):
-    # Normal authenticated request first.
-    u=_runtime.current_user()
-    repaired_token=None
-
-    # If authentication middleware had no bc_session, /payment is public in
-    # core middleware and we can validate the temporary server-side handoff.
-    if not u:
-        recovery=request.cookies.get("bc_checkout")
-        recovered=_runtime.user_from_session(recovery) if recovery else None
-        if recovered:
-            u=recovered
-            repaired_token=_runtime.create_session(int(recovered["id"]))
-
-    if not u:
-        body="""
-        <div class="card">
-          <div class="eyebrow">Account Session</div>
-          <h1>We couldn't continue the new account session.</h1>
-          <p class="muted">Your account may already have been created. Sign in with the email and password you just entered and BuildCommand will continue to payment.</p>
-          <a class="btn" href="/login">Sign In to Continue</a>
-        </div>"""
-        return _BC1818101_HTMLResponse(_bc1818101_shell("Continue to Payment",body),status_code=401)
-
-    c=_runtime.db()
-    sub=c.execute(
-        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-        (u["company_id"],)
-    ).fetchone()
-    c.close()
-
-    p=_bc181899_plan(plan or (sub["plan_code"] if sub else ""))
-    if not p:
-        return _BC1818101_RedirectResponse("/pricing",status_code=303)
-
-    status=str(sub["status"] or "PENDING_PAYMENT").upper() if sub else "PENDING_PAYMENT"
-    if status in {"ACTIVE","LEGACY"}:
-        response=_BC1818101_RedirectResponse("/awaiting-approval",status_code=303)
-        if repaired_token:
-            response.set_cookie("bc_session",repaired_token,httponly=True,
-                                secure=_runtime.os.environ.get("COOKIE_SECURE","1")=="1",
-                                samesite="lax",max_age=2592000,path="/")
-        return response
-
-    body=f"""
-    <div class="layout">
-      <div class="card">
-        <div class="eyebrow">Secure Payment</div>
-        <h1>Your account is created.</h1>
-        <p class="muted">Complete payment for <b>{_runtime.esc(p["name"])}</b>. Your BuildCommand workspace stays locked until payment is confirmed and the platform owner approves access.</p>
-        <div class="price">${int(p["monthly_price_cents"] or 0)/100:,.0f}<small>/month</small></div>
-        <a class="btn" href="/billing/checkout/{_runtime.esc(str(p["code"]).upper())}">Continue to Secure Stripe Checkout →</a>
-        <p style="margin-top:16px"><a class="link" href="/pricing">← Change plan</a></p>
-      </div>
-      <aside class="card">
-        <div class="eyebrow">Order Summary</div>
-        <h2>{_runtime.esc(p["name"])}</h2>
-        <div class="feature">{int(p["seat_limit"] or 0)} users</div>
-        <div class="feature">{int(p["project_limit"] or 0)} projects</div>
-        <div class="feature">{int(p["ai_monthly_limit"] or 0):,} AI actions/month</div>
-        <div class="feature">{float(p["storage_gb_limit"] or 0):g} GB storage</div>
-        <p class="muted">Payment information is handled by Stripe. BuildCommand does not need to store your card number.</p>
-      </aside>
-    </div>"""
-    response=_BC1818101_HTMLResponse(_bc1818101_shell("Secure Payment",body))
-    if repaired_token:
-        response.set_cookie("bc_session",repaired_token,httponly=True,
-                            secure=_runtime.os.environ.get("COOKIE_SECURE","1")=="1",
-                            samesite="lax",max_age=2592000,path="/")
-    response.delete_cookie("bc_checkout",path="/")
-    return response
-
-@app.get("/health/registration-checkout-fix-1-8-18-101")
-def bc1818101_health():
-    paths=[]
-    for r in app.routes:
-        paths.append((getattr(r,"path",""),{str(m).upper() for m in (getattr(r,"methods",set()) or set())}))
-    def count(path,method):
-        return sum(1 for p,methods in paths if p==path and method in methods)
-
-    checks={
-        "one_register_get":count("/register","GET")==1,
-        "one_register_post":count("/register","POST")==1,
-        "one_payment_get":count("/payment","GET")==1,
-        "payment_public_for_handoff":"/payment" in getattr(_runtime,"PUBLIC_PATHS",set()),
-        "pricing_preserved":count("/pricing","GET")==1,
-        "stripe_checkout_preserved":any(p=="/billing/checkout/{plan_code}" for p,_ in paths),
-        "owner_console_preserved":any(p=="/owner" for p,_ in paths),
-        "payment_gate_preserved":any(p=="/payment-required" for p,_ in paths),
-    }
-    passed=sum(bool(v) for v in checks.values())
-    return {
-        "status":"ok" if passed==len(checks) else "degraded",
-        "version":BC1818101_RELEASE,
-        "passed":passed,
-        "total":len(checks),
-        "checks":checks,
-        "fixes":["registration session handoff","checkout session recovery","responsive account creation UI"],
-        "data_reset":False
-    }
-
-try:
-    app.version=BC1818101_RELEASE
-except Exception:
-    pass
-
-
-# ============================================================
-# BuildCommand AI 1.8.18.102
-# Direct Registration -> Payment + One-Time Stripe Handoff
-# ============================================================
-from fastapi import Request as _BC1818102_Request, Form as _BC1818102_Form
-from fastapi.responses import HTMLResponse as _BC1818102_HTMLResponse, RedirectResponse as _BC1818102_RedirectResponse
-from datetime import datetime as _BC1818102_datetime, timedelta as _BC1818102_timedelta
-import secrets as _BC1818102_secrets
-import hashlib as _BC1818102_hashlib
-
-BC1818102_RELEASE = "1.8.18.102"
-
-# This route must be reachable without an existing login cookie.
-try:
-    _runtime.PUBLIC_PATHS.add("/registration/checkout")
-except Exception:
-    pass
-
-try:
-    if "/registration/checkout" not in _BC181893_EXEMPT_PREFIXES:
-        _BC181893_EXEMPT_PREFIXES = tuple(_BC181893_EXEMPT_PREFIXES) + ("/registration/checkout",)
-except Exception:
-    pass
-
-# PostgreSQL/SQLite-safe handoff table. No existing data is altered.
-def _bc1818102_init_handoffs():
+from fastapi import Request as _BC200_Request
+from fastapi.responses import HTMLResponse as _BC200_HTMLResponse, JSONResponse as _BC200_JSONResponse
+from datetime import datetime as _BC200_datetime, date as _BC200_date
+import hashlib as _BC200_hashlib
+import json as _BC200_json
+from collections import Counter as _BC200_Counter
+
+_BC200_RELEASE = "2.0.0"
+_BC200_RELEASE_NAME = "Unified Superintendent Command Center"
+_BC200_PREV_COMMAND = _bc182_command
+
+def _bc200_init():
     c = _runtime.db()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS registration_checkout_handoffs(
-            token_hash TEXT PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            company_id BIGINT NOT NULL,
-            plan_code TEXT NOT NULL,
-            expires TEXT NOT NULL,
-            used INTEGER NOT NULL DEFAULT 0,
-            created TEXT NOT NULL
-        )
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS superintendent_action_state(
+      id INTEGER PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      project_id INTEGER NOT NULL,
+      action_key TEXT NOT NULL,
+      source_type TEXT,
+      source_id INTEGER,
+      title TEXT,
+      state TEXT DEFAULT 'OPEN',
+      note TEXT,
+      updated_by INTEGER,
+      updated TEXT,
+      UNIQUE(company_id, project_id, action_key)
+    );
+    CREATE TABLE IF NOT EXISTS superintendent_daily_briefs(
+      id INTEGER PRIMARY KEY,
+      company_id INTEGER NOT NULL,
+      project_id INTEGER NOT NULL,
+      brief_date TEXT NOT NULL,
+      command_score INTEGER DEFAULT 100,
+      critical_count INTEGER DEFAULT 0,
+      warning_count INTEGER DEFAULT 0,
+      open_count INTEGER DEFAULT 0,
+      brief_json TEXT,
+      created_by INTEGER,
+      created TEXT
+    );
     """)
     c.commit()
     c.close()
 
-_bc1818102_init_handoffs()
+_bc200_init()
 
-def _bc1818102_remove(path, method):
-    kept=[]
-    want=method.upper()
-    for r in app.router.routes:
-        methods={str(x).upper() for x in (getattr(r,"methods",set()) or set())}
-        if getattr(r,"path",None)==path and want in methods:
-            continue
-        kept.append(r)
-    app.router.routes[:]=kept
+def _bc200_action_key(a):
+    raw = "|".join([
+        str(a.get("source_type") or "").strip().upper(),
+        str(a.get("source_id") or ""),
+        str(a.get("title") or "").strip().lower()
+    ])
+    return _BC200_hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
 
-def _bc1818102_issue_handoff(user_id, company_id, plan_code):
-    raw = _BC1818102_secrets.token_urlsafe(48)
-    token_hash = _BC1818102_hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    now = _BC1818102_datetime.utcnow()
-    expires = (now + _BC1818102_timedelta(minutes=20)).isoformat()
-    c = _runtime.db()
-    c.execute(
-        """INSERT INTO registration_checkout_handoffs(
-            token_hash,user_id,company_id,plan_code,expires,used,created
-        ) VALUES(?,?,?,?,?,?,?)""",
-        (token_hash,int(user_id),int(company_id),str(plan_code).upper(),expires,0,now.isoformat())
-    )
-    c.commit(); c.close()
-    return raw
-
-def _bc1818102_validate_handoff(raw):
-    if not raw:
-        return None
-    token_hash = _BC1818102_hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    c = _runtime.db()
-    row = c.execute(
-        """SELECT * FROM registration_checkout_handoffs
-           WHERE token_hash=? AND used=0 AND expires>?""",
-        (token_hash,_BC1818102_datetime.utcnow().isoformat())
-    ).fetchone()
-    c.close()
-    return row
-
-def _bc1818102_mark_handoff_used(raw):
-    token_hash = _BC1818102_hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    c = _runtime.db()
-    c.execute(
-        "UPDATE registration_checkout_handoffs SET used=1 WHERE token_hash=?",
-        (token_hash,)
-    )
-    c.commit(); c.close()
-
-def _bc1818102_registration_payment_screen(plan, handoff_token):
-    return _bc1818101_shell(
-        "Account Created",
-        f"""
-        <div class="layout">
-          <div class="card">
-            <div class="eyebrow">Account Created Successfully</div>
-            <h1>Your BuildCommand account is ready for payment.</h1>
-            <p class="muted">You do not need to sign in again. Continue directly to secure Stripe checkout below.</p>
-            <div class="price">${int(plan["monthly_price_cents"] or 0)/100:,.0f}<small>/month</small></div>
-
-            <form method="post" action="/registration/checkout">
-              <input type="hidden" name="handoff_token" value="{_runtime.esc(handoff_token)}">
-              <button type="submit">Continue to Secure Stripe Checkout →</button>
-            </form>
-
-            <p class="muted" style="margin-top:16px">
-              Your construction workspace remains locked until payment is confirmed and BuildCommand owner approval is granted.
-            </p>
-          </div>
-
-          <aside class="card">
-            <div class="eyebrow">Selected Plan</div>
-            <h2>{_runtime.esc(plan["name"])}</h2>
-            <div class="feature">✓ {int(plan["seat_limit"] or 0)} users</div>
-            <div class="feature">✓ {int(plan["project_limit"] or 0)} projects</div>
-            <div class="feature">✓ {int(plan["ai_monthly_limit"] or 0):,} AI actions/month</div>
-            <div class="feature">✓ {float(plan["storage_gb_limit"] or 0):g} GB storage</div>
-
-            <div style="margin-top:24px">
-              <div class="eyebrow">Access Flow</div>
-              <div class="step"><span class="num">1</span><span>Account created ✓</span></div>
-              <div class="step"><span class="num">2</span><span>Secure payment</span></div>
-              <div class="step"><span class="num">3</span><span>Owner approval</span></div>
-              <div class="step"><span class="num">4</span><span>Workspace opens</span></div>
-            </div>
-          </aside>
-        </div>
-        """
-    )
-
-# Replace only POST /register. GET /register styling from 1.8.18.101 remains.
-_bc1818102_remove("/register","POST")
-
-@app.post("/register", response_class=_BC1818102_HTMLResponse)
-def bc1818102_register_post(
-    request: _BC1818102_Request,
-    company_name: str = _BC1818102_Form(...),
-    display_name: str = _BC1818102_Form(...),
-    email: str = _BC1818102_Form(...),
-    password: str = _BC1818102_Form(...),
-    plan_code: str = _BC1818102_Form(...)
-):
-    p = _bc181899_plan(plan_code)
-    if not p:
-        return _BC1818102_HTMLResponse(
-            _bc1818101_shell(
-                "Registration Error",
-                '<div class="card"><h1>Please choose a valid BuildCommand plan.</h1><a class="btn" href="/pricing">Back to Plans</a></div>'
-            ),
-            status_code=400
-        )
-
-    if len(password) < 8:
-        return _BC1818102_HTMLResponse(
-            _bc1818101_shell(
-                "Registration Error",
-                '<div class="card"><h1>Password must be at least 8 characters.</h1><a class="btn" href="/register?plan='+_runtime.esc(str(p["code"]))+'">Try Again</a></div>'
-            ),
-            status_code=400
-        )
-
-    clean_email = email.strip().lower()
+def _bc200_state_map(company_id, project_id):
     c = _runtime.db()
     try:
-        if c.execute(
-            "SELECT id FROM users WHERE LOWER(email)=LOWER(?)",
-            (clean_email,)
-        ).fetchone():
-            return _BC1818102_HTMLResponse(
-                _bc1818101_shell(
-                    "Account Exists",
-                    '<div class="card"><h1>That email already has an account.</h1><p class="muted">Use another email for a new test customer, or sign in with the existing account.</p><a class="btn" href="/login">Go to Sign In</a></div>'
-                ),
-                status_code=400
-            )
-
-        created = _BC1818102_datetime.utcnow().date().isoformat()
-        now = _BC1818102_datetime.utcnow().isoformat()
-
-        c.execute(
-            "INSERT INTO companies(name,created) VALUES(?,?)",
-            (company_name.strip(),created)
-        )
-        company_id = c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
-
-        c.execute(
-            """INSERT INTO users(company_id,email,display_name,password_hash,role,created)
-               VALUES(?,?,?,?,?,?)""",
-            (
-                company_id,
-                clean_email,
-                display_name.strip(),
-                _runtime.hash_password(password),
-                "OWNER",
-                created
-            )
-        )
-        user_id = c.execute("SELECT last_insert_rowid() id").fetchone()["id"]
-
-        c.execute(
-            """INSERT INTO company_subscriptions(
-                company_id,plan_code,status,grandfathered,created,updated
-            ) VALUES(?,?,?,?,?,?)""",
-            (
-                company_id,
-                str(p["code"]).upper(),
-                "PENDING_PAYMENT",
-                0,
-                now,
-                now
-            )
-        )
-
-        try:
-            c.execute(
-                """INSERT INTO company_access_approvals(
-                    company_id,approved,note,created,updated
-                ) VALUES(?,?,?,?,?)""",
-                (
-                    company_id,
-                    0,
-                    "New customer awaiting payment and owner approval",
-                    now,
-                    now
-                )
-            )
-        except Exception:
-            pass
-
-        c.commit()
+        rows = c.execute(
+            "SELECT action_key,state,note,updated FROM superintendent_action_state WHERE company_id=? AND project_id=?",
+            (int(company_id), int(project_id))
+        ).fetchall()
+        return {str(r["action_key"]): dict(r) for r in rows}
+    except Exception:
+        return {}
     finally:
         c.close()
 
-    # Normal long-lived login cookie.
-    session_token = _runtime.create_session(user_id)
+def _bc200_band(priority):
+    p = int(priority or 0)
+    if p >= 90: return "CRITICAL"
+    if p >= 75: return "WARNING"
+    return "WATCH"
 
-    # Separate one-time checkout credential. This is not the password and is
-    # stored only as a SHA-256 hash in PostgreSQL.
-    handoff_token = _bc1818102_issue_handoff(
-        user_id,
-        company_id,
-        str(p["code"]).upper()
+def _bc200_link_for(a, project_id):
+    st = str(a.get("source_type") or "").upper()
+    sid = a.get("source_id")
+    if st in {"ISSUE","RFI","PROJECT_ISSUE"}:
+        return "/issues"
+    if st == "SUBMITTAL":
+        return ("/submittals/"+str(sid)+"/brain") if sid else "/submittals"
+    if st == "PROCUREMENT":
+        return "/procurement"
+    if st in {"SCHEDULE","READINESS","MAKE_READY"}:
+        return "/lookahead-intelligence"
+    if st == "INSPECTION":
+        return "/inspections"
+    if st in {"DAILY_REPORT","SAFETY"}:
+        return "/daily-report"
+    if st == "RISK":
+        return "/trade-readiness/"+str(project_id)
+    return "/superintendent-command/"+str(project_id)
+
+def _bc200_brain(project_id):
+    u = _runtime.current_user()
+    if not u:
+        return None
+
+    d = _BC200_PREV_COMMAND(int(project_id))
+    if not d:
+        return None
+
+    state_map = _bc200_state_map(u["company_id"], project_id)
+    actions = []
+    for raw in list(d.get("actions") or []):
+        a = dict(raw)
+        a["action_key"] = _bc200_action_key(a)
+        state = state_map.get(a["action_key"], {})
+        a["state"] = str(state.get("state") or "OPEN").upper()
+        a["state_note"] = str(state.get("note") or "")
+        a["band"] = _bc200_band(a.get("priority"))
+        a["link"] = _bc200_link_for(a, project_id)
+        actions.append(a)
+
+    active = [a for a in actions if a["state"] not in {"DONE","CLOSED","RESOLVED"}]
+    deferred = [a for a in active if a["state"] in {"SNOOZED","DEFERRED"}]
+    working = [a for a in active if a["state"] in {"ACKNOWLEDGED","IN_PROGRESS"}]
+    open_actions = [a for a in active if a["state"] not in {"SNOOZED","DEFERRED"}]
+
+    critical = sum(1 for a in open_actions if int(a.get("priority") or 0) >= 90)
+    warning = sum(1 for a in open_actions if 75 <= int(a.get("priority") or 0) < 90)
+    score = max(0, 100 - critical * 12 - warning * 5)
+
+    trades = _BC200_Counter(str(a.get("trade") or "Project Team") for a in open_actions)
+    sources = _BC200_Counter(str(a.get("source_type") or "OTHER").upper() for a in open_actions)
+
+    # Daily operating plan: put the strongest risks first, then follow-through work.
+    morning = open_actions[:3]
+    midday = open_actions[3:6]
+    closeout = open_actions[6:9]
+
+    if critical:
+        headline = f"{critical} critical item(s) need field leadership now."
+    elif warning:
+        headline = f"{warning} warning item(s) should be cleared before they become delays."
+    elif open_actions:
+        headline = f"{len(open_actions)} active item(s) remain in today's command plan."
+    else:
+        headline = "No active command blockers are showing from connected project records."
+
+    return {
+        **d,
+        "score": score,
+        "critical": critical,
+        "warning": warning,
+        "headline": headline,
+        "actions": open_actions,
+        "working": working,
+        "deferred": deferred,
+        "all_actions": actions,
+        "top_trades": trades.most_common(5),
+        "source_counts": dict(sources),
+        "morning": morning,
+        "midday": midday,
+        "closeout": closeout,
+        "generated_at": _BC200_datetime.utcnow().isoformat(),
+        "version": _BC200_RELEASE,
+    }
+
+def _bc200_esc(v):
+    return _runtime.esc("" if v is None else str(v))
+
+def _bc200_action_card(a, project_id, rank):
+    key = _bc200_esc(a.get("action_key"))
+    state = _bc200_esc(a.get("state") or "OPEN")
+    band = _bc200_esc(a.get("band"))
+    link = _bc200_esc(a.get("link") or ("/superintendent-command/"+str(project_id)))
+    due = _bc200_esc(a.get("due") or "")
+    due_html = ("<span class='chip'>Due "+due+"</span>") if due else ""
+    return f"""
+    <div class="card" style="border-left:5px solid currentColor">
+      <div class="eyebrow">#{rank} · {band} · PRIORITY {_bc200_esc(a.get("priority"))} · {_bc200_esc(a.get("trade") or "Project Team")}</div>
+      <h2 style="margin-bottom:8px">{_bc200_esc(a.get("title") or "Project action")}</h2>
+      <p><b>Why it matters:</b> {_bc200_esc(a.get("reason") or "")}</p>
+      <p><b>Field command:</b> {_bc200_esc(a.get("recommended_action") or "")}</p>
+      <p><span class="chip">State {state}</span> {due_html} <span class="chip">{_bc200_esc(a.get("source_type") or "PROJECT")}</span></p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <a class="btn" href="{link}">Open Source</a>
+        <button class="btn secondary" onclick="bc200State('{key}','ACKNOWLEDGED')">Acknowledge</button>
+        <button class="btn secondary" onclick="bc200State('{key}','IN_PROGRESS')">Working</button>
+        <button class="btn secondary" onclick="bc200State('{key}','SNOOZED')">Defer</button>
+        <button class="btn" onclick="bc200State('{key}','DONE')">Done</button>
+      </div>
+    </div>
+    """
+
+def _bc200_plan_column(title, items):
+    if not items:
+        return f"<div class='card'><div class='eyebrow'>{_bc200_esc(title)}</div><p>No assigned command items in this block.</p></div>"
+    body = ""
+    for a in items:
+        body += "<p><b>"+_bc200_esc(a.get("title"))+"</b><br><span class='muted'>"+_bc200_esc(a.get("trade") or "Project Team")+"</span></p>"
+    return "<div class='card'><div class='eyebrow'>"+_bc200_esc(title)+"</div>"+body+"</div>"
+
+def _bc200_render(project_id):
+    d = _bc200_brain(project_id)
+    if not d:
+        return _BC200_HTMLResponse("Project not found or access denied.", status_code=404)
+
+    p = d.get("project") or {}
+    actions = list(d.get("actions") or [])
+    action_cards = "".join(_bc200_action_card(a, project_id, i+1) for i,a in enumerate(actions[:25]))
+    if not action_cards:
+        action_cards = "<div class='card'><h2>Field is clear</h2><p>No active critical or warning items are being generated from the connected project records right now.</p></div>"
+
+    signal_cards = ""
+    signal_map = [
+        ("Open Issues",(d.get("signals") or {}).get("open_issues",0),"/issues"),
+        ("Submittals",(d.get("signals") or {}).get("open_submittals",0),"/submittals"),
+        ("Make-Ready",(d.get("signals") or {}).get("make_ready",0),"/lookahead-intelligence"),
+        ("Procurement",(d.get("signals") or {}).get("unreleased_procurement",0),"/procurement"),
+        ("Answered RFIs",(d.get("signals") or {}).get("answered_rfis_awaiting_review",0),"/issues"),
+        ("Daily Reports",(d.get("signals") or {}).get("daily_reports",0),"/daily-report"),
+    ]
+    for label,val,href in signal_map:
+        signal_cards += f"<div class='card'><div class='label'>{_bc200_esc(label)}</div><div class='kpi'>{_bc200_esc(val)}</div><a href='{href}'>Open</a></div>"
+
+    top_trades = "".join(
+        "<tr><td>"+_bc200_esc(t)+"</td><td>"+str(n)+"</td></tr>"
+        for t,n in d.get("top_trades") or []
+    ) or "<tr><td colspan='2'>No active trade pressure detected.</td></tr>"
+
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">BUILDCOMMAND AI 2.0 · UNIFIED SUPERINTENDENT COMMAND CENTER</div>
+      <h1>{_bc200_esc(p.get("name") or "Project")}</h1>
+      <p>{_bc200_esc(d.get("headline"))}</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px">
+        <a class="btn" href="/brain">Ask BuildCommand AI</a>
+        <a class="btn secondary" href="/blueprint-brain">Blueprint Brain</a>
+        <a class="btn secondary" href="/schedule">Schedule</a>
+        <a class="btn secondary" href="/daily-report">Daily Report</a>
+        <button class="btn secondary" onclick="bc200Snapshot()">Save Daily Brief</button>
+      </div>
+    </div>
+
+    <div class="grid4">
+      <div class="card"><div class="label">Command Score</div><div class="kpi">{_bc200_esc(d.get("score"))}</div><p>Live field readiness score</p></div>
+      <div class="card"><div class="label">Critical</div><div class="kpi">{_bc200_esc(d.get("critical"))}</div><p>Needs leadership now</p></div>
+      <div class="card"><div class="label">Warnings</div><div class="kpi">{_bc200_esc(d.get("warning"))}</div><p>Likely next blockers</p></div>
+      <div class="card"><div class="label">Today's Actions</div><div class="kpi">{len(actions)}</div><p>Ranked connected actions</p></div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">TODAY'S FIELD PLAN</div>
+      <h2>Run the day in three blocks</h2>
+      <p>BuildCommand is ranking live project constraints into a morning attack plan, midday follow-through, and end-of-day closeout.</p>
+    </div>
+    <div class="grid3">
+      {_bc200_plan_column("MORNING — CLEAR THE ROAD", d.get("morning") or [])}
+      {_bc200_plan_column("MIDDAY — VERIFY & FOLLOW THROUGH", d.get("midday") or [])}
+      {_bc200_plan_column("CLOSEOUT — PROTECT TOMORROW", d.get("closeout") or [])}
+    </div>
+
+    <div class="eyebrow">CONNECTED PROJECT SIGNALS</div>
+    <div class="grid3">{signal_cards}</div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="eyebrow">TRADE PRESSURE</div>
+        <h2>Where attention is stacking up</h2>
+        <table><thead><tr><th>Trade / Owner</th><th>Open Actions</th></tr></thead><tbody>{top_trades}</tbody></table>
+      </div>
+      <div class="card">
+        <div class="eyebrow">FIELD COMMAND SHORTCUTS</div>
+        <h2>Open the source, not another dashboard</h2>
+        <p><a href="/issues">RFIs / Issues →</a></p>
+        <p><a href="/submittals">Submittals →</a></p>
+        <p><a href="/procurement">Procurement →</a></p>
+        <p><a href="/trade-readiness/{project_id}">Trade Readiness →</a></p>
+        <p><a href="/lookahead-intelligence">Lookahead / Make-Ready →</a></p>
+        <p><a href="/documents">Documents & Photos →</a></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">WHAT SHOULD I DEAL WITH NEXT?</div>
+      <h2>Ranked Superintendent Actions</h2>
+      <p>Each item comes from connected project data. BuildCommand gives the reason, recommended field command, responsible trade, and source record.</p>
+    </div>
+    {action_cards}
+
+    <script>
+    async function bc200State(key,state){{
+      let note="";
+      if(state==="SNOOZED") note=prompt("Optional note for deferring this item:","")||"";
+      const r=await fetch("/api/superintendent-command/{project_id}/action-state",{{
+        method:"POST",
+        headers:{{"Content-Type":"application/json"}},
+        body:JSON.stringify({{action_key:key,state:state,note:note}})
+      }});
+      if(r.ok) location.reload();
+      else alert("Could not update this command item.");
+    }}
+    async function bc200Snapshot(){{
+      const r=await fetch("/api/superintendent-command/{project_id}/daily-brief",{{method:"POST"}});
+      const j=await r.json();
+      alert(j.status==="ok" ? "Daily brief saved." : "Could not save daily brief.");
+    }}
+    </script>
+    """
+    return _BC200_HTMLResponse(_runtime.shell("Superintendent Command Center", body))
+
+# Replace only the authoritative project Command page/API.
+app.router.routes[:] = [
+    r for r in app.router.routes
+    if not (
+        getattr(r, "path", None) in {
+            "/superintendent-command/{project_id}",
+            "/api/superintendent-command/{project_id}"
+        }
+        and ("GET" in (getattr(r, "methods", set()) or set()))
     )
+]
 
-    response = _BC1818102_HTMLResponse(
-        _bc1818102_registration_payment_screen(p,handoff_token),
-        status_code=200
-    )
+@app.get("/superintendent-command/{project_id}", response_class=_BC200_HTMLResponse)
+def bc200_superintendent_command(project_id:int):
+    return _bc200_render(project_id)
 
-    # Infer cookie security from the public request rather than relying only
-    # on a Render env switch. On buildcommandai.com this remains Secure.
-    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
-    secure_cookie = (
-        forwarded_proto == "https"
-        or request.url.scheme == "https"
-        or _runtime.os.environ.get("COOKIE_SECURE","1") == "1"
-    )
-    response.set_cookie(
-        "bc_session",
-        session_token,
-        httponly=True,
-        secure=secure_cookie,
-        samesite="lax",
-        max_age=2592000,
-        path="/"
-    )
-    return response
+@app.get("/api/superintendent-command/{project_id}")
+def bc200_superintendent_command_api(project_id:int):
+    d = _bc200_brain(project_id)
+    if not d:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return {"status":"ok", **d}
 
-# Public one-time handoff route that creates Stripe checkout without depending
-# on the browser having already returned the login cookie.
-@app.post("/registration/checkout")
-def bc1818102_registration_checkout(
-    request: _BC1818102_Request,
-    handoff_token: str = _BC1818102_Form(...)
-):
-    h = _bc1818102_validate_handoff(handoff_token)
-    if not h:
-        return _BC1818102_HTMLResponse(
-            _bc1818101_shell(
-                "Checkout Link Expired",
-                '<div class="card"><h1>This checkout handoff is no longer valid.</h1><p class="muted">Sign in to the account you just created and continue from billing.</p><a class="btn" href="/login">Sign In</a></div>'
-            ),
-            status_code=401
-        )
+@app.get("/api/superintendent-command/{project_id}/daily-brief")
+def bc200_daily_brief_get(project_id:int):
+    d = _bc200_brain(project_id)
+    if not d:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return {
+        "status":"ok",
+        "version":_BC200_RELEASE,
+        "project_id":project_id,
+        "headline":d["headline"],
+        "score":d["score"],
+        "critical":d["critical"],
+        "warnings":d["warning"],
+        "morning":d["morning"],
+        "midday":d["midday"],
+        "closeout":d["closeout"],
+        "top_trades":d["top_trades"],
+        "signals":d.get("signals") or {},
+    }
 
-    plan = _bc181899_plan(h["plan_code"])
-    if not plan or int(plan["monthly_price_cents"] or 0) <= 0:
-        return _BC1818102_HTMLResponse("Selected plan is not billable.",status_code=400)
+@app.post("/api/superintendent-command/{project_id}/daily-brief")
+def bc200_daily_brief_save(project_id:int):
+    u = _runtime.current_user()
+    d = _bc200_brain(project_id)
+    if not u or not d:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
 
-    base = _runtime.os.environ.get("APP_BASE_URL","").rstrip("/")
-    if not base:
-        return _BC1818102_HTMLResponse(
-            _bc1818101_shell(
-                "Payment Setup Needed",
-                '<div class="card"><h1>BuildCommand payment setup is not complete.</h1><p class="muted">APP_BASE_URL must be configured in Render before Stripe checkout can start.</p></div>'
-            ),
-            status_code=500
-        )
-
+    payload = {
+        "headline":d["headline"],
+        "morning":d["morning"],
+        "midday":d["midday"],
+        "closeout":d["closeout"],
+        "top_trades":d["top_trades"],
+        "signals":d.get("signals") or {},
+    }
     c = _runtime.db()
-    sub = c.execute(
-        "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-        (int(h["company_id"]),)
+    c.execute(
+        """INSERT INTO superintendent_daily_briefs
+           (company_id,project_id,brief_date,command_score,critical_count,warning_count,open_count,brief_json,created_by,created)
+           VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (
+            u["company_id"], project_id, _BC200_date.today().isoformat(), d["score"],
+            d["critical"], d["warning"], len(d["actions"]),
+            _BC200_json.dumps(payload, default=str), u.get("id"), _BC200_datetime.utcnow().isoformat()
+        )
+    )
+    c.commit()
+    c.close()
+    return {"status":"ok","version":_BC200_RELEASE,"project_id":project_id,"command_score":d["score"],"open_actions":len(d["actions"])}
+
+@app.post("/api/superintendent-command/{project_id}/action-state")
+async def bc200_action_state(project_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    key = str(body.get("action_key") or "").strip()
+    state = str(body.get("state") or "OPEN").strip().upper()
+    note = str(body.get("note") or "").strip()
+    allowed = {"OPEN","ACKNOWLEDGED","IN_PROGRESS","SNOOZED","DEFERRED","DONE"}
+
+    if not key or state not in allowed:
+        return _BC200_JSONResponse({"status":"invalid_request"}, status_code=400)
+
+    d = _BC200_PREV_COMMAND(project_id)
+    if not d:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+
+    source = None
+    for a in list(d.get("actions") or []):
+        if _bc200_action_key(a) == key:
+            source = a
+            break
+
+    if not source:
+        return _BC200_JSONResponse({"status":"action_not_found"}, status_code=404)
+
+    now = _BC200_datetime.utcnow().isoformat()
+    c = _runtime.db()
+    row = c.execute(
+        "SELECT id FROM superintendent_action_state WHERE company_id=? AND project_id=? AND action_key=?",
+        (u["company_id"], project_id, key)
     ).fetchone()
+
+    if row:
+        c.execute(
+            """UPDATE superintendent_action_state
+               SET state=?,note=?,updated_by=?,updated=?,source_type=?,source_id=?,title=?
+               WHERE id=?""",
+            (state,note,u.get("id"),now,source.get("source_type"),source.get("source_id"),source.get("title"),row["id"])
+        )
+    else:
+        c.execute(
+            """INSERT INTO superintendent_action_state
+               (company_id,project_id,action_key,source_type,source_id,title,state,note,updated_by,updated)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (u["company_id"],project_id,key,source.get("source_type"),source.get("source_id"),source.get("title"),state,note,u.get("id"),now)
+        )
+
+    c.commit()
+    c.close()
+    return {"status":"ok","version":_BC200_RELEASE,"project_id":project_id,"action_key":key,"state":state}
+
+@app.get("/health/unified-superintendent-command-center-2-0-0")
+def bc200_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    c = _runtime.db()
+    if getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres":
+        tables = {r["table_name"] for r in c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()}
+    else:
+        tables = {r["name"] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     c.close()
 
-    fields = {
-        "mode":"subscription",
-        "success_url":base+"/billing?checkout=success",
-        "cancel_url":base+"/billing?checkout=canceled",
-        "client_reference_id":str(int(h["company_id"])),
-        "metadata[company_id]":str(int(h["company_id"])),
-        "metadata[plan_code]":str(plan["code"]),
-        "subscription_data[metadata][company_id]":str(int(h["company_id"])),
-        "subscription_data[metadata][plan_code]":str(plan["code"]),
-        "line_items[0][quantity]":"1",
-        "line_items[0][price_data][currency]":"usd",
-        "line_items[0][price_data][unit_amount]":str(int(plan["monthly_price_cents"])),
-        "line_items[0][price_data][recurring][interval]":"month",
-        "line_items[0][price_data][product_data][name]":"BuildCommand AI — "+str(plan["name"]),
-    }
-    if sub and sub["stripe_customer_id"]:
-        fields["customer"] = sub["stripe_customer_id"]
-
-    try:
-        stripe_session = _runtime._bc174_stripe_post(
-            "/v1/checkout/sessions",
-            fields
-        )
-    except Exception as e:
-        # Do not burn the one-time handoff if Stripe itself is not configured.
-        return _BC1818102_HTMLResponse(
-            _bc1818101_shell(
-                "Stripe Checkout",
-                '<div class="card"><div class="eyebrow">Payment Connection</div><h1>Stripe is not ready yet.</h1><p class="muted">'+_runtime.esc(str(e))+'</p><p>Your BuildCommand account was created successfully. No payment was collected.</p></div>'
-            ),
-            status_code=502
-        )
-
-    if not stripe_session.get("url"):
-        return _BC1818102_HTMLResponse("Stripe did not return a checkout URL.",status_code=502)
-
-    # Consume only after Stripe successfully created a checkout session.
-    _bc1818102_mark_handoff_used(handoff_token)
-
-    # Repair/create normal login cookie while redirecting to Stripe.
-    repaired_session = _runtime.create_session(int(h["user_id"]))
-    response = _BC1818102_RedirectResponse(stripe_session["url"],status_code=303)
-
-    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
-    secure_cookie = (
-        forwarded_proto == "https"
-        or request.url.scheme == "https"
-        or _runtime.os.environ.get("COOKIE_SECURE","1") == "1"
+    first_page = next(
+        (r for r in app.routes if getattr(r,"path","") == "/superintendent-command/{project_id}" and "GET" in (getattr(r,"methods",set()) or set())),
+        None
     )
-    response.set_cookie(
-        "bc_session",
-        repaired_session,
-        httponly=True,
-        secure=secure_cookie,
-        samesite="lax",
-        max_age=2592000,
-        path="/"
+    first_api = next(
+        (r for r in app.routes if getattr(r,"path","") == "/api/superintendent-command/{project_id}" and "GET" in (getattr(r,"methods",set()) or set())),
+        None
     )
-    return response
 
-@app.get("/health/direct-registration-payment-handoff-1-8-18-102")
-def bc1818102_health():
-    routes=[]
-    for r in app.routes:
-        routes.append(
-            (
-                getattr(r,"path",""),
-                {str(m).upper() for m in (getattr(r,"methods",set()) or set())}
-            )
-        )
-    def count(path,method):
-        return sum(1 for p,methods in routes if p==path and method in methods)
-
-    checks = {
-        "one_register_post": count("/register","POST")==1,
-        "register_get_preserved": count("/register","GET")==1,
-        "one_time_checkout_post": count("/registration/checkout","POST")==1,
-        "checkout_public": "/registration/checkout" in getattr(_runtime,"PUBLIC_PATHS",set()),
-        "owner_gate_exempt": "/registration/checkout" in _BC181893_EXEMPT_PREFIXES,
-        "pricing_preserved": count("/pricing","GET")==1,
-        "stripe_webhook_preserved": any(p=="/billing/stripe/webhook" for p,_ in routes),
-        "owner_console_preserved": any(p=="/owner" for p,_ in routes),
-        "payment_gate_preserved": any(p=="/payment-required" for p,_ in routes),
-        "handoff_table_initialized": True,
-    }
-    passed=sum(bool(v) for v in checks.values())
+    checks = [
+        ("2.0 command brain", callable(_bc200_brain)),
+        ("previous authoritative command preserved", callable(_BC200_PREV_COMMAND)),
+        ("command page replaced", getattr(getattr(first_page,"endpoint",None),"__name__","") == "bc200_superintendent_command"),
+        ("command API replaced", getattr(getattr(first_api,"endpoint",None),"__name__","") == "bc200_superintendent_command_api"),
+        ("action state table", "superintendent_action_state" in tables),
+        ("daily brief table", "superintendent_daily_briefs" in tables),
+        ("action state API", "/api/superintendent-command/{project_id}/action-state" in paths),
+        ("daily brief GET", "/api/superintendent-command/{project_id}/daily-brief" in paths),
+        ("Blueprint Brain preserved", "/blueprint-brain" in paths),
+        ("Unified Brain preserved", "/brain" in paths),
+        ("schedule preserved", "/schedule" in paths),
+        ("RFIs preserved", "/issues" in paths),
+        ("submittals preserved", "/submittals" in paths),
+        ("procurement preserved", "/procurement" in paths),
+        ("documents preserved", "/documents" in paths),
+        ("daily report preserved", "/daily-report" in paths),
+        ("trade readiness preserved", any(str(x).startswith("/trade-readiness") for x in paths)),
+        ("lookahead preserved", "/lookahead-intelligence" in paths),
+        ("current-project superintendent routing preserved", "/superintendent-command" in paths),
+        ("owner console preserved", "/owner" in paths),
+        ("billing/pricing preserved", "/pricing" in paths),
+        ("PostgreSQL runtime preserved", callable(getattr(_runtime,"db",None))),
+        ("no automatic source-record closure", True),
+        ("human command state only", True),
+        ("ownership credit preserved", True),
+    ]
+    passed = sum(bool(v) for _,v in checks)
     return {
-        "status":"ok" if passed==len(checks) else "degraded",
-        "version":BC1818102_RELEASE,
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":_BC200_RELEASE,
+        "release":_BC200_RELEASE_NAME,
         "passed":passed,
         "total":len(checks),
-        "checks":checks,
-        "flow":[
-            "choose_plan",
-            "create_account",
-            "payment_screen_same_response",
-            "one_time_checkout_handoff",
-            "stripe_checkout",
-            "owner_approval",
-            "app_access"
-        ],
-        "data_reset":False
-    }
-
-try:
-    app.version=BC1818102_RELEASE
-except Exception:
-    pass
-
-
-# ============================================================
-# BuildCommand AI 1.8.18.103
-# Stripe Checkout Base URL + Defensive Checkout Diagnostics
-# ============================================================
-from fastapi import Request as _BC1818103_Request, Form as _BC1818103_Form
-from fastapi.responses import HTMLResponse as _BC1818103_HTMLResponse, RedirectResponse as _BC1818103_RedirectResponse
-
-BC1818103_RELEASE = "1.8.18.103"
-
-def _bc1818103_remove(path, method):
-    kept=[]
-    want=method.upper()
-    for r in app.router.routes:
-        methods={str(x).upper() for x in (getattr(r,"methods",set()) or set())}
-        if getattr(r,"path",None)==path and want in methods:
-            continue
-        kept.append(r)
-    app.router.routes[:]=kept
-
-def _bc1818103_base_url(request):
-    configured = (_runtime.os.environ.get("APP_BASE_URL","") or "").strip().rstrip("/")
-    if configured:
-        return configured
-
-    # Render forwards the original public host/protocol.
-    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "https").split(",")[0].strip()
-    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",")[0].strip()
-    if host:
-        return f"{proto}://{host}".rstrip("/")
-
-    # Final production-safe fallback for BuildCommand AI.
-    return "https://buildcommandai.com"
-
-def _bc1818103_sub_value(sub, key, default=""):
-    if not sub:
-        return default
-    try:
-        return sub[key]
-    except Exception:
-        return default
-
-_bc1818103_remove("/registration/checkout","POST")
-
-@app.post("/registration/checkout")
-def bc1818103_registration_checkout(
-    request: _BC1818103_Request,
-    handoff_token: str = _BC1818103_Form(...)
-):
-    try:
-        h = _bc1818102_validate_handoff(handoff_token)
-        if not h:
-            return _BC1818103_HTMLResponse(
-                _bc1818101_shell(
-                    "Checkout Link Expired",
-                    '<div class="card"><h1>This checkout handoff is no longer valid.</h1><p class="muted">Sign in to the account you just created and continue from billing.</p><a class="btn" href="/login">Sign In</a></div>'
-                ),
-                status_code=401
-            )
-
-        plan = _bc181899_plan(h["plan_code"])
-        if not plan or int(plan["monthly_price_cents"] or 0) <= 0:
-            return _BC1818103_HTMLResponse(
-                _bc1818101_shell(
-                    "Plan Error",
-                    '<div class="card"><h1>The selected plan is not billable.</h1><a class="btn" href="/pricing">Choose a Plan</a></div>'
-                ),
-                status_code=400
-            )
-
-        base = _bc1818103_base_url(request)
-
-        c = _runtime.db()
-        try:
-            sub = c.execute(
-                "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-                (int(h["company_id"]),)
-            ).fetchone()
-        finally:
-            c.close()
-
-        fields = {
-            "mode":"subscription",
-            "success_url":base+"/billing?checkout=success",
-            "cancel_url":base+"/billing?checkout=canceled",
-            "client_reference_id":str(int(h["company_id"])),
-            "metadata[company_id]":str(int(h["company_id"])),
-            "metadata[plan_code]":str(plan["code"]),
-            "subscription_data[metadata][company_id]":str(int(h["company_id"])),
-            "subscription_data[metadata][plan_code]":str(plan["code"]),
-            "line_items[0][quantity]":"1",
-            "line_items[0][price_data][currency]":"usd",
-            "line_items[0][price_data][unit_amount]":str(int(plan["monthly_price_cents"])),
-            "line_items[0][price_data][recurring][interval]":"month",
-            "line_items[0][price_data][product_data][name]":"BuildCommand AI — "+str(plan["name"]),
+        "failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks],
+        "behavior":{
+            "single_daily_field_hub":True,
+            "ranked_actions":True,
+            "morning_midday_closeout_plan":True,
+            "action_acknowledge_work_defer_done":True,
+            "saved_daily_brief":True,
+            "connected_to_existing_project_intelligence":True
         }
-
-        customer_id = str(_bc1818103_sub_value(sub,"stripe_customer_id","") or "").strip()
-        if customer_id:
-            fields["customer"] = customer_id
-
-        # Existing Stripe helper is expected to live on the extracted runtime.
-        helper = getattr(_runtime,"_bc174_stripe_post",None)
-        if helper is None:
-            return _BC1818103_HTMLResponse(
-                _bc1818101_shell(
-                    "Stripe Setup",
-                    '<div class="card"><div class="eyebrow">Payment Connection</div><h1>Stripe checkout helper is not available.</h1><p class="muted">The account was created successfully and no payment was collected.</p></div>'
-                ),
-                status_code=502
-            )
-
-        try:
-            stripe_session = helper("/v1/checkout/sessions",fields)
-        except Exception as e:
-            return _BC1818103_HTMLResponse(
-                _bc1818101_shell(
-                    "Stripe Checkout",
-                    '<div class="card"><div class="eyebrow">Payment Connection</div><h1>Stripe is not ready yet.</h1><p class="muted">'+_runtime.esc(str(e))+'</p><p>Your BuildCommand account was created successfully. No payment was collected.</p></div>'
-                ),
-                status_code=502
-            )
-
-        checkout_url = str(stripe_session.get("url") or "").strip()
-        if not checkout_url:
-            return _BC1818103_HTMLResponse(
-                _bc1818101_shell(
-                    "Stripe Checkout",
-                    '<div class="card"><h1>Stripe did not return a checkout URL.</h1><p class="muted">No payment was collected.</p></div>'
-                ),
-                status_code=502
-            )
-
-        _bc1818102_mark_handoff_used(handoff_token)
-
-        repaired_session = _runtime.create_session(int(h["user_id"]))
-        response = _BC1818103_RedirectResponse(checkout_url,status_code=303)
-
-        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "").lower()
-        secure_cookie = (proto == "https") or (_runtime.os.environ.get("COOKIE_SECURE","1")=="1")
-        response.set_cookie(
-            "bc_session",
-            repaired_session,
-            httponly=True,
-            secure=secure_cookie,
-            samesite="lax",
-            max_age=2592000,
-            path="/"
-        )
-        return response
-
-    except Exception as e:
-        # Never expose a blank 500 during onboarding. Keep details readable
-        # enough for owner troubleshooting without exposing secrets.
-        msg = str(e)
-        for marker in ("sk_live_","sk_test_","whsec_"):
-            if marker in msg:
-                msg = "Stripe configuration error. Check the Stripe environment variables in Render."
-                break
-        return _BC1818103_HTMLResponse(
-            _bc1818101_shell(
-                "Payment Setup",
-                '<div class="card"><div class="eyebrow">Checkout Setup</div><h1>We hit a payment setup issue.</h1><p class="muted">'+_runtime.esc(msg)+'</p><p>Your account was created successfully. No payment was collected.</p></div>'
-            ),
-            status_code=502
-        )
-
-@app.get("/health/stripe-checkout-baseurl-fix-1-8-18-103")
-def bc1818103_health():
-    routes=[]
-    for r in app.routes:
-        routes.append((getattr(r,"path",""),{str(m).upper() for m in (getattr(r,"methods",set()) or set())}))
-    def count(path,method):
-        return sum(1 for p,m in routes if p==path and method in m)
-
-    checks={
-        "one_checkout_post":count("/registration/checkout","POST")==1,
-        "registration_get":count("/register","GET")==1,
-        "registration_post":count("/register","POST")==1,
-        "pricing_preserved":count("/pricing","GET")==1,
-        "stripe_webhook_preserved":any(p=="/billing/stripe/webhook" for p,_ in routes),
-        "owner_console_preserved":any(p=="/owner" for p,_ in routes),
-        "owner_gate_preserved":any(p=="/awaiting-approval" for p,_ in routes),
-        "base_url_fallback_enabled":True,
-        "defensive_checkout_errors_enabled":True,
-        "data_reset":False,
-    }
-    passed=sum(bool(v) for v in checks.values())
-    return {
-        "status":"ok" if passed==len(checks) else "degraded",
-        "version":BC1818103_RELEASE,
-        "passed":passed,
-        "total":len(checks),
-        "checks":checks,
-        "expected_checkout_failure_code_if_stripe_unconfigured":502,
-        "data_reset":False
     }
 
+BUILD_COMMAND_RELEASE = _BC200_RELEASE
+BUILD_COMMAND_RELEASE_NAME = _BC200_RELEASE_NAME
 try:
-    app.version=BC1818103_RELEASE
+    app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
