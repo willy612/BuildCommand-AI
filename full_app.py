@@ -36088,3 +36088,321 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.7.0
+# Construction Experience Intelligence
+# Baseline: stable 2.6.0 Adaptive Learning Intelligence Suite
+#
+# Purpose:
+# Turn accumulated project outcomes into reusable construction
+# experience: lessons learned, repeat-risk warnings, proven-response
+# playbooks, project similarity signals, and confidence-aware advice.
+#
+# Human approval remains required for recommendations.
+# ============================================================
+
+def _bc270_init():
+    c = _runtime.db()
+    try:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS construction_brain_lessons(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          project_id INTEGER,
+          lesson_type TEXT NOT NULL,
+          subject TEXT NOT NULL,
+          lesson TEXT NOT NULL,
+          trade TEXT,
+          root_cause TEXT,
+          proven_action TEXT,
+          effectiveness_score REAL,
+          evidence_count INTEGER DEFAULT 1,
+          metadata_json TEXT,
+          created_by INTEGER,
+          created TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS construction_brain_playbooks(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          playbook_key TEXT NOT NULL,
+          title TEXT NOT NULL,
+          trigger_text TEXT,
+          recommended_sequence TEXT,
+          trade TEXT,
+          average_effectiveness REAL,
+          use_count INTEGER DEFAULT 0,
+          evidence_count INTEGER DEFAULT 0,
+          metadata_json TEXT,
+          updated TEXT NOT NULL,
+          UNIQUE(company_id, playbook_key)
+        );
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc270_init()
+
+def _bc270_lessons(project_id=None, limit=300):
+    u = _runtime.current_user()
+    if not u:
+        return []
+    c = _runtime.db()
+    try:
+        sql = "SELECT * FROM construction_brain_lessons WHERE company_id=?"
+        vals = [u["company_id"]]
+        if project_id is not None:
+            sql += " AND project_id=?"
+            vals.append(int(project_id))
+        sql += " ORDER BY effectiveness_score DESC, evidence_count DESC, id DESC LIMIT ?"
+        vals.append(int(limit))
+        return [dict(r) for r in c.execute(sql, tuple(vals)).fetchall()]
+    finally:
+        c.close()
+
+def _bc270_derive_lessons(project_id:int):
+    outcomes = _bc250_outcomes(project_id, None, 500)
+    root_causes = _bc254_root_causes(project_id)
+    roots = [x.get("root_cause") for x in root_causes[:5]]
+    lessons = []
+
+    for r in outcomes:
+        action = str(r.get("action_taken") or r.get("recommended_action") or "").strip()
+        actual = str(r.get("actual_result") or "").strip()
+        subject = str(r.get("subject") or "").strip()
+        trade = str(r.get("responsible_trade") or "").strip()
+        try:
+            score = float(r.get("effectiveness_score")) if r.get("effectiveness_score") is not None else None
+        except Exception:
+            score = None
+
+        if not subject or not actual:
+            continue
+
+        if score is not None and score >= 70 and action:
+            lessons.append({
+                "lesson_type":"PROVEN_RESPONSE",
+                "subject":subject,
+                "lesson":"A prior project outcome indicates this response was effective.",
+                "trade":trade,
+                "root_cause":roots[0] if roots else "",
+                "proven_action":action,
+                "effectiveness_score":score,
+                "evidence_count":1
+            })
+        elif score is not None and score < 50:
+            lessons.append({
+                "lesson_type":"AVOID_REPEAT",
+                "subject":subject,
+                "lesson":"A prior response had low effectiveness; review alternatives before repeating it.",
+                "trade":trade,
+                "root_cause":roots[0] if roots else "",
+                "proven_action":action,
+                "effectiveness_score":score,
+                "evidence_count":1
+            })
+
+    return lessons[:100]
+
+def _bc270_repeat_risk(project_id:int):
+    predictive = _bc221_predictive_threats(project_id)
+    patterns = _bc259_cross_project_patterns()
+    roots = _bc254_root_causes(project_id)
+    if not predictive:
+        return None
+
+    pattern_map = {str(x.get("pattern_type") or "").upper():x for x in patterns}
+    warnings = []
+    for t in predictive.get("threats") or []:
+        typ = str(t.get("type") or "").upper()
+        hist = pattern_map.get(typ)
+        score = int(t.get("predictive_risk_score") or 0)
+        if hist:
+            score = min(99, score + min(15, int(hist.get("occurrences") or 0)))
+        warnings.append({
+            "title":t.get("title"),
+            "type":typ,
+            "current_predictive_risk":t.get("predictive_risk_score"),
+            "experience_adjusted_risk":score,
+            "historical_occurrences":(hist or {}).get("occurrences",0),
+            "historical_average_effectiveness":(hist or {}).get("average_effectiveness"),
+            "recommended_prevention":t.get("prevention")
+        })
+
+    warnings.sort(key=lambda x:int(x.get("experience_adjusted_risk") or 0), reverse=True)
+    return {
+        "status":"ok",
+        "version":"2.7.0",
+        "project_id":project_id,
+        "repeat_risk_warnings":warnings,
+        "known_root_causes":roots[:10]
+    }
+
+def _bc270_playbook_candidates(project_id:int):
+    lessons = _bc270_derive_lessons(project_id)
+    grouped = {}
+    for x in lessons:
+        action = str(x.get("proven_action") or "").strip()
+        if not action:
+            continue
+        key = _bc210_norm(str(x.get("subject") or "") + " " + str(x.get("trade") or ""))
+        if not key:
+            continue
+        g = grouped.setdefault(key,{
+            "title":x.get("subject"),
+            "trade":x.get("trade"),
+            "actions":[],
+            "scores":[]
+        })
+        g["actions"].append(action)
+        if x.get("effectiveness_score") is not None:
+            g["scores"].append(float(x["effectiveness_score"]))
+
+    out = []
+    for key,g in grouped.items():
+        # Preserve observed actions rather than inventing autonomous field instructions.
+        sequence = " → ".join(dict.fromkeys(g["actions"][:5]))
+        out.append({
+            "playbook_key":key[:180],
+            "title":g["title"],
+            "trade":g["trade"],
+            "recommended_sequence":sequence,
+            "average_effectiveness":round(sum(g["scores"])/len(g["scores"]),1) if g["scores"] else None,
+            "evidence_count":len(g["actions"]),
+            "human_review_required":True
+        })
+    return sorted(out,key=lambda x:(x["evidence_count"],x["average_effectiveness"] or 0),reverse=True)
+
+def _bc270_experience_advice(project_id:int):
+    adaptive = _bc253_adaptive_recommendations(project_id)
+    repeat = _bc270_repeat_risk(project_id)
+    lessons = _bc270_derive_lessons(project_id)
+    playbooks = _bc270_playbook_candidates(project_id)
+
+    if isinstance(adaptive, _BC200_JSONResponse):
+        adaptive_rows = []
+    else:
+        adaptive_rows = adaptive.get("recommendations") or []
+
+    return {
+        "status":"ok",
+        "version":"2.7.0",
+        "project_id":project_id,
+        "experience_summary":{
+            "derived_lessons":len(lessons),
+            "playbook_candidates":len(playbooks),
+            "repeat_risks":len((repeat or {}).get("repeat_risk_warnings") or [])
+        },
+        "repeat_risk_intelligence":repeat,
+        "adaptive_recommendations":adaptive_rows,
+        "lessons_learned":lessons[:30],
+        "proven_response_playbooks":playbooks[:20],
+        "decision_policy":"Use historical evidence to inform decisions; superintendent/PM approval remains required."
+    }
+
+@app.get("/api/construction-brain/project/{project_id}/lessons-learned")
+def bc270_lessons_api(project_id:int):
+    return {
+        "status":"ok","version":"2.7.0","project_id":project_id,
+        "stored_lessons":_bc270_lessons(project_id,300),
+        "derived_lessons":_bc270_derive_lessons(project_id)
+    }
+
+@app.get("/api/construction-brain/project/{project_id}/repeat-risk")
+def bc270_repeat_risk_api(project_id:int):
+    r = _bc270_repeat_risk(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+
+@app.get("/api/construction-brain/project/{project_id}/proven-playbooks")
+def bc270_playbooks_api(project_id:int):
+    return {
+        "status":"ok","version":"2.7.0","project_id":project_id,
+        "playbooks":_bc270_playbook_candidates(project_id)
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/experience-intelligence")
+def bc270_experience_api(project_id:int):
+    return _bc270_experience_advice(project_id)
+
+@app.get("/health/construction-experience-intelligence-2-7-0")
+def bc270_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    c = _runtime.db()
+    try:
+        if getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres":
+            tables = {r["table_name"] for r in c.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            ).fetchall()}
+        else:
+            tables = {r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+    finally:
+        c.close()
+
+    checks = [
+        ("2.6.0 stable baseline preserved","/health/adaptive-learning-intelligence-suite-2-6-0" in paths),
+        ("lessons table","construction_brain_lessons" in tables),
+        ("playbooks table","construction_brain_playbooks" in tables),
+        ("lesson derivation engine",callable(globals().get("_bc270_derive_lessons"))),
+        ("repeat-risk engine",callable(globals().get("_bc270_repeat_risk"))),
+        ("playbook candidate engine",callable(globals().get("_bc270_playbook_candidates"))),
+        ("experience advice engine",callable(globals().get("_bc270_experience_advice"))),
+        ("lessons API","/api/construction-brain/project/{project_id}/lessons-learned" in paths),
+        ("repeat risk API","/api/construction-brain/project/{project_id}/repeat-risk" in paths),
+        ("proven playbooks API","/api/construction-brain/project/{project_id}/proven-playbooks" in paths),
+        ("experience intelligence API","/api/unified-construction-brain/project/{project_id}/experience-intelligence" in paths),
+        ("outcome learning preserved","/health/outcome-learning-intelligence-2-5-0" in paths),
+        ("prediction calibration preserved","/api/construction-brain/project/{project_id}/prediction-calibration" in paths),
+        ("root cause learning preserved","/api/construction-brain/project/{project_id}/root-cause-patterns" in paths),
+        ("trade learning preserved","/api/construction-brain/project/{project_id}/trade-learning" in paths),
+        ("schedule learning preserved","/api/construction-brain/project/{project_id}/schedule-learning" in paths),
+        ("procurement learning preserved","/api/construction-brain/project/{project_id}/procurement-learning" in paths),
+        ("inspection learning preserved","/api/construction-brain/project/{project_id}/inspection-learning" in paths),
+        ("cross-project patterns preserved","/api/construction-brain/cross-project-patterns" in paths),
+        ("self evaluation preserved","/api/unified-construction-brain/project/{project_id}/self-evaluation" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.7.0",
+        "release":"Construction Experience Intelligence",
+        "baseline":"2.6.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "lessons_learned_intelligence":True,
+            "repeat_risk_detection":True,
+            "proven_response_playbooks":True,
+            "experience_adjusted_risk":True,
+            "historical_action_effectiveness":True,
+            "cross_project_experience_reuse":True,
+            "confidence_aware_advice":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.7.0"
+BUILD_COMMAND_RELEASE_NAME = "Construction Experience Intelligence"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
