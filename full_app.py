@@ -34008,3 +34008,183 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+import re
+
+# ============================================================
+# BuildCommand AI 2.1.4 - Blueprint Brain Drawing Intelligence
+# ============================================================
+
+_BC214_REF_RE = re.compile(
+    r'(?<![A-Z0-9])(?:(?P<detail>\d{1,3})\s*/\s*)?(?P<sheet>[A-Z]{1,3}\d{1,3}(?:\.\d+)?)',
+    re.IGNORECASE
+)
+
+def _bc214_extract_references(text_value):
+    refs, seen = [], set()
+    for m in _BC214_REF_RE.finditer(str(text_value or "")):
+        sheet = str(m.group("sheet") or "").upper().strip()
+        detail = str(m.group("detail") or "").strip()
+        key = (detail, sheet)
+        if sheet and key not in seen:
+            seen.add(key)
+            refs.append({"detail": detail or None, "sheet": sheet,
+                         "reference": (detail + "/" + sheet) if detail else sheet})
+    return refs
+
+def _bc214_sheet_identity(doc):
+    d = _bc213_norm_doc(doc)
+    for value in [d.get("reference"), d.get("name")]:
+        refs = _bc214_extract_references(value)
+        if refs:
+            return refs[0]["sheet"]
+    return ""
+
+def _bc214_drawing_graph(documents):
+    docs = [_bc213_norm_doc(x) for x in (documents or [])[:500]]
+    nodes, edges, known = [], [], set()
+
+    for i, d in enumerate(docs):
+        sid = _bc214_sheet_identity(d)
+        if sid:
+            known.add(sid)
+        nodes.append({"id":i,"type":d["type"],"name":d["name"],"reference":d["reference"],
+                      "revision":d["revision"],"sheet_id":sid})
+
+    for i, d in enumerate(docs):
+        src = _bc214_sheet_identity(d)
+        refs = _bc214_extract_references(" ".join([d["name"], d["reference"], d["text"]]))
+        for ref in refs:
+            edges.append({"source_index":i,"source_sheet":src or None,
+                          "target_sheet":ref["sheet"],"detail":ref["detail"],
+                          "reference":ref["reference"],"resolved":ref["sheet"] in known})
+
+    inbound, outbound = {}, {}
+    for e in edges:
+        inbound[e["target_sheet"]] = inbound.get(e["target_sheet"], 0) + 1
+        if e["source_sheet"]:
+            outbound[e["source_sheet"]] = outbound.get(e["source_sheet"], 0) + 1
+
+    return {"nodes":nodes,"edges":edges,"known_sheets":sorted(known),
+            "orphaned_references":[e for e in edges if not e["resolved"]],
+            "inbound_counts":inbound,"outbound_counts":outbound}
+
+def _bc214_revision_ripple(documents):
+    docs = [_bc213_norm_doc(x) for x in (documents or [])[:500]]
+    graph = _bc214_drawing_graph(docs)
+    impacts = []
+    for d in docs:
+        rev = str(d.get("revision") or "").strip()
+        sid = _bc214_sheet_identity(d)
+        if not rev or not sid:
+            continue
+        outgoing = [e for e in graph["edges"] if e["source_sheet"] == sid]
+        incoming = [e for e in graph["edges"] if e["target_sheet"] == sid]
+        affected = {e["target_sheet"] for e in outgoing if e.get("target_sheet")}
+        affected |= {e["source_sheet"] for e in incoming if e.get("source_sheet")}
+        impacts.append({"sheet":sid,"revision":rev,"references_out":outgoing[:50],
+                        "references_in":incoming[:50],
+                        "potentially_affected_sheet_count":len(affected),
+                        "review_note":"Potential ripple only. Verify actual revision scope before acting."})
+    return impacts
+
+def _bc214_reference_links(documents):
+    docs = [_bc213_norm_doc(x) for x in (documents or [])[:500]]
+    graph = _bc214_drawing_graph(docs)
+    links = []
+    for e in graph["edges"]:
+        src = graph["nodes"][e["source_index"]]
+        if src["type"] in {"PLAN","SCHEDULE","DETAIL","SPEC","ADDENDUM"}:
+            links.append({"source_type":src["type"],"source_name":src["name"],
+                          "source_sheet":src["sheet_id"],"target_sheet":e["target_sheet"],
+                          "detail":e["detail"],"reference":e["reference"],"resolved":e["resolved"]})
+    return links
+
+@app.post("/api/blueprint-brain/drawing-graph")
+async def bc214_drawing_graph_api(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try: body = await request.json()
+    except Exception: body = {}
+    g = _bc214_drawing_graph(body.get("documents") or [])
+    return {"status":"ok","version":"2.1.4","project_id":body.get("project_id"),
+            "sheet_count":len(g["known_sheets"]),"reference_count":len(g["edges"]),
+            "orphaned_reference_count":len(g["orphaned_references"]),**g}
+
+@app.post("/api/blueprint-brain/orphaned-references")
+async def bc214_orphans_api(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try: body = await request.json()
+    except Exception: body = {}
+    g = _bc214_drawing_graph(body.get("documents") or [])
+    return {"status":"ok","version":"2.1.4","project_id":body.get("project_id"),
+            "count":len(g["orphaned_references"]),"orphaned_references":g["orphaned_references"],
+            "review_note":"Unresolved references are review flags; they may reflect missing uploads, naming differences, or real gaps."}
+
+@app.post("/api/blueprint-brain/revision-ripple")
+async def bc214_revision_ripple_api(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try: body = await request.json()
+    except Exception: body = {}
+    impacts = _bc214_revision_ripple(body.get("documents") or [])
+    return {"status":"ok","version":"2.1.4","project_id":body.get("project_id"),
+            "revised_sheet_count":len(impacts),"impacts":impacts}
+
+@app.post("/api/blueprint-brain/reference-links")
+async def bc214_reference_links_api(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try: body = await request.json()
+    except Exception: body = {}
+    links = _bc214_reference_links(body.get("documents") or [])
+    return {"status":"ok","version":"2.1.4","project_id":body.get("project_id"),
+            "link_count":len(links),"links":links}
+
+@app.get("/health/blueprint-brain-drawing-intelligence-2-1-4")
+def bc214_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("2.1.3 baseline preserved","/health/blueprint-brain-cross-document-intelligence-2-1-3" in paths),
+        ("reference extractor",callable(globals().get("_bc214_extract_references"))),
+        ("drawing graph engine",callable(globals().get("_bc214_drawing_graph"))),
+        ("revision ripple engine",callable(globals().get("_bc214_revision_ripple"))),
+        ("reference link engine",callable(globals().get("_bc214_reference_links"))),
+        ("drawing graph API","/api/blueprint-brain/drawing-graph" in paths),
+        ("orphaned reference API","/api/blueprint-brain/orphaned-references" in paths),
+        ("revision ripple API","/api/blueprint-brain/revision-ripple" in paths),
+        ("reference links API","/api/blueprint-brain/reference-links" in paths),
+        ("cross-document API preserved","/api/blueprint-brain/cross-document-reason" in paths),
+        ("missing-scope audit preserved","/api/blueprint-brain/missing-scope-audit" in paths),
+        ("scope audit preserved","/api/blueprint-brain/scope-audit" in paths),
+        ("learned corrections preserved","/api/construction-brain/corrections" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed == len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.1.4","release":"Blueprint Brain Drawing Intelligence","baseline":"2.1.3",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed == len(checks),
+            "features":{"sheet_reference_graph":True,"detail_sheet_linkage":True,
+                        "orphaned_reference_detection":True,"revision_ripple_review":True,
+                        "note_schedule_detail_linking":True,"drawing_relationship_intelligence":True},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE="2.1.4"
+BUILD_COMMAND_RELEASE_NAME="Blueprint Brain Drawing Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
