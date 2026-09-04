@@ -33735,3 +33735,276 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.1.3
+# Blueprint Brain Cross-Document Intelligence
+# Correlates plans, schedules, details, specs, addenda and learned
+# corrections; flags contradictions, missing scope and evidence gaps.
+# Preserves stable 2.1.2 construction-knowledge baseline.
+# ============================================================
+
+_BC213_DOC_TYPES = {"PLAN","SCHEDULE","DETAIL","SPEC","ADDENDUM","RFI","SUBMITTAL","OTHER"}
+
+def _bc213_norm_doc(doc):
+    if not isinstance(doc, dict):
+        return {"type":"OTHER","name":"","text":str(doc or ""),"reference":"","revision":""}
+    dtype = str(doc.get("type") or doc.get("document_type") or "OTHER").upper().strip()
+    if dtype not in _BC213_DOC_TYPES:
+        dtype = "OTHER"
+    return {
+        "type": dtype,
+        "name": str(doc.get("name") or doc.get("title") or ""),
+        "text": str(doc.get("text") or doc.get("content") or doc.get("description") or ""),
+        "reference": str(doc.get("reference") or doc.get("sheet") or doc.get("section") or ""),
+        "revision": str(doc.get("revision") or doc.get("date") or "")
+    }
+
+def _bc213_extract_scope_claims(doc):
+    d = _bc213_norm_doc(doc)
+    text = d["text"]
+    knowledge = _bc212_scope_knowledge(text)
+    claims = []
+    for k in knowledge[:12]:
+        claims.append({
+            "trade": k["trade"],
+            "reason": k["reason"],
+            "matched_terms": k["matched_terms"],
+            "document_type": d["type"],
+            "document_name": d["name"],
+            "reference": d["reference"],
+            "revision": d["revision"],
+            "excerpt_basis": ", ".join(k["matched_terms"][:8])
+        })
+    return claims
+
+def _bc213_cross_document_reason(subject, documents, project_id=None, current_trade=None):
+    docs = [_bc213_norm_doc(x) for x in (documents or [])[:200]]
+    all_claims = []
+    evidence = []
+
+    for d in docs:
+        claims = _bc213_extract_scope_claims(d)
+        all_claims.extend(claims)
+        if d["text"].strip():
+            evidence.append({
+                "label": (d["type"]+" "+d["reference"]).strip(),
+                "value": d["name"] + ((" — "+d["text"][:500]) if d["text"] else "")
+            })
+
+    trade_counts = {}
+    trade_sources = {}
+    for c in all_claims:
+        t = c["trade"]
+        trade_counts[t] = trade_counts.get(t, 0) + 1
+        trade_sources.setdefault(t, []).append(c)
+
+    ranked = sorted(trade_counts.items(), key=lambda x:x[1], reverse=True)
+    learned = _bc210_match_corrections(subject, project_id, "BLUEPRINT")
+    learned_trade = str(learned[0].get("corrected_value") or "").strip().upper() if learned else ""
+
+    recommended = learned_trade or (ranked[0][0] if ranked else None)
+    if not recommended:
+        single = _bc212_trade_reason(subject, current_trade, project_id, evidence)
+        recommended = single.get("recommended_trade")
+
+    contradictions = []
+    if len(ranked) > 1:
+        top_trade, top_count = ranked[0]
+        for other_trade, other_count in ranked[1:]:
+            if other_count > 0 and other_trade != top_trade:
+                contradictions.append({
+                    "type":"CROSS_DOCUMENT_TRADE_CONTRADICTION",
+                    "primary_trade":top_trade,
+                    "other_trade":other_trade,
+                    "primary_evidence_count":top_count,
+                    "other_evidence_count":other_count,
+                    "primary_sources":trade_sources.get(top_trade,[])[:5],
+                    "other_sources":trade_sources.get(other_trade,[])[:5]
+                })
+
+    if current_trade and recommended and _bc210_norm(current_trade) != _bc210_norm(recommended):
+        contradictions.append({
+            "type":"CURRENT_ASSIGNMENT_DISAGREEMENT",
+            "current_trade":str(current_trade),
+            "recommended_trade":recommended,
+            "reason":"Cross-document evidence and/or learned corrections recommend a different trade."
+        })
+
+    types_present = {d["type"] for d in docs if d["text"].strip()}
+    missing_evidence = []
+    for needed in ["PLAN","SPEC"]:
+        if needed not in types_present:
+            missing_evidence.append(needed)
+
+    confidence = 40
+    confidence += min(25, len(docs)*3)
+    if ranked:
+        confidence += min(20, ranked[0][1]*5)
+    if learned_trade:
+        confidence += 10
+    if contradictions:
+        confidence -= min(20, len(contradictions)*5)
+    if missing_evidence:
+        confidence -= min(15, len(missing_evidence)*7)
+    confidence = max(5, min(99, confidence))
+
+    reasoning = _bc210_reason(subject, project_id, "BLUEPRINT", evidence)
+
+    return {
+        "subject":str(subject),
+        "recommended_trade":recommended or "UNASSIGNED",
+        "confidence":confidence,
+        "documents_reviewed":len(docs),
+        "document_types_present":sorted(types_present),
+        "missing_evidence_types":missing_evidence,
+        "trade_evidence":[
+            {"trade":t,"evidence_count":n,"sources":trade_sources.get(t,[])[:8]}
+            for t,n in ranked
+        ],
+        "contradictions":contradictions,
+        "learned_corrections":learned[:5],
+        "reasoning":reasoning
+    }
+
+def _bc213_missing_scope(documents, project_id=None):
+    docs = [_bc213_norm_doc(x) for x in (documents or [])[:200]]
+    by_type = {}
+    for d in docs:
+        by_type.setdefault(d["type"], []).append(d)
+
+    findings = []
+    # Compare scope/trade claims across document types. A trade present in one
+    # authoritative source but absent from another becomes a review finding,
+    # not an automatic factual assertion.
+    type_trades = {}
+    for dtype, group in by_type.items():
+        ts = set()
+        for d in group:
+            for c in _bc213_extract_scope_claims(d):
+                ts.add(c["trade"])
+        type_trades[dtype] = ts
+
+    authoritative = [t for t in ["PLAN","SPEC","SCHEDULE","DETAIL","ADDENDUM"] if t in type_trades]
+    universe = set()
+    for t in authoritative:
+        universe |= type_trades[t]
+
+    for trade in sorted(universe):
+        present = [t for t in authoritative if trade in type_trades[t]]
+        absent = [t for t in authoritative if trade not in type_trades[t]]
+        if present and absent:
+            findings.append({
+                "type":"POSSIBLE_MISSING_SCOPE_OR_DOCUMENT_GAP",
+                "trade":trade,
+                "present_in":present,
+                "not_detected_in":absent,
+                "severity":"REVIEW",
+                "reason":"Trade scope was detected in some project document types but not others. Verify whether this is intentional."
+            })
+
+    return findings
+
+@app.post("/api/blueprint-brain/cross-document-reason")
+async def bc213_cross_document_reason_api(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    subject = str(body.get("subject") or body.get("item") or "").strip()
+    if not subject:
+        return _BC200_JSONResponse({"status":"invalid_request","error":"subject required"}, status_code=400)
+    result = _bc213_cross_document_reason(
+        subject, body.get("documents") or [], body.get("project_id"), body.get("current_trade")
+    )
+    return {"status":"ok","version":"2.1.3",**result}
+
+@app.post("/api/blueprint-brain/missing-scope-audit")
+async def bc213_missing_scope_api(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    docs = body.get("documents") or []
+    findings = _bc213_missing_scope(docs, body.get("project_id"))
+    return {
+        "status":"ok","version":"2.1.3","project_id":body.get("project_id"),
+        "documents_reviewed":len(docs),"finding_count":len(findings),"findings":findings
+    }
+
+@app.post("/api/blueprint-brain/document-matrix")
+async def bc213_document_matrix(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    docs = [_bc213_norm_doc(x) for x in (body.get("documents") or [])[:200]]
+    matrix = []
+    for d in docs:
+        claims = _bc213_extract_scope_claims(d)
+        matrix.append({
+            "type":d["type"],"name":d["name"],"reference":d["reference"],"revision":d["revision"],
+            "trade_claims":sorted({c["trade"] for c in claims}),
+            "claim_count":len(claims)
+        })
+    return {"status":"ok","version":"2.1.3","project_id":body.get("project_id"),"matrix":matrix}
+
+@app.get("/health/blueprint-brain-cross-document-intelligence-2-1-3")
+def bc213_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("2.1.2 knowledge baseline preserved","/health/blueprint-brain-construction-knowledge-2-1-2" in paths),
+        ("cross-document reasoner",callable(globals().get("_bc213_cross_document_reason"))),
+        ("missing-scope engine",callable(globals().get("_bc213_missing_scope"))),
+        ("scope claim extractor",callable(globals().get("_bc213_extract_scope_claims"))),
+        ("cross-document API","/api/blueprint-brain/cross-document-reason" in paths),
+        ("missing-scope audit API","/api/blueprint-brain/missing-scope-audit" in paths),
+        ("document matrix API","/api/blueprint-brain/document-matrix" in paths),
+        ("2.1.2 scope audit preserved","/api/blueprint-brain/scope-audit" in paths),
+        ("learned corrections preserved","/api/construction-brain/corrections" in paths),
+        ("reasoning API preserved","/api/construction-brain/reason" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI","version":"2.1.3",
+        "release":"Blueprint Brain Cross-Document Intelligence","baseline":"2.1.2",
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "plan_spec_schedule_detail_correlation":True,
+            "cross_document_trade_reasoning":True,
+            "contradiction_detection":True,
+            "possible_missing_scope_detection":True,
+            "document_evidence_matrix":True,
+            "learned_corrections_in_cross_document_reasoning":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.1.3"
+BUILD_COMMAND_RELEASE_NAME = "Blueprint Brain Cross-Document Intelligence"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
