@@ -34863,3 +34863,481 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+
+def _bc222_actions(project_id:int):
+    p=_bc221_predictive_threats(project_id)
+    if not p:return None
+    out=[]
+    for t in p.get("threats") or []:
+        owner="PROJECT TEAM"
+        typ=str(t.get("type") or "")
+        if typ=="PROCUREMENT": owner="PROJECT MANAGER / PROCUREMENT"
+        elif typ=="SUBMITTAL": owner="PROJECT ENGINEER / PM"
+        elif typ=="SCHEDULE": owner="SUPERINTENDENT"
+        elif typ=="INSPECTION": owner="SUPERINTENDENT / QAQC"
+        elif typ=="COORDINATION": owner="PROJECT TEAM / DESIGN"
+        elif typ=="FIELD_ACTION": owner="SUPERINTENDENT"
+        out.append({"rank":t.get("rank"),"title":t.get("title"),"owner":owner,
+                    "action":t.get("prevention"),"risk_score":t.get("predictive_risk_score"),
+                    "human_approval_required":True})
+    return {"status":"ok","version":"2.2.2","project_id":project_id,"actions":out}
+@app.get("/api/unified-construction-brain/project/{project_id}/actions")
+def bc222_actions_api(project_id:int):
+    r=_bc222_actions(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/action-intelligence-2-2-2")
+def _health_2_2_2():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.2.2","release":"Unified Brain Action Intelligence","baseline":"2.2.1",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"action ownership": true, "prevention-to-action conversion": true, "human approval required": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.2.2"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Action Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc223_accountability(project_id:int):
+    a=_bc222_actions(project_id)
+    if not a:return None
+    rows=[]
+    for x in a.get("actions") or []:
+        rows.append({**x,"status":"OPEN","due_logic":"Before affected work or risk window",
+                     "escalate_if":"No owner response or risk remains unresolved"})
+    return {"status":"ok","version":"2.2.3","project_id":project_id,"accountability":rows}
+@app.get("/api/unified-construction-brain/project/{project_id}/accountability")
+def bc223_accountability_api(project_id:int):
+    r=_bc223_accountability(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/accountability-intelligence-2-2-3")
+def _health_2_2_3():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.2.3","release":"Unified Brain Accountability Intelligence","baseline":"2.2.2",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"accountability queue": true, "owner/status logic": true, "escalation conditions": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.2.3"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Accountability Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc224_constraints(project_id:int):
+    a=_bc223_accountability(project_id)
+    if not a:return None
+    constraints=[]
+    for x in a.get("accountability") or []:
+        constraints.append({"title":x.get("title"),"owner":x.get("owner"),
+                            "constraint_type":"PROJECT_CONSTRAINT","resolution_action":x.get("action"),
+                            "escalate_if":x.get("escalate_if"),"risk_score":x.get("risk_score")})
+    constraints.sort(key=lambda x:int(x.get("risk_score") or 0),reverse=True)
+    return {"status":"ok","version":"2.2.4","project_id":project_id,"constraints":constraints}
+@app.get("/api/unified-construction-brain/project/{project_id}/constraints")
+def bc224_constraints_api(project_id:int):
+    r=_bc224_constraints(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/constraint-resolution-2-2-4")
+def _health_2_2_4():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.2.4","release":"Unified Brain Constraint Resolution Intelligence","baseline":"2.2.3",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"constraint queue": true, "resolution actions": true, "risk-ranked constraints": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.2.4"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Constraint Resolution Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc225_schedule_impact(project_id:int):
+    c=_bc224_constraints(project_id)
+    if not c:return None
+    impacts=[]
+    for x in c.get("constraints") or []:
+        score=int(x.get("risk_score") or 0)
+        impacts.append({"title":x.get("title"),"risk_score":score,
+                        "schedule_impact":"HIGH" if score>=75 else "MEDIUM" if score>=50 else "LOW",
+                        "recommended_schedule_action":"Verify predecessor, successor, need date, float, and recovery option."})
+    return {"status":"ok","version":"2.2.5","project_id":project_id,"schedule_impacts":impacts}
+@app.get("/api/unified-construction-brain/project/{project_id}/schedule-impact")
+def bc225_schedule_api(project_id:int):
+    r=_bc225_schedule_impact(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/schedule-impact-2-2-5")
+def _health_2_2_5():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.2.5","release":"Unified Brain Schedule Impact Intelligence","baseline":"2.2.4",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"schedule impact classification": true, "recovery prompts": true, "constraint-to-schedule linkage": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.2.5"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Schedule Impact Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc226_procurement(project_id:int):
+    p=_bc221_predictive_threats(project_id)
+    if not p:return None
+    rows=[]
+    for t in p.get("threats") or []:
+        if t.get("type")=="PROCUREMENT":
+            rows.append({"title":t.get("title"),"risk_score":t.get("predictive_risk_score"),
+                         "checklist":["approved selection","released PO","vendor confirmation","ship date",
+                                      "delivery date","storage plan","schedule need date"]})
+    return {"status":"ok","version":"2.2.6","project_id":project_id,"procurement_risks":rows}
+@app.get("/api/unified-construction-brain/project/{project_id}/procurement-intelligence")
+def bc226_procurement_api(project_id:int):
+    r=_bc226_procurement(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/procurement-intelligence-2-2-6")
+def _health_2_2_6():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.2.6","release":"Unified Brain Procurement Intelligence","baseline":"2.2.5",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"procurement readiness": true, "long-lead checklist": true, "need-date linkage": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.2.6"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Procurement Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc227_inspection(project_id:int):
+    p=_bc221_predictive_threats(project_id)
+    if not p:return None
+    rows=[]
+    for t in p.get("threats") or []:
+        if t.get("type")=="INSPECTION":
+            rows.append({"title":t.get("title"),"risk_score":t.get("predictive_risk_score"),
+                         "readiness_checklist":["prerequisite work complete","approved documents available",
+                         "testing agency confirmed","inspection requested","access ready","correction owner assigned"]})
+    return {"status":"ok","version":"2.2.7","project_id":project_id,"inspection_readiness":rows}
+@app.get("/api/unified-construction-brain/project/{project_id}/inspection-readiness")
+def bc227_inspection_api(project_id:int):
+    r=_bc227_inspection(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/inspection-readiness-2-2-7")
+def _health_2_2_7():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.2.7","release":"Unified Brain Inspection Readiness Intelligence","baseline":"2.2.6",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"inspection readiness": true, "testing prerequisites": true, "correction ownership": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.2.7"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Inspection Readiness Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc228_safety_quality(project_id:int):
+    s=_bc220_project_signals(project_id)
+    if not s:return None
+    txt=" ".join(_bc221_signal_text(x) for x in s.get("signals") or [])
+    safety=[k for k in ["safety","osha","fall","excavation","confined","hot work"] if k in txt]
+    quality=[k for k in ["quality","defect","rework","failed","punch","test"] if k in txt]
+    return {"status":"ok","version":"2.2.8","project_id":project_id,
+            "safety_indicators":safety,"quality_indicators":quality,
+            "review_required":bool(safety or quality)}
+@app.get("/api/unified-construction-brain/project/{project_id}/safety-quality")
+def bc228_sq_api(project_id:int):
+    r=_bc228_safety_quality(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/safety-quality-2-2-8")
+def _health_2_2_8():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.2.8","release":"Unified Brain Safety and Quality Intelligence","baseline":"2.2.7",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"safety indicators": true, "quality/rework indicators": true, "review-required flags": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.2.8"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Safety and Quality Intelligence"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc229_exec(project_id:int):
+    u=_bc220_decision_layer(project_id)
+    p=_bc221_predictive_threats(project_id)
+    if not u or not p:return None
+    return {"status":"ok","version":"2.2.9","project_id":project_id,
+            "command_score":u.get("command_score"),"unified_risk_score":u.get("unified_risk_score"),
+            "top_threat":p.get("top_threat"),"threat_count":p.get("threat_count"),
+            "executive_message":u.get("headline")}
+@app.get("/api/unified-construction-brain/project/{project_id}/executive-pulse")
+def bc229_exec_api(project_id:int):
+    r=_bc229_exec(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/executive-pulse-2-2-9")
+def _health_2_2_9():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.2.9","release":"Unified Brain Executive Project Pulse","baseline":"2.2.8",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"executive project pulse": true, "top risk summary": true, "command/risk score rollup": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.2.9"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Executive Project Pulse"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc230_recommendations(project_id:int):
+    a=_bc222_actions(project_id)
+    if not a:return None
+    recs=[]
+    for x in a.get("actions") or []:
+        recs.append({**x,"recommended_sequence":"Review → assign owner → confirm due date → verify completion",
+                     "execution_mode":"HUMAN_APPROVAL_ONLY"})
+    return {"status":"ok","version":"2.3.0","project_id":project_id,"recommendations":recs}
+@app.get("/api/unified-construction-brain/project/{project_id}/recommendations")
+def bc230_rec_api(project_id:int):
+    r=_bc230_recommendations(project_id)
+    return r if r else _BC200_JSONResponse({"status":"not_found"},status_code=404)
+
+@app.get("/health/recommendation-orchestration-2-3-0")
+def _health_2_3_0():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.3.0","release":"Unified Brain Recommendation Orchestration","baseline":"2.2.9",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"recommendation orchestration": true, "sequenced response plans": true, "human-approval-only execution": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.3.0"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Recommendation Orchestration"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+# ============================================================
+
+def _bc231_feedback_summary(project_id:int):
+    corrections=_bc210_corrections(project_id,None,500)
+    brain_counts={}
+    for c in corrections:
+        b=str(c.get("brain") or "UNKNOWN")
+        brain_counts[b]=brain_counts.get(b,0)+1
+    return {"status":"ok","version":"2.3.1","project_id":project_id,
+            "correction_count":len(corrections),"corrections_by_brain":brain_counts,
+            "learning_status":"ACTIVE" if corrections else "READY_FOR_FEEDBACK"}
+@app.get("/api/unified-construction-brain/project/{project_id}/learning-feedback")
+def bc231_feedback_api(project_id:int):
+    return _bc231_feedback_summary(project_id)
+
+@app.get("/health/learning-feedback-2-3-1")
+def _health_2_3_1():
+    paths={getattr(r,"path","") for r in app.routes}
+    required=[
+        "/health/unified-brain-predictive-intelligence-2-2-1",
+        "/blueprint-brain","/brain","/superintendent-command/{project_id}",
+        "/documents","/submittals","/issues","/procurement","/schedule"
+    ]
+    checks=[("preserve "+p,p in paths) for p in required]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"2.3.1","release":"Unified Brain Learning Feedback Optimization","baseline":"2.3.0",
+            "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"features":{"learning feedback summary": true, "correction counts by brain": true, "continuous improvement readiness": true},
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+BUILD_COMMAND_RELEASE="2.3.1"
+BUILD_COMMAND_RELEASE_NAME="Unified Brain Learning Feedback Optimization"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 2.4.0
+# Unified Brain Intelligence Suite
+# Consolidates 2.2.2 through 2.3.1 into one release candidate.
+# ============================================================
+
+@app.get("/api/unified-construction-brain/project/{project_id}/intelligence-suite")
+def bc240_intelligence_suite(project_id:int):
+    predictive = _bc221_predictive_threats(project_id)
+    if not predictive:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+
+    return {
+        "status":"ok",
+        "version":"2.4.0",
+        "release":"Unified Brain Intelligence Suite",
+        "project_id":project_id,
+        "predictive_intelligence":predictive,
+        "action_intelligence":_bc222_actions(project_id),
+        "accountability_intelligence":_bc223_accountability(project_id),
+        "constraint_resolution":_bc224_constraints(project_id),
+        "schedule_impact":_bc225_schedule_impact(project_id),
+        "procurement_intelligence":_bc226_procurement(project_id),
+        "inspection_readiness":_bc227_inspection(project_id),
+        "safety_quality":_bc228_safety_quality(project_id),
+        "executive_pulse":_bc229_exec(project_id),
+        "recommendation_orchestration":_bc230_recommendations(project_id),
+        "learning_feedback":_bc231_feedback_summary(project_id),
+        "human_approval_required":True,
+        "automatic_field_execution":False
+    }
+
+@app.get("/health/unified-brain-intelligence-suite-2-4-0")
+def bc240_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+
+    checks = [
+        ("2.2.1 predictive baseline preserved","/health/unified-brain-predictive-intelligence-2-2-1" in paths),
+        ("action intelligence",callable(globals().get("_bc222_actions"))),
+        ("accountability intelligence",callable(globals().get("_bc223_accountability"))),
+        ("constraint resolution",callable(globals().get("_bc224_constraints"))),
+        ("schedule impact",callable(globals().get("_bc225_schedule_impact"))),
+        ("procurement intelligence",callable(globals().get("_bc226_procurement"))),
+        ("inspection readiness",callable(globals().get("_bc227_inspection"))),
+        ("safety and quality",callable(globals().get("_bc228_safety_quality"))),
+        ("executive pulse",callable(globals().get("_bc229_exec"))),
+        ("recommendation orchestration",callable(globals().get("_bc230_recommendations"))),
+        ("learning feedback",callable(globals().get("_bc231_feedback_summary"))),
+
+        ("action API","/api/unified-construction-brain/project/{project_id}/actions" in paths),
+        ("accountability API","/api/unified-construction-brain/project/{project_id}/accountability" in paths),
+        ("constraints API","/api/unified-construction-brain/project/{project_id}/constraints" in paths),
+        ("schedule impact API","/api/unified-construction-brain/project/{project_id}/schedule-impact" in paths),
+        ("procurement intelligence API","/api/unified-construction-brain/project/{project_id}/procurement-intelligence" in paths),
+        ("inspection readiness API","/api/unified-construction-brain/project/{project_id}/inspection-readiness" in paths),
+        ("safety quality API","/api/unified-construction-brain/project/{project_id}/safety-quality" in paths),
+        ("executive pulse API","/api/unified-construction-brain/project/{project_id}/executive-pulse" in paths),
+        ("recommendations API","/api/unified-construction-brain/project/{project_id}/recommendations" in paths),
+        ("learning feedback API","/api/unified-construction-brain/project/{project_id}/learning-feedback" in paths),
+        ("suite API","/api/unified-construction-brain/project/{project_id}/intelligence-suite" in paths),
+
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.4.0",
+        "release":"Unified Brain Intelligence Suite",
+        "baseline":"2.2.1",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "predictive_intelligence":True,
+            "action_intelligence":True,
+            "accountability_intelligence":True,
+            "constraint_resolution_intelligence":True,
+            "schedule_impact_intelligence":True,
+            "procurement_intelligence":True,
+            "inspection_readiness_intelligence":True,
+            "safety_quality_intelligence":True,
+            "executive_project_pulse":True,
+            "recommendation_orchestration":True,
+            "learning_feedback_optimization":True,
+            "single_unified_suite_api":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.4.0"
+BUILD_COMMAND_RELEASE_NAME = "Unified Brain Intelligence Suite"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
