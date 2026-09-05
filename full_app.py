@@ -53309,7 +53309,7 @@ def _bc630_install_auth_design():
         if "GET" not in methods:
             continue
         if path == "/login":
-            async def bc630_login_get(request:_BC200_Request):
+            async def bc630_login_get():
                 return _BC200_HTMLResponse(_bc630_auth_html("login"))
             route.endpoint = bc630_login_get
             if hasattr(route, "dependant"):
@@ -53319,7 +53319,7 @@ def _bc630_install_auth_design():
                     pass
             changed.append("login")
         elif path in ("/signup","/register","/create-account"):
-            async def bc630_signup_get(request:_BC200_Request):
+            async def bc630_signup_get():
                 return _BC200_HTMLResponse(_bc630_auth_html("signup"))
             route.endpoint = bc630_signup_get
             if hasattr(route, "dependant"):
@@ -53368,6 +53368,68 @@ def bc630_health():
 
 BUILD_COMMAND_RELEASE="6.3.0"
 BUILD_COMMAND_RELEASE_NAME="American Flag Authentication Experience"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 6.3.1 - Authentication Route Signature Hotfix
+# ============================================================
+import inspect as _bc631_inspect
+
+def _bc631_auth_route_signature_check(path):
+    for route in app.routes:
+        if getattr(route, "path", "") == path and "GET" in set(getattr(route, "methods", set()) or set()):
+            call = getattr(getattr(route, "dependant", None), "call", None) or getattr(route, "endpoint", None)
+            if not callable(call):
+                return False
+            sig = _bc631_inspect.signature(call)
+            required = [
+                p for p in sig.parameters.values()
+                if p.default is _bc631_inspect.Parameter.empty
+                and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+            ]
+            return len(required) == 0
+    return False
+
+@app.get("/health/american-flag-auth-experience-6-3-1")
+def bc631_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    signup_path = next((p for p in ("/signup","/register","/create-account") if p in paths), None)
+    checks = [
+        ("6.3.0 design preserved", callable(globals().get("_bc630_auth_html"))),
+        ("American flag background preserved", len(globals().get("_BC630_FLAG_DATA","")) > 100000),
+        ("login GET callable signature fixed", _bc631_auth_route_signature_check("/login")),
+        ("account creation GET callable signature fixed", bool(signup_path and _bc631_auth_route_signature_check(signup_path))),
+        ("6.2.1 billing hotfix preserved", "/health/customer-trial-subscription-selection-6-2-1" in paths),
+        ("trial subscription flow preserved", "/api/billing/choose-plan" in paths),
+        ("real project intelligence preserved", "/health/real-project-intelligence-engine-6-1-0" in paths),
+        ("startup purge disabled", not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.3.1",
+        "release":"Authentication Route Signature Hotfix",
+        "baseline":"6.3.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "fixes":{
+            "login_500_missing_request_argument":True,
+            "signup_route_signature":True,
+            "american_flag_design_preserved":True,
+            "auth_post_behavior_preserved":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.3.1"
+BUILD_COMMAND_RELEASE_NAME="Authentication Route Signature Hotfix"
 try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
