@@ -52905,7 +52905,7 @@ def _bc620_trial_state(company_id):
             pass
     return dict(r or {}, trial_status=status, days_remaining=remaining, upgrade_available=status in ("active","expired","none"))
 
-def _bc620_start_demo(company_id, days=14):
+def _bc620_start_demo(company_id, days=7):
     days = max(1, min(int(days or 14), 60))
     now = _bc620_now()
     end = now + _bc620_dt.timedelta(days=days)
@@ -53643,7 +53643,7 @@ def _bc634_choose_plan_html(company_id):
       <div class="price">$0</div>
       <p>Try BuildCommand AI on a limited workspace before subscribing.</p>
       <ul>
-        <li>14-day evaluation</li>
+        <li>7-day evaluation</li>
         <li>1 project</li>
         <li>Up to 2 users</li>
         <li>Blueprint + Superintendent + core AI access</li>
@@ -53703,7 +53703,7 @@ button{{width:100%;border:0;border-radius:10px;background:#d5222e;color:#fff;pad
 <div class="note">Your company account has been created. Your data stays with your company if you upgrade later.</div>
 </div></body></html>"""
 
-def _bc634_sync_demo_subscription(company_id, days=14):
+def _bc634_sync_demo_subscription(company_id, days=7):
     now = _bc634_datetime.utcnow()
     end = now + _bc634_timedelta(days=max(1,min(int(days or 14),60)))
 
@@ -53825,7 +53825,7 @@ def bc634_choose_demo():
     if not u:
         return _BC181893_RedirectResponse("/login", status_code=303)
     cid = int(u["company_id"])
-    _bc634_sync_demo_subscription(cid, 14)
+    _bc634_sync_demo_subscription(cid, 7)
     return _BC181893_RedirectResponse("/app", status_code=303)
 
 @app.post("/choose-plan/paid/{plan_code}")
@@ -53915,6 +53915,59 @@ def bc634_health():
 
 BUILD_COMMAND_RELEASE="6.3.4"
 BUILD_COMMAND_RELEASE_NAME="Enrollment + Plan Choice Fix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 6.3.5
+# Seven-Day Demo Trial
+# Baseline: stable 6.3.4 Enrollment + Plan Choice Fix
+# ============================================================
+
+@app.get("/health/seven-day-demo-trial-6-3-5")
+def bc635_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    choose_html = _bc634_choose_plan_html(1)
+    checks = [
+        ("6.3.4 enrollment baseline preserved",
+         "/health/enrollment-plan-choice-6-3-4" in paths),
+        ("demo copy says 7-day evaluation",
+         "7-day evaluation" in choose_html),
+        ("14-day demo copy removed",
+         "14-day evaluation" not in choose_html),
+        ("demo start route preserved",
+         "/choose-plan/demo" in paths),
+        ("paid plan route preserved",
+         "/choose-plan/paid/{plan_code}" in paths),
+        ("trial subscription flow preserved",
+         "/api/billing/choose-plan" in paths),
+        ("startup purge disabled",
+         not bool(globals().get("_BC181895_RESET_ENABLED", False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.3.5",
+        "release":"Seven-Day Demo Trial",
+        "baseline":"6.3.4",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "demo_trial_days":7,
+            "paid_plan_selection_preserved":True,
+            "stripe_checkout_preserved":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.3.5"
+BUILD_COMMAND_RELEASE_NAME="Seven-Day Demo Trial"
 try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
