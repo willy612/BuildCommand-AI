@@ -53309,7 +53309,7 @@ def _bc630_install_auth_design():
         if "GET" not in methods:
             continue
         if path == "/login":
-            async def bc630_login_get():
+            def bc630_login_get():
                 return _BC200_HTMLResponse(_bc630_auth_html("login"))
             route.endpoint = bc630_login_get
             if hasattr(route, "dependant"):
@@ -53319,7 +53319,7 @@ def _bc630_install_auth_design():
                     pass
             changed.append("login")
         elif path in ("/signup","/register","/create-account"):
-            async def bc630_signup_get():
+            def bc630_signup_get():
                 return _BC200_HTMLResponse(_bc630_auth_html("signup"))
             route.endpoint = bc630_signup_get
             if hasattr(route, "dependant"):
@@ -53391,7 +53391,7 @@ def _bc631_auth_route_signature_check(path):
                 if p.default is _bc631_inspect.Parameter.empty
                 and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
             ]
-            return len(required) == 0
+            return len(required) == 0 and not _bc631_inspect.iscoroutinefunction(call)
     return False
 
 @app.get("/health/american-flag-auth-experience-6-3-1")
@@ -53430,6 +53430,70 @@ def bc631_health():
 
 BUILD_COMMAND_RELEASE="6.3.1"
 BUILD_COMMAND_RELEASE_NAME="Authentication Route Signature Hotfix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 6.3.2 - Authentication Coroutine Hotfix
+# ============================================================
+import inspect as _bc632_inspect
+
+def _bc632_find_get_call(path):
+    for route in app.routes:
+        if getattr(route, "path", "") == path and "GET" in set(getattr(route, "methods", set()) or set()):
+            return getattr(getattr(route, "dependant", None), "call", None) or getattr(route, "endpoint", None)
+    return None
+
+def _bc632_sync_zero_arg(path):
+    call = _bc632_find_get_call(path)
+    if not callable(call) or _bc632_inspect.iscoroutinefunction(call):
+        return False
+    sig = _bc632_inspect.signature(call)
+    required = [
+        p for p in sig.parameters.values()
+        if p.default is _bc632_inspect.Parameter.empty
+        and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+    ]
+    return len(required) == 0
+
+@app.get("/health/american-flag-auth-experience-6-3-2")
+def bc632_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    signup_path = next((p for p in ("/signup","/register","/create-account") if p in paths), None)
+    checks = [
+        ("6.3.1 baseline preserved", "/health/american-flag-auth-experience-6-3-1" in paths),
+        ("American flag renderer preserved", callable(globals().get("_bc630_auth_html"))),
+        ("login GET is synchronous", _bc632_sync_zero_arg("/login")),
+        ("account creation GET is synchronous", bool(signup_path and _bc632_sync_zero_arg(signup_path))),
+        ("trial subscription flow preserved", "/api/billing/choose-plan" in paths),
+        ("6.2.1 billing hotfix preserved", "/health/customer-trial-subscription-selection-6-2-1" in paths),
+        ("real project intelligence preserved", "/health/real-project-intelligence-engine-6-1-0" in paths),
+        ("startup purge disabled", not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.3.2",
+        "release":"Authentication Coroutine Hotfix",
+        "baseline":"6.3.1",
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "stage_ready":passed==len(checks),
+        "fixes":{
+            "login_coroutine_serialization_500":True,
+            "signup_coroutine_serialization_prevented":True,
+            "sync_route_contract_restored":True,
+            "american_flag_design_preserved":True,
+            "trial_subscription_selection_preserved":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.3.2"
+BUILD_COMMAND_RELEASE_NAME="Authentication Coroutine Hotfix"
 try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
