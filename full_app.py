@@ -36406,3 +36406,307 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.8.0
+# Construction Decision Intelligence
+# Baseline: stable 2.7.0 Construction Experience Intelligence
+#
+# Purpose:
+# Combine current project conditions, Blueprint intelligence,
+# predictive risk, learned outcomes, lessons, playbooks, and
+# cross-project experience into one confidence-aware decision
+# recommendation with evidence, alternatives, and risk notes.
+# ============================================================
+
+def _bc280_decision_context(project_id:int, question:str):
+    unified = _bc220_decision_layer(project_id, question)
+    predictive = _bc221_predictive_threats(project_id)
+    experience = _bc270_experience_advice(project_id)
+    adaptive = _bc260_self_evaluation(project_id)
+
+    if not unified:
+        return None
+
+    evidence = []
+
+    # Unified Brain priorities
+    for x in (unified.get("cross_brain_priorities") or [])[:12]:
+        evidence.append({
+            "source":"UNIFIED_BRAIN",
+            "label":x.get("title"),
+            "detail":x.get("reason"),
+            "trade":x.get("trade"),
+            "priority":x.get("priority")
+        })
+
+    # Predictive threats
+    if predictive:
+        for x in (predictive.get("threats") or [])[:10]:
+            evidence.append({
+                "source":"PREDICTIVE",
+                "label":x.get("title"),
+                "detail":x.get("why"),
+                "risk_score":x.get("predictive_risk_score"),
+                "prevention":x.get("prevention")
+            })
+
+    # Experience / lessons
+    for x in (experience.get("lessons_learned") or [])[:10]:
+        evidence.append({
+            "source":"EXPERIENCE",
+            "label":x.get("subject"),
+            "detail":x.get("lesson"),
+            "proven_action":x.get("proven_action"),
+            "effectiveness_score":x.get("effectiveness_score")
+        })
+
+    # Proven playbooks
+    for x in (experience.get("proven_response_playbooks") or [])[:8]:
+        evidence.append({
+            "source":"PLAYBOOK",
+            "label":x.get("title"),
+            "detail":x.get("recommended_sequence"),
+            "effectiveness_score":x.get("average_effectiveness"),
+            "evidence_count":x.get("evidence_count")
+        })
+
+    return {
+        "unified":unified,
+        "predictive":predictive,
+        "experience":experience,
+        "self_evaluation":adaptive,
+        "evidence":evidence
+    }
+
+def _bc280_candidate_actions(project_id:int, question:str):
+    ctx = _bc280_decision_context(project_id, question)
+    if not ctx:
+        return None
+
+    candidates = []
+
+    # Current recommendations from orchestration layer
+    recs = _bc230_recommendations(project_id)
+    if recs:
+        for r in recs.get("recommendations") or []:
+            title = str(r.get("title") or r.get("action") or "Project action")
+            risk = int(r.get("risk_score") or 50)
+            feedback = _bc250_recommendation_feedback(project_id, title)
+            hist_eff = feedback.get("average_effectiveness")
+            confidence = 55 + min(25, risk // 4)
+            if hist_eff is not None:
+                confidence = (confidence * 0.65) + (float(hist_eff) * 0.35)
+            candidates.append({
+                "title":title,
+                "action":r.get("action"),
+                "owner":r.get("owner"),
+                "risk_score":risk,
+                "historical_effectiveness":hist_eff,
+                "confidence":round(max(5,min(99,confidence)),1),
+                "source":"RECOMMENDATION_ORCHESTRATION"
+            })
+
+    # Proven playbooks as alternative actions
+    for p in (ctx["experience"].get("proven_response_playbooks") or [])[:10]:
+        candidates.append({
+            "title":p.get("title"),
+            "action":p.get("recommended_sequence"),
+            "owner":p.get("trade") or "PROJECT TEAM",
+            "risk_score":50,
+            "historical_effectiveness":p.get("average_effectiveness"),
+            "confidence":round(
+                max(5,min(99, 50 + min(25, int(p.get("evidence_count") or 0)*3) +
+                            min(20, float(p.get("average_effectiveness") or 0)*0.2))),1
+            ),
+            "source":"PROVEN_PLAYBOOK"
+        })
+
+    candidates.sort(
+        key=lambda x:(float(x.get("confidence") or 0), float(x.get("historical_effectiveness") or 0), int(x.get("risk_score") or 0)),
+        reverse=True
+    )
+    return {"context":ctx,"candidates":candidates[:20]}
+
+def _bc280_decision(project_id:int, question:str):
+    pack = _bc280_candidate_actions(project_id, question)
+    if not pack:
+        return None
+
+    candidates = pack["candidates"]
+    ctx = pack["context"]
+    best = candidates[0] if candidates else None
+
+    alternatives = candidates[1:4] if len(candidates) > 1 else []
+
+    uncertainty = []
+    if not candidates:
+        uncertainty.append("No strong historical or current recommendation candidate was found.")
+    if ctx["self_evaluation"].get("outcome_count",0) < 10:
+        uncertainty.append("Limited outcome history is available for this project.")
+    cal = ctx["self_evaluation"].get("prediction_calibration") or {}
+    if cal.get("accuracy") is None:
+        uncertainty.append("Prediction calibration is not yet established.")
+    elif float(cal.get("accuracy") or 0) < 70:
+        uncertainty.append("Prediction calibration is still developing.")
+
+    confidence = float((best or {}).get("confidence") or 40)
+    confidence -= min(20, len(uncertainty)*5)
+    confidence = round(max(5,min(99,confidence)),1)
+
+    return {
+        "status":"ok",
+        "version":"2.8.0",
+        "project_id":project_id,
+        "question":question,
+        "recommended_decision":best,
+        "alternatives":alternatives,
+        "confidence":confidence,
+        "evidence":ctx["evidence"][:30],
+        "top_predictive_threat":(ctx["predictive"] or {}).get("top_threat"),
+        "experience_summary":ctx["experience"].get("experience_summary"),
+        "uncertainty":uncertainty,
+        "why_this_decision":[
+            "It ranks current project risk and leadership priorities.",
+            "It considers prior outcomes and historical action effectiveness.",
+            "It includes proven-response playbooks when available.",
+            "It preserves alternatives when more than one reasonable response exists."
+        ],
+        "decision_policy":"Decision support only. Superintendent/PM approval remains required before execution."
+    }
+
+@app.post("/api/unified-construction-brain/project/{project_id}/decision")
+async def bc280_decision_api(project_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    question = str(
+        body.get("question")
+        or "What is the best course of action for this project right now?"
+    ).strip()
+
+    result = _bc280_decision(project_id, question)
+    if not result:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return result
+
+@app.get("/api/unified-construction-brain/project/{project_id}/decision")
+def bc280_decision_get(project_id:int, question:str="What is the best course of action for this project right now?"):
+    result = _bc280_decision(project_id, question)
+    if not result:
+        return _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+    return result
+
+@app.get("/unified-construction-brain/{project_id}/decision", response_class=_BC200_HTMLResponse)
+def bc280_decision_page(project_id:int):
+    d = _bc280_decision(project_id, "What is the best course of action for this project right now?")
+    if not d:
+        return _BC200_HTMLResponse("Project not found or access denied.", status_code=404)
+
+    best = d.get("recommended_decision") or {}
+    alternatives = ""
+    for a in d.get("alternatives") or []:
+        alternatives += (
+            "<div class='card'>"
+            f"<h3>{_bc200_esc(a.get('title'))}</h3>"
+            f"<p><b>Action:</b> {_bc200_esc(a.get('action'))}</p>"
+            f"<p><b>Confidence:</b> {_bc200_esc(a.get('confidence'))}</p>"
+            "</div>"
+        )
+
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">BUILDCOMMAND AI 2.8.0 · CONSTRUCTION DECISION INTELLIGENCE</div>
+      <h1>Best Course of Action</h1>
+      <p>Current project conditions + predictive risk + lessons learned + historical effectiveness.</p>
+    </div>
+
+    <div class="grid3">
+      <div class="card"><div class="label">Decision Confidence</div><div class="kpi">{_bc200_esc(d.get("confidence"))}</div></div>
+      <div class="card"><div class="label">Historical Evidence</div><div class="kpi">{len(d.get("evidence") or [])}</div></div>
+      <div class="card"><div class="label">Alternatives</div><div class="kpi">{len(d.get("alternatives") or [])}</div></div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">RECOMMENDED DECISION</div>
+      <h2>{_bc200_esc(best.get("title") or "No strong recommendation yet")}</h2>
+      <p><b>Action:</b> {_bc200_esc(best.get("action") or "")}</p>
+      <p><b>Owner:</b> {_bc200_esc(best.get("owner") or "Project Team")}</p>
+      <p><b>Historical effectiveness:</b> {_bc200_esc(best.get("historical_effectiveness"))}</p>
+      <p><b>Confidence:</b> {_bc200_esc(best.get("confidence"))}</p>
+    </div>
+
+    <div class="card"><div class="eyebrow">ALTERNATIVES</div><h2>Other Reasonable Responses</h2></div>
+    {alternatives or "<div class='card'><p>No strong alternate response is currently available.</p></div>"}
+
+    <div class="card">
+      <div class="eyebrow">DECISION POLICY</div>
+      <p>{_bc200_esc(d.get("decision_policy"))}</p>
+    </div>
+    """
+    return _BC200_HTMLResponse(_runtime.shell("Construction Decision Intelligence", body))
+
+@app.get("/health/construction-decision-intelligence-2-8-0")
+def bc280_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+
+    checks = [
+        ("2.7.0 stable baseline preserved","/health/construction-experience-intelligence-2-7-0" in paths),
+        ("decision context engine",callable(globals().get("_bc280_decision_context"))),
+        ("candidate action engine",callable(globals().get("_bc280_candidate_actions"))),
+        ("decision engine",callable(globals().get("_bc280_decision"))),
+        ("decision POST API","/api/unified-construction-brain/project/{project_id}/decision" in paths),
+        ("decision page","/unified-construction-brain/{project_id}/decision" in paths),
+        ("experience intelligence preserved","/api/unified-construction-brain/project/{project_id}/experience-intelligence" in paths),
+        ("adaptive recommendations preserved","/api/unified-construction-brain/project/{project_id}/adaptive-recommendations" in paths),
+        ("self evaluation preserved","/api/unified-construction-brain/project/{project_id}/self-evaluation" in paths),
+        ("predictive intelligence preserved","/api/unified-construction-brain/project/{project_id}/predictive" in paths),
+        ("recommendations preserved","/api/unified-construction-brain/project/{project_id}/recommendations" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.8.0",
+        "release":"Construction Decision Intelligence",
+        "baseline":"2.7.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "best_course_of_action":True,
+            "confidence_aware_decisions":True,
+            "evidence_backed_decisions":True,
+            "historical_effectiveness_influence":True,
+            "alternative_action_generation":True,
+            "uncertainty_reporting":True,
+            "human_approval_required":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.8.0"
+BUILD_COMMAND_RELEASE_NAME = "Construction Decision Intelligence"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
