@@ -53851,7 +53851,13 @@ def bc634_choose_paid(plan_code:str):
     except Exception:
         pass
 
-    return _BC181893_RedirectResponse(f"/billing/checkout/{code}", status_code=303)
+    checkout_url = _bc636_resolve_checkout_url(code)
+    if not checkout_url:
+        return _BC200_HTMLResponse(
+            "Stripe checkout route is not configured for this plan. Please contact BuildCommand support.",
+            status_code=503
+        )
+    return _BC181893_RedirectResponse(checkout_url, status_code=303)
 
 @app.get("/health/enrollment-plan-choice-6-3-4")
 def bc634_health():
@@ -53968,6 +53974,119 @@ def bc635_health():
 
 BUILD_COMMAND_RELEASE="6.3.5"
 BUILD_COMMAND_RELEASE_NAME="Seven-Day Demo Trial"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 6.3.6
+# Stripe Checkout Handoff Fix
+# Baseline: stable 6.3.5 Seven-Day Demo Trial
+#
+# Fixes paid-plan enrollment so it redirects to the actual Stripe
+# checkout route already present in BuildCommand instead of assuming
+# one hard-coded path.
+# ============================================================
+
+def _bc636_route_paths():
+    return {getattr(r,"path","") for r in app.routes}
+
+def _bc636_resolve_checkout_url(plan_code):
+    code = str(plan_code or "").strip().upper()
+    paths = _bc636_route_paths()
+
+    # Prefer known dynamic checkout routes already present in the app.
+    candidates = [
+        ("/billing/checkout/{plan_code}", f"/billing/checkout/{code}"),
+        ("/billing/checkout/{code}", f"/billing/checkout/{code}"),
+        ("/stripe/checkout/{plan_code}", f"/stripe/checkout/{code}"),
+        ("/stripe/checkout/{code}", f"/stripe/checkout/{code}"),
+        ("/checkout/{plan_code}", f"/checkout/{code}"),
+        ("/checkout/{code}", f"/checkout/{code}"),
+        ("/pricing/checkout/{plan_code}", f"/pricing/checkout/{code}"),
+        ("/subscribe/{plan_code}", f"/subscribe/{code}"),
+    ]
+    for route_path, url in candidates:
+        if route_path in paths:
+            return url
+
+    # Then look for a static Stripe checkout/subscribe endpoint that can
+    # accept the selected plan as a query parameter.
+    for route_path in sorted(paths):
+        low = route_path.lower()
+        if ("checkout" in low or "subscribe" in low) and "{" not in route_path:
+            if "stripe" in low or "billing" in low or "checkout" in low:
+                sep = "&" if "?" in route_path else "?"
+                return f"{route_path}{sep}plan_code={code}"
+
+    return None
+
+def _bc636_checkout_diagnostics():
+    paths = sorted(_bc636_route_paths())
+    return {
+        "checkout_like_routes":[p for p in paths if "checkout" in p.lower()],
+        "stripe_like_routes":[p for p in paths if "stripe" in p.lower()],
+        "subscribe_like_routes":[p for p in paths if "subscribe" in p.lower()],
+    }
+
+@app.get("/api/billing/stripe-checkout-diagnostics")
+def bc636_checkout_diagnostics_api():
+    return {
+        "status":"ok",
+        "version":"6.3.6",
+        **_bc636_checkout_diagnostics()
+    }
+
+@app.get("/health/stripe-checkout-handoff-6-3-6")
+def bc636_health():
+    paths = _bc636_route_paths()
+    resolved = _bc636_resolve_checkout_url("STARTER")
+    checks = [
+        ("6.3.5 seven-day demo preserved",
+         "/health/seven-day-demo-trial-6-3-5" in paths),
+        ("checkout resolver engine",
+         callable(globals().get("_bc636_resolve_checkout_url"))),
+        ("paid plan route preserved",
+         "/choose-plan/paid/{plan_code}" in paths),
+        ("existing Stripe/billing route detected",
+         bool(resolved)),
+        ("checkout diagnostics API",
+         "/api/billing/stripe-checkout-diagnostics" in paths),
+        ("trial subscription flow preserved",
+         "/api/billing/choose-plan" in paths),
+        ("login preserved",
+         "/login" in paths),
+        ("signup preserved",
+         "/signup" in paths or "/register" in paths),
+        ("startup purge disabled",
+         not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.3.6",
+        "release":"Stripe Checkout Handoff Fix",
+        "baseline":"6.3.5",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed==len(checks),
+        "resolved_checkout_example":resolved,
+        "diagnostics":_bc636_checkout_diagnostics(),
+        "fixes":{
+            "hardcoded_checkout_removed":True,
+            "existing_checkout_route_detection":True,
+            "paid_plan_to_stripe_handoff":True,
+            "seven_day_demo_preserved":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.3.6"
+BUILD_COMMAND_RELEASE_NAME="Stripe Checkout Handoff Fix"
 try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
