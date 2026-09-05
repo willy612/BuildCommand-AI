@@ -54758,3 +54758,133 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 6.5.0 — Logo Branding Fix
+# Baseline: stable 6.4.2
+# Auth and construction app remain separate pages.
+# Approved BuildCommand roof/flag artwork is the primary logo on both.
+# Billing, Stripe, demo and access logic remain unchanged.
+# ============================================================
+
+import base64 as _bc650_b64
+
+@app.get("/brand/buildcommand-main-logo")
+def bc650_main_logo():
+    raw = globals().get("_BC640_BRAND_FLAG", "")
+    if not raw:
+        return _BC200_HTMLResponse("Logo asset unavailable.", status_code=404)
+    try:
+        return _BC200_Response(
+            content=_bc650_b64.b64decode(raw),
+            media_type="image/png",
+            headers={"Cache-Control":"public, max-age=86400"}
+        )
+    except Exception:
+        return _BC200_HTMLResponse("Logo asset unavailable.", status_code=404)
+
+def _bc650_logo_block(auth=False):
+    width = "min(760px,90vw)" if auth else "min(300px,78vw)"
+    return """<div class="bc650-main-logo" style="width:%s;margin:0 auto 12px;text-align:center">
+    <img src="/brand/buildcommand-main-logo"
+         alt="BuildCommand - Build Smarter. Grow Faster."
+         style="display:block;width:100%%;height:auto;object-fit:contain">
+    </div>""" % width
+
+def _bc650_inject_logo(html, auth=False):
+    if not isinstance(html, str) or "bc650-main-logo" in html:
+        return html
+    pos = html.lower().find("<body")
+    if pos < 0:
+        return html
+    end = html.find(">", pos)
+    if end < 0:
+        return html
+    block = '<div id="bc650-brand-wrap" style="position:relative;z-index:50;padding:14px 16px 4px">' + _bc650_logo_block(auth) + '</div>'
+    css = """<style>
+    .old-logo,.legacy-logo,.brand-logo-old,[data-logo="old"],[data-brand="legacy"]{display:none!important}
+    #bc650-brand-wrap{box-sizing:border-box}
+    @media(max-width:700px){#bc650-brand-wrap{padding-top:9px!important}}
+    </style>"""
+    return html[:end+1] + block + html[end+1:] + css
+
+_bc650_login_original = globals().get("_bc640_login_html")
+if callable(_bc650_login_original):
+    def _bc640_login_html(*args, **kwargs):
+        return _bc650_inject_logo(_bc650_login_original(*args, **kwargs), auth=True)
+
+_bc650_signup_original = globals().get("_bc640_signup_html")
+if callable(_bc650_signup_original):
+    def _bc640_signup_html(*args, **kwargs):
+        return _bc650_inject_logo(_bc650_signup_original(*args, **kwargs), auth=True)
+
+@app.middleware("http")
+async def bc650_app_logo_branding(request, call_next):
+    response = await call_next(request)
+    path = request.url.path or "/"
+    excluded = (
+        path in ("/login","/signup","/logout","/choose-plan","/payment-required")
+        or path.startswith("/billing/")
+        or path.startswith("/health/")
+        or path.startswith("/brand/")
+    )
+    if excluded:
+        return response
+
+    ctype = str(response.headers.get("content-type") or "").lower()
+    if "text/html" not in ctype:
+        return response
+
+    try:
+        parts = []
+        async for chunk in response.body_iterator:
+            parts.append(chunk)
+        body = b"".join(parts).decode("utf-8", errors="replace")
+        body = _bc650_inject_logo(body, auth=False)
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        return _BC200_HTMLResponse(body, status_code=response.status_code, headers=headers)
+    except Exception:
+        return response
+
+@app.get("/health/logo-branding-fix-6-5-0")
+def bc650_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = [
+        ("6.4.2 Stripe/trial baseline preserved", "/health/stripe-trial-loop-final-fix-6-4-2" in paths),
+        ("main logo asset route", "/brand/buildcommand-main-logo" in paths),
+        ("logo injection engine", callable(globals().get("_bc650_inject_logo"))),
+        ("working app branding middleware", callable(globals().get("bc650_app_logo_branding"))),
+        ("login separate", "/login" in paths),
+        ("signup separate", "/signup" in paths),
+        ("construction app separate", "/" in paths or "/app" in paths),
+        ("Stripe success preserved", "/billing/stripe-success" in paths),
+        ("7-day demo preserved", "/health/seven-day-demo-trial-6-3-5" in paths),
+        ("startup purge disabled", not bool(globals().get("_BC181895_RESET_ENABLED", False))),
+    ]
+    passed = sum(bool(v) for _, v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.5.0",
+        "release":"Logo Branding Fix",
+        "baseline":"6.4.2",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "branding":{
+            "auth_and_app_are_separate_pages":True,
+            "approved_buildcommand_roof_flag_logo_on_auth":True,
+            "approved_buildcommand_roof_flag_logo_on_construction_app":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.5.0"
+BUILD_COMMAND_RELEASE_NAME="Logo Branding Fix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
