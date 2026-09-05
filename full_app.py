@@ -40210,3 +40210,1780 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 5.0.0 — Construction Intelligence Mesh 100
+# Baseline: stable 4.0.0
+# ============================================================
+
+def _bc500_brain_001(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Architectural Plan").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":1,"brain":"ARCHITECTURAL_PLAN","name":"Architectural Plan","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_002(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Structural Plan").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":2,"brain":"STRUCTURAL_PLAN","name":"Structural Plan","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_003(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Civil Plan").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":3,"brain":"CIVIL_PLAN","name":"Civil Plan","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_004(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("MEP Plan").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":4,"brain":"MEP_PLAN","name":"MEP Plan","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_005(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Specification Crosscheck").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":5,"brain":"SPECIFICATION_CROSSCHECK","name":"Specification Crosscheck","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_006(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Drawing Notes").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":6,"brain":"DRAWING_NOTES","name":"Drawing Notes","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_007(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Detail Dependency").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":7,"brain":"DETAIL_DEPENDENCY","name":"Detail Dependency","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_008(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Schedule Detail Correlation").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":8,"brain":"SCHEDULE_DETAIL_CORRELATION","name":"Schedule Detail Correlation","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_009(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Revision Delta").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":9,"brain":"REVISION_DELTA","name":"Revision Delta","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_010(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Addendum Impact").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":10,"brain":"ADDENDUM_IMPACT","name":"Addendum Impact","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_011(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("RFI Impact").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":11,"brain":"RFI_IMPACT","name":"RFI Impact","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_012(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("ASI Impact").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":12,"brain":"ASI_IMPACT","name":"ASI Impact","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_013(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Submittal Drawing Correlation").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":13,"brain":"SUBMITTAL_DRAWING_CORRELATION","name":"Submittal Drawing Correlation","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_014(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Document Conflict").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":14,"brain":"DOCUMENT_CONFLICT","name":"Document Conflict","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_015(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Governing Evidence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":15,"brain":"GOVERNING_EVIDENCE","name":"Governing Evidence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_016(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Scope Boundary").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":16,"brain":"SCOPE_BOUNDARY","name":"Scope Boundary","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_017(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Scope Exclusion").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":17,"brain":"SCOPE_EXCLUSION","name":"Scope Exclusion","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_018(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Trade Overlap").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":18,"brain":"TRADE_OVERLAP","name":"Trade Overlap","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_019(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Trade Gap").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":19,"brain":"TRADE_GAP","name":"Trade Gap","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_020(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Bid Scope Completeness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":20,"brain":"BID_SCOPE_COMPLETENESS","name":"Bid Scope Completeness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_021(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Demolition Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":21,"brain":"DEMOLITION_RESPONSIBILITY","name":"Demolition Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_022(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Concrete Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":22,"brain":"CONCRETE_RESPONSIBILITY","name":"Concrete Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_023(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Framing Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":23,"brain":"FRAMING_RESPONSIBILITY","name":"Framing Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_024(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Drywall Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":24,"brain":"DRYWALL_RESPONSIBILITY","name":"Drywall Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_025(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Doors Hardware Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":25,"brain":"DOORS_HARDWARE_RESPONSIBILITY","name":"Doors Hardware Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_026(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Storefront Glazing Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":26,"brain":"STOREFRONT_GLAZING_RESPONSIBILITY","name":"Storefront Glazing Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_027(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Ceiling Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":27,"brain":"CEILING_RESPONSIBILITY","name":"Ceiling Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_028(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Flooring Tile Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":28,"brain":"FLOORING_TILE_RESPONSIBILITY","name":"Flooring Tile Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_029(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Paint Finish Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":29,"brain":"PAINT_FINISH_RESPONSIBILITY","name":"Paint Finish Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_030(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Roofing Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":30,"brain":"ROOFING_RESPONSIBILITY","name":"Roofing Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_031(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Electrical Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":31,"brain":"ELECTRICAL_RESPONSIBILITY","name":"Electrical Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_032(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Plumbing Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":32,"brain":"PLUMBING_RESPONSIBILITY","name":"Plumbing Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_033(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("HVAC Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":33,"brain":"HVAC_RESPONSIBILITY","name":"HVAC Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_034(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Fire Sprinkler Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":34,"brain":"FIRE_SPRINKLER_RESPONSIBILITY","name":"Fire Sprinkler Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_035(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Low Voltage Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":35,"brain":"LOW_VOLTAGE_RESPONSIBILITY","name":"Low Voltage Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_036(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Bathroom Accessories Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":36,"brain":"BATHROOM_ACCESSORIES_RESPONSIBILITY","name":"Bathroom Accessories Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_037(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Specialties Responsibility").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":37,"brain":"SPECIALTIES_RESPONSIBILITY","name":"Specialties Responsibility","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_038(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Underground Utility Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":38,"brain":"UNDERGROUND_UTILITY_SEQUENCE","name":"Underground Utility Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_039(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Foundation Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":39,"brain":"FOUNDATION_SEQUENCE","name":"Foundation Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_040(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Structural Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":40,"brain":"STRUCTURAL_SEQUENCE","name":"Structural Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_041(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Building Dry-In Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":41,"brain":"BUILDING_DRY_IN_SEQUENCE","name":"Building Dry-In Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_042(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("MEP Rough Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":42,"brain":"MEP_ROUGH_SEQUENCE","name":"MEP Rough Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_043(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Wall Close Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":43,"brain":"WALL_CLOSE_SEQUENCE","name":"Wall Close Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_044(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Ceiling Close Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":44,"brain":"CEILING_CLOSE_SEQUENCE","name":"Ceiling Close Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_045(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Finish Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":45,"brain":"FINISH_SEQUENCE","name":"Finish Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_046(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Sitework Sequence").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":46,"brain":"SITEWORK_SEQUENCE","name":"Sitework Sequence","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_047(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Inspection Predecessor").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":47,"brain":"INSPECTION_PREDECESSOR","name":"Inspection Predecessor","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_048(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Testing Predecessor").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":48,"brain":"TESTING_PREDECESSOR","name":"Testing Predecessor","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_049(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Trade Handoff Readiness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":49,"brain":"TRADE_HANDOFF_READINESS","name":"Trade Handoff Readiness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_050(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Workface Readiness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":50,"brain":"WORKFACE_READINESS","name":"Workface Readiness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_051(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Three Week Lookahead").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":51,"brain":"THREE_WEEK_LOOKAHEAD","name":"Three Week Lookahead","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_052(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Six Week Forecast").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":52,"brain":"SIX_WEEK_FORECAST","name":"Six Week Forecast","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_053(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Milestone Protection").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":53,"brain":"MILESTONE_PROTECTION","name":"Milestone Protection","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_054(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Critical Path Threat").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":54,"brain":"CRITICAL_PATH_THREAT","name":"Critical Path Threat","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_055(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Float Consumption").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":55,"brain":"FLOAT_CONSUMPTION","name":"Float Consumption","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_056(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Schedule Recovery").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":56,"brain":"SCHEDULE_RECOVERY","name":"Schedule Recovery","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_057(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Crew Productivity").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":57,"brain":"CREW_PRODUCTIVITY","name":"Crew Productivity","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_058(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Manpower Loading").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":58,"brain":"MANPOWER_LOADING","name":"Manpower Loading","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_059(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Trade Stacking").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":59,"brain":"TRADE_STACKING","name":"Trade Stacking","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_060(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Access Logistics").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":60,"brain":"ACCESS_LOGISTICS","name":"Access Logistics","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_061(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Material Need Date").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":61,"brain":"MATERIAL_NEED_DATE","name":"Material Need Date","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_062(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Long Lead Forecast").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":62,"brain":"LONG_LEAD_FORECAST","name":"Long Lead Forecast","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_063(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Fabrication Status").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":63,"brain":"FABRICATION_STATUS","name":"Fabrication Status","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_064(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Shipping Risk").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":64,"brain":"SHIPPING_RISK","name":"Shipping Risk","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_065(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Delivery Readiness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":65,"brain":"DELIVERY_READINESS","name":"Delivery Readiness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_066(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Storage Logistics").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":66,"brain":"STORAGE_LOGISTICS","name":"Storage Logistics","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_067(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Equipment Procurement").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":67,"brain":"EQUIPMENT_PROCUREMENT","name":"Equipment Procurement","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_068(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Submittal Approval Risk").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":68,"brain":"SUBMITTAL_APPROVAL_RISK","name":"Submittal Approval Risk","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_069(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Procurement Recovery").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":69,"brain":"PROCUREMENT_RECOVERY","name":"Procurement Recovery","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_070(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Vendor Performance").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":70,"brain":"VENDOR_PERFORMANCE","name":"Vendor Performance","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_071(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Inspection Readiness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":71,"brain":"INSPECTION_READINESS","name":"Inspection Readiness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_072(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Special Inspection Readiness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":72,"brain":"SPECIAL_INSPECTION_READINESS","name":"Special Inspection Readiness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_073(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Quality Hold Point").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":73,"brain":"QUALITY_HOLD_POINT","name":"Quality Hold Point","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_074(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Punchlist Forecast").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":74,"brain":"PUNCHLIST_FORECAST","name":"Punchlist Forecast","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_075(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Commissioning Readiness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":75,"brain":"COMMISSIONING_READINESS","name":"Commissioning Readiness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_076(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Turnover Readiness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":76,"brain":"TURNOVER_READINESS","name":"Turnover Readiness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_077(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Safety Pre-Task Risk").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":77,"brain":"SAFETY_PRE_TASK_RISK","name":"Safety Pre-Task Risk","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_078(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Site Hazard Forecast").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":78,"brain":"SITE_HAZARD_FORECAST","name":"Site Hazard Forecast","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_079(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Weather Exposure").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":79,"brain":"WEATHER_EXPOSURE","name":"Weather Exposure","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_080(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Temporary Protection").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":80,"brain":"TEMPORARY_PROTECTION","name":"Temporary Protection","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_081(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Rework Risk").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":81,"brain":"REWORK_RISK","name":"Rework Risk","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_082(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Cost Exposure").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":82,"brain":"COST_EXPOSURE","name":"Cost Exposure","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_083(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Change Event Impact").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":83,"brain":"CHANGE_EVENT_IMPACT","name":"Change Event Impact","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_084(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Premium Freight Exposure").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":84,"brain":"PREMIUM_FREIGHT_EXPOSURE","name":"Premium Freight Exposure","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_085(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Overtime Exposure").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":85,"brain":"OVERTIME_EXPOSURE","name":"Overtime Exposure","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_086(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Delay Cost Exposure").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":86,"brain":"DELAY_COST_EXPOSURE","name":"Delay Cost Exposure","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_087(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Contract Notice").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":87,"brain":"CONTRACT_NOTICE","name":"Contract Notice","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_088(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Decision Deadline").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":88,"brain":"DECISION_DEADLINE","name":"Decision Deadline","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_089(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Owner Decision Impact").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":89,"brain":"OWNER_DECISION_IMPACT","name":"Owner Decision Impact","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_090(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Architect Decision Impact").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":90,"brain":"ARCHITECT_DECISION_IMPACT","name":"Architect Decision Impact","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_091(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Engineer Decision Impact").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":91,"brain":"ENGINEER_DECISION_IMPACT","name":"Engineer Decision Impact","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_092(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Superintendent Priority").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":92,"brain":"SUPERINTENDENT_PRIORITY","name":"Superintendent Priority","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_093(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Project Manager Priority").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":93,"brain":"PROJECT_MANAGER_PRIORITY","name":"Project Manager Priority","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_094(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Executive Exception").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":94,"brain":"EXECUTIVE_EXCEPTION","name":"Executive Exception","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_095(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Daily Field Command").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":95,"brain":"DAILY_FIELD_COMMAND","name":"Daily Field Command","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_096(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Tomorrow Readiness").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":96,"brain":"TOMORROW_READINESS","name":"Tomorrow Readiness","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_097(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Weekly Strategy").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":97,"brain":"WEEKLY_STRATEGY","name":"Weekly Strategy","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_098(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Cross Project Learning").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":98,"brain":"CROSS_PROJECT_LEARNING","name":"Cross Project Learning","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_099(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Prediction Calibration").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":99,"brain":"PREDICTION_CALIBRATION","name":"Prediction Calibration","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+def _bc500_brain_100(project_id:int):
+    attention=_bc340_safe(_bc310_attention_queue,project_id,default=[]) or []
+    evidence=_bc340_safe(_bc320_weighted_evidence,project_id,default=[]) or []
+    readiness=_bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    quality=_bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+    terms=set(_bc210_norm("Master Intelligence Mesh").split())
+    sig=[x for x in attention if terms & set(_bc210_norm(str(x)).split())]
+    ev=[x for x in evidence if terms & set(_bc210_norm(str(x)).split())]
+    return {"brain_id":100,"brain":"MASTER_INTELLIGENCE_MESH","name":"Master Intelligence Mesh","project_id":project_id,
+            "priority_signals":sig[:20] if sig else attention[:8],
+            "governing_evidence":ev[:20] if ev else evidence[:8],
+            "field_readiness":readiness,"reasoning_quality":quality,
+            "human_approval_required":True}
+
+
+_BC500_BRAIN_MAP={
+    "architectural_plan":_bc500_brain_001,
+    "structural_plan":_bc500_brain_002,
+    "civil_plan":_bc500_brain_003,
+    "mep_plan":_bc500_brain_004,
+    "specification_crosscheck":_bc500_brain_005,
+    "drawing_notes":_bc500_brain_006,
+    "detail_dependency":_bc500_brain_007,
+    "schedule_detail_correlation":_bc500_brain_008,
+    "revision_delta":_bc500_brain_009,
+    "addendum_impact":_bc500_brain_010,
+    "rfi_impact":_bc500_brain_011,
+    "asi_impact":_bc500_brain_012,
+    "submittal_drawing_correlation":_bc500_brain_013,
+    "document_conflict":_bc500_brain_014,
+    "governing_evidence":_bc500_brain_015,
+    "scope_boundary":_bc500_brain_016,
+    "scope_exclusion":_bc500_brain_017,
+    "trade_overlap":_bc500_brain_018,
+    "trade_gap":_bc500_brain_019,
+    "bid_scope_completeness":_bc500_brain_020,
+    "demolition_responsibility":_bc500_brain_021,
+    "concrete_responsibility":_bc500_brain_022,
+    "framing_responsibility":_bc500_brain_023,
+    "drywall_responsibility":_bc500_brain_024,
+    "doors_hardware_responsibility":_bc500_brain_025,
+    "storefront_glazing_responsibility":_bc500_brain_026,
+    "ceiling_responsibility":_bc500_brain_027,
+    "flooring_tile_responsibility":_bc500_brain_028,
+    "paint_finish_responsibility":_bc500_brain_029,
+    "roofing_responsibility":_bc500_brain_030,
+    "electrical_responsibility":_bc500_brain_031,
+    "plumbing_responsibility":_bc500_brain_032,
+    "hvac_responsibility":_bc500_brain_033,
+    "fire_sprinkler_responsibility":_bc500_brain_034,
+    "low_voltage_responsibility":_bc500_brain_035,
+    "bathroom_accessories_responsibility":_bc500_brain_036,
+    "specialties_responsibility":_bc500_brain_037,
+    "underground_utility_sequence":_bc500_brain_038,
+    "foundation_sequence":_bc500_brain_039,
+    "structural_sequence":_bc500_brain_040,
+    "building_dry_in_sequence":_bc500_brain_041,
+    "mep_rough_sequence":_bc500_brain_042,
+    "wall_close_sequence":_bc500_brain_043,
+    "ceiling_close_sequence":_bc500_brain_044,
+    "finish_sequence":_bc500_brain_045,
+    "sitework_sequence":_bc500_brain_046,
+    "inspection_predecessor":_bc500_brain_047,
+    "testing_predecessor":_bc500_brain_048,
+    "trade_handoff_readiness":_bc500_brain_049,
+    "workface_readiness":_bc500_brain_050,
+    "three_week_lookahead":_bc500_brain_051,
+    "six_week_forecast":_bc500_brain_052,
+    "milestone_protection":_bc500_brain_053,
+    "critical_path_threat":_bc500_brain_054,
+    "float_consumption":_bc500_brain_055,
+    "schedule_recovery":_bc500_brain_056,
+    "crew_productivity":_bc500_brain_057,
+    "manpower_loading":_bc500_brain_058,
+    "trade_stacking":_bc500_brain_059,
+    "access_logistics":_bc500_brain_060,
+    "material_need_date":_bc500_brain_061,
+    "long_lead_forecast":_bc500_brain_062,
+    "fabrication_status":_bc500_brain_063,
+    "shipping_risk":_bc500_brain_064,
+    "delivery_readiness":_bc500_brain_065,
+    "storage_logistics":_bc500_brain_066,
+    "equipment_procurement":_bc500_brain_067,
+    "submittal_approval_risk":_bc500_brain_068,
+    "procurement_recovery":_bc500_brain_069,
+    "vendor_performance":_bc500_brain_070,
+    "inspection_readiness":_bc500_brain_071,
+    "special_inspection_readiness":_bc500_brain_072,
+    "quality_hold_point":_bc500_brain_073,
+    "punchlist_forecast":_bc500_brain_074,
+    "commissioning_readiness":_bc500_brain_075,
+    "turnover_readiness":_bc500_brain_076,
+    "safety_pre_task_risk":_bc500_brain_077,
+    "site_hazard_forecast":_bc500_brain_078,
+    "weather_exposure":_bc500_brain_079,
+    "temporary_protection":_bc500_brain_080,
+    "rework_risk":_bc500_brain_081,
+    "cost_exposure":_bc500_brain_082,
+    "change_event_impact":_bc500_brain_083,
+    "premium_freight_exposure":_bc500_brain_084,
+    "overtime_exposure":_bc500_brain_085,
+    "delay_cost_exposure":_bc500_brain_086,
+    "contract_notice":_bc500_brain_087,
+    "decision_deadline":_bc500_brain_088,
+    "owner_decision_impact":_bc500_brain_089,
+    "architect_decision_impact":_bc500_brain_090,
+    "engineer_decision_impact":_bc500_brain_091,
+    "superintendent_priority":_bc500_brain_092,
+    "project_manager_priority":_bc500_brain_093,
+    "executive_exception":_bc500_brain_094,
+    "daily_field_command":_bc500_brain_095,
+    "tomorrow_readiness":_bc500_brain_096,
+    "weekly_strategy":_bc500_brain_097,
+    "cross_project_learning":_bc500_brain_098,
+    "prediction_calibration":_bc500_brain_099,
+    "master_intelligence_mesh":_bc500_brain_100
+}
+
+def _bc500_intelligence_mesh(project_id:int):
+    return {
+        "status":"ok","app":"BuildCommand AI","version":"5.0.0",
+        "release":"Construction Intelligence Mesh 100","baseline":"4.0.0",
+        "new_brain_count":100,"project_id":project_id,
+        "shared_context":{
+            "project_health":_bc340_safe(_bc310_health_trajectory,project_id,False,default={}),
+            "field_readiness":_bc340_safe(_bc320_field_readiness,project_id,default={}),
+            "reasoning_quality":_bc340_safe(_bc320_reasoning_quality,project_id,default={}),
+            "attention_queue":(_bc340_safe(_bc310_attention_queue,project_id,default=[]) or [])[:30],
+            "strategy":_bc340_safe(_bc300_unified_strategy,project_id,default={})
+        },
+        "brains":{
+            "001_architectural_plan":_bc500_brain_001(project_id),
+            "002_structural_plan":_bc500_brain_002(project_id),
+            "003_civil_plan":_bc500_brain_003(project_id),
+            "004_mep_plan":_bc500_brain_004(project_id),
+            "005_specification_crosscheck":_bc500_brain_005(project_id),
+            "006_drawing_notes":_bc500_brain_006(project_id),
+            "007_detail_dependency":_bc500_brain_007(project_id),
+            "008_schedule_detail_correlation":_bc500_brain_008(project_id),
+            "009_revision_delta":_bc500_brain_009(project_id),
+            "010_addendum_impact":_bc500_brain_010(project_id),
+            "011_rfi_impact":_bc500_brain_011(project_id),
+            "012_asi_impact":_bc500_brain_012(project_id),
+            "013_submittal_drawing_correlation":_bc500_brain_013(project_id),
+            "014_document_conflict":_bc500_brain_014(project_id),
+            "015_governing_evidence":_bc500_brain_015(project_id),
+            "016_scope_boundary":_bc500_brain_016(project_id),
+            "017_scope_exclusion":_bc500_brain_017(project_id),
+            "018_trade_overlap":_bc500_brain_018(project_id),
+            "019_trade_gap":_bc500_brain_019(project_id),
+            "020_bid_scope_completeness":_bc500_brain_020(project_id),
+            "021_demolition_responsibility":_bc500_brain_021(project_id),
+            "022_concrete_responsibility":_bc500_brain_022(project_id),
+            "023_framing_responsibility":_bc500_brain_023(project_id),
+            "024_drywall_responsibility":_bc500_brain_024(project_id),
+            "025_doors_hardware_responsibility":_bc500_brain_025(project_id),
+            "026_storefront_glazing_responsibility":_bc500_brain_026(project_id),
+            "027_ceiling_responsibility":_bc500_brain_027(project_id),
+            "028_flooring_tile_responsibility":_bc500_brain_028(project_id),
+            "029_paint_finish_responsibility":_bc500_brain_029(project_id),
+            "030_roofing_responsibility":_bc500_brain_030(project_id),
+            "031_electrical_responsibility":_bc500_brain_031(project_id),
+            "032_plumbing_responsibility":_bc500_brain_032(project_id),
+            "033_hvac_responsibility":_bc500_brain_033(project_id),
+            "034_fire_sprinkler_responsibility":_bc500_brain_034(project_id),
+            "035_low_voltage_responsibility":_bc500_brain_035(project_id),
+            "036_bathroom_accessories_responsibility":_bc500_brain_036(project_id),
+            "037_specialties_responsibility":_bc500_brain_037(project_id),
+            "038_underground_utility_sequence":_bc500_brain_038(project_id),
+            "039_foundation_sequence":_bc500_brain_039(project_id),
+            "040_structural_sequence":_bc500_brain_040(project_id),
+            "041_building_dry_in_sequence":_bc500_brain_041(project_id),
+            "042_mep_rough_sequence":_bc500_brain_042(project_id),
+            "043_wall_close_sequence":_bc500_brain_043(project_id),
+            "044_ceiling_close_sequence":_bc500_brain_044(project_id),
+            "045_finish_sequence":_bc500_brain_045(project_id),
+            "046_sitework_sequence":_bc500_brain_046(project_id),
+            "047_inspection_predecessor":_bc500_brain_047(project_id),
+            "048_testing_predecessor":_bc500_brain_048(project_id),
+            "049_trade_handoff_readiness":_bc500_brain_049(project_id),
+            "050_workface_readiness":_bc500_brain_050(project_id),
+            "051_three_week_lookahead":_bc500_brain_051(project_id),
+            "052_six_week_forecast":_bc500_brain_052(project_id),
+            "053_milestone_protection":_bc500_brain_053(project_id),
+            "054_critical_path_threat":_bc500_brain_054(project_id),
+            "055_float_consumption":_bc500_brain_055(project_id),
+            "056_schedule_recovery":_bc500_brain_056(project_id),
+            "057_crew_productivity":_bc500_brain_057(project_id),
+            "058_manpower_loading":_bc500_brain_058(project_id),
+            "059_trade_stacking":_bc500_brain_059(project_id),
+            "060_access_logistics":_bc500_brain_060(project_id),
+            "061_material_need_date":_bc500_brain_061(project_id),
+            "062_long_lead_forecast":_bc500_brain_062(project_id),
+            "063_fabrication_status":_bc500_brain_063(project_id),
+            "064_shipping_risk":_bc500_brain_064(project_id),
+            "065_delivery_readiness":_bc500_brain_065(project_id),
+            "066_storage_logistics":_bc500_brain_066(project_id),
+            "067_equipment_procurement":_bc500_brain_067(project_id),
+            "068_submittal_approval_risk":_bc500_brain_068(project_id),
+            "069_procurement_recovery":_bc500_brain_069(project_id),
+            "070_vendor_performance":_bc500_brain_070(project_id),
+            "071_inspection_readiness":_bc500_brain_071(project_id),
+            "072_special_inspection_readiness":_bc500_brain_072(project_id),
+            "073_quality_hold_point":_bc500_brain_073(project_id),
+            "074_punchlist_forecast":_bc500_brain_074(project_id),
+            "075_commissioning_readiness":_bc500_brain_075(project_id),
+            "076_turnover_readiness":_bc500_brain_076(project_id),
+            "077_safety_pre_task_risk":_bc500_brain_077(project_id),
+            "078_site_hazard_forecast":_bc500_brain_078(project_id),
+            "079_weather_exposure":_bc500_brain_079(project_id),
+            "080_temporary_protection":_bc500_brain_080(project_id),
+            "081_rework_risk":_bc500_brain_081(project_id),
+            "082_cost_exposure":_bc500_brain_082(project_id),
+            "083_change_event_impact":_bc500_brain_083(project_id),
+            "084_premium_freight_exposure":_bc500_brain_084(project_id),
+            "085_overtime_exposure":_bc500_brain_085(project_id),
+            "086_delay_cost_exposure":_bc500_brain_086(project_id),
+            "087_contract_notice":_bc500_brain_087(project_id),
+            "088_decision_deadline":_bc500_brain_088(project_id),
+            "089_owner_decision_impact":_bc500_brain_089(project_id),
+            "090_architect_decision_impact":_bc500_brain_090(project_id),
+            "091_engineer_decision_impact":_bc500_brain_091(project_id),
+            "092_superintendent_priority":_bc500_brain_092(project_id),
+            "093_project_manager_priority":_bc500_brain_093(project_id),
+            "094_executive_exception":_bc500_brain_094(project_id),
+            "095_daily_field_command":_bc500_brain_095(project_id),
+            "096_tomorrow_readiness":_bc500_brain_096(project_id),
+            "097_weekly_strategy":_bc500_brain_097(project_id),
+            "098_cross_project_learning":_bc500_brain_098(project_id),
+            "099_prediction_calibration":_bc500_brain_099(project_id),
+            "100_master_intelligence_mesh":_bc500_brain_100(project_id)
+        },
+        "prior_4_0_suite":_bc400_master_suite(project_id),
+        "human_approval_required":True,"automatic_field_execution":False
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/intelligence-mesh-100")
+def bc500_mesh_api(project_id:int):
+    return _bc500_intelligence_mesh(project_id)
+
+@app.get("/api/unified-construction-brain/project/{project_id}/mesh-brain/{brain_name}")
+def bc500_single_api(project_id:int,brain_name:str):
+    key=str(brain_name or "").strip().lower().replace("-","_").replace(" ","_")
+    fn=_BC500_BRAIN_MAP.get(key)
+    if not fn:
+        return _BC200_JSONResponse({"status":"not_found","available_brains":sorted(_BC500_BRAIN_MAP)},status_code=404)
+    return {"status":"ok","version":"5.0.0","project_id":project_id,"result":fn(project_id)}
+
+@app.get("/health/construction-intelligence-mesh-5-0-0")
+def bc500_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    funcs=[
+        "_bc500_brain_001",
+        "_bc500_brain_002",
+        "_bc500_brain_003",
+        "_bc500_brain_004",
+        "_bc500_brain_005",
+        "_bc500_brain_006",
+        "_bc500_brain_007",
+        "_bc500_brain_008",
+        "_bc500_brain_009",
+        "_bc500_brain_010",
+        "_bc500_brain_011",
+        "_bc500_brain_012",
+        "_bc500_brain_013",
+        "_bc500_brain_014",
+        "_bc500_brain_015",
+        "_bc500_brain_016",
+        "_bc500_brain_017",
+        "_bc500_brain_018",
+        "_bc500_brain_019",
+        "_bc500_brain_020",
+        "_bc500_brain_021",
+        "_bc500_brain_022",
+        "_bc500_brain_023",
+        "_bc500_brain_024",
+        "_bc500_brain_025",
+        "_bc500_brain_026",
+        "_bc500_brain_027",
+        "_bc500_brain_028",
+        "_bc500_brain_029",
+        "_bc500_brain_030",
+        "_bc500_brain_031",
+        "_bc500_brain_032",
+        "_bc500_brain_033",
+        "_bc500_brain_034",
+        "_bc500_brain_035",
+        "_bc500_brain_036",
+        "_bc500_brain_037",
+        "_bc500_brain_038",
+        "_bc500_brain_039",
+        "_bc500_brain_040",
+        "_bc500_brain_041",
+        "_bc500_brain_042",
+        "_bc500_brain_043",
+        "_bc500_brain_044",
+        "_bc500_brain_045",
+        "_bc500_brain_046",
+        "_bc500_brain_047",
+        "_bc500_brain_048",
+        "_bc500_brain_049",
+        "_bc500_brain_050",
+        "_bc500_brain_051",
+        "_bc500_brain_052",
+        "_bc500_brain_053",
+        "_bc500_brain_054",
+        "_bc500_brain_055",
+        "_bc500_brain_056",
+        "_bc500_brain_057",
+        "_bc500_brain_058",
+        "_bc500_brain_059",
+        "_bc500_brain_060",
+        "_bc500_brain_061",
+        "_bc500_brain_062",
+        "_bc500_brain_063",
+        "_bc500_brain_064",
+        "_bc500_brain_065",
+        "_bc500_brain_066",
+        "_bc500_brain_067",
+        "_bc500_brain_068",
+        "_bc500_brain_069",
+        "_bc500_brain_070",
+        "_bc500_brain_071",
+        "_bc500_brain_072",
+        "_bc500_brain_073",
+        "_bc500_brain_074",
+        "_bc500_brain_075",
+        "_bc500_brain_076",
+        "_bc500_brain_077",
+        "_bc500_brain_078",
+        "_bc500_brain_079",
+        "_bc500_brain_080",
+        "_bc500_brain_081",
+        "_bc500_brain_082",
+        "_bc500_brain_083",
+        "_bc500_brain_084",
+        "_bc500_brain_085",
+        "_bc500_brain_086",
+        "_bc500_brain_087",
+        "_bc500_brain_088",
+        "_bc500_brain_089",
+        "_bc500_brain_090",
+        "_bc500_brain_091",
+        "_bc500_brain_092",
+        "_bc500_brain_093",
+        "_bc500_brain_094",
+        "_bc500_brain_095",
+        "_bc500_brain_096",
+        "_bc500_brain_097",
+        "_bc500_brain_098",
+        "_bc500_brain_099",
+        "_bc500_brain_100"
+    ]
+    checks=[
+        ("4.0.0 stable baseline preserved","/health/advanced-construction-brain-expansion-4-0-0" in paths),
+        ("100 brain registry",len(_BC500_BRAIN_MAP)==100)
+    ]
+    for i,n in enumerate(funcs,1):
+        checks.append((f"{i:03d} intelligence mesh brain",callable(globals().get(n))))
+    checks += [
+        ("intelligence mesh API","/api/unified-construction-brain/project/{project_id}/intelligence-mesh-100" in paths),
+        ("mesh single brain API","/api/unified-construction-brain/project/{project_id}/mesh-brain/{brain_name}" in paths),
+        ("4.0 advanced suite preserved","/api/unified-construction-brain/project/{project_id}/advanced-50-brain-suite" in paths),
+        ("3.4 multi brain suite preserved","/api/unified-construction-brain/project/{project_id}/multi-brain-suite" in paths),
+        ("deep construction preserved","/api/unified-construction-brain/project/{project_id}/deep-construction-intelligence" in paths),
+        ("autonomous command preserved","/api/unified-construction-brain/project/{project_id}/autonomous-command" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("documents preserved","/documents" in paths),("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False)))
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI",
+            "version":"5.0.0","release":"Construction Intelligence Mesh 100","baseline":"4.0.0",
+            "new_brain_count":100,"passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "stage_ready":passed==len(checks),"human_approval_required":True,
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE="5.0.0"
+BUILD_COMMAND_RELEASE_NAME="Construction Intelligence Mesh 100"
+try: app.version=BUILD_COMMAND_RELEASE
+except Exception: pass
