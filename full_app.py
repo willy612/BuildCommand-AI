@@ -36710,3 +36710,309 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 2.9.0
+# Cause-and-Effect Construction Intelligence
+# Baseline: stable 2.8.0 Construction Decision Intelligence
+#
+# Purpose:
+# Evaluate a proposed project action and estimate likely downstream
+# effects across schedule, procurement, inspections/quality,
+# coordination/trades, and cost exposure. Uses current signals,
+# historical outcomes, repeat-risk intelligence, and decision context.
+#
+# This is decision support, not a deterministic forecast.
+# ============================================================
+
+def _bc290_action_terms(action):
+    txt = _bc210_norm(action)
+    groups = {
+        "SCHEDULE":["delay","accelerate","overtime","sequence","reschedule","start","finish","recover","crew"],
+        "PROCUREMENT":["material","order","delivery","lead time","vendor","equipment","release","purchase"],
+        "INSPECTION":["inspection","test","quality","rework","punch","approve","failed"],
+        "COORDINATION":["rfi","conflict","coordinate","trade","drawing","detail","revision","scope"],
+        "COST":["cost","change order","overtime","premium","expedite","rework","labor","material"]
+    }
+    return {k:[term for term in vals if term in txt] for k,vals in groups.items()}
+
+def _bc290_effect_score(base, evidence_count=0, historical_effectiveness=None):
+    score = float(base)
+    score += min(15, int(evidence_count or 0)*2)
+    if historical_effectiveness is not None:
+        try:
+            score = (score*0.70) + (float(historical_effectiveness)*0.30)
+        except Exception:
+            pass
+    return round(max(5,min(95,score)),1)
+
+def _bc290_simulate(project_id:int, proposed_action:str):
+    if not proposed_action or not str(proposed_action).strip():
+        return None
+
+    decision_ctx = _bc280_decision_context(
+        project_id,
+        "What are the likely downstream effects if we take this action: " + str(proposed_action)
+    )
+    if not decision_ctx:
+        return None
+
+    terms = _bc290_action_terms(proposed_action)
+    predictive = decision_ctx.get("predictive") or {}
+    experience = decision_ctx.get("experience") or {}
+    playbooks = experience.get("proven_response_playbooks") or []
+    lessons = experience.get("lessons_learned") or []
+
+    # Historical evidence matching the proposed action.
+    hist_matches = []
+    action_norm = _bc210_norm(proposed_action)
+    for x in lessons:
+        blob = _bc210_norm(
+            str(x.get("subject") or "") + " " +
+            str(x.get("proven_action") or "") + " " +
+            str(x.get("lesson") or "")
+        )
+        action_words = [w for w in action_norm.split() if len(w) >= 5]
+        overlap = sum(1 for w in action_words if w in blob)
+        if overlap:
+            hist_matches.append((overlap,x))
+    hist_matches.sort(key=lambda z:z[0], reverse=True)
+
+    hist_scores = []
+    for _,x in hist_matches[:10]:
+        try:
+            if x.get("effectiveness_score") is not None:
+                hist_scores.append(float(x["effectiveness_score"]))
+        except Exception:
+            pass
+    hist_eff = round(sum(hist_scores)/len(hist_scores),1) if hist_scores else None
+
+    threat_types = {
+        str(x.get("type") or "").upper():x
+        for x in (predictive.get("threats") or [])
+    }
+
+    effects = []
+
+    def add_effect(area, direction, base, explanation, watch, mitigation):
+        evidence_count = len(terms.get(area,[]))
+        if area in threat_types:
+            evidence_count += 2
+        score = _bc290_effect_score(base,evidence_count,hist_eff)
+        effects.append({
+            "area":area,
+            "direction":direction,
+            "likelihood_score":score,
+            "explanation":explanation,
+            "watch_for":watch,
+            "mitigation":mitigation,
+            "evidence_terms":terms.get(area,[])
+        })
+
+    # Schedule
+    schedule_base = 40 + (15 if terms["SCHEDULE"] else 0) + (10 if "SCHEDULE" in threat_types else 0)
+    add_effect(
+        "SCHEDULE",
+        "MIXED / VERIFY",
+        schedule_base,
+        "The action may change sequence, float, manpower demand, or predecessor/successor timing.",
+        "Critical-path movement, lost float, crew stacking, incomplete predecessors, missed handoffs.",
+        "Verify affected activities, predecessors, successors, float, manpower, and recovery dates before committing."
+    )
+
+    # Procurement
+    procurement_base = 35 + (18 if terms["PROCUREMENT"] else 0) + (12 if "PROCUREMENT" in threat_types else 0)
+    add_effect(
+        "PROCUREMENT",
+        "MIXED / VERIFY",
+        procurement_base,
+        "The action may change material need dates, release timing, vendor commitments, or delivery sequencing.",
+        "Long-lead exposure, unapproved selections, missed release dates, storage or delivery conflicts.",
+        "Reconfirm approved selection, PO/release status, ship date, delivery date, and field need date."
+    )
+
+    # Inspection / quality
+    inspection_base = 35 + (18 if terms["INSPECTION"] else 0) + (12 if "INSPECTION" in threat_types else 0)
+    add_effect(
+        "INSPECTION",
+        "MIXED / VERIFY",
+        inspection_base,
+        "The action may affect inspection prerequisites, testing, access, rework exposure, or work being covered prematurely.",
+        "Inspection failure, missing testing, inaccessible work, unapproved installation, reinspection.",
+        "Confirm prerequisites, approved documents, testing agency, inspection timing, and hold points."
+    )
+
+    # Coordination / downstream trades
+    coord_base = 45 + (18 if terms["COORDINATION"] else 0) + (12 if "COORDINATION" in threat_types else 0)
+    add_effect(
+        "COORDINATION",
+        "MIXED / VERIFY",
+        coord_base,
+        "The action may create downstream effects for adjacent scopes, trade handoffs, drawings, or responsibility boundaries.",
+        "Trade stacking, scope gaps, conflicting installations, RFI/revision impacts, rework.",
+        "Identify impacted trades and governing documents; confirm responsibility and notify affected parties before work proceeds."
+    )
+
+    # Cost exposure
+    cost_base = 30 + (20 if terms["COST"] else 0)
+    if any(k in action_norm for k in ["overtime","expedite","rework","premium"]):
+        cost_base += 15
+    add_effect(
+        "COST",
+        "POTENTIAL EXPOSURE",
+        cost_base,
+        "Schedule recovery, acceleration, rework, procurement changes, or changed trade sequencing can create cost exposure.",
+        "Overtime, premium freight, rework labor/material, change requests, productivity loss.",
+        "Document the reason for the action, confirm contractual responsibility, and quantify cost before authorization when practical."
+    )
+
+    effects.sort(key=lambda x:float(x.get("likelihood_score") or 0), reverse=True)
+
+    overall = round(sum(float(x["likelihood_score"]) for x in effects)/len(effects),1) if effects else 0
+    confidence = 45
+    confidence += min(20,len(hist_matches)*3)
+    confidence += min(15,sum(len(v) for v in terms.values())*2)
+    if hist_eff is not None:
+        confidence += min(15,hist_eff*0.15)
+    confidence = round(min(95,confidence),1)
+
+    return {
+        "status":"ok",
+        "version":"2.9.0",
+        "project_id":project_id,
+        "proposed_action":proposed_action,
+        "overall_downstream_exposure":overall,
+        "analysis_confidence":confidence,
+        "effects":effects,
+        "historical_matches":len(hist_matches),
+        "historical_average_effectiveness":hist_eff,
+        "supporting_experience":[x for _,x in hist_matches[:5]],
+        "top_current_threat":predictive.get("top_threat"),
+        "decision_note":"These are evidence-informed scenario indicators, not guaranteed future outcomes.",
+        "approval_policy":"Human project leadership must review and approve field, contractual, safety, schedule, and cost decisions."
+    }
+
+def _bc290_compare_actions(project_id:int, actions):
+    results = []
+    for action in (actions or [])[:5]:
+        sim = _bc290_simulate(project_id,str(action))
+        if sim:
+            # Lower exposure and higher historical effectiveness are favorable,
+            # but this remains a decision-support ranking.
+            exposure = float(sim.get("overall_downstream_exposure") or 0)
+            hist = float(sim.get("historical_average_effectiveness") or 50)
+            confidence = float(sim.get("analysis_confidence") or 40)
+            score = round((100-exposure)*0.45 + hist*0.30 + confidence*0.25,1)
+            results.append({
+                "action":action,
+                "decision_support_score":score,
+                "overall_downstream_exposure":exposure,
+                "analysis_confidence":confidence,
+                "historical_average_effectiveness":sim.get("historical_average_effectiveness"),
+                "effects":sim.get("effects")
+            })
+    results.sort(key=lambda x:x["decision_support_score"], reverse=True)
+    return results
+
+@app.post("/api/unified-construction-brain/project/{project_id}/cause-effect")
+async def bc290_cause_effect_api(project_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    action = str(body.get("proposed_action") or body.get("action") or "").strip()
+    if not action:
+        return _BC200_JSONResponse(
+            {"status":"invalid_request","error":"proposed_action required"},
+            status_code=400
+        )
+    r = _bc290_simulate(project_id,action)
+    return r if r else _BC200_JSONResponse({"status":"not_found"}, status_code=404)
+
+@app.post("/api/unified-construction-brain/project/{project_id}/compare-actions")
+async def bc290_compare_api(project_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    actions = body.get("actions") or []
+    if not isinstance(actions,list) or not actions:
+        return _BC200_JSONResponse(
+            {"status":"invalid_request","error":"actions list required"},
+            status_code=400
+        )
+    return {
+        "status":"ok",
+        "version":"2.9.0",
+        "project_id":project_id,
+        "comparison":_bc290_compare_actions(project_id,actions),
+        "policy":"Comparison is decision support; human approval remains required."
+    }
+
+@app.get("/health/cause-and-effect-intelligence-2-9-0")
+def bc290_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+
+    checks = [
+        ("2.8.0 stable baseline preserved","/health/construction-decision-intelligence-2-8-0" in paths),
+        ("action term engine",callable(globals().get("_bc290_action_terms"))),
+        ("effect scoring engine",callable(globals().get("_bc290_effect_score"))),
+        ("cause-effect simulator",callable(globals().get("_bc290_simulate"))),
+        ("action comparison engine",callable(globals().get("_bc290_compare_actions"))),
+        ("cause-effect API","/api/unified-construction-brain/project/{project_id}/cause-effect" in paths),
+        ("compare actions API","/api/unified-construction-brain/project/{project_id}/compare-actions" in paths),
+        ("decision intelligence preserved","/api/unified-construction-brain/project/{project_id}/decision" in paths),
+        ("experience intelligence preserved","/api/unified-construction-brain/project/{project_id}/experience-intelligence" in paths),
+        ("adaptive learning preserved","/api/unified-construction-brain/project/{project_id}/adaptive-learning-suite" in paths),
+        ("predictive intelligence preserved","/api/unified-construction-brain/project/{project_id}/predictive" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"2.9.0",
+        "release":"Cause-and-Effect Construction Intelligence",
+        "baseline":"2.8.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "cause_effect_reasoning":True,
+            "schedule_downstream_effects":True,
+            "procurement_downstream_effects":True,
+            "inspection_quality_downstream_effects":True,
+            "trade_coordination_downstream_effects":True,
+            "cost_exposure_reasoning":True,
+            "alternative_action_comparison":True,
+            "historical_outcome_influence":True,
+            "uncertainty_and_confidence":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "2.9.0"
+BUILD_COMMAND_RELEASE_NAME = "Cause-and-Effect Construction Intelligence"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
