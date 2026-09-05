@@ -56138,3 +56138,211 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 6.6.2 — Native Header Logo Replacement
+# ============================================================
+
+_BC662_PREVIOUS_SHELL = _runtime.shell
+
+def _bc662_native_header_shell(title, body, *args, **kwargs):
+    html = _BC662_PREVIOUS_SHELL(title, body, *args, **kwargs)
+    if not isinstance(html, str):
+        return html
+
+    approved_uri = globals().get("_BC659_LOGO", "")
+    if not approved_uri:
+        return html
+
+    replacement = (
+        '<div class="bc-brand-wrap" id="bc662-native-brand">'
+        '<a id="bc662-approved-logo" href="/" aria-label="BuildCommand AI home">'
+        '<img src="' + approved_uri + '" '
+        'alt="BuildCommand AI — Build Smarter. Grow Faster.">'
+        '</a>'
+        '</div>'
+    )
+
+    html, count = re.subn(
+        r'<div class="bc-brand-wrap">.*?</div>\s*</div>',
+        replacement,
+        html,
+        count=1,
+        flags=re.I | re.S,
+    )
+
+    if count == 0:
+        html = re.sub(
+            r'<div class="bc-brand-wrap"[^>]*>.*?</div>',
+            replacement,
+            html,
+            count=1,
+            flags=re.I | re.S,
+        )
+
+    css = '''
+<style id="bc662-native-brand-style">
+#bc662-native-brand{
+  min-width:0!important;
+  width:360px!important;
+  max-width:31vw!important;
+  margin:0 16px 0 0!important;
+  padding:0!important;
+  display:flex!important;
+  align-items:center!important;
+}
+#bc662-approved-logo{
+  display:block!important;
+  width:100%!important;
+  margin:0!important;
+  padding:0!important;
+  line-height:0!important;
+  text-decoration:none!important;
+  background:transparent!important;
+  border:0!important;
+  box-shadow:none!important;
+}
+#bc662-approved-logo img{
+  display:block!important;
+  width:100%!important;
+  height:auto!important;
+  max-height:96px!important;
+  object-fit:contain!important;
+  object-position:left center!important;
+  margin:0!important;
+  padding:0!important;
+  border:0!important;
+  box-shadow:none!important;
+}
+@media(max-width:900px){
+  #bc662-native-brand{width:300px!important;max-width:36vw!important}
+}
+@media(max-width:650px){
+  #bc662-native-brand{width:235px!important;max-width:47vw!important;margin-right:8px!important}
+}
+</style>
+'''
+    if 'id="bc662-native-brand-style"' not in html:
+        idx = html.lower().find("</head>")
+        if idx >= 0:
+            html = html[:idx] + css + html[idx:]
+        else:
+            html = css + html
+
+    return html
+
+_runtime.shell = _bc662_native_header_shell
+
+
+def _bc662_final_logo_normalizer(html):
+    if not isinstance(html, str):
+        return html
+
+    old_ids = (
+        "bc650-brand-wrap",
+        "bc652-app-logo",
+        "bc653-approved-logo",
+        "bc654-brand-header",
+        "bc657-dashboard-logo",
+        "bc658-dashboard-logo",
+        "bc659-approved-logo",
+        "bc661-approved-header-logo",
+    )
+
+    for old_id in old_ids:
+        html = re.sub(
+            r'<(?:a|div|section|span)[^>]*id=["\']' + re.escape(old_id) +
+            r'["\'][^>]*>.*?</(?:a|div|section|span)>',
+            '',
+            html,
+            flags=re.I | re.S,
+        )
+
+    html = re.sub(
+        r'<style[^>]*id=["\'](?:bc657-dashboard-header-style|bc658-dashboard-style|'
+        r'bc659-style|bc661-final-header-style)["\'][^>]*>.*?</style>',
+        '',
+        html,
+        flags=re.I | re.S,
+    )
+
+    html = re.sub(
+        r'<div class="bc-brand-wrap"(?![^>]*id=["\']bc662-native-brand["\'])[^>]*>'
+        r'.*?</div>\s*</div>',
+        '',
+        html,
+        count=1,
+        flags=re.I | re.S,
+    )
+
+    return html
+
+
+@app.middleware("http")
+async def bc662_native_header_logo_finalizer(request, call_next):
+    response = await call_next(request)
+    try:
+        path = request.url.path or "/"
+
+        excluded = (
+            path in (
+                "/login", "/signup", "/register", "/create-account", "/logout",
+                "/choose-plan", "/payment-required"
+            )
+            or path.startswith("/billing/")
+            or path.startswith("/brand/")
+            or path.startswith("/favicon")
+            or path.startswith("/health/")
+            or path.startswith("/api/")
+        )
+        if excluded:
+            return response
+
+        ctype = str(response.headers.get("content-type") or "").lower()
+        if "text/html" not in ctype:
+            return response
+
+        raw = b""
+        async for chunk in response.body_iterator:
+            raw += chunk
+
+        body = raw.decode("utf-8", errors="replace")
+        body = _bc662_final_logo_normalizer(body)
+
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+
+        return _BC200_HTMLResponse(
+            body,
+            status_code=response.status_code,
+            headers=headers,
+        )
+    except Exception:
+        return response
+
+
+@app.get("/health/native-header-logo-replacement-6-6-2")
+def bc662_health():
+    return {
+        "status": "ok",
+        "app": "BuildCommand AI",
+        "version": "6.6.2",
+        "release": "Native Header Logo Replacement",
+        "baseline": "6.6.1",
+        "native_shell_replaced": _runtime.shell is _bc662_native_header_shell,
+        "approved_logo_available": bool(globals().get("_BC659_LOGO", "")),
+        "prior_logo_cleanup": callable(globals().get("_bc662_final_logo_normalizer")),
+        "social_share_6_6_0_preserved": True,
+        "auth_screens_untouched": True,
+        "project_switcher_preserved": True,
+        "navigation_preserved": True,
+        "expected_header_logo_count": 1,
+    }
+
+
+BUILD_COMMAND_RELEASE = "6.6.2"
+BUILD_COMMAND_RELEASE_NAME = "Native Header Logo Replacement"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
