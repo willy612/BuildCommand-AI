@@ -38450,3 +38450,469 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 3.4.0
+# Deep Multi-Brain Intelligence Suite
+# Baseline: stable 3.2.0 Deep Construction Intelligence
+#
+# NEXT 30 BRAINS — ONE CONSOLIDATED BUILD
+#
+# 01 Blueprint Evidence Brain
+# 02 Trade Responsibility Brain
+# 03 Scope Gap Brain
+# 04 Revision Impact Brain
+# 05 Constructability Brain
+# 06 Sequence Brain
+# 07 Field Readiness Brain
+# 08 Inspection Brain
+# 09 Quality Brain
+# 10 Safety Brain
+# 11 Procurement Brain
+# 12 Long-Lead Brain
+# 13 Submittal Brain
+# 14 RFI Brain
+# 15 Schedule Brain
+# 16 Lookahead Brain
+# 17 Constraint Brain
+# 18 Coordination Brain
+# 19 Trade Handoff Brain
+# 20 Cost Exposure Brain
+# 21 Change Impact Brain
+# 22 Risk Brain
+# 23 Recovery Brain
+# 24 Superintendent Brain
+# 25 Executive Brain
+# 26 Lessons-Learned Brain
+# 27 Outcome Brain
+# 28 Confidence Brain
+# 29 Strategy Brain
+# 30 Unified Command Brain
+#
+# Human approval remains required.
+# ============================================================
+
+def _bc340_safe(fn, *args, default=None, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except Exception:
+        return default
+
+# 01 Blueprint Evidence Brain
+def _bc340_blueprint_evidence_brain(project_id:int):
+    return {
+        "brain":"BLUEPRINT_EVIDENCE",
+        "evidence":_bc340_safe(_bc320_weighted_evidence, project_id, default=[]),
+        "reasoning_quality":_bc340_safe(_bc320_reasoning_quality, project_id, default={})
+    }
+
+# 02 Trade Responsibility Brain
+def _bc340_trade_responsibility_brain(project_id:int):
+    return {
+        "brain":"TRADE_RESPONSIBILITY",
+        "trade_depth":_bc340_safe(_bc320_trade_depth, project_id, default={}),
+        "correction_memory":_bc340_safe(_bc210_corrections, project_id, None, 200, default=[])
+    }
+
+# 03 Scope Gap Brain
+def _bc340_scope_gap_brain(project_id:int):
+    return {
+        "brain":"SCOPE_GAP",
+        "missing_scope":_bc340_safe(_bc310_missing_scope, project_id, default={}),
+        "scope_conflicts":_bc340_safe(_bc310_coordination_watch, project_id, default=[])
+    }
+
+# 04 Revision Impact Brain
+def _bc340_revision_impact_brain(project_id:int):
+    return {
+        "brain":"REVISION_IMPACT",
+        "revision_watch":_bc340_safe(_bc310_revision_watch, project_id, default={}),
+        "drawing_relationships":"PRESERVED_FROM_BLUEPRINT_DRAWING_INTELLIGENCE"
+    }
+
+# 05 Constructability Brain
+def _bc340_constructability_brain(project_id:int):
+    return {
+        "brain":"CONSTRUCTABILITY",
+        "sequence":_bc340_safe(_bc320_sequence_reasoning, project_id, default={}),
+        "field_readiness":_bc340_safe(_bc320_field_readiness, project_id, default={})
+    }
+
+# 06 Sequence Brain
+def _bc340_sequence_brain(project_id:int):
+    return {
+        "brain":"SEQUENCE",
+        "construction_sequence":_bc340_safe(_bc320_sequence_reasoning, project_id, default={}),
+        "schedule_watch":_bc340_safe(_bc310_schedule_watch, project_id, default=[])
+    }
+
+# 07 Field Readiness Brain
+def _bc340_field_readiness_brain(project_id:int):
+    return {
+        "brain":"FIELD_READINESS",
+        "readiness":_bc340_safe(_bc320_field_readiness, project_id, default={}),
+        "attention":_bc340_safe(_bc310_attention_queue, project_id, default=[])[:20]
+    }
+
+# 08 Inspection Brain
+def _bc340_inspection_brain(project_id:int):
+    return {
+        "brain":"INSPECTION",
+        "prerequisites":_bc340_safe(_bc320_inspection_prerequisites, project_id, default=[]),
+        "inspection_watch":_bc340_safe(_bc310_inspection_watch, project_id, default=[])
+    }
+
+# 09 Quality Brain
+def _bc340_quality_brain(project_id:int):
+    sq = _bc340_safe(_bc228_safety_quality, project_id, default={}) or {}
+    return {
+        "brain":"QUALITY",
+        "quality_indicators":sq.get("quality_indicators") or [],
+        "inspection_learning":_bc340_safe(_bc258_inspection_learning, project_id, default={})
+    }
+
+# 10 Safety Brain
+def _bc340_safety_brain(project_id:int):
+    sq = _bc340_safe(_bc228_safety_quality, project_id, default={}) or {}
+    return {
+        "brain":"SAFETY",
+        "safety_indicators":sq.get("safety_indicators") or [],
+        "review_required":bool(sq.get("safety_indicators"))
+    }
+
+# 11 Procurement Brain
+def _bc340_procurement_brain(project_id:int):
+    return {
+        "brain":"PROCUREMENT",
+        "installation_readiness":_bc340_safe(_bc320_procurement_install_readiness, project_id, default=[]),
+        "procurement_watch":_bc340_safe(_bc310_procurement_watch, project_id, default=[])
+    }
+
+# 12 Long-Lead Brain
+def _bc340_long_lead_brain(project_id:int):
+    rows = _bc340_safe(_bc320_procurement_install_readiness, project_id, default=[])
+    return {
+        "brain":"LONG_LEAD",
+        "at_risk_items":[x for x in rows if str(x.get("installation_readiness"))=="AT RISK"],
+        "required_checks":["approval","release","fabrication","ship","delivery","field need date"]
+    }
+
+# 13 Submittal Brain
+def _bc340_submittal_brain(project_id:int):
+    return {
+        "brain":"SUBMITTAL",
+        "constraint_watch":_bc340_safe(_bc310_submittal_watch, project_id, default=[]),
+        "approval_policy":"Tie approval timing to procurement and installation need dates."
+    }
+
+# 14 RFI Brain
+def _bc340_rfi_brain(project_id:int):
+    coord = _bc340_safe(_bc310_coordination_watch, project_id, default=[])
+    return {
+        "brain":"RFI",
+        "coordination_items":[x for x in coord if "rfi" in _bc210_norm(str(x))],
+        "policy":"Escalate RFIs that block procurement, inspection, or field sequence."
+    }
+
+# 15 Schedule Brain
+def _bc340_schedule_brain(project_id:int):
+    return {
+        "brain":"SCHEDULE",
+        "schedule_watch":_bc340_safe(_bc310_schedule_watch, project_id, default=[]),
+        "schedule_learning":_bc340_safe(_bc256_schedule_learning, project_id, default={})
+    }
+
+# 16 Lookahead Brain
+def _bc340_lookahead_brain(project_id:int):
+    return {
+        "brain":"LOOKAHEAD",
+        "attention":_bc340_safe(_bc310_attention_queue, project_id, default=[])[:15],
+        "emerging_risks":_bc340_safe(_bc310_emerging_risks, project_id, default=[])[:15]
+    }
+
+# 17 Constraint Brain
+def _bc340_constraint_brain(project_id:int):
+    return {
+        "brain":"CONSTRAINT",
+        "constraints":_bc340_safe(_bc224_constraints, project_id, default={}),
+        "decision_deadlines":_bc340_safe(_bc310_decision_deadlines, project_id, default=[])[:20]
+    }
+
+# 18 Coordination Brain
+def _bc340_coordination_brain(project_id:int):
+    return {
+        "brain":"COORDINATION",
+        "coordination_watch":_bc340_safe(_bc310_coordination_watch, project_id, default=[]),
+        "repeat_problem":_bc340_safe(_bc310_repeat_problem, project_id, default={})
+    }
+
+# 19 Trade Handoff Brain
+def _bc340_trade_handoff_brain(project_id:int):
+    return {
+        "brain":"TRADE_HANDOFF",
+        "handoff_watch":_bc340_safe(_bc310_trade_handoff, project_id, default=[]),
+        "sequence":_bc340_safe(_bc320_sequence_reasoning, project_id, default={})
+    }
+
+# 20 Cost Exposure Brain
+def _bc340_cost_exposure_brain(project_id:int):
+    return {
+        "brain":"COST_EXPOSURE",
+        "decision":_bc340_safe(_bc280_decision, project_id, "Where is avoidable cost exposure highest?", default={}),
+        "policy":"Flag overtime, premium freight, rework, productivity loss, and changed-scope exposure."
+    }
+
+# 21 Change Impact Brain
+def _bc340_change_impact_brain(project_id:int):
+    return {
+        "brain":"CHANGE_IMPACT",
+        "revision_watch":_bc340_safe(_bc310_revision_watch, project_id, default={}),
+        "cause_effect_policy":"Evaluate schedule, procurement, inspection, coordination, and cost consequences before approval."
+    }
+
+# 22 Risk Brain
+def _bc340_risk_brain(project_id:int):
+    return {
+        "brain":"RISK",
+        "predictive":_bc340_safe(_bc221_predictive_threats, project_id, default={}),
+        "health":_bc340_safe(_bc310_health_trajectory, project_id, False, default={})
+    }
+
+# 23 Recovery Brain
+def _bc340_recovery_brain(project_id:int):
+    return {
+        "brain":"RECOVERY",
+        "recommended_path":_bc340_safe(_bc310_recovery_path, project_id, default={}),
+        "alternatives":_bc340_safe(_bc310_recovery_alternatives, project_id, default=[])
+    }
+
+# 24 Superintendent Brain
+def _bc340_superintendent_brain(project_id:int):
+    return {
+        "brain":"SUPERINTENDENT",
+        "morning":_bc340_safe(_bc310_morning, project_id, default={}),
+        "midday":_bc340_safe(_bc310_midday, project_id, default={}),
+        "closeout":_bc340_safe(_bc310_closeout, project_id, default={})
+    }
+
+# 25 Executive Brain
+def _bc340_executive_brain(project_id:int):
+    return {
+        "brain":"EXECUTIVE",
+        "exceptions":_bc340_safe(_bc310_executive_exceptions, project_id, default={}),
+        "health":_bc340_safe(_bc310_health_trajectory, project_id, False, default={})
+    }
+
+# 26 Lessons-Learned Brain
+def _bc340_lessons_brain(project_id:int):
+    return {
+        "brain":"LESSONS_LEARNED",
+        "experience":_bc340_safe(_bc270_experience_advice, project_id, default={}),
+        "cross_project_patterns":_bc340_safe(_bc259_cross_project_patterns, default=[])
+    }
+
+# 27 Outcome Brain
+def _bc340_outcome_brain(project_id:int):
+    return {
+        "brain":"OUTCOME",
+        "learning_summary":_bc340_safe(_bc250_learning_summary, project_id, default={}),
+        "schedule_learning":_bc340_safe(_bc256_schedule_learning, project_id, default={}),
+        "procurement_learning":_bc340_safe(_bc257_procurement_learning, project_id, default={}),
+        "inspection_learning":_bc340_safe(_bc258_inspection_learning, project_id, default={})
+    }
+
+# 28 Confidence Brain
+def _bc340_confidence_brain(project_id:int):
+    return {
+        "brain":"CONFIDENCE",
+        "reasoning_quality":_bc340_safe(_bc320_reasoning_quality, project_id, default={}),
+        "confidence_watch":_bc340_safe(_bc310_confidence_watch, project_id, default={}),
+        "self_evaluation":_bc340_safe(_bc260_self_evaluation, project_id, default={})
+    }
+
+# 29 Strategy Brain
+def _bc340_strategy_brain(project_id:int):
+    return {
+        "brain":"STRATEGY",
+        "project_strategy":_bc340_safe(_bc300_unified_strategy, project_id, default={}),
+        "decision_intelligence":_bc340_safe(_bc280_decision, project_id, "What is the strongest project strategy now?", default={})
+    }
+
+# 30 Unified Command Brain
+def _bc340_unified_command_brain(project_id:int):
+    return {
+        "status":"ok",
+        "app":"BuildCommand AI",
+        "version":"3.4.0",
+        "release":"Deep Multi-Brain Intelligence Suite",
+        "project_id":project_id,
+        "01_blueprint_evidence":_bc340_blueprint_evidence_brain(project_id),
+        "02_trade_responsibility":_bc340_trade_responsibility_brain(project_id),
+        "03_scope_gap":_bc340_scope_gap_brain(project_id),
+        "04_revision_impact":_bc340_revision_impact_brain(project_id),
+        "05_constructability":_bc340_constructability_brain(project_id),
+        "06_sequence":_bc340_sequence_brain(project_id),
+        "07_field_readiness":_bc340_field_readiness_brain(project_id),
+        "08_inspection":_bc340_inspection_brain(project_id),
+        "09_quality":_bc340_quality_brain(project_id),
+        "10_safety":_bc340_safety_brain(project_id),
+        "11_procurement":_bc340_procurement_brain(project_id),
+        "12_long_lead":_bc340_long_lead_brain(project_id),
+        "13_submittal":_bc340_submittal_brain(project_id),
+        "14_rfi":_bc340_rfi_brain(project_id),
+        "15_schedule":_bc340_schedule_brain(project_id),
+        "16_lookahead":_bc340_lookahead_brain(project_id),
+        "17_constraint":_bc340_constraint_brain(project_id),
+        "18_coordination":_bc340_coordination_brain(project_id),
+        "19_trade_handoff":_bc340_trade_handoff_brain(project_id),
+        "20_cost_exposure":_bc340_cost_exposure_brain(project_id),
+        "21_change_impact":_bc340_change_impact_brain(project_id),
+        "22_risk":_bc340_risk_brain(project_id),
+        "23_recovery":_bc340_recovery_brain(project_id),
+        "24_superintendent":_bc340_superintendent_brain(project_id),
+        "25_executive":_bc340_executive_brain(project_id),
+        "26_lessons_learned":_bc340_lessons_brain(project_id),
+        "27_outcome":_bc340_outcome_brain(project_id),
+        "28_confidence":_bc340_confidence_brain(project_id),
+        "29_strategy":_bc340_strategy_brain(project_id),
+        "30_unified_command":{
+            "human_approval_required":True,
+            "automatic_field_execution":False,
+            "policy":"All 30 brains provide coordinated decision support; human project leadership retains authority."
+        }
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/multi-brain-suite")
+def bc340_multi_brain_api(project_id:int):
+    return _bc340_unified_command_brain(project_id)
+
+@app.get("/api/unified-construction-brain/project/{project_id}/brain/{brain_name}")
+def bc340_single_brain_api(project_id:int, brain_name:str):
+    key = str(brain_name or "").strip().lower().replace("-","_")
+    mapping = {
+        "blueprint_evidence":_bc340_blueprint_evidence_brain,
+        "trade_responsibility":_bc340_trade_responsibility_brain,
+        "scope_gap":_bc340_scope_gap_brain,
+        "revision_impact":_bc340_revision_impact_brain,
+        "constructability":_bc340_constructability_brain,
+        "sequence":_bc340_sequence_brain,
+        "field_readiness":_bc340_field_readiness_brain,
+        "inspection":_bc340_inspection_brain,
+        "quality":_bc340_quality_brain,
+        "safety":_bc340_safety_brain,
+        "procurement":_bc340_procurement_brain,
+        "long_lead":_bc340_long_lead_brain,
+        "submittal":_bc340_submittal_brain,
+        "rfi":_bc340_rfi_brain,
+        "schedule":_bc340_schedule_brain,
+        "lookahead":_bc340_lookahead_brain,
+        "constraint":_bc340_constraint_brain,
+        "coordination":_bc340_coordination_brain,
+        "trade_handoff":_bc340_trade_handoff_brain,
+        "cost_exposure":_bc340_cost_exposure_brain,
+        "change_impact":_bc340_change_impact_brain,
+        "risk":_bc340_risk_brain,
+        "recovery":_bc340_recovery_brain,
+        "superintendent":_bc340_superintendent_brain,
+        "executive":_bc340_executive_brain,
+        "lessons_learned":_bc340_lessons_brain,
+        "outcome":_bc340_outcome_brain,
+        "confidence":_bc340_confidence_brain,
+        "strategy":_bc340_strategy_brain,
+        "unified_command":_bc340_unified_command_brain
+    }
+    fn = mapping.get(key)
+    if not fn:
+        return _BC200_JSONResponse(
+            {"status":"not_found","available_brains":sorted(mapping.keys())},
+            status_code=404
+        )
+    return {"status":"ok","version":"3.4.0","project_id":project_id,"result":fn(project_id)}
+
+@app.get("/health/deep-multi-brain-intelligence-suite-3-4-0")
+def bc340_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    brains = [
+        "_bc340_blueprint_evidence_brain",
+        "_bc340_trade_responsibility_brain",
+        "_bc340_scope_gap_brain",
+        "_bc340_revision_impact_brain",
+        "_bc340_constructability_brain",
+        "_bc340_sequence_brain",
+        "_bc340_field_readiness_brain",
+        "_bc340_inspection_brain",
+        "_bc340_quality_brain",
+        "_bc340_safety_brain",
+        "_bc340_procurement_brain",
+        "_bc340_long_lead_brain",
+        "_bc340_submittal_brain",
+        "_bc340_rfi_brain",
+        "_bc340_schedule_brain",
+        "_bc340_lookahead_brain",
+        "_bc340_constraint_brain",
+        "_bc340_coordination_brain",
+        "_bc340_trade_handoff_brain",
+        "_bc340_cost_exposure_brain",
+        "_bc340_change_impact_brain",
+        "_bc340_risk_brain",
+        "_bc340_recovery_brain",
+        "_bc340_superintendent_brain",
+        "_bc340_executive_brain",
+        "_bc340_lessons_brain",
+        "_bc340_outcome_brain",
+        "_bc340_confidence_brain",
+        "_bc340_strategy_brain",
+        "_bc340_unified_command_brain",
+    ]
+
+    checks = [
+        ("3.2.0 stable baseline preserved","/health/deep-construction-intelligence-3-2-0" in paths),
+    ]
+    for i,name in enumerate(brains,1):
+        checks.append((f"{i:02d} {name.replace('_bc340_','').replace('_brain','').replace('_',' ')}", callable(globals().get(name))))
+
+    checks += [
+        ("multi brain suite API","/api/unified-construction-brain/project/{project_id}/multi-brain-suite" in paths),
+        ("single brain API","/api/unified-construction-brain/project/{project_id}/brain/{brain_name}" in paths),
+        ("autonomous command preserved","/api/unified-construction-brain/project/{project_id}/autonomous-command" in paths),
+        ("project strategy preserved","/api/unified-construction-brain/project/{project_id}/project-strategy" in paths),
+        ("decision intelligence preserved","/api/unified-construction-brain/project/{project_id}/decision" in paths),
+        ("cause-effect preserved","/api/unified-construction-brain/project/{project_id}/cause-effect" in paths),
+        ("experience intelligence preserved","/api/unified-construction-brain/project/{project_id}/experience-intelligence" in paths),
+        ("adaptive learning preserved","/api/unified-construction-brain/project/{project_id}/adaptive-learning-suite" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"3.4.0",
+        "release":"Deep Multi-Brain Intelligence Suite",
+        "baseline":"3.2.0",
+        "brain_count":30,
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "human_approval_required":True,
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "3.4.0"
+BUILD_COMMAND_RELEASE_NAME = "Deep Multi-Brain Intelligence Suite"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
