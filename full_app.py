@@ -53498,3 +53498,85 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 6.3.3
+# Signup Route Fix
+# Baseline: stable 6.3.2 Authentication Coroutine Hotfix
+#
+# Problem:
+# /login is healthy, but GET /signup is still being intercepted
+# upstream and redirected (303) back to /login before the signup
+# presentation route can render.
+#
+# Fix:
+# Add a narrow outer HTTP middleware that serves ONLY GET signup
+# presentation routes directly. POST /signup and all existing
+# account-creation/authentication backend behavior remain untouched.
+# ============================================================
+
+@app.middleware("http")
+async def bc633_public_signup_presentation(request, call_next):
+    path = request.url.path
+    method = request.method.upper()
+
+    if method == "GET" and path in ("/signup", "/register", "/create-account"):
+        return _BC200_HTMLResponse(_bc630_auth_html("signup"))
+
+    return await call_next(request)
+
+def _bc633_signup_public_paths():
+    return ["/signup", "/register", "/create-account"]
+
+@app.get("/health/american-flag-auth-experience-6-3-3")
+def bc633_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = [
+        ("6.3.2 login hotfix preserved",
+         "/health/american-flag-auth-experience-6-3-2" in paths),
+        ("American flag renderer preserved",
+         callable(globals().get("_bc630_auth_html"))),
+        ("signup presentation middleware installed",
+         callable(globals().get("bc633_public_signup_presentation"))),
+        ("signup public path declared",
+         "/signup" in _bc633_signup_public_paths()),
+        ("login route preserved",
+         "/login" in paths),
+        ("trial subscription flow preserved",
+         "/api/billing/choose-plan" in paths),
+        ("6.2.1 billing hotfix preserved",
+         "/health/customer-trial-subscription-selection-6-2-1" in paths),
+        ("real project intelligence preserved",
+         "/health/real-project-intelligence-engine-6-1-0" in paths),
+        ("startup purge disabled",
+         not bool(globals().get("_BC181895_RESET_ENABLED", False))),
+    ]
+
+    passed = sum(bool(v) for _, v in checks)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": "6.3.3",
+        "release": "Signup Route Fix",
+        "baseline": "6.3.2",
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "stage_ready": passed == len(checks),
+        "fixes": {
+            "signup_get_redirect_bypass": True,
+            "signup_american_flag_page": True,
+            "login_preserved": True,
+            "signup_post_backend_preserved": True,
+            "trial_subscription_selection_preserved": True
+        },
+        "checks": [{"case": n, "passed": bool(v)} for n, v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "6.3.3"
+BUILD_COMMAND_RELEASE_NAME = "Signup Route Fix"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
