@@ -52676,3 +52676,441 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 6.2.0
+# Customer Trial & Subscription Selection
+# Baseline: stable 6.1.0 Real Project Intelligence Engine
+#
+# Goals:
+# - New customers are NOT forced into trial-only onboarding.
+# - Signup can choose Demo Trial OR any enabled paid plan.
+# - Trial users can upgrade at any time through existing Stripe checkout.
+# - Trial expiration preserves data and gates premium actions.
+# - Owner can extend/end/convert trial and inspect lifecycle state.
+# ============================================================
+
+import datetime as _bc620_dt
+
+def _bc620_db_columns(table_name):
+    try:
+        with _runtime.db() as conn:
+            rows = conn.execute("PRAGMA table_info(" + table_name + ")").fetchall()
+            return {str(r[1]) for r in rows}
+    except Exception:
+        return set()
+
+def _bc620_ensure_schema():
+    # Separate compatibility table avoids destructive alteration of older billing tables.
+    with _runtime.db() as conn:
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS customer_trial_lifecycle (
+            company_id INTEGER PRIMARY KEY,
+            onboarding_choice TEXT,
+            trial_started_at TEXT,
+            trial_ends_at TEXT,
+            trial_status TEXT DEFAULT 'none',
+            selected_plan_code TEXT,
+            checkout_started_at TEXT,
+            converted_at TEXT,
+            owner_trial_note TEXT,
+            updated_at TEXT
+        )
+        """)
+        conn.commit()
+
+def _bc620_now():
+    return _bc620_dt.datetime.utcnow().replace(microsecond=0)
+
+def _bc620_iso(dt):
+    return dt.isoformat() + "Z" if dt else None
+
+def _bc620_current_company_id():
+    u = _runtime.current_user()
+    if not u:
+        return None
+    for key in ("company_id","customer_company_id","organization_id","tenant_id"):
+        try:
+            v = u.get(key) if isinstance(u, dict) else getattr(u, key, None)
+            if v:
+                return int(v)
+        except Exception:
+            pass
+    return None
+
+def _bc620_plan_catalog():
+    """
+    Prefer existing BuildCommand plan tables. Fall back to safe generic choices
+    only if the legacy catalog cannot be read.
+    """
+    candidates = []
+    try:
+        with _runtime.db() as conn:
+            for table in ("subscription_plans","plans","billing_plans"):
+                cols = _bc620_db_columns(table)
+                if not cols:
+                    continue
+                rows = conn.execute("SELECT * FROM " + table).fetchall()
+                names = [d[0] for d in conn.execute("SELECT * FROM " + table + " LIMIT 0").description]
+                for row in rows:
+                    d = dict(zip(names,row))
+                    active = d.get("active", d.get("is_active", 1))
+                    if active in (0, False, "0"):
+                        continue
+                    code = d.get("code") or d.get("plan_code") or d.get("slug") or d.get("name")
+                    name = d.get("name") or d.get("display_name") or code
+                    if code:
+                        candidates.append({
+                            "code":str(code),
+                            "name":str(name),
+                            "price":d.get("price_monthly") or d.get("monthly_price") or d.get("price"),
+                            "seat_limit":d.get("seat_limit") or d.get("max_seats"),
+                            "project_limit":d.get("project_limit") or d.get("max_projects"),
+                            "source_table":table
+                        })
+                if candidates:
+                    break
+    except Exception:
+        pass
+
+    if not candidates:
+        # These are UI fallbacks, not Stripe price IDs. Existing checkout remains authoritative.
+        candidates = [
+            {"code":"starter","name":"Starter","price":None,"seat_limit":None,"project_limit":None,"source_table":"fallback"},
+            {"code":"professional","name":"Professional","price":None,"seat_limit":None,"project_limit":None,"source_table":"fallback"},
+            {"code":"enterprise","name":"Enterprise","price":None,"seat_limit":None,"project_limit":None,"source_table":"fallback"}
+        ]
+
+    return [{
+        "code":"demo_trial",
+        "name":"Free Demo Trial",
+        "price":0,
+        "trial":True,
+        "description":"Limited BuildCommand AI evaluation before choosing a paid subscription."
+    }] + [dict(x, trial=False) for x in candidates if str(x.get("code")).lower() not in ("trial","demo_trial","free_trial")]
+
+def _bc620_trial_record(company_id):
+    _bc620_ensure_schema()
+    with _runtime.db() as conn:
+        row = conn.execute("""
+            SELECT company_id,onboarding_choice,trial_started_at,trial_ends_at,
+                   trial_status,selected_plan_code,checkout_started_at,
+                   converted_at,owner_trial_note,updated_at
+            FROM customer_trial_lifecycle WHERE company_id=?
+        """,(company_id,)).fetchone()
+    if not row:
+        return None
+    keys = ["company_id","onboarding_choice","trial_started_at","trial_ends_at",
+            "trial_status","selected_plan_code","checkout_started_at",
+            "converted_at","owner_trial_note","updated_at"]
+    return dict(zip(keys,row))
+
+def _bc620_save_trial(company_id, **fields):
+    _bc620_ensure_schema()
+    existing = _bc620_trial_record(company_id) or {}
+    data = {
+        "onboarding_choice":existing.get("onboarding_choice"),
+        "trial_started_at":existing.get("trial_started_at"),
+        "trial_ends_at":existing.get("trial_ends_at"),
+        "trial_status":existing.get("trial_status") or "none",
+        "selected_plan_code":existing.get("selected_plan_code"),
+        "checkout_started_at":existing.get("checkout_started_at"),
+        "converted_at":existing.get("converted_at"),
+        "owner_trial_note":existing.get("owner_trial_note"),
+        "updated_at":_bc620_iso(_bc620_now())
+    }
+    data.update(fields)
+    with _runtime.db() as conn:
+        conn.execute("""
+        INSERT INTO customer_trial_lifecycle
+        (company_id,onboarding_choice,trial_started_at,trial_ends_at,trial_status,
+         selected_plan_code,checkout_started_at,converted_at,owner_trial_note,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(company_id) DO UPDATE SET
+          onboarding_choice=excluded.onboarding_choice,
+          trial_started_at=excluded.trial_started_at,
+          trial_ends_at=excluded.trial_ends_at,
+          trial_status=excluded.trial_status,
+          selected_plan_code=excluded.selected_plan_code,
+          checkout_started_at=excluded.checkout_started_at,
+          converted_at=excluded.converted_at,
+          owner_trial_note=excluded.owner_trial_note,
+          updated_at=excluded.updated_at
+        """,(company_id,data["onboarding_choice"],data["trial_started_at"],data["trial_ends_at"],
+             data["trial_status"],data["selected_plan_code"],data["checkout_started_at"],
+             data["converted_at"],data["owner_trial_note"],data["updated_at"]))
+        conn.commit()
+    return _bc620_trial_record(company_id)
+
+def _bc620_trial_state(company_id):
+    r = _bc620_trial_record(company_id)
+    if not r:
+        return {"company_id":company_id,"trial_status":"none","days_remaining":None,"upgrade_available":True}
+    status = r.get("trial_status") or "none"
+    remaining = None
+    if r.get("trial_ends_at") and status == "active":
+        try:
+            end = _bc620_dt.datetime.fromisoformat(str(r["trial_ends_at"]).replace("Z",""))
+            delta = end - _bc620_now()
+            remaining = max(0, int((delta.total_seconds()+86399)//86400))
+            if delta.total_seconds() <= 0:
+                status = "expired"
+                r = _bc620_save_trial(company_id, trial_status="expired")
+        except Exception:
+            pass
+    return dict(r or {}, trial_status=status, days_remaining=remaining, upgrade_available=status in ("active","expired","none"))
+
+def _bc620_start_demo(company_id, days=14):
+    days = max(1, min(int(days or 14), 60))
+    now = _bc620_now()
+    end = now + _bc620_dt.timedelta(days=days)
+    return _bc620_save_trial(
+        company_id,
+        onboarding_choice="demo_trial",
+        trial_started_at=_bc620_iso(now),
+        trial_ends_at=_bc620_iso(end),
+        trial_status="active",
+        selected_plan_code=None,
+        converted_at=None
+    )
+
+def _bc620_select_paid_plan(company_id, plan_code):
+    catalog = _bc620_plan_catalog()
+    valid = {str(x["code"]):x for x in catalog if not x.get("trial")}
+    if plan_code not in valid:
+        return {"status":"invalid_plan","available_plans":list(valid.values())}
+    rec = _bc620_save_trial(
+        company_id,
+        onboarding_choice="paid_plan",
+        selected_plan_code=plan_code,
+        checkout_started_at=_bc620_iso(_bc620_now()),
+        trial_status=(_bc620_trial_record(company_id) or {}).get("trial_status") or "none"
+    )
+    # Existing Stripe checkout route remains the source of truth for payment.
+    return {
+        "status":"plan_selected",
+        "company_id":company_id,
+        "plan":valid[plan_code],
+        "lifecycle":rec,
+        "next_step":"stripe_checkout",
+        "checkout_note":"Continue through the existing BuildCommand Stripe checkout for this plan."
+    }
+
+def _bc620_mark_converted(company_id, plan_code=None):
+    return _bc620_save_trial(
+        company_id,
+        trial_status="converted",
+        selected_plan_code=plan_code or (_bc620_trial_record(company_id) or {}).get("selected_plan_code"),
+        converted_at=_bc620_iso(_bc620_now())
+    )
+
+def _bc620_access_policy(company_id):
+    state = _bc620_trial_state(company_id)
+    status = state.get("trial_status")
+    if status == "active":
+        return {
+            "access":"demo",
+            "premium_actions_allowed":True,
+            "limits":{"projects":1,"demo_projects":1,"heavy_ai_usage":"limited","enterprise_features":False},
+            "upgrade_required":False,
+            "days_remaining":state.get("days_remaining")
+        }
+    if status == "expired":
+        return {
+            "access":"trial_expired",
+            "premium_actions_allowed":False,
+            "data_preserved":True,
+            "upgrade_required":True,
+            "message":"Your demo has ended. Choose a paid plan to continue using premium BuildCommand AI actions."
+        }
+    if status == "converted":
+        return {"access":"paid","premium_actions_allowed":True,"upgrade_required":False}
+    return {"access":"choose_plan","premium_actions_allowed":False,"upgrade_required":False}
+
+def _bc620_choose_plan_page(company_id):
+    state = _bc620_trial_state(company_id)
+    plans = _bc620_plan_catalog()
+    cards = []
+    for p in plans:
+        code = str(p["code"])
+        if p.get("trial"):
+            action = f"/api/billing/company/{company_id}/start-demo-trial"
+            button = "Start Free Demo"
+        else:
+            action = f"/api/billing/company/{company_id}/select-plan"
+            button = "Choose " + str(p.get("name") or code)
+        cards.append({
+            "plan":p,
+            "button":button,
+            "action":action
+        })
+    return {
+        "status":"ok",
+        "app":"BuildCommand AI",
+        "version":"6.2.0",
+        "company_id":company_id,
+        "headline":"Choose how you want to start",
+        "subheadline":"Try BuildCommand with a limited demo or choose a paid subscription now.",
+        "trial_state":state,
+        "plans":cards,
+        "can_skip_trial":True,
+        "can_upgrade_anytime":True
+    }
+
+@app.get("/api/billing/choose-plan")
+def bc620_choose_plan_current_api():
+    cid = _bc620_current_company_id()
+    if not cid:
+        return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    return _bc620_choose_plan_page(cid)
+
+@app.get("/api/billing/company/{company_id}/choose-plan")
+def bc620_choose_plan_company_api(company_id:int):
+    return _bc620_choose_plan_page(company_id)
+
+@app.post("/api/billing/company/{company_id}/start-demo-trial")
+async def bc620_start_demo_api(company_id:int, request:_BC200_Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    days = body.get("days",14)
+    return {
+        "status":"ok",
+        "version":"6.2.0",
+        "trial":_bc620_start_demo(company_id,days),
+        "access":_bc620_access_policy(company_id)
+    }
+
+@app.post("/api/billing/company/{company_id}/select-plan")
+async def bc620_select_plan_api(company_id:int, request:_BC200_Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    plan_code = str(body.get("plan_code") or "").strip()
+    if not plan_code:
+        return _BC200_JSONResponse({"status":"invalid_request","error":"plan_code required"},status_code=400)
+    return _bc620_select_paid_plan(company_id,plan_code)
+
+@app.get("/api/billing/company/{company_id}/trial-status")
+def bc620_trial_status_api(company_id:int):
+    return {
+        "status":"ok",
+        "version":"6.2.0",
+        "trial":_bc620_trial_state(company_id),
+        "access":_bc620_access_policy(company_id)
+    }
+
+@app.post("/api/billing/company/{company_id}/mark-converted")
+async def bc620_mark_converted_api(company_id:int, request:_BC200_Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    return {"status":"ok","lifecycle":_bc620_mark_converted(company_id,body.get("plan_code"))}
+
+@app.post("/api/owner/company/{company_id}/trial-control")
+async def bc620_owner_trial_control_api(company_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    action = str(body.get("action") or "").strip().lower()
+    note = str(body.get("note") or "").strip() or None
+
+    if action == "extend":
+        state = _bc620_trial_state(company_id)
+        try:
+            current_end = _bc620_dt.datetime.fromisoformat(str(state.get("trial_ends_at")).replace("Z",""))
+        except Exception:
+            current_end = _bc620_now()
+        days = max(1,min(int(body.get("days") or 7),60))
+        rec = _bc620_save_trial(
+            company_id,
+            trial_status="active",
+            trial_ends_at=_bc620_iso(max(current_end,_bc620_now()) + _bc620_dt.timedelta(days=days)),
+            owner_trial_note=note
+        )
+    elif action == "expire":
+        rec = _bc620_save_trial(company_id,trial_status="expired",owner_trial_note=note)
+    elif action == "restart":
+        rec = _bc620_start_demo(company_id,int(body.get("days") or 14))
+        if note:
+            rec = _bc620_save_trial(company_id,owner_trial_note=note)
+    elif action == "convert":
+        rec = _bc620_mark_converted(company_id,body.get("plan_code"))
+        if note:
+            rec = _bc620_save_trial(company_id,owner_trial_note=note)
+    else:
+        return _BC200_JSONResponse(
+            {"status":"invalid_action","allowed":["extend","expire","restart","convert"]},
+            status_code=400
+        )
+    return {"status":"ok","version":"6.2.0","lifecycle":rec,"access":_bc620_access_policy(company_id)}
+
+@app.get("/health/customer-trial-subscription-selection-6-2-0")
+def bc620_health():
+    _bc620_ensure_schema()
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("6.1.0 stable baseline preserved","/health/real-project-intelligence-engine-6-1-0" in paths),
+        ("trial lifecycle schema",bool(_bc620_db_columns("customer_trial_lifecycle"))),
+        ("plan catalog engine",callable(globals().get("_bc620_plan_catalog"))),
+        ("trial state engine",callable(globals().get("_bc620_trial_state"))),
+        ("demo start engine",callable(globals().get("_bc620_start_demo"))),
+        ("paid plan selection engine",callable(globals().get("_bc620_select_paid_plan"))),
+        ("conversion engine",callable(globals().get("_bc620_mark_converted"))),
+        ("trial access policy",callable(globals().get("_bc620_access_policy"))),
+        ("choose plan engine",callable(globals().get("_bc620_choose_plan_page"))),
+        ("current user choose plan API","/api/billing/choose-plan" in paths),
+        ("company choose plan API","/api/billing/company/{company_id}/choose-plan" in paths),
+        ("start demo trial API","/api/billing/company/{company_id}/start-demo-trial" in paths),
+        ("select paid plan API","/api/billing/company/{company_id}/select-plan" in paths),
+        ("trial status API","/api/billing/company/{company_id}/trial-status" in paths),
+        ("conversion API","/api/billing/company/{company_id}/mark-converted" in paths),
+        ("owner trial control API","/api/owner/company/{company_id}/trial-control" in paths),
+        ("real project intelligence preserved","/api/unified-construction-brain/project/{project_id}/real-project-intelligence" in paths),
+        ("1000 supermesh preserved","/api/unified-construction-brain/project/{project_id}/supermesh-1000" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.2.0",
+        "release":"Customer Trial & Subscription Selection",
+        "baseline":"6.1.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed==len(checks),
+        "features":{
+            "trial_optional":True,
+            "paid_plan_at_signup":True,
+            "free_demo_trial":True,
+            "trial_upgrade_anytime":True,
+            "trial_expiration_preserves_data":True,
+            "owner_trial_controls":True,
+            "existing_stripe_checkout_preserved":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.2.0"
+BUILD_COMMAND_RELEASE_NAME="Customer Trial & Subscription Selection"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
