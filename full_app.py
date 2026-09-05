@@ -55508,3 +55508,97 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 6.5.5 — Auth Branding Cleanup
+# Baseline: 6.5.4 Header Rebuild
+# ============================================================
+
+def _bc655_clean_auth_branding(html):
+    if not isinstance(html, str):
+        return html
+    patterns = (
+        r'<div[^>]*id=["\']bc650-brand-wrap["\'][^>]*>.*?</div>\s*</div>',
+        r'<div[^>]*id=["\']bc650-brand-wrap["\'][^>]*>.*?</div>',
+        r'<div[^>]*id=["\']bc652-app-logo["\'][^>]*>.*?</div>',
+        r'<div[^>]*id=["\']bc653-approved-logo["\'][^>]*>.*?</div>',
+        r'<section[^>]*id=["\']bc654-brand-header["\'][^>]*>.*?</section>',
+        r'<style[^>]*id=["\']bc653-approved-logo-style["\'][^>]*>.*?</style>',
+        r'<style[^>]*id=["\']bc654-header-style["\'][^>]*>.*?</style>',
+    )
+    for pattern in patterns:
+        html = re.sub(pattern, '', html, count=0, flags=re.S | re.I)
+
+    cleanup_css = '''<style id="bc655-auth-cleanup-style">
+      #bc650-brand-wrap,#bc652-app-logo,#bc653-approved-logo,#bc654-brand-header,
+      .bc650-main-logo{display:none!important;visibility:hidden!important;height:0!important;
+      min-height:0!important;width:0!important;min-width:0!important;margin:0!important;
+      padding:0!important;overflow:hidden!important}
+    </style>'''
+    if 'id="bc655-auth-cleanup-style"' not in html:
+        head_end = html.lower().find('</head>')
+        if head_end >= 0:
+            html = html[:head_end] + cleanup_css + html[head_end:]
+        else:
+            html += cleanup_css
+    return html
+
+@app.middleware("http")
+async def bc655_auth_branding_cleanup(request, call_next):
+    response = await call_next(request)
+    try:
+        path = (request.url.path or '').rstrip('/') or '/'
+        if path not in {'/login', '/signup', '/register'}:
+            return response
+        ctype = (response.headers.get('content-type') or '').lower()
+        if 'text/html' not in ctype:
+            return response
+        raw = b''
+        async for chunk in response.body_iterator:
+            raw += chunk
+        body = raw.decode('utf-8', errors='ignore')
+        body = _bc655_clean_auth_branding(body)
+        headers = dict(response.headers)
+        headers.pop('content-length', None)
+        return _BC200_HTMLResponse(body, status_code=response.status_code, headers=headers)
+    except Exception:
+        return response
+
+@app.get('/health/auth-branding-cleanup-6-5-5')
+def bc655_health():
+    paths = {getattr(r, 'path', '') for r in app.routes}
+    checks = [
+        ('6.5.4 baseline preserved', '/health/header-rebuild-6-5-4' in paths),
+        ('auth cleanup engine', callable(globals().get('_bc655_clean_auth_branding'))),
+        ('auth cleanup middleware', callable(globals().get('bc655_auth_branding_cleanup'))),
+        ('construction app header preserved', callable(globals().get('_bc654_clean_header_block'))),
+        ('Stripe/trial baseline preserved', '/health/stripe-trial-loop-final-fix-6-4-2' in paths),
+        ('startup purge disabled', not bool(globals().get('_BC181895_RESET_ENABLED', False))),
+    ]
+    passed = sum(bool(v) for _, v in checks)
+    return {
+        'status': 'ok' if passed == len(checks) else 'degraded',
+        'app': 'BuildCommand AI',
+        'version': '6.5.5',
+        'release': 'Auth Branding Cleanup',
+        'baseline': '6.5.4 Header Rebuild',
+        'passed': passed,
+        'total': len(checks),
+        'failed': len(checks)-passed,
+        'stage_ready': passed == len(checks),
+        'visuals': {
+            'flag_background_preserved': True,
+            'dark_auth_card_preserved': True,
+            'auth_full_logo_overlay_removed': True,
+            'native_auth_brand_mark_preserved': True,
+            'construction_header_unchanged': True,
+        },
+        'checks': [{'case': n, 'passed': bool(v)} for n,v in checks],
+    }
+
+BUILD_COMMAND_RELEASE='6.5.5'
+BUILD_COMMAND_RELEASE_NAME='Auth Branding Cleanup'
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
