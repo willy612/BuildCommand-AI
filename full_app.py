@@ -52405,3 +52405,274 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 6.1.0
+# Real Project Intelligence Engine
+# Baseline: stable 6.0.0 Construction Intelligence Supermesh 1000
+#
+# Purpose:
+# Convert the large intelligence architecture into a project-grounded
+# reasoning system that activates specialists from real project evidence,
+# routes disagreements through the Council, captures corrections/outcomes,
+# and reports measurable quality.
+#
+# Human approval remains required.
+# ============================================================
+
+def _bc610_project_evidence(project_id:int):
+    evidence = []
+    # Reuse project evidence already assembled by the deep construction layer.
+    for e in (_bc340_safe(_bc320_weighted_evidence, project_id, default=[]) or []):
+        evidence.append({
+            "source":"PROJECT_EVIDENCE",
+            "source_type":e.get("source") or e.get("source_type"),
+            "label":e.get("label") or e.get("title"),
+            "detail":e.get("detail") or e.get("reason"),
+            "trade":e.get("trade"),
+            "weight":e.get("governing_weight"),
+            "raw":e
+        })
+
+    # Add live operational signals.
+    for x in (_bc340_safe(_bc310_attention_queue, project_id, default=[]) or [])[:100]:
+        evidence.append({
+            "source":"OPERATIONS",
+            "source_type":x.get("type"),
+            "label":x.get("title"),
+            "detail":x.get("reason") or x.get("recommended_action"),
+            "trade":x.get("trade"),
+            "weight":0.75,
+            "raw":x
+        })
+
+    return evidence
+
+def _bc610_activate_specialists(project_id:int, question:str, limit:int=25):
+    q = _bc210_norm(question)
+    qterms = {w for w in q.split() if len(w) >= 4}
+
+    scored = []
+    for spec in _BC600_SUPERMESH_SPECS:
+        blob = _bc210_norm(
+            spec.get("family","") + " " +
+            spec.get("domain","") + " " +
+            spec.get("capability","") + " " +
+            spec.get("name","")
+        )
+        overlap = len(qterms & set(blob.split()))
+        if overlap > 0:
+            scored.append((overlap, spec))
+
+    if not scored:
+        # Fall back to the most broadly useful specialist families.
+        preferred = {"DEEP_REASONING","PREDICTIVE","FIELD_OPERATIONS","META_INTELLIGENCE"}
+        scored = [(1, s) for s in _BC600_SUPERMESH_SPECS if s["family"] in preferred][:limit*2]
+
+    scored.sort(key=lambda x:(x[0], x[1]["id"]), reverse=True)
+
+    results = []
+    seen = set()
+    for score, spec in scored:
+        if spec["key"] in seen:
+            continue
+        seen.add(spec["key"])
+        r = _bc600_specialist(project_id, spec["key"])
+        if r:
+            r["activation_score"] = score
+            results.append(r)
+        if len(results) >= limit:
+            break
+    return results
+
+def _bc610_grounded_answer(project_id:int, question:str):
+    specialists = _bc610_activate_specialists(project_id, question, 25)
+    council = _bc510_council_deliberation(project_id)
+    evidence = _bc610_project_evidence(project_id)
+    proving = _bc340_safe(_bc540_proving_ground, project_id, default={}) or {}
+    validation = _bc340_safe(_bc530_validation_suite, project_id, default={}) or {}
+    readiness = _bc340_safe(_bc320_field_readiness, project_id, default={}) or {}
+
+    # Rank active specialist recommendations.
+    recommendations = []
+    for s in specialists:
+        top = (s.get("relevant_signals") or [None])[0]
+        if top:
+            action = (
+                top.get("recommended_action")
+                or top.get("next_action")
+                or top.get("prevention")
+                or top.get("title")
+            )
+        else:
+            action = None
+        recommendations.append({
+            "specialist_key":s.get("specialist_key"),
+            "name":s.get("name"),
+            "family":s.get("family"),
+            "domain":s.get("domain"),
+            "confidence":s.get("specialist_confidence"),
+            "recommended_action":action,
+            "relevant_evidence":s.get("relevant_evidence") or [],
+            "relevant_conflicts":s.get("relevant_conflicts") or []
+        })
+
+    recommendations.sort(
+        key=lambda x:float(x.get("confidence") or 0),
+        reverse=True
+    )
+
+    conflicts = []
+    for r in recommendations:
+        for c in r.get("relevant_conflicts") or []:
+            conflicts.append({
+                "specialist":r.get("name"),
+                "conflict":c
+            })
+
+    measured_accuracy = proving.get("measured_accuracy")
+    validation_score = validation.get("average_validation_score")
+    council_conf = council.get("final_council_confidence")
+
+    quality_inputs = [x for x in [measured_accuracy, validation_score, council_conf] if x is not None]
+    quality_score = round(sum(float(x) for x in quality_inputs)/len(quality_inputs),1) if quality_inputs else None
+
+    return {
+        "status":"ok",
+        "app":"BuildCommand AI",
+        "version":"6.1.0",
+        "release":"Real Project Intelligence Engine",
+        "project_id":project_id,
+        "question":question,
+        "activated_specialist_count":len(specialists),
+        "activated_specialists":specialists,
+        "ranked_recommendations":recommendations[:15],
+        "council":council,
+        "project_evidence":evidence[:60],
+        "field_readiness":readiness,
+        "conflicts":conflicts[:30],
+        "validation_score":validation_score,
+        "measured_accuracy":measured_accuracy,
+        "council_confidence":council_conf,
+        "overall_quality_score":quality_score,
+        "grounding_policy":[
+            "Use project evidence and active project signals.",
+            "Activate only relevant specialists where possible.",
+            "Route disagreements through the Construction Brain Council.",
+            "Expose conflicts instead of hiding them.",
+            "Treat proving-ground accuracy as unknown until ground truth is supplied.",
+            "Require human approval for project execution."
+        ],
+        "human_approval_required":True
+    }
+
+def _bc610_real_project_dashboard(project_id:int):
+    summary = _bc610_grounded_answer(
+        project_id,
+        "What matters most on this project right now?"
+    )
+    return {
+        "status":"ok",
+        "version":"6.1.0",
+        "project_id":project_id,
+        "headline":"Real Project Intelligence",
+        "quality_score":summary.get("overall_quality_score"),
+        "field_readiness":summary.get("field_readiness"),
+        "top_recommendations":summary.get("ranked_recommendations")[:8],
+        "council_classification":(summary.get("council") or {}).get("classification"),
+        "council_confidence":summary.get("council_confidence"),
+        "conflict_count":len(summary.get("conflicts") or []),
+        "activated_specialist_count":summary.get("activated_specialist_count"),
+        "human_approval_required":True
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/real-project-intelligence")
+def bc610_real_project_api(project_id:int):
+    return _bc610_real_project_dashboard(project_id)
+
+@app.post("/api/unified-construction-brain/project/{project_id}/ask-real-project")
+async def bc610_ask_real_project_api(project_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    question = str(body.get("question") or "").strip()
+    if not question:
+        return _BC200_JSONResponse(
+            {"status":"invalid_request","error":"question required"},
+            status_code=400
+        )
+    return _bc610_grounded_answer(project_id, question)
+
+@app.get("/api/unified-construction-brain/project/{project_id}/active-specialists")
+def bc610_active_specialists_api(project_id:int, question:str="What matters most on this project right now?"):
+    return {
+        "status":"ok",
+        "version":"6.1.0",
+        "project_id":project_id,
+        "question":question,
+        "specialists":_bc610_activate_specialists(project_id, question, 25)
+    }
+
+@app.get("/health/real-project-intelligence-engine-6-1-0")
+def bc610_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("6.0.0 stable baseline preserved","/health/construction-intelligence-supermesh-6-0-0" in paths),
+        ("project evidence engine",callable(globals().get("_bc610_project_evidence"))),
+        ("specialist activation engine",callable(globals().get("_bc610_activate_specialists"))),
+        ("grounded answer engine",callable(globals().get("_bc610_grounded_answer"))),
+        ("real project dashboard engine",callable(globals().get("_bc610_real_project_dashboard"))),
+        ("real project intelligence API","/api/unified-construction-brain/project/{project_id}/real-project-intelligence" in paths),
+        ("ask real project API","/api/unified-construction-brain/project/{project_id}/ask-real-project" in paths),
+        ("active specialists API","/api/unified-construction-brain/project/{project_id}/active-specialists" in paths),
+        ("1000 supermesh preserved","/api/unified-construction-brain/project/{project_id}/supermesh-1000" in paths),
+        ("proving ground preserved","/api/unified-construction-brain/project/{project_id}/proving-ground-100" in paths),
+        ("validation suite preserved","/api/unified-construction-brain/project/{project_id}/validation-suite-100" in paths),
+        ("council deep suite preserved","/api/unified-construction-brain/project/{project_id}/council-deep-100" in paths),
+        ("brain council preserved","/api/unified-construction-brain/project/{project_id}/brain-council" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.1.0",
+        "release":"Real Project Intelligence Engine",
+        "baseline":"6.0.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed==len(checks),
+        "features":{
+            "real_project_evidence_grounding":True,
+            "dynamic_specialist_activation":True,
+            "council_disagreement_resolution":True,
+            "project_specific_recommendation_ranking":True,
+            "conflict_exposure":True,
+            "quality_score_rollup":True,
+            "ground_truth_accuracy_awareness":True
+        },
+        "human_approval_required":True,
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.1.0"
+BUILD_COMMAND_RELEASE_NAME="Real Project Intelligence Engine"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
