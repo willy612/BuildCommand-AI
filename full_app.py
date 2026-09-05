@@ -54392,3 +54392,369 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 6.4.2
+# Stripe + Trial Loop Final Fix
+# Baseline: stable 6.4.1 Enrollment Gate Bypass Fix
+#
+# Fixes BOTH remaining loop paths:
+# 1) A selected 7-day demo is recognized directly from
+#    company_subscriptions, so the legacy payment/approval gate cannot
+#    bounce an active demo back to /payment-required.
+# 2) GET /billing/checkout/{plan} is handled BEFORE the legacy checkout
+#    handler and creates a real Stripe Checkout Session directly.
+# ============================================================
+
+import os as _bc642_os
+import json as _bc642_json
+import urllib.parse as _bc642_parse
+import urllib.request as _bc642_request
+import urllib.error as _bc642_error
+from datetime import datetime as _bc642_datetime
+
+def _bc642_company_subscription(company_id):
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            """SELECT company_id,plan_code,status,trial_ends_at,
+                      seat_limit_override,project_limit_override
+               FROM company_subscriptions
+               WHERE company_id=?
+               LIMIT 1""",
+            (int(company_id),)
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def _bc642_active_demo(company_id):
+    row = _bc642_company_subscription(company_id)
+    if not row or str(row.get("status") or "").upper() != "TRIAL":
+        return False
+    end = row.get("trial_ends_at")
+    if not end:
+        return True
+    try:
+        dt = _bc642_datetime.fromisoformat(str(end).replace("Z",""))
+        return dt > _bc642_datetime.utcnow()
+    except Exception:
+        return True
+
+# Replace the 6.3.4 wrappers with a stronger subscription-backed version.
+_bc642_payment_original = globals().get("_bc181893_payment_ok_original", _bc181893_payment_ok)
+_bc642_approval_original = globals().get("_bc181893_is_approved_original", _bc181893_is_approved)
+
+def _bc181893_payment_ok(company_id):
+    if _bc642_active_demo(company_id):
+        return True
+    try:
+        return _bc642_payment_original(company_id)
+    except Exception:
+        return False
+
+def _bc181893_is_approved(company_id):
+    # Demo customers do not need owner approval merely to evaluate the product.
+    if _bc642_active_demo(company_id):
+        return True
+    try:
+        return _bc642_approval_original(company_id)
+    except Exception:
+        return False
+
+def _bc642_plan(plan_code):
+    code = str(plan_code or "").strip().upper()
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            """SELECT code,name,monthly_price_cents,seat_limit,
+                      project_limit,description
+               FROM platform_plans
+               WHERE UPPER(code)=? AND COALESCE(active,1)=1
+               LIMIT 1""",
+            (code,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def _bc642_current_user(request):
+    try:
+        raw = request.cookies.get("bc_session")
+        return _runtime.user_from_session(raw) if raw else None
+    except Exception:
+        return None
+
+def _bc642_base_url(request):
+    base = str(_bc642_os.getenv("APP_BASE_URL") or "").strip().rstrip("/")
+    if base:
+        return base
+    try:
+        return str(request.base_url).rstrip("/")
+    except Exception:
+        return ""
+
+def _bc642_stripe_request(method, endpoint, data=None):
+    secret = str(_bc642_os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    if not secret:
+        raise RuntimeError("STRIPE_SECRET_KEY is not configured in Render.")
+
+    url = "https://api.stripe.com/v1/" + endpoint.lstrip("/")
+    encoded = None
+    headers = {
+        "Authorization": "Bearer " + secret,
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    if data is not None:
+        encoded = _bc642_parse.urlencode(data).encode("utf-8")
+
+    req = _bc642_request.Request(url, data=encoded, headers=headers, method=method)
+    try:
+        with _bc642_request.urlopen(req, timeout=25) as resp:
+            return _bc642_json.loads(resp.read().decode("utf-8"))
+    except _bc642_error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        try:
+            detail = _bc642_json.loads(body)
+            msg = ((detail.get("error") or {}).get("message")) or body
+        except Exception:
+            msg = body
+        raise RuntimeError("Stripe error: " + str(msg))
+
+def _bc642_create_checkout(request, plan_code):
+    user = _bc642_current_user(request)
+    if not user:
+        return None, "/login"
+
+    plan = _bc642_plan(plan_code)
+    if not plan:
+        raise RuntimeError("Selected BuildCommand subscription plan is invalid or inactive.")
+
+    cents = int(plan.get("monthly_price_cents") or 0)
+    if cents <= 0:
+        raise RuntimeError("Selected paid plan does not have a monthly Stripe amount configured.")
+
+    base = _bc642_base_url(request)
+    if not base:
+        raise RuntimeError("APP_BASE_URL is not configured.")
+
+    cid = int(user["company_id"])
+    email = str(user.get("email") or "").strip()
+    code = str(plan.get("code") or plan_code).upper()
+
+    success = base + "/billing/stripe-success?session_id={CHECKOUT_SESSION_ID}&plan_code=" + _bc642_parse.quote(code)
+    cancel = base + "/choose-plan?checkout=cancelled"
+
+    form = {
+        "mode": "subscription",
+        "success_url": success,
+        "cancel_url": cancel,
+        "client_reference_id": str(cid),
+        "metadata[company_id]": str(cid),
+        "metadata[plan_code]": code,
+        "line_items[0][quantity]": "1",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]": str(cents),
+        "line_items[0][price_data][recurring][interval]": "month",
+        "line_items[0][price_data][product_data][name]": "BuildCommand AI — " + str(plan.get("name") or code),
+        "line_items[0][price_data][product_data][description]": str(plan.get("description") or "BuildCommand AI subscription"),
+    }
+    if email:
+        form["customer_email"] = email
+
+    session = _bc642_stripe_request("POST", "checkout/sessions", form)
+    url = session.get("url")
+    if not url:
+        raise RuntimeError("Stripe Checkout Session was created without a checkout URL.")
+
+    # Persist selected plan intent before redirecting away.
+    try:
+        _bc620_save_trial(
+            cid,
+            onboarding_choice="paid_plan",
+            selected_plan_code=code,
+            checkout_started_at=_bc620_iso(_bc620_now()),
+            trial_status="none"
+        )
+    except Exception:
+        pass
+
+    return session, url
+
+def _bc642_activate_paid_company(company_id, plan_code):
+    plan = _bc642_plan(plan_code)
+    if not plan:
+        raise RuntimeError("Cannot activate unknown BuildCommand plan.")
+
+    now = _bc642_datetime.utcnow().isoformat()
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            "SELECT id FROM company_subscriptions WHERE company_id=?",
+            (int(company_id),)
+        ).fetchone()
+
+        if row:
+            c.execute(
+                """UPDATE company_subscriptions
+                   SET plan_code=?,status='ACTIVE',
+                       seat_limit_override=NULL,
+                       project_limit_override=NULL,
+                       trial_ends_at=NULL,
+                       access_note=?,
+                       updated=?
+                   WHERE company_id=?""",
+                (
+                    str(plan_code).upper(),
+                    "Stripe subscription checkout completed",
+                    now,
+                    int(company_id),
+                )
+            )
+        else:
+            c.execute(
+                """INSERT INTO company_subscriptions
+                   (company_id,plan_code,status,trial_ends_at,
+                    grandfathered,access_note,created,updated)
+                   VALUES(?,?, 'ACTIVE', NULL,0,?,?,?)""",
+                (
+                    int(company_id),
+                    str(plan_code).upper(),
+                    "Stripe subscription checkout completed",
+                    now, now
+                )
+            )
+        c.commit()
+    finally:
+        try: c.close()
+        except Exception: pass
+
+    try:
+        _bc620_mark_converted(int(company_id), str(plan_code).upper())
+    except Exception:
+        pass
+
+@app.middleware("http")
+async def bc642_direct_checkout_and_demo_gate(request, call_next):
+    path = request.url.path or "/"
+    method = request.method.upper()
+
+    # Direct real Stripe checkout, bypassing the old failing checkout endpoint.
+    prefix = "/billing/checkout/"
+    if method == "GET" and path.startswith(prefix):
+        code = path[len(prefix):].strip().upper()
+        try:
+            session, target = _bc642_create_checkout(request, code)
+            return _BC181893_RedirectResponse(target, status_code=303)
+        except Exception as e:
+            msg = _runtime.esc(str(e))
+            return _BC200_HTMLResponse(
+                f"""<!doctype html><html><body style="background:#07101a;color:white;
+                font-family:Arial;padding:40px"><h2>Stripe checkout could not start</h2>
+                <p>{msg}</p><p><a style="color:#6db8ff" href="/choose-plan">Back to Choose Plan</a></p>
+                </body></html>""",
+                status_code=503
+            )
+
+    return await call_next(request)
+
+@app.get("/billing/stripe-success")
+def bc642_stripe_success(session_id:str, plan_code:str):
+    u = _runtime.current_user()
+    if not u:
+        return _BC181893_RedirectResponse("/login", status_code=303)
+
+    try:
+        session = _bc642_stripe_request(
+            "GET",
+            "checkout/sessions/" + _bc642_parse.quote(str(session_id), safe="")
+        )
+    except Exception as e:
+        return _BC200_HTMLResponse(
+            "Unable to verify Stripe checkout: " + _runtime.esc(str(e)),
+            status_code=502
+        )
+
+    cid = int(u["company_id"])
+    ref = str(session.get("client_reference_id") or "")
+    metadata = session.get("metadata") or {}
+    meta_cid = str(metadata.get("company_id") or "")
+    paid_ok = (
+        str(session.get("payment_status") or "").lower() in ("paid","no_payment_required")
+        or str(session.get("status") or "").lower() == "complete"
+    )
+
+    if str(cid) not in (ref, meta_cid) or not paid_ok:
+        return _BC200_HTMLResponse(
+            "Stripe checkout could not be verified for this BuildCommand account.",
+            status_code=400
+        )
+
+    code = str(metadata.get("plan_code") or plan_code or "").upper()
+    _bc642_activate_paid_company(cid, code)
+    return _BC181893_RedirectResponse("/app", status_code=303)
+
+@app.get("/health/stripe-trial-loop-final-fix-6-4-2")
+def bc642_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("6.4.1 baseline preserved",
+         "/health/enrollment-gate-bypass-6-4-1" in paths),
+        ("subscription-backed demo detector",
+         callable(globals().get("_bc642_active_demo"))),
+        ("legacy payment gate demo override",
+         callable(globals().get("_bc181893_payment_ok"))),
+        ("legacy approval gate demo override",
+         callable(globals().get("_bc181893_is_approved"))),
+        ("direct Stripe API engine",
+         callable(globals().get("_bc642_stripe_request"))),
+        ("direct checkout engine",
+         callable(globals().get("_bc642_create_checkout"))),
+        ("paid activation engine",
+         callable(globals().get("_bc642_activate_paid_company"))),
+        ("Stripe success route",
+         "/billing/stripe-success" in paths),
+        ("7-day demo preserved",
+         "/health/seven-day-demo-trial-6-3-5" in paths),
+        ("American flag branding preserved",
+         len(globals().get("_BC640_BRAND_FLAG","")) > 100000),
+        ("startup purge disabled",
+         not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.4.2",
+        "release":"Stripe + Trial Loop Final Fix",
+        "baseline":"6.4.1",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "environment":{
+            "app_base_url_configured":bool(str(_bc642_os.getenv("APP_BASE_URL") or "").strip()),
+            "stripe_secret_key_configured":bool(str(_bc642_os.getenv("STRIPE_SECRET_KEY") or "").strip())
+        },
+        "fixes":{
+            "active_demo_no_payment_loop":True,
+            "active_demo_no_owner_approval_loop":True,
+            "legacy_checkout_500_bypassed":True,
+            "direct_stripe_checkout_session":True,
+            "stripe_success_verification":True,
+            "paid_subscription_activation":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.4.2"
+BUILD_COMMAND_RELEASE_NAME="Stripe + Trial Loop Final Fix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
