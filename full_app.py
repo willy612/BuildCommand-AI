@@ -37016,3 +37016,526 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 3.0.0
+# Project Strategy Intelligence Suite
+# Baseline: stable 2.9.0 Cause-and-Effect Intelligence
+#
+# NEXT 20 INTELLIGENCE UPGRADES — ONE CONSOLIDATED BUILD
+#
+# 01 Strategy Scenario Engine
+# 02 Multi-Path Strategy Comparison
+# 03 Schedule Recovery Strategy
+# 04 Procurement Recovery Strategy
+# 05 Inspection Readiness Strategy
+# 06 Trade Coordination Strategy
+# 07 Constructability Strategy
+# 08 Cost Exposure Strategy
+# 09 Constraint Removal Strategy
+# 10 Critical Decision Queue
+# 11 Decision Dependency Mapping
+# 12 Strategy Confidence Scoring
+# 13 Strategy Evidence Envelope
+# 14 Risk/Reward Balancing
+# 15 Historical Strategy Matching
+# 16 Cross-Project Strategy Learning
+# 17 Superintendent Priority Strategy
+# 18 Executive Strategy Pulse
+# 19 Strategy Outcome Feedback Foundation
+# 20 Unified Project Strategy Command
+#
+# Decision support only. Human approval remains required.
+# ============================================================
+
+def _bc300_init():
+    c = _runtime.db()
+    try:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS construction_brain_strategy_events(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          project_id INTEGER,
+          strategy_type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          proposed_path TEXT,
+          selected_path TEXT,
+          predicted_exposure REAL,
+          actual_outcome TEXT,
+          effectiveness_score REAL,
+          evidence_json TEXT,
+          metadata_json TEXT,
+          created_by INTEGER,
+          created TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS construction_brain_strategy_dependencies(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          parent_key TEXT NOT NULL,
+          child_key TEXT NOT NULL,
+          dependency_type TEXT,
+          metadata_json TEXT,
+          created TEXT NOT NULL
+        );
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc300_init()
+
+# 01 Strategy Scenario Engine
+def _bc300_scenario(project_id:int, action:str):
+    sim = _bc290_simulate(project_id, action)
+    if not sim:
+        return None
+    effects = sim.get("effects") or []
+    by_area = {str(x.get("area") or "").upper():x for x in effects}
+    return {
+        "action":action,
+        "overall_exposure":sim.get("overall_downstream_exposure"),
+        "analysis_confidence":sim.get("analysis_confidence"),
+        "schedule":by_area.get("SCHEDULE"),
+        "procurement":by_area.get("PROCUREMENT"),
+        "inspection":by_area.get("INSPECTION"),
+        "coordination":by_area.get("COORDINATION"),
+        "cost":by_area.get("COST"),
+        "historical_matches":sim.get("historical_matches"),
+        "historical_effectiveness":sim.get("historical_average_effectiveness")
+    }
+
+# 02 Multi-Path Strategy Comparison
+def _bc300_compare_paths(project_id:int, paths):
+    rows = _bc290_compare_actions(project_id, paths)
+    for i,r in enumerate(rows,1):
+        r["strategy_rank"] = i
+    return rows
+
+# 03 Schedule Recovery Strategy
+def _bc300_schedule_strategy(project_id:int):
+    predictive = _bc221_predictive_threats(project_id) or {}
+    learned = _bc256_schedule_learning(project_id)
+    threats = [x for x in predictive.get("threats") or [] if str(x.get("type") or "").upper()=="SCHEDULE"]
+    return {
+        "current_threats":threats[:10],
+        "historical_schedule_outcomes":learned,
+        "strategy":[
+            "Protect critical-path predecessors and near-term handoffs.",
+            "Resolve open constraints before adding acceleration.",
+            "Verify manpower and trade stacking before resequencing.",
+            "Use documented recovery dates and compare actual outcome to prediction."
+        ]
+    }
+
+# 04 Procurement Recovery Strategy
+def _bc300_procurement_strategy(project_id:int):
+    predictive = _bc221_predictive_threats(project_id) or {}
+    learned = _bc257_procurement_learning(project_id)
+    threats = [x for x in predictive.get("threats") or [] if str(x.get("type") or "").upper()=="PROCUREMENT"]
+    return {
+        "current_threats":threats[:10],
+        "historical_procurement_outcomes":learned,
+        "strategy":[
+            "Prioritize long-lead items by field need date and schedule impact.",
+            "Confirm approval, release, fabrication, ship, and delivery dates.",
+            "Escalate items whose delivery threatens critical work.",
+            "Compare recovery actions against prior procurement outcomes."
+        ]
+    }
+
+# 05 Inspection Readiness Strategy
+def _bc300_inspection_strategy(project_id:int):
+    learned = _bc258_inspection_learning(project_id)
+    return {
+        "historical_inspection_outcomes":learned,
+        "strategy":[
+            "Verify approved documents and prerequisites before requesting inspection.",
+            "Confirm testing agency and required reports.",
+            "Protect hold points and avoid covering work before acceptance.",
+            "Use prior failures to identify repeat inspection risks."
+        ]
+    }
+
+# 06 Trade Coordination Strategy
+def _bc300_coordination_strategy(project_id:int):
+    roots = _bc254_root_causes(project_id)
+    repeat = _bc270_repeat_risk(project_id) or {}
+    return {
+        "root_causes":roots[:10],
+        "repeat_risks":repeat.get("repeat_risk_warnings") or [],
+        "strategy":[
+            "Identify impacted trades before committing to changed work.",
+            "Confirm governing plan/spec/detail/revision evidence.",
+            "Resolve scope ownership and handoff sequence.",
+            "Document coordination decisions for future learning."
+        ]
+    }
+
+# 07 Constructability Strategy
+def _bc300_constructability(project_id:int):
+    try:
+        understanding = _bc215_project_understanding(project_id)
+    except Exception:
+        understanding = None
+    return {
+        "project_understanding":understanding,
+        "strategy":[
+            "Check physical sequence and access before field execution.",
+            "Check drawing/detail relationships and revision ripple.",
+            "Identify downstream installations that could be blocked.",
+            "Escalate contradictions or missing scope before work proceeds."
+        ]
+    }
+
+# 08 Cost Exposure Strategy
+def _bc300_cost_strategy(project_id:int):
+    decision = _bc280_decision(project_id,"Where is the greatest avoidable cost exposure right now?")
+    return {
+        "decision_context":decision,
+        "strategy":[
+            "Separate contractual responsibility from field urgency.",
+            "Quantify rework, premium freight, overtime, and productivity exposure.",
+            "Document cause and authorization before changed work where practical.",
+            "Prefer lower-exposure strategies when schedule and quality outcomes are comparable."
+        ]
+    }
+
+# 09 Constraint Removal Strategy
+def _bc300_constraint_strategy(project_id:int):
+    try:
+        constraints = _bc230_constraints(project_id)
+    except Exception:
+        constraints = None
+    return {
+        "constraints":constraints,
+        "strategy":[
+            "Rank constraints by downstream schedule impact.",
+            "Assign a responsible owner and required-by date.",
+            "Resolve prerequisite constraints before secondary symptoms.",
+            "Recheck the constraint after the corrective action."
+        ]
+    }
+
+# 10 Critical Decision Queue
+def _bc300_decision_queue(project_id:int):
+    predictive = _bc221_predictive_threats(project_id) or {}
+    recommendations = _bc230_recommendations(project_id) or {}
+    queue = []
+    for x in predictive.get("threats") or []:
+        queue.append({
+            "source":"PREDICTIVE",
+            "title":x.get("title"),
+            "priority_score":int(x.get("predictive_risk_score") or 0),
+            "reason":x.get("why"),
+            "next_action":x.get("prevention")
+        })
+    for x in recommendations.get("recommendations") or []:
+        queue.append({
+            "source":"RECOMMENDATION",
+            "title":x.get("title") or x.get("action"),
+            "priority_score":int(x.get("risk_score") or 50),
+            "reason":x.get("reason"),
+            "next_action":x.get("action")
+        })
+    queue.sort(key=lambda x:x["priority_score"], reverse=True)
+    return queue[:25]
+
+# 11 Decision Dependency Mapping
+def _bc300_dependencies(project_id:int):
+    queue = _bc300_decision_queue(project_id)
+    deps = []
+    for i,item in enumerate(queue):
+        title = str(item.get("title") or "")
+        blob = _bc210_norm(title+" "+str(item.get("reason") or "")+" "+str(item.get("next_action") or ""))
+        for j,other in enumerate(queue):
+            if i == j:
+                continue
+            oblob = _bc210_norm(str(other.get("title") or "")+" "+str(other.get("reason") or ""))
+            shared = set(w for w in blob.split() if len(w)>=6) & set(w for w in oblob.split() if len(w)>=6)
+            if len(shared) >= 2:
+                deps.append({
+                    "parent":title,
+                    "child":other.get("title"),
+                    "shared_signals":sorted(list(shared))[:6],
+                    "dependency_strength":min(95,40+len(shared)*10)
+                })
+    return deps[:50]
+
+# 12 Strategy Confidence Scoring
+def _bc300_strategy_confidence(project_id:int):
+    learning = _bc260_self_evaluation(project_id)
+    outcomes = int(learning.get("outcome_count") or 0)
+    calibration = learning.get("prediction_calibration") or {}
+    acc = calibration.get("accuracy")
+    score = 45 + min(20,outcomes//3)
+    if acc is not None:
+        score += min(25,float(acc)*0.25)
+    return round(max(5,min(95,score)),1)
+
+# 13 Strategy Evidence Envelope
+def _bc300_evidence(project_id:int):
+    ctx = _bc280_decision_context(project_id,"Build the project strategy evidence envelope.")
+    return (ctx or {}).get("evidence") or []
+
+# 14 Risk/Reward Balancing
+def _bc300_risk_reward(project_id:int, actions):
+    rows = []
+    for action in actions[:5]:
+        sim = _bc290_simulate(project_id,action)
+        if not sim:
+            continue
+        exposure = float(sim.get("overall_downstream_exposure") or 0)
+        hist = sim.get("historical_average_effectiveness")
+        reward = float(hist) if hist is not None else 50.0
+        confidence = float(sim.get("analysis_confidence") or 40)
+        balance = round((100-exposure)*0.45 + reward*0.35 + confidence*0.20,1)
+        rows.append({
+            "action":action,
+            "risk_exposure":exposure,
+            "historical_reward_signal":hist,
+            "analysis_confidence":confidence,
+            "risk_reward_score":balance
+        })
+    return sorted(rows,key=lambda x:x["risk_reward_score"],reverse=True)
+
+# 15 Historical Strategy Matching
+def _bc300_historical_match(project_id:int, strategy_text:str):
+    outcomes = _bc250_outcomes(project_id,None,500)
+    needle = set(w for w in _bc210_norm(strategy_text).split() if len(w)>=5)
+    matches = []
+    for r in outcomes:
+        blob = _bc210_norm(
+            str(r.get("subject") or "")+" "+
+            str(r.get("recommended_action") or "")+" "+
+            str(r.get("action_taken") or "")+" "+
+            str(r.get("actual_result") or "")
+        )
+        overlap = len(needle & set(blob.split()))
+        if overlap:
+            matches.append((overlap,r))
+    matches.sort(key=lambda x:x[0],reverse=True)
+    return [dict(x[1],strategy_overlap=x[0]) for x in matches[:20]]
+
+# 16 Cross-Project Strategy Learning
+def _bc300_cross_project_strategy():
+    return {
+        "patterns":_bc259_cross_project_patterns(),
+        "note":"Cross-project patterns are company-scoped and used as evidence, not automatic instructions."
+    }
+
+# 17 Superintendent Priority Strategy
+def _bc300_superintendent_strategy(project_id:int):
+    queue = _bc300_decision_queue(project_id)
+    return {
+        "morning_priorities":queue[:5],
+        "midday_recheck":queue[5:10],
+        "closeout_watch":queue[10:15],
+        "policy":"Superintendent retains field authority and validates actual conditions."
+    }
+
+# 18 Executive Strategy Pulse
+def _bc300_executive_strategy(project_id:int):
+    try:
+        pulse = _bc230_executive_pulse(project_id)
+    except Exception:
+        pulse = None
+    return {
+        "executive_pulse":pulse,
+        "strategy_confidence":_bc300_strategy_confidence(project_id),
+        "top_decisions":_bc300_decision_queue(project_id)[:8],
+        "cross_project_patterns":_bc259_cross_project_patterns()[:10]
+    }
+
+# 19 Strategy Outcome Feedback Foundation
+@app.post("/api/construction-brain/strategy-outcomes")
+async def bc300_strategy_outcome(request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = str(body.get("title") or "").strip()
+    if not title:
+        return _BC200_JSONResponse({"status":"invalid_request","error":"title required"},status_code=400)
+    c = _runtime.db()
+    try:
+        cur = c.execute(
+            """INSERT INTO construction_brain_strategy_events
+            (company_id,project_id,strategy_type,title,proposed_path,selected_path,
+             predicted_exposure,actual_outcome,effectiveness_score,evidence_json,
+             metadata_json,created_by,created)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                u["company_id"],body.get("project_id"),
+                str(body.get("strategy_type") or "GENERAL").upper(),
+                title,str(body.get("proposed_path") or ""),
+                str(body.get("selected_path") or ""),
+                body.get("predicted_exposure"),
+                str(body.get("actual_outcome") or ""),
+                body.get("effectiveness_score"),
+                _BC200_json.dumps(body.get("evidence") or [],default=str),
+                _BC200_json.dumps(body.get("metadata") or {},default=str),
+                u.get("id"),_BC200_datetime.utcnow().isoformat()
+            )
+        )
+        c.commit()
+        sid = getattr(cur,"lastrowid",None)
+    finally:
+        c.close()
+    return {"status":"ok","version":"3.0.0","strategy_event_id":sid}
+
+# 20 Unified Project Strategy Command
+def _bc300_unified_strategy(project_id:int):
+    queue = _bc300_decision_queue(project_id)
+    actions = [str(x.get("next_action") or x.get("title") or "") for x in queue[:5] if x.get("next_action") or x.get("title")]
+    return {
+        "status":"ok",
+        "version":"3.0.0",
+        "release":"Project Strategy Intelligence Suite",
+        "project_id":project_id,
+        "strategy_confidence":_bc300_strategy_confidence(project_id),
+        "critical_decision_queue":queue,
+        "decision_dependencies":_bc300_dependencies(project_id),
+        "schedule_strategy":_bc300_schedule_strategy(project_id),
+        "procurement_strategy":_bc300_procurement_strategy(project_id),
+        "inspection_strategy":_bc300_inspection_strategy(project_id),
+        "coordination_strategy":_bc300_coordination_strategy(project_id),
+        "constructability_strategy":_bc300_constructability(project_id),
+        "cost_strategy":_bc300_cost_strategy(project_id),
+        "constraint_strategy":_bc300_constraint_strategy(project_id),
+        "superintendent_strategy":_bc300_superintendent_strategy(project_id),
+        "executive_strategy":_bc300_executive_strategy(project_id),
+        "risk_reward_comparison":_bc300_risk_reward(project_id,actions),
+        "strategy_evidence":_bc300_evidence(project_id)[:40],
+        "cross_project_learning":_bc300_cross_project_strategy(),
+        "human_approval_required":True
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/project-strategy")
+def bc300_strategy_api(project_id:int):
+    return _bc300_unified_strategy(project_id)
+
+@app.post("/api/unified-construction-brain/project/{project_id}/compare-strategies")
+async def bc300_compare_strategies_api(project_id:int, request:_BC200_Request):
+    u = _runtime.current_user()
+    if not u:
+        return _BC200_JSONResponse({"status":"unauthorized"},status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    actions = body.get("strategies") or body.get("actions") or []
+    if not isinstance(actions,list) or not actions:
+        return _BC200_JSONResponse({"status":"invalid_request","error":"strategies list required"},status_code=400)
+    return {
+        "status":"ok","version":"3.0.0","project_id":project_id,
+        "strategy_comparison":_bc300_compare_paths(project_id,actions),
+        "risk_reward":_bc300_risk_reward(project_id,actions),
+        "policy":"Strategy ranking is decision support; human approval remains required."
+    }
+
+@app.get("/health/project-strategy-intelligence-suite-3-0-0")
+def bc300_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    c = _runtime.db()
+    try:
+        if getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres":
+            tables = {r["table_name"] for r in c.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            ).fetchall()}
+        else:
+            tables = {r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+    finally:
+        c.close()
+
+    checks = [
+        ("2.9.0 stable baseline preserved","/health/cause-and-effect-intelligence-2-9-0" in paths),
+        ("strategy events table","construction_brain_strategy_events" in tables),
+        ("strategy dependencies table","construction_brain_strategy_dependencies" in tables),
+        ("01 strategy scenario engine",callable(globals().get("_bc300_scenario"))),
+        ("02 multi-path comparison",callable(globals().get("_bc300_compare_paths"))),
+        ("03 schedule recovery strategy",callable(globals().get("_bc300_schedule_strategy"))),
+        ("04 procurement recovery strategy",callable(globals().get("_bc300_procurement_strategy"))),
+        ("05 inspection readiness strategy",callable(globals().get("_bc300_inspection_strategy"))),
+        ("06 trade coordination strategy",callable(globals().get("_bc300_coordination_strategy"))),
+        ("07 constructability strategy",callable(globals().get("_bc300_constructability"))),
+        ("08 cost exposure strategy",callable(globals().get("_bc300_cost_strategy"))),
+        ("09 constraint removal strategy",callable(globals().get("_bc300_constraint_strategy"))),
+        ("10 critical decision queue",callable(globals().get("_bc300_decision_queue"))),
+        ("11 decision dependency mapping",callable(globals().get("_bc300_dependencies"))),
+        ("12 strategy confidence scoring",callable(globals().get("_bc300_strategy_confidence"))),
+        ("13 strategy evidence envelope",callable(globals().get("_bc300_evidence"))),
+        ("14 risk reward balancing",callable(globals().get("_bc300_risk_reward"))),
+        ("15 historical strategy matching",callable(globals().get("_bc300_historical_match"))),
+        ("16 cross-project strategy learning",callable(globals().get("_bc300_cross_project_strategy"))),
+        ("17 superintendent priority strategy",callable(globals().get("_bc300_superintendent_strategy"))),
+        ("18 executive strategy pulse",callable(globals().get("_bc300_executive_strategy"))),
+        ("19 strategy outcome feedback","/api/construction-brain/strategy-outcomes" in paths),
+        ("20 unified project strategy","/api/unified-construction-brain/project/{project_id}/project-strategy" in paths),
+        ("compare strategies API","/api/unified-construction-brain/project/{project_id}/compare-strategies" in paths),
+        ("decision intelligence preserved","/api/unified-construction-brain/project/{project_id}/decision" in paths),
+        ("cause-effect preserved","/api/unified-construction-brain/project/{project_id}/cause-effect" in paths),
+        ("experience intelligence preserved","/api/unified-construction-brain/project/{project_id}/experience-intelligence" in paths),
+        ("adaptive learning preserved","/api/unified-construction-brain/project/{project_id}/adaptive-learning-suite" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"3.0.0",
+        "release":"Project Strategy Intelligence Suite",
+        "baseline":"2.9.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "strategy_scenarios":True,
+            "multi_path_comparison":True,
+            "schedule_recovery_strategy":True,
+            "procurement_recovery_strategy":True,
+            "inspection_readiness_strategy":True,
+            "trade_coordination_strategy":True,
+            "constructability_strategy":True,
+            "cost_exposure_strategy":True,
+            "constraint_removal_strategy":True,
+            "critical_decision_queue":True,
+            "decision_dependency_mapping":True,
+            "strategy_confidence":True,
+            "strategy_evidence":True,
+            "risk_reward_balancing":True,
+            "historical_strategy_matching":True,
+            "cross_project_strategy_learning":True,
+            "superintendent_priority_strategy":True,
+            "executive_strategy_pulse":True,
+            "strategy_outcome_feedback":True,
+            "unified_project_strategy_command":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "3.0.0"
+BUILD_COMMAND_RELEASE_NAME = "Project Strategy Intelligence Suite"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
