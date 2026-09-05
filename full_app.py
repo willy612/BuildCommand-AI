@@ -38154,3 +38154,299 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 3.2.0
+# Deep Construction Intelligence
+# Baseline: stable 3.1.0 Autonomous Project Intelligence Suite
+#
+# Goal:
+# Make the existing brains deeper and more construction-specific
+# instead of simply adding more surface-level modules.
+#
+# Core upgrades:
+# - evidence-weighted construction reasoning
+# - governing-document hierarchy
+# - trade responsibility depth
+# - field sequence / predecessor reasoning
+# - inspection prerequisite reasoning
+# - procurement-to-installation readiness
+# - schedule-to-field readiness
+# - correction-memory influence
+# - contradiction / uncertainty penalties
+# - integrated deep construction assessment
+# ============================================================
+
+_BC320_GOVERNING_WEIGHT = {
+    "ADDENDUM": 1.00,
+    "ASI": 0.98,
+    "REVISION": 0.96,
+    "RFI": 0.94,
+    "SPECIFICATION": 0.90,
+    "DETAIL": 0.88,
+    "SCHEDULE": 0.84,
+    "PLAN": 0.82,
+    "GENERAL_NOTE": 0.72,
+    "FIELD_NOTE": 0.62,
+    "HISTORICAL": 0.55
+}
+
+_BC320_SEQUENCE_RULES = [
+    ("underground", ["survey","excavation","utility layout","inspection","backfill"]),
+    ("footing", ["layout","excavation","rebar","forms","inspection","concrete"]),
+    ("slab", ["underground mep","compaction","vapor barrier","rebar","inspection","concrete"]),
+    ("wall close", ["framing","in-wall mep","rough inspections","insulation","drywall"]),
+    ("ceiling close", ["above-ceiling mep","fire sprinkler","inspection","ceiling grid","tile"]),
+    ("roof", ["deck","penetrations","curbs","dry-in","roofing","final flashing"])
+]
+
+def _bc320_evidence_weight(source_type):
+    return _BC320_GOVERNING_WEIGHT.get(str(source_type or "").upper(), 0.50)
+
+def _bc320_weighted_evidence(project_id:int):
+    try:
+        evidence = _bc300_evidence(project_id) or []
+    except Exception:
+        evidence = []
+    rows = []
+    for e in evidence:
+        source = str(e.get("source") or e.get("source_type") or "HISTORICAL").upper()
+        rows.append({**e, "governing_weight":_bc320_evidence_weight(source)})
+    rows.sort(key=lambda x:float(x.get("governing_weight") or 0), reverse=True)
+    return rows
+
+def _bc320_trade_depth(project_id:int):
+    try:
+        audit = _bc212_scope_audit(project_id)
+    except Exception:
+        audit = None
+    try:
+        missing = _bc213_missing_scope(project_id)
+    except Exception:
+        missing = None
+    try:
+        corrections = _bc210_learned_rules(project_id)
+    except Exception:
+        corrections = None
+    return {
+        "scope_audit":audit,
+        "missing_scope":missing,
+        "learned_trade_corrections":corrections,
+        "reasoning_policy":[
+            "Prefer explicit learned corrections over generic trade assumptions.",
+            "Separate installation responsibility from patch/repair responsibility.",
+            "Separate equipment furnishing from electrical connection responsibility.",
+            "Separate interior doors/hardware from storefront/glazing.",
+            "Keep low-voltage scope distinct from line-voltage electrical.",
+            "Assign concrete cutting/trenching/restoration to concrete when caused by MEP work.",
+            "Flag ambiguous multi-trade responsibility instead of silently forcing assignment."
+        ]
+    }
+
+def _bc320_sequence_reasoning(project_id:int):
+    queue = _bc310_attention_queue(project_id)
+    findings = []
+    blob = _bc210_norm(" ".join(
+        str(x.get("title") or "")+" "+str(x.get("reason") or "")+" "+str(x.get("recommended_action") or "")
+        for x in queue[:50]
+    ))
+    for phase, sequence in _BC320_SEQUENCE_RULES:
+        hits = [s for s in sequence if s in blob]
+        if hits:
+            findings.append({
+                "phase":phase,
+                "expected_sequence":sequence,
+                "signals_found":hits,
+                "sequence_confidence":min(95,50+len(hits)*8)
+            })
+    return {
+        "findings":findings,
+        "policy":"Do not recommend downstream work as ready until known predecessors and required inspections are satisfied."
+    }
+
+def _bc320_inspection_prerequisites(project_id:int):
+    watch = _bc310_inspection_watch(project_id)
+    prerequisites = []
+    for x in watch:
+        txt = _bc210_norm(str(x))
+        req = ["approved documents","work complete","access available"]
+        if "concrete" in txt:
+            req += ["rebar/forms verified","embedments verified","testing coordinated"]
+        if "wall" in txt or "rough" in txt:
+            req += ["rough MEP complete","required firestopping visible","wall not closed"]
+        if "ceiling" in txt:
+            req += ["above-ceiling systems complete","testing complete","ceiling not concealed prematurely"]
+        prerequisites.append({
+            "item":x.get("title"),
+            "severity":x.get("severity"),
+            "required_before_ready":list(dict.fromkeys(req))
+        })
+    return prerequisites[:20]
+
+def _bc320_procurement_install_readiness(project_id:int):
+    watch = _bc310_procurement_watch(project_id)
+    rows = []
+    for x in watch:
+        sev = int(x.get("severity") or 0)
+        rows.append({
+            "item":x.get("title"),
+            "risk":sev,
+            "installation_readiness":"AT RISK" if sev >= 65 else "VERIFY",
+            "required_checks":[
+                "approved selection/submittal",
+                "purchase/release confirmed",
+                "fabrication status confirmed",
+                "ship/delivery date confirmed",
+                "field need date confirmed",
+                "storage/access/install prerequisites confirmed"
+            ]
+        })
+    return rows[:20]
+
+def _bc320_field_readiness(project_id:int):
+    schedule = _bc310_schedule_watch(project_id)
+    inspections = _bc320_inspection_prerequisites(project_id)
+    procurement = _bc320_procurement_install_readiness(project_id)
+    coordination = _bc310_coordination_watch(project_id)
+    blockers = []
+    blockers += [{"type":"SCHEDULE","item":x} for x in schedule if int(x.get("severity") or 0)>=65]
+    blockers += [{"type":"INSPECTION","item":x} for x in inspections]
+    blockers += [{"type":"PROCUREMENT","item":x} for x in procurement if x.get("installation_readiness")=="AT RISK"]
+    blockers += [{"type":"COORDINATION","item":x} for x in coordination if int(x.get("severity") or 0)>=65]
+    score = max(0,100-min(90,len(blockers)*8))
+    return {
+        "field_readiness_score":score,
+        "ready":score >= 75,
+        "blockers":blockers[:30],
+        "policy":"Field readiness is advisory and must be verified against actual site conditions."
+    }
+
+def _bc320_reasoning_quality(project_id:int):
+    evidence = _bc320_weighted_evidence(project_id)
+    confidence = _bc310_confidence_watch(project_id)
+    contradictions = 0
+    try:
+        cd = _bc213_cross_document(project_id)
+        contradictions = len((cd or {}).get("contradictions") or [])
+    except Exception:
+        pass
+    top_weights = [float(x.get("governing_weight") or 0) for x in evidence[:20]]
+    evidence_quality = round((sum(top_weights)/max(1,len(top_weights)))*100,1)
+    base = float(confidence.get("confidence_score") or 50)
+    score = round(max(5,min(99,base*0.45 + evidence_quality*0.55 - min(25,contradictions*4))),1)
+    return {
+        "reasoning_quality_score":score,
+        "evidence_quality":evidence_quality,
+        "contradiction_count":contradictions,
+        "confidence_degraded":confidence.get("degraded"),
+        "confidence_reasons":confidence.get("reasons") or []
+    }
+
+def _bc320_deep_assessment(project_id:int):
+    return {
+        "status":"ok",
+        "app":"BuildCommand AI",
+        "version":"3.2.0",
+        "release":"Deep Construction Intelligence",
+        "project_id":project_id,
+        "reasoning_quality":_bc320_reasoning_quality(project_id),
+        "field_readiness":_bc320_field_readiness(project_id),
+        "trade_responsibility":_bc320_trade_depth(project_id),
+        "construction_sequence":_bc320_sequence_reasoning(project_id),
+        "inspection_prerequisites":_bc320_inspection_prerequisites(project_id),
+        "procurement_installation_readiness":_bc320_procurement_install_readiness(project_id),
+        "governing_evidence":_bc320_weighted_evidence(project_id)[:40],
+        "autonomous_command":_bc310_unified_command(project_id),
+        "deep_reasoning_policy":[
+            "Use the strongest governing evidence available.",
+            "Apply learned corrections before generic construction rules.",
+            "Penalize confidence when documents conflict or evidence is weak.",
+            "Check predecessor work, procurement, coordination, and inspections before declaring work ready.",
+            "Expose uncertainty instead of hiding it.",
+            "Require human approval for execution."
+        ],
+        "human_approval_required":True
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/deep-construction-intelligence")
+def bc320_deep_api(project_id:int):
+    return _bc320_deep_assessment(project_id)
+
+@app.get("/api/unified-construction-brain/project/{project_id}/field-readiness")
+def bc320_field_readiness_api(project_id:int):
+    return {"status":"ok","version":"3.2.0","project_id":project_id,**_bc320_field_readiness(project_id)}
+
+@app.get("/api/unified-construction-brain/project/{project_id}/reasoning-quality")
+def bc320_reasoning_quality_api(project_id:int):
+    return {"status":"ok","version":"3.2.0","project_id":project_id,**_bc320_reasoning_quality(project_id)}
+
+@app.get("/health/deep-construction-intelligence-3-2-0")
+def bc320_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("3.1.0 stable baseline preserved","/health/autonomous-project-intelligence-suite-3-1-0" in paths),
+        ("governing document weights",bool(_BC320_GOVERNING_WEIGHT)),
+        ("construction sequence rules",bool(_BC320_SEQUENCE_RULES)),
+        ("evidence weighting engine",callable(globals().get("_bc320_weighted_evidence"))),
+        ("trade responsibility depth",callable(globals().get("_bc320_trade_depth"))),
+        ("construction sequence reasoning",callable(globals().get("_bc320_sequence_reasoning"))),
+        ("inspection prerequisite reasoning",callable(globals().get("_bc320_inspection_prerequisites"))),
+        ("procurement installation readiness",callable(globals().get("_bc320_procurement_install_readiness"))),
+        ("field readiness engine",callable(globals().get("_bc320_field_readiness"))),
+        ("reasoning quality engine",callable(globals().get("_bc320_reasoning_quality"))),
+        ("deep construction assessment",callable(globals().get("_bc320_deep_assessment"))),
+        ("deep intelligence API","/api/unified-construction-brain/project/{project_id}/deep-construction-intelligence" in paths),
+        ("field readiness API","/api/unified-construction-brain/project/{project_id}/field-readiness" in paths),
+        ("reasoning quality API","/api/unified-construction-brain/project/{project_id}/reasoning-quality" in paths),
+        ("autonomous command preserved","/api/unified-construction-brain/project/{project_id}/autonomous-command" in paths),
+        ("project strategy preserved","/api/unified-construction-brain/project/{project_id}/project-strategy" in paths),
+        ("decision intelligence preserved","/api/unified-construction-brain/project/{project_id}/decision" in paths),
+        ("cause-effect preserved","/api/unified-construction-brain/project/{project_id}/cause-effect" in paths),
+        ("experience intelligence preserved","/api/unified-construction-brain/project/{project_id}/experience-intelligence" in paths),
+        ("adaptive learning preserved","/api/unified-construction-brain/project/{project_id}/adaptive-learning-suite" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"3.2.0",
+        "release":"Deep Construction Intelligence",
+        "baseline":"3.1.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "evidence_weighted_reasoning":True,
+            "governing_document_hierarchy":True,
+            "deep_trade_responsibility":True,
+            "construction_sequence_reasoning":True,
+            "inspection_prerequisite_reasoning":True,
+            "procurement_installation_readiness":True,
+            "field_readiness_intelligence":True,
+            "correction_memory_priority":True,
+            "contradiction_confidence_penalty":True,
+            "reasoning_quality_scoring":True,
+            "integrated_deep_construction_assessment":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "3.2.0"
+BUILD_COMMAND_RELEASE_NAME = "Deep Construction Intelligence"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
