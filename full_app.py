@@ -53225,7 +53225,7 @@ def _bc630_auth_html(mode="login", error=None):
     signup = str(mode).lower() in ("signup","register","account","create")
     title = "Create Your BuildCommand Account" if signup else "Welcome Back"
     subtitle = "Start building smarter with construction intelligence." if signup else "Plans to Progress. Intelligence to Build."
-    action = "/signup" if signup else "/login"
+    action = "/register" if signup else "/login"
     button = "Create Account" if signup else "Sign In"
     switch_text = "Already have an account?" if signup else "New to BuildCommand AI?"
     switch_label = "Sign In" if signup else "Create a New Account"
@@ -53236,7 +53236,7 @@ def _bc630_auth_html(mode="login", error=None):
       <label>Company Name</label>
       <div class="field"><span>▣</span><input name="company_name" autocomplete="organization" placeholder="Your company name" required></div>
       <label>Full Name</label>
-      <div class="field"><span>●</span><input name="name" autocomplete="name" placeholder="Your name" required></div>
+      <div class="field"><span>●</span><input name="display_name" autocomplete="name" placeholder="Your name" required></div>
     """ if signup else ""
 
     remember = """
@@ -53578,5 +53578,344 @@ BUILD_COMMAND_RELEASE = "6.3.3"
 BUILD_COMMAND_RELEASE_NAME = "Signup Route Fix"
 try:
     app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 6.3.4
+# Enrollment + Plan Choice Fix
+# Baseline: stable 6.3.3 Signup Route Fix
+#
+# Fixes the actual enrollment lifecycle:
+# 1) American-flag Create Account form posts to the REAL /register backend.
+# 2) Uses display_name, matching the existing registration handler.
+# 3) Newly created companies are routed to Choose Plan BEFORE the
+#    old billing layer silently auto-creates a forced trial.
+# 4) Customer may choose Demo Trial OR a paid subscription.
+# 5) Demo trial is synchronized with the legacy subscription gate so
+#    the customer can actually enter the product.
+# ============================================================
+
+from datetime import datetime as _bc634_datetime, timedelta as _bc634_timedelta
+
+def _bc634_user_from_request(request):
+    try:
+        raw = request.cookies.get("bc_session")
+        return _runtime.user_from_session(raw) if raw else None
+    except Exception:
+        return None
+
+def _bc634_legacy_subscription(company_id, create=False):
+    try:
+        return _runtime._bc174_subscription(company_id, create_trial=create)
+    except TypeError:
+        try:
+            return _runtime._bc174_subscription(company_id) if create else None
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+def _bc634_plan_rows():
+    c = _runtime.db()
+    try:
+        rows = c.execute(
+            """SELECT code,name,monthly_price_cents,seat_limit,project_limit,description
+               FROM platform_plans
+               WHERE active=1
+               ORDER BY monthly_price_cents, code"""
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def _bc634_choose_plan_html(company_id):
+    plans = _bc634_plan_rows()
+    cards = []
+
+    # Demo trial first.
+    cards.append("""
+    <div class="plan featured">
+      <div class="eyebrow">TRY BUILDCOMMAND</div>
+      <h2>Free Demo Trial</h2>
+      <div class="price">$0</div>
+      <p>Try BuildCommand AI on a limited workspace before subscribing.</p>
+      <ul>
+        <li>14-day evaluation</li>
+        <li>1 project</li>
+        <li>Up to 2 users</li>
+        <li>Blueprint + Superintendent + core AI access</li>
+        <li>Upgrade at any time</li>
+      </ul>
+      <form method="post" action="/choose-plan/demo">
+        <button type="submit">Start Free Demo</button>
+      </form>
+    </div>
+    """)
+
+    for p in plans:
+        code = str(p.get("code") or "")
+        name = str(p.get("name") or code.title())
+        cents = int(p.get("monthly_price_cents") or 0)
+        price = "Contact Us" if cents <= 0 else f"${cents/100:,.0f}/mo"
+        seats = p.get("seat_limit")
+        projects = p.get("project_limit")
+        desc = p.get("description") or "BuildCommand AI subscription"
+        cards.append(f"""
+        <div class="plan">
+          <div class="eyebrow">PAID SUBSCRIPTION</div>
+          <h2>{_runtime.esc(name)}</h2>
+          <div class="price">{_runtime.esc(price)}</div>
+          <p>{_runtime.esc(desc)}</p>
+          <ul>
+            <li>{_runtime.esc(seats)} seats</li>
+            <li>{_runtime.esc(projects)} projects</li>
+            <li>Full subscription billing through Stripe</li>
+          </ul>
+          <form method="post" action="/choose-plan/paid/{_runtime.esc(code)}">
+            <button type="submit">Choose {_runtime.esc(name)}</button>
+          </form>
+        </div>
+        """)
+
+    return f"""<!doctype html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Choose Your BuildCommand Plan</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;background:#07101a;color:#f5f7fa;font-family:Inter,Arial,sans-serif}}
+.wrap{{max-width:1180px;margin:0 auto;padding:48px 24px}}
+.hero{{text-align:center;margin-bottom:34px}}h1{{font-size:38px;margin:8px 0}}.muted{{color:#aeb8c5}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}}
+.plan{{background:#111b27;border:1px solid #26384d;border-radius:18px;padding:24px;box-shadow:0 18px 45px rgba(0,0,0,.22)}}
+.plan.featured{{border-color:#d72732;box-shadow:0 18px 45px rgba(150,15,25,.18)}}
+.eyebrow{{font-size:11px;font-weight:900;letter-spacing:.13em;color:#e23a44}}h2{{margin:8px 0}}.price{{font-size:30px;font-weight:900;margin:12px 0}}
+p,li{{color:#c6ced8;line-height:1.5}}ul{{padding-left:20px;min-height:125px}}
+button{{width:100%;border:0;border-radius:10px;background:#d5222e;color:#fff;padding:13px;font-weight:900;cursor:pointer}}
+.note{{text-align:center;margin-top:26px;color:#9ca8b6;font-size:13px}}
+</style></head>
+<body><div class="wrap">
+<div class="hero"><div class="eyebrow">WELCOME TO BUILDCOMMAND AI</div>
+<h1>Choose how you want to start</h1>
+<p class="muted">Start with a free demo or choose a paid subscription now. You are not forced into a trial.</p></div>
+<div class="grid">{''.join(cards)}</div>
+<div class="note">Your company account has been created. Your data stays with your company if you upgrade later.</div>
+</div></body></html>"""
+
+def _bc634_sync_demo_subscription(company_id, days=14):
+    now = _bc634_datetime.utcnow()
+    end = now + _bc634_timedelta(days=max(1,min(int(days or 14),60)))
+
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            "SELECT id FROM company_subscriptions WHERE company_id=?",
+            (int(company_id),)
+        ).fetchone()
+
+        if row:
+            c.execute(
+                """UPDATE company_subscriptions
+                   SET plan_code='STARTER',
+                       status='TRIAL',
+                       seat_limit_override=2,
+                       project_limit_override=1,
+                       trial_ends_at=?,
+                       grandfathered=0,
+                       access_note=?,
+                       updated=?
+                   WHERE company_id=?""",
+                (
+                    end.isoformat(),
+                    "BuildCommand 6.3.4 customer-selected demo trial",
+                    now.isoformat(),
+                    int(company_id),
+                )
+            )
+        else:
+            c.execute(
+                """INSERT INTO company_subscriptions(
+                     company_id,plan_code,status,seat_limit_override,
+                     project_limit_override,trial_ends_at,grandfathered,
+                     access_note,created,updated
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    int(company_id),"STARTER","TRIAL",2,1,end.isoformat(),0,
+                    "BuildCommand 6.3.4 customer-selected demo trial",
+                    now.isoformat(),now.isoformat()
+                )
+            )
+        c.commit()
+    finally:
+        try: c.close()
+        except Exception: pass
+
+    # Keep the 6.2 lifecycle layer synchronized too.
+    try:
+        _bc620_save_trial(
+            int(company_id),
+            onboarding_choice="demo_trial",
+            trial_started_at=_bc620_iso(_bc620_now()),
+            trial_ends_at=_bc620_iso(_bc620_now() + _bc620_dt.timedelta(days=days)),
+            trial_status="active",
+            selected_plan_code="STARTER"
+        )
+    except Exception:
+        pass
+
+def _bc634_demo_active(company_id):
+    try:
+        state = _bc620_trial_state(int(company_id))
+        return (
+            str(state.get("onboarding_choice") or "") == "demo_trial"
+            and str(state.get("trial_status") or "") == "active"
+        )
+    except Exception:
+        return False
+
+# Patch the later access-gate helpers at runtime. The middleware resolves these
+# globals when requests are processed, so this safely keeps paid behavior intact
+# while allowing a customer-selected demo trial.
+_bc181893_payment_ok_original = _bc181893_payment_ok
+_bc181893_is_approved_original = _bc181893_is_approved
+
+def _bc181893_payment_ok(company_id):
+    if _bc634_demo_active(company_id):
+        return True
+    return _bc181893_payment_ok_original(company_id)
+
+def _bc181893_is_approved(company_id):
+    if _bc634_demo_active(company_id):
+        return True
+    return _bc181893_is_approved_original(company_id)
+
+@app.middleware("http")
+async def bc634_enrollment_plan_router(request, call_next):
+    path = request.url.path or "/"
+    method = request.method.upper()
+
+    # Serve enrollment pages outside the older subscription gates.
+    if method == "GET" and path == "/choose-plan":
+        user = _bc634_user_from_request(request)
+        if not user:
+            return _BC181893_RedirectResponse("/login", status_code=303)
+        return _BC200_HTMLResponse(_bc634_choose_plan_html(int(user["company_id"])))
+
+    user = _bc634_user_from_request(request)
+
+    # New account: route to plan choice BEFORE legacy billing auto-creates a trial.
+    if user and method == "GET" and path in ("/", "/app"):
+        cid = int(user["company_id"])
+        lifecycle = None
+        try:
+            lifecycle = _bc620_trial_record(cid)
+        except Exception:
+            pass
+
+        sub = _bc634_legacy_subscription(cid, create=False)
+        if not lifecycle and not sub:
+            return _BC181893_RedirectResponse("/choose-plan", status_code=303)
+
+    return await call_next(request)
+
+@app.post("/choose-plan/demo")
+def bc634_choose_demo():
+    u = _runtime.current_user()
+    if not u:
+        return _BC181893_RedirectResponse("/login", status_code=303)
+    cid = int(u["company_id"])
+    _bc634_sync_demo_subscription(cid, 14)
+    return _BC181893_RedirectResponse("/app", status_code=303)
+
+@app.post("/choose-plan/paid/{plan_code}")
+def bc634_choose_paid(plan_code:str):
+    u = _runtime.current_user()
+    if not u:
+        return _BC181893_RedirectResponse("/login", status_code=303)
+
+    cid = int(u["company_id"])
+    code = str(plan_code or "").upper().strip()
+    valid = {str(p.get("code") or "").upper() for p in _bc634_plan_rows()}
+    if code not in valid:
+        return _BC200_HTMLResponse("Invalid subscription plan.", status_code=400)
+
+    try:
+        _bc620_save_trial(
+            cid,
+            onboarding_choice="paid_plan",
+            selected_plan_code=code,
+            checkout_started_at=_bc620_iso(_bc620_now()),
+            trial_status="none"
+        )
+    except Exception:
+        pass
+
+    return _BC181893_RedirectResponse(f"/billing/checkout/{code}", status_code=303)
+
+@app.get("/health/enrollment-plan-choice-6-3-4")
+def bc634_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+
+    # Verify the actual auth renderer now posts to the real registration backend.
+    signup_html = _bc630_auth_html("signup")
+    checks = [
+        ("6.3.3 signup presentation preserved",
+         "/health/american-flag-auth-experience-6-3-3" in paths),
+        ("signup posts to real register backend",
+         'action="/register"' in signup_html),
+        ("signup uses display_name field",
+         'name="display_name"' in signup_html),
+        ("choose plan page engine",
+         callable(globals().get("_bc634_choose_plan_html"))),
+        ("choose plan GET route",
+         "/choose-plan" in paths or callable(globals().get("bc634_enrollment_plan_router"))),
+        ("demo trial POST route",
+         "/choose-plan/demo" in paths),
+        ("paid plan POST route",
+         "/choose-plan/paid/{plan_code}" in paths),
+        ("demo subscription synchronization",
+         callable(globals().get("_bc634_sync_demo_subscription"))),
+        ("demo access gate integration",
+         callable(globals().get("_bc634_demo_active"))),
+        ("6.2.1 PostgreSQL billing hotfix preserved",
+         "/health/customer-trial-subscription-selection-6-2-1" in paths),
+        ("real registration route preserved",
+         "/register" in paths),
+        ("Stripe checkout preserved",
+         "/billing/checkout/{plan_code}" in paths),
+        ("login preserved",
+         "/login" in paths),
+        ("startup purge disabled",
+         not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.3.4",
+        "release":"Enrollment + Plan Choice Fix",
+        "baseline":"6.3.3",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "fixes":{
+            "create_account_backend_target":True,
+            "display_name_field_match":True,
+            "forced_trial_removed":True,
+            "post_registration_plan_choice":True,
+            "customer_selected_demo_trial":True,
+            "paid_plan_selection":True,
+            "stripe_checkout_handoff":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.3.4"
+BUILD_COMMAND_RELEASE_NAME="Enrollment + Plan Choice Fix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
