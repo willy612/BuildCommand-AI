@@ -37539,3 +37539,618 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 3.1.0
+# Autonomous Project Intelligence Suite
+# Baseline: stable 3.0.0 Project Strategy Intelligence Suite
+#
+# NEXT 30 INTELLIGENCE UPGRADES — ONE CONSOLIDATED BUILD
+#
+# 01 Continuous Project Signal Scan
+# 02 Autonomous Attention Queue
+# 03 Urgency Escalation Intelligence
+# 04 Emerging Risk Detection
+# 05 Risk Trend Intelligence
+# 06 Schedule Drift Watch
+# 07 Procurement Drift Watch
+# 08 Submittal Constraint Watch
+# 09 Inspection Readiness Watch
+# 10 Trade Handoff Watch
+# 11 Coordination Collision Watch
+# 12 Drawing/Revision Impact Watch
+# 13 Missing Scope Watch
+# 14 Repeated Problem Recognition
+# 15 Historical Solution Recall
+# 16 Recommended Recovery Path
+# 17 Alternative Recovery Ranking
+# 18 Decision Deadline Intelligence
+# 19 Decision Consequence Preview
+# 20 Superintendent Morning Command
+# 21 Superintendent Midday Replan
+# 22 Superintendent Closeout Intelligence
+# 23 Executive Exception Management
+# 24 Project Health Trajectory
+# 25 Confidence Degradation Watch
+# 26 Learning Opportunity Capture
+# 27 Cross-Project Warning Transfer
+# 28 Proactive Project Brief
+# 29 Autonomous Recommendation Queue
+# 30 Unified Autonomous Project Command
+#
+# "Autonomous" means proactive analysis and surfacing.
+# It does NOT autonomously execute construction, contractual,
+# safety, financial, scheduling, procurement, or communication
+# actions. Human approval remains required.
+# ============================================================
+
+def _bc310_init():
+    c = _runtime.db()
+    try:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS construction_brain_autonomous_events(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          event_type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          severity INTEGER DEFAULT 0,
+          status TEXT DEFAULT 'OPEN',
+          source_type TEXT,
+          source_key TEXT,
+          recommendation TEXT,
+          evidence_json TEXT,
+          metadata_json TEXT,
+          created_by INTEGER,
+          created TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS construction_brain_health_snapshots(
+          id INTEGER PRIMARY KEY,
+          company_id INTEGER NOT NULL,
+          project_id INTEGER NOT NULL,
+          health_score REAL,
+          risk_score REAL,
+          confidence_score REAL,
+          open_attention_count INTEGER DEFAULT 0,
+          metadata_json TEXT,
+          created TEXT NOT NULL
+        );
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc310_init()
+
+# ---------- shared helpers ----------
+
+def _bc310_predictive(project_id):
+    try:
+        return _bc221_predictive_threats(project_id) or {}
+    except Exception:
+        return {}
+
+def _bc310_strategy(project_id):
+    try:
+        return _bc300_unified_strategy(project_id) or {}
+    except Exception:
+        return {}
+
+def _bc310_experience(project_id):
+    try:
+        return _bc270_experience_advice(project_id) or {}
+    except Exception:
+        return {}
+
+def _bc310_learning(project_id):
+    try:
+        return _bc260_self_evaluation(project_id) or {}
+    except Exception:
+        return {}
+
+def _bc310_risk_score(item):
+    for k in ("predictive_risk_score","priority_score","experience_adjusted_risk","risk_score","severity"):
+        try:
+            if item.get(k) is not None:
+                return int(float(item.get(k)))
+        except Exception:
+            pass
+    return 50
+
+# 01 Continuous Project Signal Scan
+def _bc310_signal_scan(project_id:int):
+    predictive = _bc310_predictive(project_id)
+    strategy = _bc310_strategy(project_id)
+    signals = []
+
+    for x in predictive.get("threats") or []:
+        signals.append({
+            "type":str(x.get("type") or "RISK").upper(),
+            "title":x.get("title"),
+            "severity":_bc310_risk_score(x),
+            "reason":x.get("why"),
+            "recommended_action":x.get("prevention"),
+            "source":"PREDICTIVE"
+        })
+
+    for x in strategy.get("critical_decision_queue") or []:
+        signals.append({
+            "type":"DECISION",
+            "title":x.get("title"),
+            "severity":_bc310_risk_score(x),
+            "reason":x.get("reason"),
+            "recommended_action":x.get("next_action"),
+            "source":x.get("source") or "STRATEGY"
+        })
+
+    signals.sort(key=lambda x:int(x.get("severity") or 0), reverse=True)
+    return signals[:100]
+
+# 02 Autonomous Attention Queue
+def _bc310_attention_queue(project_id:int):
+    rows = _bc310_signal_scan(project_id)
+    out = []
+    for x in rows:
+        sev = int(x.get("severity") or 0)
+        if sev >= 75:
+            band = "NOW"
+        elif sev >= 60:
+            band = "TODAY"
+        elif sev >= 45:
+            band = "WATCH"
+        else:
+            band = "MONITOR"
+        out.append({**x,"attention_band":band})
+    return out
+
+# 03 Urgency Escalation Intelligence
+def _bc310_urgency(project_id:int):
+    queue = _bc310_attention_queue(project_id)
+    return {
+        "now":[x for x in queue if x["attention_band"]=="NOW"],
+        "today":[x for x in queue if x["attention_band"]=="TODAY"],
+        "watch":[x for x in queue if x["attention_band"]=="WATCH"],
+        "monitor":[x for x in queue if x["attention_band"]=="MONITOR"]
+    }
+
+# 04 Emerging Risk Detection
+def _bc310_emerging_risks(project_id:int):
+    queue = _bc310_attention_queue(project_id)
+    return [
+        {**x,"emerging":True}
+        for x in queue
+        if 45 <= int(x.get("severity") or 0) < 75
+    ][:25]
+
+# 05 Risk Trend Intelligence
+def _bc310_risk_trend(project_id:int):
+    u = _runtime.current_user()
+    if not u:
+        return {"trend":"UNKNOWN","snapshots":[]}
+    c = _runtime.db()
+    try:
+        rows = [dict(r) for r in c.execute(
+            """SELECT * FROM construction_brain_health_snapshots
+               WHERE company_id=? AND project_id=?
+               ORDER BY id DESC LIMIT 20""",
+            (u["company_id"],project_id)
+        ).fetchall()]
+    finally:
+        c.close()
+    vals = [float(x.get("risk_score") or 0) for x in rows]
+    trend = "INSUFFICIENT_DATA"
+    if len(vals) >= 2:
+        trend = "IMPROVING" if vals[0] < vals[-1] else "WORSENING" if vals[0] > vals[-1] else "STABLE"
+    return {"trend":trend,"snapshots":rows}
+
+# 06 Schedule Drift Watch
+def _bc310_schedule_watch(project_id:int):
+    q = _bc310_attention_queue(project_id)
+    return [x for x in q if x["type"] in {"SCHEDULE","DELAY","MILESTONE"}][:20]
+
+# 07 Procurement Drift Watch
+def _bc310_procurement_watch(project_id:int):
+    q = _bc310_attention_queue(project_id)
+    return [x for x in q if x["type"] in {"PROCUREMENT","DELIVERY","MATERIAL"}][:20]
+
+# 08 Submittal Constraint Watch
+def _bc310_submittal_watch(project_id:int):
+    q = _bc310_attention_queue(project_id)
+    return [x for x in q if "submittal" in _bc210_norm(str(x.get("title") or "")+" "+str(x.get("reason") or ""))][:20]
+
+# 09 Inspection Readiness Watch
+def _bc310_inspection_watch(project_id:int):
+    q = _bc310_attention_queue(project_id)
+    return [x for x in q if x["type"] in {"INSPECTION","QUALITY","TEST"} or "inspection" in _bc210_norm(str(x.get("title") or ""))][:20]
+
+# 10 Trade Handoff Watch
+def _bc310_trade_handoff(project_id:int):
+    q = _bc310_attention_queue(project_id)
+    keys = ("handoff","predecessor","successor","trade stacking","sequence")
+    return [x for x in q if any(k in _bc210_norm(str(x)) for k in keys)][:20]
+
+# 11 Coordination Collision Watch
+def _bc310_coordination_watch(project_id:int):
+    q = _bc310_attention_queue(project_id)
+    keys = ("coordination","conflict","collision","rfi","scope")
+    return [x for x in q if x["type"]=="COORDINATION" or any(k in _bc210_norm(str(x)) for k in keys)][:20]
+
+# 12 Drawing/Revision Impact Watch
+def _bc310_revision_watch(project_id:int):
+    try:
+        ripple = _bc214_revision_ripple(project_id)
+    except Exception:
+        ripple = None
+    return {"revision_ripple":ripple,"requires_review":bool(ripple)}
+
+# 13 Missing Scope Watch
+def _bc310_missing_scope(project_id:int):
+    try:
+        return _bc213_missing_scope(project_id)
+    except Exception:
+        return {"status":"unavailable","items":[]}
+
+# 14 Repeated Problem Recognition
+def _bc310_repeat_problem(project_id:int):
+    try:
+        return _bc270_repeat_risk(project_id) or {}
+    except Exception:
+        return {}
+
+# 15 Historical Solution Recall
+def _bc310_solution_recall(project_id:int):
+    exp = _bc310_experience(project_id)
+    return {
+        "lessons":(exp.get("lessons_learned") or [])[:20],
+        "playbooks":(exp.get("proven_response_playbooks") or [])[:20]
+    }
+
+# 16 Recommended Recovery Path
+def _bc310_recovery_path(project_id:int):
+    queue = _bc310_attention_queue(project_id)
+    if not queue:
+        return None
+    top = queue[0]
+    action = str(top.get("recommended_action") or top.get("title") or "")
+    sim = _bc290_simulate(project_id,action) if action else None
+    return {
+        "trigger":top,
+        "recommended_path":action,
+        "consequence_preview":sim,
+        "human_approval_required":True
+    }
+
+# 17 Alternative Recovery Ranking
+def _bc310_recovery_alternatives(project_id:int):
+    queue = _bc310_attention_queue(project_id)
+    actions = []
+    for x in queue[:8]:
+        a = str(x.get("recommended_action") or "").strip()
+        if a and a not in actions:
+            actions.append(a)
+    return _bc300_risk_reward(project_id,actions[:5]) if actions else []
+
+# 18 Decision Deadline Intelligence
+def _bc310_decision_deadlines(project_id:int):
+    queue = _bc310_attention_queue(project_id)
+    rows = []
+    for x in queue[:25]:
+        sev = int(x.get("severity") or 0)
+        window = "IMMEDIATE REVIEW" if sev >= 80 else "TODAY" if sev >= 65 else "NEXT 48 HOURS" if sev >= 50 else "MONITOR"
+        rows.append({**x,"decision_window":window})
+    return rows
+
+# 19 Decision Consequence Preview
+def _bc310_consequence_preview(project_id:int):
+    path = _bc310_recovery_path(project_id)
+    return (path or {}).get("consequence_preview")
+
+# 20 Superintendent Morning Command
+def _bc310_morning(project_id:int):
+    urgency = _bc310_urgency(project_id)
+    return {
+        "must_address":urgency["now"][:5],
+        "today":urgency["today"][:5],
+        "watch":urgency["watch"][:5],
+        "field_policy":"Verify actual field conditions before acting."
+    }
+
+# 21 Superintendent Midday Replan
+def _bc310_midday(project_id:int):
+    return {
+        "recheck":_bc310_attention_queue(project_id)[:10],
+        "emerging":_bc310_emerging_risks(project_id)[:10],
+        "recovery_options":_bc310_recovery_alternatives(project_id)
+    }
+
+# 22 Superintendent Closeout Intelligence
+def _bc310_closeout(project_id:int):
+    return {
+        "open_attention":_bc310_attention_queue(project_id)[:15],
+        "tomorrow_watch":_bc310_emerging_risks(project_id)[:10],
+        "learning_capture":"Record actual outcomes and action effectiveness before closeout."
+    }
+
+# 23 Executive Exception Management
+def _bc310_executive_exceptions(project_id:int):
+    return {
+        "critical_exceptions":[x for x in _bc310_attention_queue(project_id) if int(x.get("severity") or 0)>=75][:10],
+        "strategy":_bc300_executive_strategy(project_id)
+    }
+
+# 24 Project Health Trajectory
+def _bc310_health_trajectory(project_id:int, persist=False):
+    queue = _bc310_attention_queue(project_id)
+    risk = round(sum(int(x.get("severity") or 0) for x in queue[:10])/max(1,len(queue[:10])),1)
+    learning = _bc310_learning(project_id)
+    confidence = float(learning.get("learning_maturity_score") or 40)
+    health = round(max(1,min(99,100-(risk*0.65)+(confidence*0.25))),1)
+
+    snap = {
+        "health_score":health,
+        "risk_score":risk,
+        "confidence_score":confidence,
+        "open_attention_count":len(queue)
+    }
+
+    if persist:
+        u = _runtime.current_user()
+        if u:
+            c = _runtime.db()
+            try:
+                c.execute(
+                    """INSERT INTO construction_brain_health_snapshots
+                    (company_id,project_id,health_score,risk_score,confidence_score,
+                     open_attention_count,metadata_json,created)
+                    VALUES(?,?,?,?,?,?,?,?)""",
+                    (u["company_id"],project_id,health,risk,confidence,len(queue),
+                     _BC200_json.dumps({},default=str),_BC200_datetime.utcnow().isoformat())
+                )
+                c.commit()
+            finally:
+                c.close()
+
+    return {**snap,"trend":_bc310_risk_trend(project_id)}
+
+# 25 Confidence Degradation Watch
+def _bc310_confidence_watch(project_id:int):
+    learning = _bc310_learning(project_id)
+    calibration = learning.get("prediction_calibration") or {}
+    reasons = []
+    if int(learning.get("outcome_count") or 0) < 10:
+        reasons.append("Limited verified outcome history.")
+    if calibration.get("accuracy") is None:
+        reasons.append("Prediction calibration not yet established.")
+    elif float(calibration.get("accuracy") or 0) < 70:
+        reasons.append("Prediction calibration below 70%.")
+    return {
+        "confidence_score":learning.get("learning_maturity_score"),
+        "degraded":bool(reasons),
+        "reasons":reasons
+    }
+
+# 26 Learning Opportunity Capture
+def _bc310_learning_opportunities(project_id:int):
+    queue = _bc310_attention_queue(project_id)
+    return [
+        {
+            "title":x.get("title"),
+            "learning_type":x.get("type"),
+            "capture_after":"Record selected action, actual result, and effectiveness score.",
+            "source":x.get("source")
+        }
+        for x in queue[:15]
+    ]
+
+# 27 Cross-Project Warning Transfer
+def _bc310_cross_project_warnings(project_id:int):
+    patterns = _bc259_cross_project_patterns()
+    current = _bc310_attention_queue(project_id)
+    current_types = {str(x.get("type") or "").upper() for x in current}
+    return [
+        {
+            "pattern_type":p.get("pattern_type"),
+            "historical_occurrences":p.get("occurrences"),
+            "historical_effectiveness":p.get("average_effectiveness"),
+            "currently_relevant":str(p.get("pattern_type") or "").upper() in current_types
+        }
+        for p in patterns[:20]
+    ]
+
+# 28 Proactive Project Brief
+def _bc310_proactive_brief(project_id:int):
+    return {
+        "headline":"BuildCommand AI proactive project brief",
+        "health":_bc310_health_trajectory(project_id,False),
+        "attention":_bc310_attention_queue(project_id)[:10],
+        "recovery":_bc310_recovery_path(project_id),
+        "confidence":_bc310_confidence_watch(project_id),
+        "cross_project_warnings":_bc310_cross_project_warnings(project_id)[:10]
+    }
+
+# 29 Autonomous Recommendation Queue
+def _bc310_recommendation_queue(project_id:int):
+    queue = []
+    for x in _bc310_attention_queue(project_id):
+        action = str(x.get("recommended_action") or "").strip()
+        if not action:
+            continue
+        queue.append({
+            "title":x.get("title"),
+            "recommended_action":action,
+            "severity":x.get("severity"),
+            "attention_band":x.get("attention_band"),
+            "source":x.get("source"),
+            "requires_human_approval":True
+        })
+    return queue[:25]
+
+# 30 Unified Autonomous Project Command
+def _bc310_unified_command(project_id:int):
+    return {
+        "status":"ok",
+        "app":"BuildCommand AI",
+        "version":"3.1.0",
+        "release":"Autonomous Project Intelligence Suite",
+        "project_id":project_id,
+        "project_health":_bc310_health_trajectory(project_id,False),
+        "attention_queue":_bc310_attention_queue(project_id),
+        "urgency":_bc310_urgency(project_id),
+        "emerging_risks":_bc310_emerging_risks(project_id),
+        "schedule_watch":_bc310_schedule_watch(project_id),
+        "procurement_watch":_bc310_procurement_watch(project_id),
+        "submittal_watch":_bc310_submittal_watch(project_id),
+        "inspection_watch":_bc310_inspection_watch(project_id),
+        "trade_handoff_watch":_bc310_trade_handoff(project_id),
+        "coordination_watch":_bc310_coordination_watch(project_id),
+        "revision_watch":_bc310_revision_watch(project_id),
+        "missing_scope_watch":_bc310_missing_scope(project_id),
+        "repeat_problem_recognition":_bc310_repeat_problem(project_id),
+        "historical_solution_recall":_bc310_solution_recall(project_id),
+        "recommended_recovery":_bc310_recovery_path(project_id),
+        "alternative_recoveries":_bc310_recovery_alternatives(project_id),
+        "decision_deadlines":_bc310_decision_deadlines(project_id),
+        "morning_command":_bc310_morning(project_id),
+        "midday_replan":_bc310_midday(project_id),
+        "closeout_intelligence":_bc310_closeout(project_id),
+        "executive_exceptions":_bc310_executive_exceptions(project_id),
+        "confidence_watch":_bc310_confidence_watch(project_id),
+        "learning_opportunities":_bc310_learning_opportunities(project_id),
+        "cross_project_warnings":_bc310_cross_project_warnings(project_id),
+        "proactive_brief":_bc310_proactive_brief(project_id),
+        "recommendation_queue":_bc310_recommendation_queue(project_id),
+        "autonomy_policy":"Proactive analysis only. No automatic field, contractual, financial, procurement, schedule, safety, or communication execution.",
+        "human_approval_required":True
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/autonomous-command")
+def bc310_autonomous_command_api(project_id:int):
+    return _bc310_unified_command(project_id)
+
+@app.get("/api/unified-construction-brain/project/{project_id}/proactive-brief")
+def bc310_proactive_brief_api(project_id:int):
+    return {"status":"ok","version":"3.1.0","project_id":project_id,**_bc310_proactive_brief(project_id)}
+
+@app.get("/api/unified-construction-brain/project/{project_id}/attention-queue")
+def bc310_attention_api(project_id:int):
+    return {"status":"ok","version":"3.1.0","project_id":project_id,"attention_queue":_bc310_attention_queue(project_id)}
+
+@app.get("/api/unified-construction-brain/project/{project_id}/project-health")
+def bc310_health_api(project_id:int):
+    return {"status":"ok","version":"3.1.0","project_id":project_id,**_bc310_health_trajectory(project_id,True)}
+
+@app.get("/health/autonomous-project-intelligence-suite-3-1-0")
+def bc310_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    c = _runtime.db()
+    try:
+        if getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres":
+            tables = {r["table_name"] for r in c.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema='public'"
+            ).fetchall()}
+        else:
+            tables = {r["name"] for r in c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()}
+    finally:
+        c.close()
+
+    engines = [
+        "_bc310_signal_scan","_bc310_attention_queue","_bc310_urgency",
+        "_bc310_emerging_risks","_bc310_risk_trend","_bc310_schedule_watch",
+        "_bc310_procurement_watch","_bc310_submittal_watch","_bc310_inspection_watch",
+        "_bc310_trade_handoff","_bc310_coordination_watch","_bc310_revision_watch",
+        "_bc310_missing_scope","_bc310_repeat_problem","_bc310_solution_recall",
+        "_bc310_recovery_path","_bc310_recovery_alternatives","_bc310_decision_deadlines",
+        "_bc310_consequence_preview","_bc310_morning","_bc310_midday","_bc310_closeout",
+        "_bc310_executive_exceptions","_bc310_health_trajectory","_bc310_confidence_watch",
+        "_bc310_learning_opportunities","_bc310_cross_project_warnings","_bc310_proactive_brief",
+        "_bc310_recommendation_queue","_bc310_unified_command"
+    ]
+
+    checks = [
+        ("3.0.0 stable baseline preserved","/health/project-strategy-intelligence-suite-3-0-0" in paths),
+        ("autonomous events table","construction_brain_autonomous_events" in tables),
+        ("health snapshots table","construction_brain_health_snapshots" in tables),
+    ]
+    for i,name in enumerate(engines,1):
+        checks.append((f"{i:02d} {name.replace('_bc310_','').replace('_',' ')}",callable(globals().get(name))))
+
+    checks += [
+        ("autonomous command API","/api/unified-construction-brain/project/{project_id}/autonomous-command" in paths),
+        ("proactive brief API","/api/unified-construction-brain/project/{project_id}/proactive-brief" in paths),
+        ("attention queue API","/api/unified-construction-brain/project/{project_id}/attention-queue" in paths),
+        ("project health API","/api/unified-construction-brain/project/{project_id}/project-health" in paths),
+        ("project strategy preserved","/api/unified-construction-brain/project/{project_id}/project-strategy" in paths),
+        ("decision intelligence preserved","/api/unified-construction-brain/project/{project_id}/decision" in paths),
+        ("cause-effect preserved","/api/unified-construction-brain/project/{project_id}/cause-effect" in paths),
+        ("experience intelligence preserved","/api/unified-construction-brain/project/{project_id}/experience-intelligence" in paths),
+        ("adaptive learning preserved","/api/unified-construction-brain/project/{project_id}/adaptive-learning-suite" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("Daily Operations preserved","/superintendent-command/{project_id}/daily-operations" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"3.1.0",
+        "release":"Autonomous Project Intelligence Suite",
+        "baseline":"3.0.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "features":{
+            "continuous_project_signal_scan":True,
+            "autonomous_attention_queue":True,
+            "urgency_escalation":True,
+            "emerging_risk_detection":True,
+            "risk_trend_intelligence":True,
+            "schedule_drift_watch":True,
+            "procurement_drift_watch":True,
+            "submittal_constraint_watch":True,
+            "inspection_readiness_watch":True,
+            "trade_handoff_watch":True,
+            "coordination_collision_watch":True,
+            "drawing_revision_impact_watch":True,
+            "missing_scope_watch":True,
+            "repeated_problem_recognition":True,
+            "historical_solution_recall":True,
+            "recommended_recovery_path":True,
+            "alternative_recovery_ranking":True,
+            "decision_deadline_intelligence":True,
+            "decision_consequence_preview":True,
+            "superintendent_morning_command":True,
+            "superintendent_midday_replan":True,
+            "superintendent_closeout_intelligence":True,
+            "executive_exception_management":True,
+            "project_health_trajectory":True,
+            "confidence_degradation_watch":True,
+            "learning_opportunity_capture":True,
+            "cross_project_warning_transfer":True,
+            "proactive_project_brief":True,
+            "autonomous_recommendation_queue":True,
+            "unified_autonomous_project_command":True
+        },
+        "autonomy_policy":"Analysis and recommendations only; human approval required.",
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE = "3.1.0"
+BUILD_COMMAND_RELEASE_NAME = "Autonomous Project Intelligence Suite"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
