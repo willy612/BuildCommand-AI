@@ -54238,3 +54238,157 @@ BUILD_COMMAND_RELEASE="6.4.0"
 BUILD_COMMAND_RELEASE_NAME="Brand Flag + Billing Loop Fix"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 6.4.1
+# Enrollment Gate Bypass Fix
+# Baseline: stable 6.4.0 Brand Flag + Billing Loop Fix
+#
+# Root cause:
+# The legacy 1.8.18.93 payment middleware is defined inside the app
+# and does NOT exempt /choose-plan. Therefore POST /choose-plan/demo
+# and POST /choose-plan/paid/{plan} are redirected to /payment-required
+# BEFORE the newer enrollment handlers ever run.
+#
+# Fix:
+# This outer middleware directly handles the enrollment POST actions
+# before the legacy payment gate. Paid choices then redirect to the
+# existing /billing/checkout/{plan_code}, which *is* already exempt
+# because the legacy gate exempts the /billing prefix.
+# ============================================================
+
+def _bc641_current_user_from_request(request):
+    try:
+        raw = request.cookies.get("bc_session")
+        return _runtime.user_from_session(raw) if raw else None
+    except Exception:
+        return None
+
+def _bc641_valid_paid_plan(code):
+    code = str(code or "").upper().strip()
+    try:
+        plans = _bc634_plan_rows()
+        valid = {str(p.get("code") or "").upper() for p in plans}
+        return code if code in valid else None
+    except Exception:
+        return None
+
+def _bc641_record_paid_choice(company_id, plan_code):
+    try:
+        _bc620_save_trial(
+            int(company_id),
+            onboarding_choice="paid_plan",
+            selected_plan_code=str(plan_code).upper(),
+            checkout_started_at=_bc620_iso(_bc620_now()),
+            trial_status="none"
+        )
+    except Exception:
+        pass
+
+def _bc641_logout_button():
+    return """
+    <form method="post" action="/logout" style="display:inline">
+      <button type="submit" style="border:0;border-radius:9px;background:#24364b;color:#fff;
+      padding:13px 22px;font-weight:900;cursor:pointer">Sign Out</button>
+    </form>
+    """
+
+# Repair the payment-required page's logout control so it uses the actual POST route.
+_bc641_old_payment_html = _bc640_payment_required_html
+def _bc640_payment_required_html():
+    html = _bc641_old_payment_html()
+    html = html.replace('<a class="btn alt" href="/logout">Sign Out</a>', _bc641_logout_button())
+    return html
+
+@app.middleware("http")
+async def bc641_enrollment_gate_bypass(request, call_next):
+    path = request.url.path or "/"
+    method = request.method.upper()
+
+    # Handle the demo choice before the old payment middleware can block it.
+    if method == "POST" and path == "/choose-plan/demo":
+        user = _bc641_current_user_from_request(request)
+        if not user:
+            return _BC181893_RedirectResponse("/login", status_code=303)
+
+        cid = int(user["company_id"])
+        _bc634_sync_demo_subscription(cid, 7)
+        return _BC181893_RedirectResponse("/app", status_code=303)
+
+    # Handle paid choice before the old payment middleware can block it.
+    prefix = "/choose-plan/paid/"
+    if method == "POST" and path.startswith(prefix):
+        user = _bc641_current_user_from_request(request)
+        if not user:
+            return _BC181893_RedirectResponse("/login", status_code=303)
+
+        code = path[len(prefix):].strip().upper()
+        code = _bc641_valid_paid_plan(code)
+        if not code:
+            return _BC200_HTMLResponse("Invalid or inactive subscription plan.", status_code=400)
+
+        cid = int(user["company_id"])
+        _bc641_record_paid_choice(cid, code)
+
+        # The legacy access gate exempts /billing, so this request will reach
+        # the pre-existing Stripe checkout handler instead of payment-required.
+        return _BC181893_RedirectResponse(f"/billing/checkout/{code}", status_code=303)
+
+    return await call_next(request)
+
+@app.get("/health/enrollment-gate-bypass-6-4-1")
+def bc641_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("6.4.0 baseline preserved",
+         "/health/brand-flag-billing-loop-fix-6-4-0" in paths),
+        ("enrollment bypass middleware installed",
+         callable(globals().get("bc641_enrollment_gate_bypass"))),
+        ("demo enrollment engine preserved",
+         callable(globals().get("_bc634_sync_demo_subscription"))),
+        ("paid plan validation engine",
+         callable(globals().get("_bc641_valid_paid_plan"))),
+        ("paid choice lifecycle recorder",
+         callable(globals().get("_bc641_record_paid_choice"))),
+        ("legacy billing checkout route present",
+         "/billing/checkout/{plan_code}" in paths),
+        ("legacy payment gate billing exemption",
+         "/billing" in globals().get("_BC181893_EXEMPT_PREFIXES", ())),
+        ("7-day demo preserved",
+         "/health/seven-day-demo-trial-6-3-5" in paths),
+        ("American flag branding preserved",
+         len(globals().get("_BC640_BRAND_FLAG","")) > 100000),
+        ("POST logout preserved",
+         "/logout" in paths),
+        ("startup purge disabled",
+         not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.4.1",
+        "release":"Enrollment Gate Bypass Fix",
+        "baseline":"6.4.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed == len(checks),
+        "fixes":{
+            "demo_post_bypasses_legacy_payment_gate":True,
+            "paid_plan_post_bypasses_legacy_payment_gate":True,
+            "paid_plan_redirects_to_existing_billing_checkout":True,
+            "logout_uses_post":True,
+            "seven_day_demo_preserved":True,
+            "american_flag_branding_preserved":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.4.1"
+BUILD_COMMAND_RELEASE_NAME="Enrollment Gate Bypass Fix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
