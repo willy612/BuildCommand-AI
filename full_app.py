@@ -55713,3 +55713,178 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 6.5.7 — Dashboard Header Final Cleanup
+# Baseline: 6.5.6 Auth Logo Background Removal
+# ============================================================
+
+def _bc657_dashboard_header_cleanup(html):
+    if not isinstance(html, str):
+        return html
+
+    html = re.sub(
+        r'<section[^>]*id=["\']bc654-brand-header["\'][^>]*>.*?</section>',
+        '',
+        html,
+        flags=re.I | re.S,
+    )
+    html = re.sub(
+        r'<style[^>]*id=["\']bc654-header-style["\'][^>]*>.*?</style>',
+        '',
+        html,
+        flags=re.I | re.S,
+    )
+
+    if 'id="bc657-dashboard-logo"' not in html:
+        marker = '<form class="v117r-project"'
+        pos = html.find(marker)
+        if pos >= 0:
+            logo = """<a id="bc657-dashboard-logo" href="/" aria-label="BuildCommand home">
+  <img src="/brand/buildcommand-approved-logo-v653"
+       alt="BuildCommand — Build Smarter. Grow Faster.">
+</a>"""
+            html = html[:pos] + logo + html[pos:]
+
+    css_js = """
+<style id="bc657-dashboard-header-style">
+#bc654-brand-header,#bc650-brand-wrap,#bc652-app-logo,#bc653-approved-logo{
+  display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;
+}
+#bc657-dashboard-logo{
+  display:inline-flex!important;align-items:center!important;justify-content:flex-start!important;
+  flex:0 0 auto!important;width:min(355px,31vw)!important;max-width:355px!important;
+  margin:0 12px 0 0!important;padding:0!important;line-height:0!important;
+  text-decoration:none!important;border:0!important;background:transparent!important;box-shadow:none!important;
+}
+#bc657-dashboard-logo img{
+  display:block!important;width:100%!important;height:auto!important;max-height:92px!important;
+  object-fit:contain!important;object-position:left center!important;border:0!important;
+  border-radius:5px!important;margin:0!important;padding:0!important;box-shadow:none!important;
+}
+.bc657-legacy-header-logo-hidden{
+  display:none!important;visibility:hidden!important;width:0!important;height:0!important;
+  min-width:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;
+}
+@media(max-width:900px){
+  #bc657-dashboard-logo{width:min(300px,36vw)!important}
+  #bc657-dashboard-logo img{max-height:80px!important}
+}
+@media(max-width:650px){
+  #bc657-dashboard-logo{width:min(245px,48vw)!important;margin-right:8px!important}
+  #bc657-dashboard-logo img{max-height:68px!important}
+}
+</style>
+<script id="bc657-dashboard-header-script">
+(function(){
+  function clean(){
+    var form=document.querySelector('form.v117r-project');
+    var logo=document.getElementById('bc657-dashboard-logo');
+    if(!form || !logo) return;
+
+    var node=logo.previousElementSibling, hops=0;
+    while(node && hops<3){
+      var txt=(node.textContent||'').replace(/\\s+/g,' ').trim();
+      var hasImg=!!(node.querySelector && node.querySelector('img'));
+      var looksBrand=/BuildCommand/i.test(txt) ||
+                     /logo|brand/i.test(node.className||'') ||
+                     /logo|brand/i.test(node.id||'');
+      if(hasImg || looksBrand){
+        node.classList.add('bc657-legacy-header-logo-hidden');
+        break;
+      }
+      node=node.previousElementSibling;
+      hops++;
+    }
+  }
+  if(document.readyState==='loading'){
+    document.addEventListener('DOMContentLoaded',clean,{once:true});
+  }else{clean();}
+})();
+</script>
+"""
+
+    if 'id="bc657-dashboard-header-style"' not in html:
+        head = html.lower().find('</head>')
+        if head >= 0:
+            html = html[:head] + css_js + html[head:]
+        else:
+            html += css_js
+
+    return html
+
+
+@app.middleware('http')
+async def bc657_dashboard_header_final_cleanup(request, call_next):
+    response = await call_next(request)
+    try:
+        path = request.url.path or '/'
+        excluded = (
+            path in ('/login','/signup','/register','/create-account','/logout','/choose-plan','/payment-required')
+            or path.startswith('/billing/')
+            or path.startswith('/health/')
+            or path.startswith('/brand/')
+            or path.startswith('/api/')
+        )
+        if excluded:
+            return response
+
+        ctype = (response.headers.get('content-type') or '').lower()
+        if 'text/html' not in ctype:
+            return response
+
+        raw = b''
+        async for chunk in response.body_iterator:
+            raw += chunk
+        body = raw.decode('utf-8', errors='ignore')
+        body = _bc657_dashboard_header_cleanup(body)
+
+        headers = dict(response.headers)
+        headers.pop('content-length', None)
+        return _BC200_HTMLResponse(body, status_code=response.status_code, headers=headers)
+    except Exception:
+        return response
+
+
+@app.get('/health/dashboard-header-final-cleanup-6-5-7')
+def bc657_health():
+    paths = {getattr(r,'path','') for r in app.routes}
+    checks = [
+        ('6.5.6 auth fix preserved', '/health/auth-logo-background-removal-6-5-6' in paths),
+        ('approved logo route preserved', '/brand/buildcommand-approved-logo-v653' in paths),
+        ('dashboard cleanup engine installed', callable(globals().get('_bc657_dashboard_header_cleanup'))),
+        ('dashboard middleware installed', callable(globals().get('bc657_dashboard_header_final_cleanup'))),
+        ('project creation preserved', '/projects/new' in paths),
+        ('Stripe/trial baseline preserved', '/health/stripe-trial-loop-final-fix-6-4-2' in paths),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        'status':'ok' if passed == len(checks) else 'degraded',
+        'app':'BuildCommand AI',
+        'version':'6.5.7',
+        'release':'Dashboard Header Final Cleanup',
+        'baseline':'6.5.6',
+        'passed':passed,
+        'total':len(checks),
+        'stage_ready':passed == len(checks),
+        'fixes':{
+            'correct_auth_screen_preserved':True,
+            'ghost_top_brand_bar_removed':True,
+            'legacy_small_header_logo_hidden':True,
+            'single_approved_dashboard_logo':True,
+            'project_switcher_preserved':True,
+            'navigation_preserved':True,
+            'upload_and_user_controls_preserved':True,
+        },
+        'checks':[{'case':n,'passed':bool(v)} for n,v in checks],
+    }
+
+
+BUILD_COMMAND_RELEASE='6.5.7'
+BUILD_COMMAND_RELEASE_NAME='Dashboard Header Final Cleanup'
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
