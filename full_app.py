@@ -41987,3 +41987,354 @@ BUILD_COMMAND_RELEASE="5.0.0"
 BUILD_COMMAND_RELEASE_NAME="Construction Intelligence Mesh 100"
 try: app.version=BUILD_COMMAND_RELEASE
 except Exception: pass
+
+
+# ============================================================
+# BuildCommand AI 5.1.0
+# Construction Brain Council
+# Baseline: stable 5.0.0 Construction Intelligence Mesh 100
+#
+# Goal:
+# Make the brains deliberate together instead of acting as isolated
+# specialists. The Council collects recommendations, weighs evidence,
+# records dissent, detects conflicts, and produces one consolidated
+# construction decision for human review.
+# ============================================================
+
+_BC510_COUNCIL_MEMBERS = {
+    "BLUEPRINT": "architectural_plan",
+    "TRADE_SCOPE": "scope_boundary",
+    "SEQUENCE": "structural_sequence",
+    "FIELD_READINESS": "workface_readiness",
+    "SCHEDULE": "critical_path_threat",
+    "PROCUREMENT": "procurement_recovery",
+    "SUBMITTAL": "submittal_approval_risk",
+    "INSPECTION": "inspection_readiness",
+    "COORDINATION": "trade_handoff_readiness",
+    "QUALITY": "quality_hold_point",
+    "SAFETY": "safety_pre_task_risk",
+    "COST": "cost_exposure",
+    "RISK": "rework_risk",
+    "SUPERINTENDENT": "superintendent_priority",
+    "PROJECT_MANAGER": "project_manager_priority",
+    "EXECUTIVE": "executive_exception",
+    "STRATEGY": "weekly_strategy",
+    "LEARNING": "cross_project_learning",
+    "CONFIDENCE": "prediction_calibration",
+    "MASTER": "master_intelligence_mesh",
+}
+
+_BC510_MEMBER_WEIGHT = {
+    "BLUEPRINT":1.00,
+    "TRADE_SCOPE":1.00,
+    "SEQUENCE":0.95,
+    "FIELD_READINESS":1.00,
+    "SCHEDULE":1.00,
+    "PROCUREMENT":0.95,
+    "SUBMITTAL":0.85,
+    "INSPECTION":0.95,
+    "COORDINATION":0.95,
+    "QUALITY":0.90,
+    "SAFETY":1.00,
+    "COST":0.90,
+    "RISK":0.95,
+    "SUPERINTENDENT":1.00,
+    "PROJECT_MANAGER":0.95,
+    "EXECUTIVE":0.80,
+    "STRATEGY":0.95,
+    "LEARNING":0.80,
+    "CONFIDENCE":0.85,
+    "MASTER":1.00,
+}
+
+def _bc510_member_output(project_id:int, council_role:str):
+    key = _BC510_COUNCIL_MEMBERS.get(council_role)
+    fn = _BC500_BRAIN_MAP.get(key)
+    if not fn:
+        return None
+    try:
+        result = fn(project_id)
+    except Exception:
+        return None
+
+    signals = result.get("priority_signals") or []
+    evidence = result.get("governing_evidence") or []
+    rq = result.get("reasoning_quality") or {}
+    readiness = result.get("field_readiness") or {}
+
+    top = signals[0] if signals else {}
+    severity = 50
+    for k in ("severity","priority_score","predictive_risk_score","risk_score"):
+        try:
+            if top.get(k) is not None:
+                severity = int(float(top.get(k)))
+                break
+        except Exception:
+            pass
+
+    confidence = None
+    for k in ("reasoning_quality_score","confidence_score","learning_maturity_score"):
+        try:
+            if rq.get(k) is not None:
+                confidence = float(rq.get(k))
+                break
+        except Exception:
+            pass
+    if confidence is None:
+        confidence = 60.0
+
+    action = (
+        top.get("recommended_action")
+        or top.get("next_action")
+        or top.get("prevention")
+        or top.get("title")
+        or f"Review {council_role.lower()} conditions."
+    )
+
+    return {
+        "role":council_role,
+        "brain_key":key,
+        "weight":_BC510_MEMBER_WEIGHT.get(council_role,0.75),
+        "severity":severity,
+        "confidence":round(max(5,min(99,confidence)),1),
+        "recommended_action":str(action),
+        "top_signal":top,
+        "evidence":evidence[:8],
+        "field_ready":bool(readiness.get("ready")) if isinstance(readiness,dict) else None,
+    }
+
+def _bc510_action_similarity(a,b):
+    aw = {w for w in _bc210_norm(a).split() if len(w)>=5}
+    bw = {w for w in _bc210_norm(b).split() if len(w)>=5}
+    if not aw or not bw:
+        return 0.0
+    return len(aw & bw) / max(1,len(aw | bw))
+
+def _bc510_cluster_recommendations(members):
+    clusters = []
+    for m in members:
+        action = str(m.get("recommended_action") or "").strip()
+        if not action:
+            continue
+        placed = False
+        for c in clusters:
+            if _bc510_action_similarity(action,c["representative"]) >= 0.22:
+                c["members"].append(m)
+                placed = True
+                break
+        if not placed:
+            clusters.append({"representative":action,"members":[m]})
+
+    for c in clusters:
+        weighted_support = 0.0
+        total_weight = 0.0
+        sev = []
+        conf = []
+        for m in c["members"]:
+            w = float(m.get("weight") or 0.75)
+            total_weight += w
+            weighted_support += w * (float(m.get("confidence") or 50)/100.0)
+            sev.append(float(m.get("severity") or 50))
+            conf.append(float(m.get("confidence") or 50))
+        c["support_score"] = round(weighted_support*100/max(0.01,total_weight),1)
+        c["average_severity"] = round(sum(sev)/len(sev),1) if sev else 0
+        c["average_confidence"] = round(sum(conf)/len(conf),1) if conf else 0
+        c["member_roles"] = [m["role"] for m in c["members"]]
+
+    clusters.sort(
+        key=lambda c:(c["support_score"],c["average_severity"],len(c["members"])),
+        reverse=True
+    )
+    return clusters
+
+def _bc510_conflict_matrix(members):
+    conflicts = []
+    for i,a in enumerate(members):
+        for b in members[i+1:]:
+            sim = _bc510_action_similarity(a.get("recommended_action"),b.get("recommended_action"))
+            sev = max(int(a.get("severity") or 0),int(b.get("severity") or 0))
+            if sim < 0.08 and sev >= 65:
+                conflicts.append({
+                    "role_a":a.get("role"),
+                    "role_b":b.get("role"),
+                    "action_a":a.get("recommended_action"),
+                    "action_b":b.get("recommended_action"),
+                    "similarity":round(sim,3),
+                    "severity":sev,
+                    "review_required":True
+                })
+    return conflicts[:40]
+
+def _bc510_evidence_rank(members):
+    rows = []
+    seen = set()
+    for m in members:
+        for e in m.get("evidence") or []:
+            blob = _bc210_norm(str(e))
+            if not blob or blob in seen:
+                continue
+            seen.add(blob)
+            source = str(e.get("source") or e.get("source_type") or "HISTORICAL").upper() if isinstance(e,dict) else "HISTORICAL"
+            weight = _bc320_evidence_weight(source)
+            rows.append({
+                "member_role":m.get("role"),
+                "source_type":source,
+                "governing_weight":weight,
+                "evidence":e
+            })
+    rows.sort(key=lambda x:float(x.get("governing_weight") or 0),reverse=True)
+    return rows[:50]
+
+def _bc510_council_deliberation(project_id:int):
+    members = []
+    for role in _BC510_COUNCIL_MEMBERS:
+        m = _bc510_member_output(project_id,role)
+        if m:
+            members.append(m)
+
+    clusters = _bc510_cluster_recommendations(members)
+    conflicts = _bc510_conflict_matrix(members)
+    evidence = _bc510_evidence_rank(members)
+    readiness = _bc340_safe(_bc320_field_readiness,project_id,default={}) or {}
+    reasoning = _bc340_safe(_bc320_reasoning_quality,project_id,default={}) or {}
+
+    winning = clusters[0] if clusters else None
+    dissent = []
+    if winning:
+        winning_roles = set(winning.get("member_roles") or [])
+        dissent = [m for m in members if m.get("role") not in winning_roles]
+
+    consensus_strength = 0.0
+    if winning and members:
+        consensus_strength = round(
+            (len(winning["members"])/len(members))*60
+            + (float(winning.get("support_score") or 0))*0.40,
+            1
+        )
+        consensus_strength = max(0,min(99,consensus_strength))
+
+    conflict_penalty = min(30,len(conflicts)*3)
+    final_conf = consensus_strength - conflict_penalty
+    if not readiness.get("ready"):
+        final_conf -= 10
+    final_conf = round(max(5,min(99,final_conf)),1)
+
+    if final_conf >= 80 and not conflicts and readiness.get("ready"):
+        classification = "STRONG_COUNCIL_CONSENSUS"
+    elif final_conf >= 60:
+        classification = "CONDITIONAL_CONSENSUS"
+    else:
+        classification = "HUMAN_REVIEW_REQUIRED"
+
+    return {
+        "status":"ok",
+        "app":"BuildCommand AI",
+        "version":"5.1.0",
+        "release":"Construction Brain Council",
+        "project_id":project_id,
+        "member_count":len(members),
+        "members":members,
+        "recommendation_clusters":clusters[:10],
+        "winning_recommendation":winning,
+        "dissenting_members":dissent[:10],
+        "conflicts":conflicts,
+        "ranked_evidence":evidence,
+        "field_readiness":readiness,
+        "reasoning_quality":reasoning,
+        "consensus_strength":consensus_strength,
+        "final_council_confidence":final_conf,
+        "classification":classification,
+        "human_approval_required":True,
+        "automatic_field_execution":False,
+        "council_policy":[
+            "No single specialist brain controls the final answer.",
+            "Conflicting recommendations are preserved instead of hidden.",
+            "Governing evidence receives more weight than weak historical signals.",
+            "Low field readiness lowers final confidence.",
+            "Human project leadership remains the final decision-maker."
+        ]
+    }
+
+@app.get("/api/unified-construction-brain/project/{project_id}/brain-council")
+def bc510_council_api(project_id:int):
+    return _bc510_council_deliberation(project_id)
+
+@app.get("/api/unified-construction-brain/project/{project_id}/brain-council/summary")
+def bc510_council_summary_api(project_id:int):
+    d = _bc510_council_deliberation(project_id)
+    return {
+        "status":"ok",
+        "version":"5.1.0",
+        "project_id":project_id,
+        "classification":d.get("classification"),
+        "consensus_strength":d.get("consensus_strength"),
+        "final_council_confidence":d.get("final_council_confidence"),
+        "winning_recommendation":d.get("winning_recommendation"),
+        "conflict_count":len(d.get("conflicts") or []),
+        "member_count":d.get("member_count"),
+        "human_approval_required":True
+    }
+
+@app.get("/health/construction-brain-council-5-1-0")
+def bc510_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("5.0.0 stable baseline preserved","/health/construction-intelligence-mesh-5-0-0" in paths),
+        ("council member registry",len(_BC510_COUNCIL_MEMBERS)==20),
+        ("member weight registry",len(_BC510_MEMBER_WEIGHT)==20),
+        ("member output engine",callable(globals().get("_bc510_member_output"))),
+        ("recommendation similarity engine",callable(globals().get("_bc510_action_similarity"))),
+        ("recommendation cluster engine",callable(globals().get("_bc510_cluster_recommendations"))),
+        ("conflict matrix engine",callable(globals().get("_bc510_conflict_matrix"))),
+        ("evidence ranking engine",callable(globals().get("_bc510_evidence_rank"))),
+        ("council deliberation engine",callable(globals().get("_bc510_council_deliberation"))),
+        ("brain council API","/api/unified-construction-brain/project/{project_id}/brain-council" in paths),
+        ("brain council summary API","/api/unified-construction-brain/project/{project_id}/brain-council/summary" in paths),
+        ("100 brain mesh preserved","/api/unified-construction-brain/project/{project_id}/intelligence-mesh-100" in paths),
+        ("4.0 advanced suite preserved","/api/unified-construction-brain/project/{project_id}/advanced-50-brain-suite" in paths),
+        ("3.4 multi brain suite preserved","/api/unified-construction-brain/project/{project_id}/multi-brain-suite" in paths),
+        ("deep construction preserved","/api/unified-construction-brain/project/{project_id}/deep-construction-intelligence" in paths),
+        ("autonomous command preserved","/api/unified-construction-brain/project/{project_id}/autonomous-command" in paths),
+        ("Blueprint Brain preserved","/blueprint-brain" in paths),
+        ("Unified Brain preserved","/brain" in paths),
+        ("Superintendent Command preserved","/superintendent-command/{project_id}" in paths),
+        ("documents preserved","/documents" in paths),
+        ("submittals preserved","/submittals" in paths),
+        ("issues preserved","/issues" in paths),
+        ("procurement preserved","/procurement" in paths),
+        ("schedule preserved","/schedule" in paths),
+        ("lookahead preserved","/lookahead-intelligence" in paths),
+        ("startup purge disabled",not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"5.1.0",
+        "release":"Construction Brain Council",
+        "baseline":"5.0.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed==len(checks),
+        "features":{
+            "multi_brain_deliberation":True,
+            "weighted_specialist_votes":True,
+            "recommendation_clustering":True,
+            "dissent_preservation":True,
+            "conflict_detection":True,
+            "governing_evidence_ranking":True,
+            "consensus_strength":True,
+            "field_readiness_penalty":True,
+            "final_council_confidence":True,
+            "human_approval_required":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="5.1.0"
+BUILD_COMMAND_RELEASE_NAME="Construction Brain Council"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
