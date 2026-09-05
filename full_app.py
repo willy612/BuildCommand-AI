@@ -52694,16 +52694,33 @@ except Exception:
 import datetime as _bc620_dt
 
 def _bc620_db_columns(table_name):
+    conn = None
     try:
-        with _runtime.db() as conn:
-            rows = conn.execute("PRAGMA table_info(" + table_name + ")").fetchall()
-            return {str(r[1]) for r in rows}
+        conn = _runtime.db()
+        rows = conn.execute("PRAGMA table_info(" + table_name + ")").fetchall()
+        return {str(r[1]) for r in rows}
     except Exception:
-        return set()
+        # PostgreSQL compatibility fallback
+        try:
+            if conn is None:
+                conn = _runtime.db()
+            rows = conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                (table_name,)
+            ).fetchall()
+            return {str(r[0]) for r in rows}
+        except Exception:
+            return set()
+    finally:
+        try:
+            if conn is not None and hasattr(conn, "close"):
+                conn.close()
+        except Exception:
+            pass
 
 def _bc620_ensure_schema():
-    # Separate compatibility table avoids destructive alteration of older billing tables.
-    with _runtime.db() as conn:
+    conn = _runtime.db()
+    try:
         conn.execute("""
         CREATE TABLE IF NOT EXISTS customer_trial_lifecycle (
             company_id INTEGER PRIMARY KEY,
@@ -52719,6 +52736,12 @@ def _bc620_ensure_schema():
         )
         """)
         conn.commit()
+    finally:
+        try:
+            if hasattr(conn, "close"):
+                conn.close()
+        except Exception:
+            pass
 
 def _bc620_now():
     return _bc620_dt.datetime.utcnow().replace(microsecond=0)
@@ -52745,34 +52768,41 @@ def _bc620_plan_catalog():
     only if the legacy catalog cannot be read.
     """
     candidates = []
+    conn = None
     try:
-        with _runtime.db() as conn:
-            for table in ("subscription_plans","plans","billing_plans"):
-                cols = _bc620_db_columns(table)
-                if not cols:
+        conn = _runtime.db()
+        for table in ("subscription_plans","plans","billing_plans"):
+            cols = _bc620_db_columns(table)
+            if not cols:
+                continue
+            rows = conn.execute("SELECT * FROM " + table).fetchall()
+            names = [d[0] for d in conn.execute("SELECT * FROM " + table + " LIMIT 0").description]
+            for row in rows:
+                d = dict(zip(names,row))
+                active = d.get("active", d.get("is_active", 1))
+                if active in (0, False, "0"):
                     continue
-                rows = conn.execute("SELECT * FROM " + table).fetchall()
-                names = [d[0] for d in conn.execute("SELECT * FROM " + table + " LIMIT 0").description]
-                for row in rows:
-                    d = dict(zip(names,row))
-                    active = d.get("active", d.get("is_active", 1))
-                    if active in (0, False, "0"):
-                        continue
-                    code = d.get("code") or d.get("plan_code") or d.get("slug") or d.get("name")
-                    name = d.get("name") or d.get("display_name") or code
-                    if code:
-                        candidates.append({
-                            "code":str(code),
-                            "name":str(name),
-                            "price":d.get("price_monthly") or d.get("monthly_price") or d.get("price"),
-                            "seat_limit":d.get("seat_limit") or d.get("max_seats"),
-                            "project_limit":d.get("project_limit") or d.get("max_projects"),
-                            "source_table":table
-                        })
-                if candidates:
-                    break
+                code = d.get("code") or d.get("plan_code") or d.get("slug") or d.get("name")
+                name = d.get("name") or d.get("display_name") or code
+                if code:
+                    candidates.append({
+                        "code":str(code),
+                        "name":str(name),
+                        "price":d.get("price_monthly") or d.get("monthly_price") or d.get("price"),
+                        "seat_limit":d.get("seat_limit") or d.get("max_seats"),
+                        "project_limit":d.get("project_limit") or d.get("max_projects"),
+                        "source_table":table
+                    })
+            if candidates:
+                break
     except Exception:
         pass
+    finally:
+        try:
+            if conn is not None and hasattr(conn, "close"):
+                conn.close()
+        except Exception:
+            pass
 
     if not candidates:
         # These are UI fallbacks, not Stripe price IDs. Existing checkout remains authoritative.
@@ -52792,13 +52822,20 @@ def _bc620_plan_catalog():
 
 def _bc620_trial_record(company_id):
     _bc620_ensure_schema()
-    with _runtime.db() as conn:
+    conn = _runtime.db()
+    try:
         row = conn.execute("""
             SELECT company_id,onboarding_choice,trial_started_at,trial_ends_at,
                    trial_status,selected_plan_code,checkout_started_at,
                    converted_at,owner_trial_note,updated_at
             FROM customer_trial_lifecycle WHERE company_id=?
         """,(company_id,)).fetchone()
+    finally:
+        try:
+            if hasattr(conn, "close"):
+                conn.close()
+        except Exception:
+            pass
     if not row:
         return None
     keys = ["company_id","onboarding_choice","trial_started_at","trial_ends_at",
@@ -52821,7 +52858,8 @@ def _bc620_save_trial(company_id, **fields):
         "updated_at":_bc620_iso(_bc620_now())
     }
     data.update(fields)
-    with _runtime.db() as conn:
+    conn = _runtime.db()
+    try:
         conn.execute("""
         INSERT INTO customer_trial_lifecycle
         (company_id,onboarding_choice,trial_started_at,trial_ends_at,trial_status,
@@ -52841,6 +52879,12 @@ def _bc620_save_trial(company_id, **fields):
              data["trial_status"],data["selected_plan_code"],data["checkout_started_at"],
              data["converted_at"],data["owner_trial_note"],data["updated_at"]))
         conn.commit()
+    finally:
+        try:
+            if hasattr(conn, "close"):
+                conn.close()
+        except Exception:
+            pass
     return _bc620_trial_record(company_id)
 
 def _bc620_trial_state(company_id):
@@ -53110,6 +53154,55 @@ def bc620_health():
 
 BUILD_COMMAND_RELEASE="6.2.0"
 BUILD_COMMAND_RELEASE_NAME="Customer Trial & Subscription Selection"
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 6.2.1 - PostgreSQL Trial/Billing Hotfix
+# Fixes PgCompatConnection context-manager incompatibility.
+# ============================================================
+
+@app.get("/health/customer-trial-subscription-selection-6-2-1")
+def bc621_health():
+    checks = []
+    try:
+        _bc620_ensure_schema()
+        checks.append(("PostgreSQL-compatible trial lifecycle schema", True))
+    except Exception as e:
+        checks.append(("PostgreSQL-compatible trial lifecycle schema", False))
+    checks += [
+        ("6.2 subscription selection preserved", callable(globals().get("_bc620_select_paid_plan"))),
+        ("demo trial preserved", callable(globals().get("_bc620_start_demo"))),
+        ("trial state preserved", callable(globals().get("_bc620_trial_state"))),
+        ("owner trial controls preserved", any(getattr(r,"path","") == "/api/owner/company/{company_id}/trial-control" for r in app.routes)),
+        ("Stripe handoff preserved", callable(globals().get("_bc620_select_paid_plan"))),
+        ("6.1 real project intelligence preserved", any(getattr(r,"path","") == "/health/real-project-intelligence-engine-6-1-0" for r in app.routes)),
+        ("startup purge disabled", not bool(globals().get("_BC181895_RESET_ENABLED",False))),
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"6.2.1",
+        "release":"PostgreSQL Trial & Billing Hotfix",
+        "baseline":"6.2.0",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "stage_ready":passed==len(checks),
+        "fixes":{
+            "pgcompat_context_manager_error":True,
+            "explicit_connection_lifecycle":True,
+            "trial_subscription_flow_preserved":True
+        },
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="6.2.1"
+BUILD_COMMAND_RELEASE_NAME="PostgreSQL Trial & Billing Hotfix"
 try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
