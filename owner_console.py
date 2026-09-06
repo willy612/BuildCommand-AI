@@ -8,11 +8,13 @@ Uses the same FastAPI application and PostgreSQL database as full_app.py.
 """
 
 from datetime import datetime
+import re
 from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "1.8.18.103"
+OWNER_CONSOLE_VERSION = "1.8.18.104"
+OWNER_CONSOLE_RELEASE = "6.6.6 Safe Test Account Deletion"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -58,6 +60,8 @@ def register_owner_console(app, runtime, owner_email=OWNER_EMAIL):
         ("/owner/customers/{company_id}", {"GET"}),
         ("/owner/customers/{company_id}/plan", {"POST"}),
         ("/owner/customers/{company_id}/status", {"POST"}),
+        ("/owner/customers/{company_id}/delete", {"GET"}),
+        ("/owner/customers/{company_id}/delete", {"POST"}),
         ("/owner/access-approvals", {"GET"}),
         ("/owner/access-approvals/{company_id}/approve", {"POST"}),
         ("/owner/access-approvals/{company_id}/revoke", {"POST"}),
@@ -298,6 +302,180 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
         c.commit()
         c.close()
 
+    # ------------------------------------------------------------
+    # 6.6.6 Safe Test Account Deletion
+    # Permanently deletes one non-owner company and data scoped to it.
+    # PostgreSQL schema metadata is used to remove related rows in
+    # dependency order. The platform-owner company is always protected.
+    # ------------------------------------------------------------
+    def _safe_ident(name):
+        name = str(name or "")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            raise ValueError("Unsafe database identifier.")
+        return '"' + name + '"'
+
+    def _schema_columns(c):
+        rows = c.execute(
+            """SELECT table_name,column_name
+               FROM information_schema.columns
+               WHERE table_schema=current_schema()
+               ORDER BY table_name,ordinal_position"""
+        ).fetchall()
+        cols = {}
+        for r in rows:
+            cols.setdefault(str(r["table_name"]), set()).add(str(r["column_name"]))
+        return cols
+
+    def _foreign_key_edges(c):
+        rows = c.execute(
+            """SELECT
+                   tc.table_name AS child_table,
+                   kcu.column_name AS child_column,
+                   ccu.table_name AS parent_table,
+                   ccu.column_name AS parent_column
+               FROM information_schema.table_constraints tc
+               JOIN information_schema.key_column_usage kcu
+                 ON tc.constraint_name=kcu.constraint_name
+                AND tc.table_schema=kcu.table_schema
+               JOIN information_schema.constraint_column_usage ccu
+                 ON ccu.constraint_name=tc.constraint_name
+                AND ccu.table_schema=tc.table_schema
+               WHERE tc.constraint_type='FOREIGN KEY'
+                 AND tc.table_schema=current_schema()"""
+        ).fetchall()
+        return [
+            (
+                str(r["child_table"]),
+                str(r["child_column"]),
+                str(r["parent_table"]),
+                str(r["parent_column"]),
+            )
+            for r in rows
+        ]
+
+    def _company_delete_plan(c, company_id):
+        cols = _schema_columns(c)
+        if "companies" not in cols or "id" not in cols["companies"]:
+            raise RuntimeError("Companies table is unavailable.")
+
+        # parent -> child relationships from actual PostgreSQL foreign keys.
+        edges = []
+        for child, child_col, parent, parent_col in _foreign_key_edges(c):
+            if child in cols and parent in cols:
+                edges.append((parent, parent_col, child, child_col))
+
+        # BuildCommand has older tables that use logical *_id relationships
+        # without formal foreign keys. Include those conventional links too.
+        if "users" in cols and "id" in cols["users"]:
+            for table, table_cols in cols.items():
+                for col in sorted(table_cols):
+                    if (col == "user_id" or col.endswith("_user_id")) and table != "users":
+                        edges.append(("users", "id", table, col))
+
+        if "projects" in cols and "id" in cols["projects"]:
+            for table, table_cols in cols.items():
+                for col in sorted(table_cols):
+                    if (col == "project_id" or col.endswith("_project_id")) and table != "projects":
+                        edges.append(("projects", "id", table, col))
+
+        for table, table_cols in cols.items():
+            if table != "companies" and "company_id" in table_cols:
+                edges.append(("companies", "id", table, "company_id"))
+
+        edges = list(dict.fromkeys(edges))
+
+        # Discover every table scoped to the selected company.
+        path = {"companies": None}
+        depth = {"companies": 0}
+        changed = True
+        while changed:
+            changed = False
+            for parent, parent_col, child, child_col in edges:
+                if parent not in path or child in path:
+                    continue
+                path[child] = (parent, parent_col, child_col)
+                depth[child] = depth[parent] + 1
+                changed = True
+
+        def predicate_for(table, alias, level=0):
+            if table == "companies":
+                return f'{alias}."id"=?', [int(company_id)]
+
+            parent, parent_col, child_col = path[table]
+            parent_alias = f"p{level}"
+            parent_pred, params = predicate_for(parent, parent_alias, level + 1)
+            sql = (
+                f'EXISTS (SELECT 1 FROM {_safe_ident(parent)} {parent_alias} '
+                f'WHERE {alias}.{_safe_ident(child_col)}='
+                f'{parent_alias}.{_safe_ident(parent_col)} '
+                f'AND {parent_pred})'
+            )
+            return sql, params
+
+        plan = []
+        for table in sorted(
+            (t for t in path if t != "companies"),
+            key=lambda t: depth[t],
+            reverse=True,
+        ):
+            pred, params = predicate_for(table, "d")
+            plan.append((table, pred, params, depth[table]))
+
+        return plan
+
+    def _delete_company_permanently(company_id):
+        oid = owner_company_id()
+        if oid is not None and int(company_id) == int(oid):
+            raise ValueError("The platform-owner company cannot be deleted.")
+
+        c = db()
+        try:
+            company = c.execute(
+                "SELECT id,name FROM companies WHERE id=?",
+                (int(company_id),)
+            ).fetchone()
+            if not company:
+                raise ValueError("Customer company not found.")
+
+            plan = _company_delete_plan(c, company_id)
+            deleted = {}
+
+            # Deepest children first, then users/projects, then company.
+            for table, pred, params, _depth in plan:
+                if table.lower() in {"alembic_version", "schema_migrations"}:
+                    continue
+                sql = f'DELETE FROM {_safe_ident(table)} d WHERE {pred}'
+                cur = c.execute(sql, tuple(params))
+                try:
+                    deleted[table] = max(0, int(cur.rowcount or 0))
+                except Exception:
+                    deleted[table] = 0
+
+            cur = c.execute(
+                "DELETE FROM companies WHERE id=?",
+                (int(company_id),)
+            )
+            try:
+                deleted["companies"] = max(0, int(cur.rowcount or 0))
+            except Exception:
+                deleted["companies"] = 1
+
+            c.commit()
+            return {
+                "company_id": int(company_id),
+                "company_name": str(company["name"]),
+                "deleted_rows": deleted,
+                "total_deleted_rows": sum(deleted.values()),
+            }
+        except Exception:
+            try:
+                c.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            c.close()
+
     def company_detail(company_id):
         oid = owner_company_id()
         if oid is not None and int(company_id) == oid:
@@ -487,7 +665,11 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             </div>
             <div class="card" style="margin-top:14px">
               <h2>Access Control</h2>
-              <div class="actions">{approval_action}<a class="btn secondary" href="/owner">Back to Dashboard</a></div>
+              <div class="actions">
+                {approval_action}
+                <a class="btn secondary" href="/owner">Back to Dashboard</a>
+                <a class="btn danger" href="/owner/customers/{company_id}/delete">Delete Test Account</a>
+              </div>
             </div>
           </div>
           <div class="card">
@@ -507,6 +689,93 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
           <div style="overflow:auto"><table><tr><th>Event</th><th>Status</th><th>Amount (cents)</th><th>Created</th></tr>{bill_rows}</table></div>
         </div>"""
         return shell(str(co["name"]), body)
+
+    @app.get("/owner/customers/{company_id}/delete", response_class=HTMLResponse)
+    def owner_delete_customer_confirm(company_id: int):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        oid = owner_company_id()
+        if oid is not None and int(company_id) == int(oid):
+            return HTMLResponse("The platform-owner company cannot be deleted.", status_code=403)
+
+        c = db()
+        co = c.execute(
+            "SELECT id,name FROM companies WHERE id=?",
+            (int(company_id),)
+        ).fetchone()
+        c.close()
+        if not co:
+            return HTMLResponse("Customer company not found.", status_code=404)
+
+        phrase = f"DELETE {int(company_id)}"
+        body = f"""
+        <div class="hero">
+          <div class="eyebrow">Permanent Test Account Removal</div>
+          <h1>Delete {escape(str(co["name"]))}?</h1>
+          <div class="muted">This permanently removes this company and BuildCommand data scoped to it. This cannot be undone.</div>
+        </div>
+        <div class="card">
+          <h2>Safety confirmation</h2>
+          <div class="notice">
+            Your platform-owner company is protected automatically.<br>
+            To delete Company #{int(company_id)}, type <b>{escape(phrase)}</b> exactly.
+          </div>
+          <form method="post" action="/owner/customers/{int(company_id)}/delete">
+            <input name="confirmation" autocomplete="off" placeholder="{escape(phrase)}" required style="min-width:260px">
+            <div style="height:12px"></div>
+            <button class="danger" type="submit">Permanently Delete Test Account</button>
+            <a class="btn secondary" href="/owner/customers/{int(company_id)}">Cancel</a>
+          </form>
+        </div>"""
+        return shell("Delete Test Account", body)
+
+    @app.post("/owner/customers/{company_id}/delete")
+    def owner_delete_customer(company_id: int, confirmation: str = Form(...)):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        expected = f"DELETE {int(company_id)}"
+        if str(confirmation or "").strip().upper() != expected:
+            return HTMLResponse(
+                shell(
+                    "Deletion Not Confirmed",
+                    f"""<div class="hero"><div class="eyebrow">Deletion Blocked</div>
+                    <h1>Confirmation did not match.</h1>
+                    <div class="muted">Nothing was deleted.</div></div>
+                    <div class="card"><a class="btn secondary" href="/owner/customers/{int(company_id)}/delete">Try Again</a></div>"""
+                ),
+                status_code=400,
+            )
+
+        try:
+            result = _delete_company_permanently(company_id)
+        except ValueError as exc:
+            return HTMLResponse(str(exc), status_code=403)
+        except Exception as exc:
+            return HTMLResponse(
+                shell(
+                    "Deletion Failed",
+                    f"""<div class="hero"><div class="eyebrow">Deletion Rolled Back</div>
+                    <h1>Nothing was deleted.</h1>
+                    <div class="muted">The database rejected the cleanup, so the transaction was rolled back safely.</div></div>
+                    <div class="card"><div class="notice">{escape(str(exc))}</div>
+                    <a class="btn secondary" href="/owner/customers/{int(company_id)}">Return to Account</a></div>"""
+                ),
+                status_code=409,
+            )
+
+        return HTMLResponse(
+            shell(
+                "Test Account Deleted",
+                f"""<div class="hero"><div class="eyebrow">Deletion Complete</div>
+                <h1>{escape(result["company_name"])} was deleted.</h1>
+                <div class="muted">Company #{result["company_id"]} and {result["total_deleted_rows"]} scoped database rows were permanently removed.</div></div>
+                <div class="card"><a class="btn" href="/owner/customers">Back to Customers</a></div>"""
+            )
+        )
 
     @app.post("/owner/customers/{company_id}/plan")
     def owner_set_plan(company_id: int, plan_code: str = Form(...)):
@@ -654,6 +923,7 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             "customer_detail": "/owner/customers/{company_id}" in paths,
             "plan_control": "/owner/customers/{company_id}/plan" in paths,
             "status_control": "/owner/customers/{company_id}/status" in paths,
+            "safe_delete": "/owner/customers/{company_id}/delete" in paths,
             "approval_control": "/owner/access-approvals/{company_id}/approve" in paths,
             "revocation_control": "/owner/access-approvals/{company_id}/revoke" in paths,
             "owner_api": "/owner/api/summary" in paths,
@@ -665,7 +935,7 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
         return {
             "status": "ok" if passed == len(checks) else "degraded",
             "version": OWNER_CONSOLE_VERSION,
-            "release": "Separate Real Owner Business Console",
+            "release": OWNER_CONSOLE_RELEASE,
             "passed": passed,
             "total": len(checks),
             "checks": checks,
