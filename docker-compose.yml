@@ -1,8 +1,0 @@
-services:
-  construction-ai:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      CONSTRUCTION_AI_ENV: development
-      REQUIRE_HUMAN_APPROVAL: "true"
