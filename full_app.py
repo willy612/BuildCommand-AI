@@ -55409,3 +55409,99 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.1.1 — AUTH BRAND LOCK
+# Locks the approved clean 7.1.0 authentication branding in place
+# and adds regression checks so the American-flag auth background
+# cannot quietly return in a later build.
+# ============================================================
+_BC711_PREVIOUS_AUTH_HTML = _bc630_auth_html
+
+def _bc630_auth_html(mode="login", error=None):
+    html = _BC711_PREVIOUS_AUTH_HTML(mode, error)
+
+    # Hard-lock the auth page to the approved dark background.
+    html = _bc706_re.sub(
+        r'body\{min-height:100vh;[^}]*\}',
+        'body{min-height:100vh;background:#07101d}',
+        html,
+        count=1,
+        flags=_bc706_re.I | _bc706_re.S,
+    )
+
+    # The BuildCommand AI logo itself must never carry a background image.
+    html = _bc706_re.sub(
+        r'<div class="logo"(?:\s+style="[^"]*")?>',
+        '<div class="logo">',
+        html,
+        count=1,
+        flags=_bc706_re.I | _bc706_re.S,
+    )
+
+    # Remove any surviving auth reference to the legacy flag asset.
+    if globals().get('_BC630_FLAG_DATA'):
+        html = html.replace(str(_BC630_FLAG_DATA), '')
+
+    return html
+
+@app.get('/health/auth-brand-lock-7-1-1')
+def bc711_auth_brand_lock_health():
+    login_html = _bc630_auth_html('login')
+    signup_html = _bc630_auth_html('signup')
+    paths = {getattr(r, 'path', '') for r in app.routes}
+
+    def logo_block(page):
+        m = _bc706_re.search(
+            r'<div class="logo">(.*?)</div>',
+            page,
+            _bc706_re.I | _bc706_re.S,
+        )
+        return m.group(1) if m else ''
+
+    login_logo = logo_block(login_html)
+    signup_logo = logo_block(signup_html)
+    flag_data = str(globals().get('_BC630_FLAG_DATA', ''))
+
+    checks = [
+        ('7.1.0 baseline preserved', '/health/clean-auth-brand-7-1-0' in paths),
+        ('login route preserved', '/login' in paths),
+        ('signup/register route preserved',
+         any(p in paths for p in ('/signup', '/register', '/create-account'))),
+        ('login flag asset absent', not flag_data or flag_data not in login_html),
+        ('signup flag asset absent', not flag_data or flag_data not in signup_html),
+        ('login logo has no background image', 'background-image' not in login_logo),
+        ('signup logo has no background image', 'background-image' not in signup_logo),
+        ('approved BuildCommand wordmark preserved',
+         'BUILDCOMMAND <b>AI</b>' in login_html),
+        ('Construction Intelligence preserved',
+         'CONSTRUCTION INTELLIGENCE' in login_html),
+        ('Welcome Back preserved', 'Welcome Back' in login_html),
+        ('login POST preserved', 'action="/login"' in login_html),
+        ('register POST preserved', 'action="/register"' in signup_html),
+    ]
+    passed = sum(bool(v) for _, v in checks)
+    return {
+        'status': 'ok' if passed == len(checks) else 'failed',
+        'app': 'BuildCommand AI',
+        'version': '7.1.1',
+        'release': 'Auth Brand Lock',
+        'passed': passed,
+        'total': len(checks),
+        'failed': len(checks) - passed,
+        'auth_flag_removed': (not flag_data or
+                              (flag_data not in login_html and flag_data not in signup_html)),
+        'logo_background_clean': (
+            'background-image' not in login_logo and
+            'background-image' not in signup_logo
+        ),
+        'checks': [{'case': n, 'passed': bool(v)} for n, v in checks],
+    }
+
+BUILD_COMMAND_RELEASE = '7.1.1'
+BUILD_COMMAND_RELEASE_NAME = 'Auth Brand Lock'
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
