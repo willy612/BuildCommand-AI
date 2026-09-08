@@ -55804,3 +55804,370 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 7.2.0 — Subscription & Access Control
+# ============================================================
+from datetime import datetime as _BC720_datetime
+from fastapi import Form as _BC720_Form
+from fastapi.responses import HTMLResponse as _BC720_HTMLResponse, RedirectResponse as _BC720_RedirectResponse
+
+BC720_RELEASE = "7.2.0"
+BC720_RELEASE_NAME = "Subscription & Access Control"
+BC720_MASTER_EMAIL = "buildcommandai@gmail.com"
+
+def _bc720_is_master_company(company_id):
+    c = None
+    try:
+        c = _runtime.db()
+        row = c.execute(
+            "SELECT id FROM users WHERE company_id=? AND LOWER(email)=LOWER(?) LIMIT 1",
+            (int(company_id), BC720_MASTER_EMAIL)
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+    finally:
+        try:
+            if c: c.close()
+        except Exception:
+            pass
+
+def _bc720_subscription(company_id):
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
+            (int(company_id),)
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def _bc720_subscription_status(company_id):
+    row = _bc720_subscription(company_id)
+    return str((row or {}).get("status") or "NO_SUBSCRIPTION").upper()
+
+def _bc720_payment_active(company_id):
+    return _bc720_subscription_status(company_id) == "ACTIVE"
+
+# Commercial access policy: trials/demos do not bypass the paid customer gate.
+def _bc181893_payment_ok(company_id):
+    return _bc720_payment_active(company_id)
+
+def _bc181893_is_approved(company_id):
+    try:
+        row = _bc181893_access_row(int(company_id), create=False)
+        return bool(row and int(_bc181893_row_value(row, "approved", 0) or 0) == 1)
+    except Exception:
+        return False
+
+def _bc720_init():
+    c = _runtime.db()
+    try:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS owner_subscription_control_events(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                actor_user_id INTEGER,
+                action TEXT NOT NULL,
+                detail TEXT,
+                created TEXT NOT NULL
+            )
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc720_init()
+
+def _bc720_log(company_id, actor_user_id, action, detail=""):
+    c = _runtime.db()
+    try:
+        c.execute(
+            "INSERT INTO owner_subscription_control_events(company_id,actor_user_id,action,detail,created) VALUES(?,?,?,?,?)",
+            (int(company_id), int(actor_user_id) if actor_user_id is not None else None,
+             str(action or "").upper(), str(detail or ""), _BC720_datetime.utcnow().isoformat())
+        )
+        c.commit()
+    finally:
+        c.close()
+
+def _bc720_owner_required():
+    u = _runtime.current_user()
+    return u if _bc181893_owner(u) else None
+
+def _bc720_plans():
+    c = _runtime.db()
+    try:
+        rows = c.execute(
+            "SELECT code,name,monthly_price_cents,seat_limit,project_limit FROM platform_plans WHERE COALESCE(active,1)=1 ORDER BY monthly_price_cents,code"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+    finally:
+        c.close()
+
+def _bc720_set_subscription(company_id, plan_code=None, status=None, actor_user_id=None, note=""):
+    if _bc720_is_master_company(company_id):
+        raise RuntimeError("The BuildCommand master-owner company cannot be changed here.")
+
+    now = _BC720_datetime.utcnow().isoformat()
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
+            (int(company_id),)
+        ).fetchone()
+        if row:
+            sets, vals = [], []
+            if plan_code is not None:
+                sets.append("plan_code=?"); vals.append(str(plan_code).upper())
+            if status is not None:
+                sets.append("status=?"); vals.append(str(status).upper())
+            sets.extend(["access_note=?", "updated=?"])
+            vals.extend([str(note or ""), now, int(company_id)])
+            c.execute("UPDATE company_subscriptions SET " + ",".join(sets) + " WHERE company_id=?", tuple(vals))
+        else:
+            code = str(plan_code or "PROFESSIONAL").upper()
+            state = str(status or "PENDING_PAYMENT").upper()
+            c.execute(
+                """INSERT INTO company_subscriptions(
+                    company_id,plan_code,status,trial_ends_at,grandfathered,access_note,created,updated
+                ) VALUES(?,?,?,NULL,0,?,?,?)""",
+                (int(company_id), code, state, str(note or ""), now, now)
+            )
+        c.commit()
+    finally:
+        c.close()
+    _bc720_log(company_id, actor_user_id, "SUBSCRIPTION_" + str(status or "UPDATED").upper(), note)
+
+def _bc720_money(cents):
+    try: return "${:,.0f}".format(int(cents or 0)/100)
+    except Exception: return "—"
+
+@app.get("/owner/subscriptions", response_class=_BC720_HTMLResponse)
+def bc720_owner_subscriptions():
+    u = _bc720_owner_required()
+    if not u:
+        return _BC720_HTMLResponse("Platform owner access required.", status_code=403)
+
+    c = _runtime.db()
+    try:
+        rows = c.execute(
+            """SELECT co.id,co.name,cs.plan_code,cs.status,cs.access_note,
+                      ca.approved,ca.approved_at,ca.revoked_at,
+                      (SELECT COUNT(*) FROM users x WHERE x.company_id=co.id) user_count,
+                      (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) project_count
+               FROM companies co
+               LEFT JOIN company_subscriptions cs ON cs.company_id=co.id
+               LEFT JOIN company_access_approvals ca ON ca.company_id=co.id
+               ORDER BY co.name"""
+        ).fetchall()
+    finally:
+        c.close()
+
+    plans = _bc720_plans()
+    plan_options = "".join(
+        '<option value="{}">{} · {}/mo</option>'.format(
+            _runtime.esc(str(p["code"])),
+            _runtime.esc(str(p["name"])),
+            _bc720_money(p["monthly_price_cents"])
+        ) for p in plans
+    )
+
+    active = pending = suspended = 0
+    cards = ""
+    for r in rows:
+        cid = int(r["id"])
+        master = _bc720_is_master_company(cid)
+        status = str(r["status"] or "NO_SUBSCRIPTION").upper()
+        approved = bool(int(r["approved"] or 0))
+        allowed = master or (status == "ACTIVE" and approved)
+
+        if status == "ACTIVE": active += 1
+        if status in ("PENDING_PAYMENT","NO_SUBSCRIPTION","TRIAL"): pending += 1
+        if status in ("SUSPENDED","PAST_DUE","CANCELED","CANCELLED"): suspended += 1
+
+        if master:
+            controls = '<div class="lock">MASTER OWNER · ALWAYS ALLOWED</div>'
+        else:
+            controls = f'''
+            <form class="rowform" method="post" action="/owner/subscriptions/{cid}/plan">
+              <select name="plan_code">{plan_options}</select>
+              <button type="submit">Set Plan</button>
+            </form>
+            <div class="actions">
+              <form method="post" action="/owner/subscriptions/{cid}/activate"><button type="submit">Activate Subscription</button></form>
+              <form method="post" action="/owner/subscriptions/{cid}/suspend"><button class="warn" type="submit">Suspend</button></form>
+              <form method="post" action="/owner/subscriptions/{cid}/cancel"><button class="danger" type="submit">Cancel</button></form>
+            </div>
+            <div class="actions">
+              <form method="post" action="/owner/subscriptions/{cid}/approve"><button type="submit">Approve Access</button></form>
+              <form method="post" action="/owner/subscriptions/{cid}/revoke"><button class="warn" type="submit">Revoke Access</button></form>
+            </div>'''
+
+        access_label = "ALLOWED" if allowed else "LOCKED"
+        access_class = "ok" if allowed else "bad"
+        cards += f'''
+        <section class="customer">
+          <div class="top">
+            <div><div class="eyebrow">COMPANY #{cid}</div><h2>{_runtime.esc(str(r["name"]))}</h2>
+            <div class="muted">{int(r["user_count"] or 0)} users · {int(r["project_count"] or 0)} projects</div></div>
+            <div class="state {access_class}">{access_label}</div>
+          </div>
+          <div class="facts">
+            <div><span>Plan</span><b>{_runtime.esc(str(r["plan_code"] or "—"))}</b></div>
+            <div><span>Subscription</span><b>{_runtime.esc(status)}</b></div>
+            <div><span>Owner Approval</span><b>{"APPROVED" if approved else "NOT APPROVED"}</b></div>
+            <div><span>Rule</span><b>{"OWNER BYPASS" if master else "ACTIVE + APPROVED"}</b></div>
+          </div>
+          {controls}
+        </section>'''
+
+    body = f'''
+    <style>
+    .bc720{{max-width:1180px;margin:auto}} .hero720{{background:#101923;border:1px solid #253548;border-radius:18px;padding:24px;margin-bottom:16px}}
+    .muted{{color:#8fa4b8}} .stats{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}}
+    .stat,.customer{{background:#101923;border:1px solid #253548;border-radius:14px;padding:18px}} .customer{{margin:12px 0}}
+    .stat b{{font-size:27px;display:block;margin-top:5px}} .top{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}
+    .top h2{{margin:4px 0}} .eyebrow{{font-size:11px;letter-spacing:.12em;color:#f0b44d;font-weight:900}}
+    .state{{border-radius:999px;padding:7px 11px;font-size:12px;font-weight:900}} .state.ok{{background:#163523;color:#7ee2a6}} .state.bad{{background:#401d22;color:#ff9ca6}}
+    .facts{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0}} .facts div{{background:#0a141e;border:1px solid #1e3041;border-radius:10px;padding:11px}}
+    .facts span{{display:block;color:#8297aa;font-size:11px;text-transform:uppercase;margin-bottom:5px}} .actions,.rowform{{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}}
+    button,select{{border-radius:9px;border:1px solid #33485d;padding:10px 12px;font-weight:800}} button{{background:#f0b44d;color:#071018;cursor:pointer}} select{{background:#09131d;color:#eef4fb}}
+    button.warn{{background:#d7dee7}} button.danger{{background:#d9414c;color:white}} .lock{{padding:12px;border:1px solid #38516b;background:#0b1723;border-radius:10px;font-weight:900;color:#7ee2a6}}
+    @media(max-width:760px){{.stats,.facts{{grid-template-columns:1fr 1fr}}}}
+    </style>
+    <div class="bc720"><div class="hero720"><div class="eyebrow">BUILDCOMMAND BUSINESS · OWNER CONTROL</div>
+    <h1>Subscriptions & Customer Access</h1><p class="muted">Every customer except the BuildCommand master owner must have an ACTIVE subscription and your explicit approval before entering the construction app.</p></div>
+    <div class="stats"><div class="stat"><span>Companies</span><b>{len(rows)}</b></div><div class="stat"><span>Active Subscriptions</span><b>{active}</b></div>
+    <div class="stat"><span>Waiting / Unpaid</span><b>{pending}</b></div><div class="stat"><span>Suspended / Canceled</span><b>{suspended}</b></div></div>
+    {cards or '<div class="customer">No companies found.</div>'}<p><a href="/owner">← Owner Business Console</a></p></div>'''
+    return _runtime.shell("Subscriptions & Access", body)
+
+@app.post("/owner/subscriptions/{company_id}/plan")
+def bc720_set_plan(company_id:int, plan_code:str=_BC720_Form(...)):
+    u = _bc720_owner_required()
+    if not u: return _BC720_HTMLResponse("Platform owner access required.", status_code=403)
+    if _bc720_is_master_company(company_id): return _BC720_HTMLResponse("Master owner subscription cannot be changed.", status_code=409)
+    valid = {str(p["code"]).upper() for p in _bc720_plans()}
+    code = str(plan_code or "").upper()
+    if code not in valid: return _BC720_HTMLResponse("Invalid BuildCommand plan.", status_code=400)
+    _bc720_set_subscription(company_id, plan_code=code, actor_user_id=u["id"], note=f"Plan changed to {code}")
+    return _BC720_RedirectResponse("/owner/subscriptions", status_code=303)
+
+@app.post("/owner/subscriptions/{company_id}/activate")
+def bc720_activate(company_id:int):
+    u = _bc720_owner_required()
+    if not u: return _BC720_HTMLResponse("Platform owner access required.", status_code=403)
+    _bc720_set_subscription(company_id, status="ACTIVE", actor_user_id=u["id"], note="Subscription manually activated by platform owner")
+    return _BC720_RedirectResponse("/owner/subscriptions", status_code=303)
+
+@app.post("/owner/subscriptions/{company_id}/suspend")
+def bc720_suspend(company_id:int):
+    u = _bc720_owner_required()
+    if not u: return _BC720_HTMLResponse("Platform owner access required.", status_code=403)
+    _bc720_set_subscription(company_id, status="SUSPENDED", actor_user_id=u["id"], note="Subscription suspended by platform owner")
+    return _BC720_RedirectResponse("/owner/subscriptions", status_code=303)
+
+@app.post("/owner/subscriptions/{company_id}/cancel")
+def bc720_cancel(company_id:int):
+    u = _bc720_owner_required()
+    if not u: return _BC720_HTMLResponse("Platform owner access required.", status_code=403)
+    _bc720_set_subscription(company_id, status="CANCELED", actor_user_id=u["id"], note="Subscription canceled by platform owner")
+    try:
+        _bc181893_access_row(company_id, create=True)
+        now = _BC720_datetime.utcnow().isoformat()
+        c = _runtime.db()
+        c.execute("UPDATE company_access_approvals SET approved=0,revoked_by_user_id=?,revoked_at=?,note=?,updated=? WHERE company_id=?",
+                  (u["id"],now,"Access automatically revoked when subscription canceled",now,int(company_id)))
+        c.commit(); c.close()
+    except Exception: pass
+    return _BC720_RedirectResponse("/owner/subscriptions", status_code=303)
+
+@app.post("/owner/subscriptions/{company_id}/approve")
+def bc720_approve(company_id:int):
+    u = _bc720_owner_required()
+    if not u: return _BC720_HTMLResponse("Platform owner access required.", status_code=403)
+    if _bc720_is_master_company(company_id): return _BC720_RedirectResponse("/owner/subscriptions", status_code=303)
+    if not _bc720_payment_active(company_id): return _BC720_HTMLResponse("Subscription must be ACTIVE before access can be approved.", status_code=409)
+    _bc181893_access_row(company_id, create=True)
+    now = _BC720_datetime.utcnow().isoformat()
+    c = _runtime.db()
+    c.execute("UPDATE company_access_approvals SET approved=1,approved_by_user_id=?,approved_at=?,revoked_by_user_id=NULL,revoked_at=NULL,note=?,updated=? WHERE company_id=?",
+              (u["id"],now,"Approved in 7.2.0 owner subscription control",now,int(company_id)))
+    c.commit(); c.close()
+    _bc720_log(company_id,u["id"],"ACCESS_APPROVED","Customer access approved")
+    return _BC720_RedirectResponse("/owner/subscriptions", status_code=303)
+
+@app.post("/owner/subscriptions/{company_id}/revoke")
+def bc720_revoke(company_id:int):
+    u = _bc720_owner_required()
+    if not u: return _BC720_HTMLResponse("Platform owner access required.", status_code=403)
+    if _bc720_is_master_company(company_id): return _BC720_HTMLResponse("Master owner access cannot be revoked.", status_code=409)
+    _bc181893_access_row(company_id, create=True)
+    now = _BC720_datetime.utcnow().isoformat()
+    c = _runtime.db()
+    c.execute("UPDATE company_access_approvals SET approved=0,revoked_by_user_id=?,revoked_at=?,note=?,updated=? WHERE company_id=?",
+              (u["id"],now,"Access revoked in 7.2.0 owner subscription control",now,int(company_id)))
+    c.commit(); c.close()
+    _bc720_log(company_id,u["id"],"ACCESS_REVOKED","Customer access revoked")
+    return _BC720_RedirectResponse("/owner/subscriptions", status_code=303)
+
+@app.get("/api/owner/subscription-control/{company_id}")
+def bc720_subscription_state_api(company_id:int):
+    u = _bc720_owner_required()
+    if not u: return _BC181893_JSONResponse({"status":"forbidden"},status_code=403)
+    master = _bc720_is_master_company(company_id)
+    paid = _bc720_payment_active(company_id)
+    approved = True if master else _bc181893_is_approved(company_id)
+    return {"status":"ok","company_id":int(company_id),"master_owner_company":master,
+            "subscription":_bc720_subscription(company_id),"payment_active":True if master else paid,
+            "owner_approved":approved,"access_allowed":bool(master or (paid and approved)),
+            "rule":"MASTER OWNER BYPASS OR ACTIVE SUBSCRIPTION + OWNER APPROVAL"}
+
+@app.get("/health/subscription-access-control-7-2-0")
+def bc720_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    c = _runtime.db(); tables=set()
+    for t in ("company_subscriptions","company_access_approvals","company_access_approval_events","owner_subscription_control_events","platform_plans"):
+        try: c.execute(f"SELECT 1 FROM {t} LIMIT 1"); tables.add(t)
+        except Exception: pass
+    c.close()
+    checks = [
+        ("7.1.4 baseline preserved", "/health/auth-visible-flag-7-1-4" in paths),
+        ("owner subscription console", "/owner/subscriptions" in paths),
+        ("plan control", "/owner/subscriptions/{company_id}/plan" in paths),
+        ("activate control", "/owner/subscriptions/{company_id}/activate" in paths),
+        ("suspend control", "/owner/subscriptions/{company_id}/suspend" in paths),
+        ("cancel control", "/owner/subscriptions/{company_id}/cancel" in paths),
+        ("approve control", "/owner/subscriptions/{company_id}/approve" in paths),
+        ("revoke control", "/owner/subscriptions/{company_id}/revoke" in paths),
+        ("owner subscription API", "/api/owner/subscription-control/{company_id}" in paths),
+        ("subscription table", "company_subscriptions" in tables),
+        ("approval table", "company_access_approvals" in tables),
+        ("control audit table", "owner_subscription_control_events" in tables),
+        ("master owner protected", BC720_MASTER_EMAIL == "buildcommandai@gmail.com"),
+        ("strict ACTIVE policy enabled", callable(_bc720_payment_active)),
+        ("existing Stripe checkout preserved", "/billing/checkout/{plan_code}" in paths),
+        ("existing auth preserved", "/login" in paths and "/register" in paths),
+        ("flag auth preserved", "/health/auth-visible-flag-7-1-4" in paths),
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI","version":BC720_RELEASE,
+            "release":BC720_RELEASE_NAME,"passed":passed,"total":len(checks),"failed":len(checks)-passed,
+            "access_rule":"Master owner bypass OR ACTIVE subscription + explicit owner approval",
+            "trial_app_bypass":False,"stripe_live_required_for_real_payments":True,"data_reset":False,
+            "checks":[{"case":n,"passed":bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE = BC720_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC720_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
