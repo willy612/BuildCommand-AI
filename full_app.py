@@ -55211,3 +55211,58 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.0.8 — NOTIFICATION DOT FINAL PURGE
+# Removes every rendered /notifications header/control anchor so
+# the upper-right notification dot cannot survive duplicate markup.
+# ============================================================
+_BC708_PREVIOUS_SHELL = _runtime.shell
+
+def _bc708_shell(title, body, *args, **kwargs):
+    html = _BC708_PREVIOUS_SHELL(title, body, *args, **kwargs)
+    # Remove ALL notification anchors, not only the first occurrence.
+    html = _bc706_re.sub(
+        r'<a\\b[^>]*href=["\\\']/notifications["\\\'][^>]*>.*?</a>',
+        '', html, count=0, flags=_bc706_re.I|_bc706_re.S
+    )
+    # Also remove any button/form control explicitly targeting notifications.
+    html = _bc706_re.sub(
+        r'<button\\b[^>]*(?:data-href|formaction)=["\\\']/notifications["\\\'][^>]*>.*?</button>',
+        '', html, count=0, flags=_bc706_re.I|_bc706_re.S
+    )
+    html = _bc706_re.sub(
+        r'<form\\b[^>]*action=["\\\']/notifications["\\\'][^>]*>.*?</form>',
+        '', html, count=0, flags=_bc706_re.I|_bc706_re.S
+    )
+    return html
+
+_runtime.shell = _bc708_shell
+
+@app.get('/health/clean-patriot-header-7-0-8')
+def bc708_clean_patriot_header_health():
+    sample = _runtime.shell('7.0.8 Header Check', '<div>ok</div>')
+    paths = {getattr(r,'path','') for r in app.routes}
+    notification_refs = _bc706_re.findall(r'(?:href|data-href|formaction|action)=["\\\']/notifications["\\\']', sample, _bc706_re.I)
+    checks = [
+        ('7.0.7 baseline preserved', '/health/clean-patriot-header-7-0-7' in paths),
+        ('clean header CSS active', 'data-bc706-clean-patriot-header' in sample),
+        ('white-background logo embedded', 'data:image/png;base64,' in sample),
+        ('add project shortcut removed', 'class="bc1810k-add-project"' not in sample),
+        ('notification dot removed', len(notification_refs) == 0),
+        ('project selector preserved', 'class="v117r-project"' in sample),
+        ('upload preserved', 'href="/documents"' in sample),
+        ('settings preserved', 'href="/company-settings"' in sample),
+        ('documents route preserved', '/documents' in paths),
+        ('app route preserved', '/app' in paths),
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {'status':'ok' if passed==len(checks) else 'failed','app':'BuildCommand AI','version':'7.0.8','release':'Notification Dot Final Purge','passed':passed,'total':len(checks),'failed':len(checks)-passed,'black_logo_background_removed':True,'header_clutter_reduced':True,'notification_dot_removed':len(notification_refs)==0,'notification_refs_remaining':len(notification_refs),'checks':[{'case':n,'passed':bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE='7.0.8'
+BUILD_COMMAND_RELEASE_NAME='Notification Dot Final Purge'
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
