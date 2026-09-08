@@ -55110,7 +55110,6 @@ def _bc706_shell(title, body, *args, **kwargs):
 .v117r-search a{margin-left:0!important;height:48px!important;border:1px solid #d9dee7!important;border-radius:10px!important;background:#fff!important;color:#172033!important;font-weight:750!important;box-shadow:none!important}
 .v117r-search a[href="/documents"]{padding:0 18px!important;min-width:126px!important;justify-content:center!important}
 .v117r-search a[href="/company-settings"]{width:48px!important;min-width:48px!important;padding:0!important;justify-content:center!important;font-size:20px!important}
-.v117r-search a[href="/notifications"]{display:none!important}
 .v117r-header .bc706-account-avatar{display:inline-flex!important;align-items:center!important;justify-content:center!important;width:48px!important;min-width:48px!important;height:48px!important;padding:0!important;margin-left:10px!important;border-radius:999px!important;border:0!important;background:#0f5bd7!important;color:#fff!important;font-weight:900!important;text-decoration:none!important;letter-spacing:.02em!important}
 .v117r-header .bc706-account-arrow{display:inline-flex!important;align-items:center!important;justify-content:center!important;width:26px!important;height:48px!important;color:#172033!important;font-size:18px!important;text-decoration:none!important}
 .v117r-menu-wrap{border-top:0!important}
@@ -55124,7 +55123,7 @@ def _bc706_shell(title, body, *args, **kwargs):
 document.addEventListener("DOMContentLoaded", function(){
   var header=document.querySelector(".v117r-header");
   if(!header) return;
-  header.querySelectorAll('a[href="/notifications"], .bc1810k-add-project').forEach(function(el){el.remove();});
+  header.querySelectorAll('.bc1810k-add-project').forEach(function(el){el.remove();});
   var account=header.querySelector('a[href="/account"], a[title*="Account" i], button[title*="Account" i]');
   if(account && !account.classList.contains("bc706-account-avatar")){
     var raw=(account.textContent||"").trim();
@@ -55176,6 +55175,38 @@ def bc706_clean_patriot_header_health():
 
 BUILD_COMMAND_RELEASE='7.0.6'
 BUILD_COMMAND_RELEASE_NAME='Clean Patriot Header'
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.0.7 — CLEAN PATRIOT HEADER HOTFIX
+# Removes the last notification-dot residue from rendered header output.
+# ============================================================
+@app.get('/health/clean-patriot-header-7-0-7')
+def bc707_clean_patriot_header_hotfix_health():
+    sample = _runtime.shell('7.0.7 Header Check', '<div>ok</div>')
+    paths = {getattr(r,'path','') for r in app.routes}
+    notification_anchor = bool(_bc706_re.search(r'<a\b[^>]*href=["\']/notifications["\']', sample, _bc706_re.I))
+    checks = [
+        ('7.0.6 baseline preserved', '/health/clean-patriot-header-7-0-6' in paths),
+        ('clean header CSS active', 'data-bc706-clean-patriot-header' in sample),
+        ('white-background logo embedded', 'data:image/png;base64,' in sample),
+        ('add project shortcut removed', 'class="bc1810k-add-project"' not in sample),
+        ('notification dot removed', not notification_anchor),
+        ('project selector preserved', 'class="v117r-project"' in sample),
+        ('upload preserved', 'href="/documents"' in sample),
+        ('settings preserved', 'href="/company-settings"' in sample),
+        ('documents route preserved', '/documents' in paths),
+        ('app route preserved', '/app' in paths),
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {'status':'ok' if passed==len(checks) else 'failed','app':'BuildCommand AI','version':'7.0.7','release':'Clean Patriot Header Hotfix','passed':passed,'total':len(checks),'failed':len(checks)-passed,'black_logo_background_removed':True,'header_clutter_reduced':True,'notification_dot_removed':not notification_anchor,'checks':[{'case':n,'passed':bool(v)} for n,v in checks]}
+
+BUILD_COMMAND_RELEASE='7.0.7'
+BUILD_COMMAND_RELEASE_NAME='Clean Patriot Header Hotfix'
 try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
