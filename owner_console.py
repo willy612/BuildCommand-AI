@@ -12,7 +12,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.2.2"
+OWNER_CONSOLE_VERSION = "7.2.3"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -1026,6 +1026,378 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             "failed":len(checks)-passed,
             "master_protected":True,
             "automatic_deletion_on_deploy":False,
+            "checks":checks,
+        }
+
+
+    # ========================================================
+    # BuildCommand AI 7.2.3 — Company Cleanup Center
+    # Replaces trial-only cleanup with selectable non-master cleanup.
+    # ========================================================
+
+    # Remove the 7.2.2 cleanup routes before registering replacements.
+    for p, methods in (
+        ("/owner/cleanup", {"GET"}),
+        ("/owner/cleanup/preview", {"GET"}),
+        ("/owner/cleanup/delete-trials", {"POST"}),
+        ("/owner/api/cleanup-preview", {"GET"}),
+    ):
+        remove_route(p, methods)
+
+    def all_non_master_companies():
+        oid = owner_company_id()
+        c = db()
+        try:
+            rows = c.execute(
+                """SELECT co.id,co.name,
+                          COALESCE(
+                            (SELECT s.status FROM company_subscriptions s
+                             WHERE s.company_id=co.id ORDER BY s.id DESC LIMIT 1),
+                            'NO_SUBSCRIPTION'
+                          ) AS status,
+                          COALESCE(
+                            (SELECT s.plan_code FROM company_subscriptions s
+                             WHERE s.company_id=co.id ORDER BY s.id DESC LIMIT 1),
+                            ''
+                          ) AS plan_code,
+                          COALESCE(
+                            (SELECT a.approved FROM company_access_approvals a
+                             WHERE a.company_id=co.id LIMIT 1),
+                            0
+                          ) AS approved,
+                          (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) AS user_count,
+                          (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) AS project_count
+                   FROM companies co
+                   WHERE (? IS NULL OR co.id<>?)
+                   ORDER BY co.name""",
+                (oid, oid)
+            ).fetchall()
+            return rows
+        finally:
+            c.close()
+
+    def _safe_ident(name):
+        s = str(name or "")
+        return bool(s) and s.replace("_","").isalnum()
+
+    def _tables_with_column(c, column_name):
+        try:
+            rows = c.execute(
+                """SELECT table_name FROM information_schema.columns
+                   WHERE table_schema='public' AND column_name=?
+                   ORDER BY table_name""",
+                (str(column_name),)
+            ).fetchall()
+            return [str(r["table_name"]) for r in rows if _safe_ident(r["table_name"])]
+        except Exception:
+            try: c.rollback()
+            except Exception: pass
+            return []
+
+    def delete_non_master_company(company_id, actor_user_id):
+        """Delete one explicitly selected company.
+        Hard-protects the master company and uses one transaction."""
+        cid = int(company_id)
+        oid = owner_company_id()
+        if oid is not None and cid == int(oid):
+            raise RuntimeError("The BuildCommand master company cannot be deleted.")
+
+        c = db()
+        try:
+            row = c.execute(
+                "SELECT id,name FROM companies WHERE id=? LIMIT 1",
+                (cid,)
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Company no longer exists.")
+
+            # Re-check master protection by actual master email as a second guard.
+            master_user = c.execute(
+                "SELECT id FROM users WHERE company_id=? AND LOWER(email)=LOWER(?) LIMIT 1",
+                (cid, owner_email)
+            ).fetchone()
+            if master_user:
+                raise RuntimeError("The company containing the BuildCommand master email cannot be deleted.")
+
+            project_rows = c.execute(
+                "SELECT id FROM projects WHERE company_id=?",
+                (cid,)
+            ).fetchall()
+            project_ids = [int(r["id"]) for r in project_rows]
+
+            user_rows = c.execute(
+                "SELECT id FROM users WHERE company_id=?",
+                (cid,)
+            ).fetchall()
+            user_ids = [int(r["id"]) for r in user_rows]
+
+            # 1) Delete rows explicitly scoped by company_id from all public tables.
+            # Skip parent tables until the end.
+            for table in _tables_with_column(c, "company_id"):
+                if table in {"companies","projects","users"}:
+                    continue
+                c.execute(f'DELETE FROM "{table}" WHERE company_id=?', (cid,))
+
+            # 2) Delete rows scoped by project_id for this company's projects.
+            if project_ids:
+                for table in _tables_with_column(c, "project_id"):
+                    if table == "projects":
+                        continue
+                    for pid in project_ids:
+                        c.execute(f'DELETE FROM "{table}" WHERE project_id=?', (pid,))
+
+            # 3) Delete rows scoped by user_id / actor_user_id where present.
+            # Never delete the audit record we create after successful cleanup.
+            if user_ids:
+                for col in ("user_id","actor_user_id","approved_by_user_id","revoked_by_user_id"):
+                    for table in _tables_with_column(c, col):
+                        if table in {"users","owner_cleanup_events"}:
+                            continue
+                        for uid in user_ids:
+                            c.execute(f'DELETE FROM "{table}" WHERE "{col}"=?', (uid,))
+
+            # 4) Parents last.
+            c.execute("DELETE FROM projects WHERE company_id=?", (cid,))
+            c.execute("DELETE FROM users WHERE company_id=?", (cid,))
+            c.execute("DELETE FROM companies WHERE id=?", (cid,))
+            c.commit()
+            return str(row["name"])
+        except Exception:
+            try: c.rollback()
+            except Exception: pass
+            raise
+        finally:
+            c.close()
+
+    @app.get("/owner/cleanup", response_class=HTMLResponse)
+    @app.get("/owner/cleanup/preview", response_class=HTMLResponse)
+    def owner_company_cleanup_center():
+        if not require_owner():
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        rows = all_non_master_companies()
+        total_users = sum(int(r["user_count"] or 0) for r in rows)
+        total_projects = sum(int(r["project_count"] or 0) for r in rows)
+
+        table_rows = ""
+        for r in rows:
+            cid = int(r["id"])
+            status = str(r["status"] or "NO_SUBSCRIPTION").upper()
+            approved_value = bool(int(r["approved"] or 0))
+            table_rows += f"""<tr>
+              <td style="width:42px">
+                <input class="company-check" type="checkbox" name="company_ids" value="{cid}" form="cleanup-form">
+              </td>
+              <td>
+                <b>{escape(str(r["name"]))}</b><br>
+                <span class="muted">Company #{cid}</span>
+              </td>
+              <td>{escape(str(r["plan_code"] or "—"))}</td>
+              <td><span class="pill {'good' if status=='ACTIVE' else 'warn'}">{escape(status)}</span></td>
+              <td>{"YES" if approved_value else "NO"}</td>
+              <td>{int(r["user_count"] or 0)}</td>
+              <td>{int(r["project_count"] or 0)}</td>
+            </tr>"""
+
+        body = f"""
+        <div class="card">
+          <div class="eyebrow">OWNER ONLY · COMPANY CLEANUP CENTER</div>
+          <h1>Reset Customer Companies</h1>
+          <p><b>Master protection:</b> the company containing {escape(owner_email)} is excluded from this list and blocked again inside the delete function.</p>
+          <p class="muted">This page shows every non-master company, regardless of subscription status. Select only the companies you intend to permanently remove.</p>
+
+          <div class="grid">
+            <div class="stat"><span>Non-Master Companies</span><b>{len(rows)}</b></div>
+            <div class="stat"><span>Users Across Them</span><b>{total_users}</b></div>
+            <div class="stat"><span>Projects Across Them</span><b>{total_projects}</b></div>
+          </div>
+
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0">
+            <button type="button" class="btn secondary" onclick="setAllCompanies(true)">Select All Non-Master</button>
+            <button type="button" class="btn secondary" onclick="setAllCompanies(false)">Clear Selection</button>
+          </div>
+
+          <div style="overflow:auto">
+            <table>
+              <tr>
+                <th>Select</th><th>Company</th><th>Plan</th><th>Status</th>
+                <th>Approved</th><th>Users</th><th>Projects</th>
+              </tr>
+              {table_rows or '<tr><td colspan="7"><b>No non-master companies found. Customer database is already clean.</b></td></tr>'}
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="eyebrow">PERMANENT DELETION</div>
+          <h2>Delete Selected Companies</h2>
+          <p>This cannot be undone. Type <b>DELETE SELECTED COMPANIES</b> exactly.</p>
+          <form id="cleanup-form" method="post" action="/owner/cleanup/delete-selected">
+            <input name="confirmation" autocomplete="off"
+                   placeholder="DELETE SELECTED COMPANIES"
+                   style="width:100%;max-width:430px;padding:12px;border-radius:8px">
+            <div style="margin-top:12px">
+              <button class="btn" type="submit" {"disabled" if not rows else ""}>Delete Selected Companies</button>
+            </div>
+          </form>
+        </div>
+
+        <script>
+        function setAllCompanies(value) {{
+          document.querySelectorAll('.company-check').forEach(function(cb) {{
+            cb.checked = value;
+          }});
+        }}
+        </script>
+        """
+        return shell("Company Cleanup Center", body)
+
+    @app.post("/owner/cleanup/delete-selected")
+    def owner_cleanup_delete_selected(
+        confirmation: str = Form(...),
+        company_ids: list[int] = Form(default=[])
+    ):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        if str(confirmation or "").strip() != "DELETE SELECTED COMPANIES":
+            return HTMLResponse(
+                "Confirmation text did not match. Nothing was deleted.",
+                status_code=400
+            )
+
+        selected = []
+        seen = set()
+        for raw in company_ids or []:
+            cid = int(raw)
+            if cid not in seen:
+                selected.append(cid)
+                seen.add(cid)
+
+        if not selected:
+            return HTMLResponse("No companies were selected. Nothing was deleted.", status_code=400)
+
+        oid = owner_company_id()
+        if oid is not None and int(oid) in selected:
+            return HTMLResponse(
+                "Master company protection blocked this request. Nothing was deleted.",
+                status_code=409
+            )
+
+        deleted = []
+        failed = []
+        for cid in selected:
+            try:
+                name = delete_non_master_company(cid, int(u["id"]))
+                deleted.append({"company_id":cid,"name":name})
+            except Exception as exc:
+                failed.append({"company_id":cid,"error":str(exc)})
+
+        # Audit after deletions, in a master-level table.
+        c = db()
+        try:
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS owner_cleanup_events(
+                    id BIGSERIAL PRIMARY KEY,
+                    actor_user_id BIGINT,
+                    action TEXT NOT NULL,
+                    detail TEXT,
+                    created TEXT NOT NULL
+                )
+            """)
+            c.execute(
+                """INSERT INTO owner_cleanup_events(actor_user_id,action,detail,created)
+                   VALUES(?,?,?,?)""",
+                (
+                    int(u["id"]),
+                    "DELETE_SELECTED_COMPANIES",
+                    f"selected={selected}; deleted={deleted}; failed={failed}",
+                    now()
+                )
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        status_code = 200 if not failed else 409
+        fail_html = ""
+        if failed:
+            fail_html = "<h3>Not deleted</h3><pre>" + escape(str(failed)) + "</pre>"
+
+        body = f"""
+        <div class="card">
+          <div class="eyebrow">CLEANUP RESULT</div>
+          <h1>{"Customer Reset Complete" if not failed else "Customer Reset Partially Completed"}</h1>
+          <p><b>{len(deleted)}</b> companies deleted. <b>{len(failed)}</b> companies failed safely and remained in the database.</p>
+          <p class="muted">The BuildCommand master company was never eligible for deletion.</p>
+          {fail_html}
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <a class="btn secondary" href="/owner/cleanup">Back to Cleanup</a>
+            <a class="btn secondary" href="/owner/customers">Customer List</a>
+          </div>
+        </div>
+        """
+        rendered = shell("Cleanup Result", body)
+        # shell() returns HTMLResponse in this module.
+        if isinstance(rendered, HTMLResponse):
+            rendered.status_code = status_code
+            return rendered
+        return HTMLResponse(str(rendered), status_code=status_code)
+
+    @app.get("/owner/api/cleanup-preview")
+    def owner_company_cleanup_preview_api():
+        if not require_owner():
+            return JSONResponse({"detail":"Platform owner access required."},status_code=403)
+        rows = all_non_master_companies()
+        return {
+            "status":"ok",
+            "version":"7.2.3",
+            "master_company_id":owner_company_id(),
+            "master_email":owner_email,
+            "master_protected":True,
+            "automatic_delete":False,
+            "confirmation_required":"DELETE SELECTED COMPANIES",
+            "companies":[
+                {
+                    "company_id":int(r["id"]),
+                    "company_name":r["name"],
+                    "plan":r["plan_code"],
+                    "status":r["status"],
+                    "approved":bool(int(r["approved"] or 0)),
+                    "users":int(r["user_count"] or 0),
+                    "projects":int(r["project_count"] or 0),
+                }
+                for r in rows
+            ]
+        }
+
+    @app.get("/health/owner-console-7-2-3")
+    def owner_console_723_health():
+        paths = {getattr(r,"path","") for r in app.routes}
+        checks = {
+            "owner_dashboard":"/owner" in paths,
+            "customers":"/owner/customers" in paths,
+            "subscriptions":"/owner/subscriptions" in paths,
+            "cleanup_center":"/owner/cleanup" in paths,
+            "selective_delete":"/owner/cleanup/delete-selected" in paths,
+            "cleanup_preview_api":"/owner/api/cleanup-preview" in paths,
+            "master_email_protected":owner_email == "buildcommandai@gmail.com",
+            "same_database":callable(getattr(runtime,"db",None)),
+            "old_trial_delete_removed":"/owner/cleanup/delete-trials" not in paths,
+        }
+        passed = sum(1 for v in checks.values() if v)
+        return {
+            "status":"ok" if passed==len(checks) else "degraded",
+            "app":"BuildCommand AI",
+            "version":"7.2.3",
+            "release":"Company Cleanup Center",
+            "passed":passed,
+            "total":len(checks),
+            "failed":len(checks)-passed,
+            "master_protected":True,
+            "automatic_deletion_on_deploy":False,
+            "requires_selection":True,
             "checks":checks,
         }
 
