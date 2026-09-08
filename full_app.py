@@ -55868,16 +55868,36 @@ def _bc181893_is_approved(company_id):
 def _bc720_init():
     c = _runtime.db()
     try:
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS owner_subscription_control_events(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                company_id INTEGER NOT NULL,
-                actor_user_id INTEGER,
-                action TEXT NOT NULL,
-                detail TEXT,
-                created TEXT NOT NULL
-            )
-        """)
+        # PostgreSQL production schema. SQLite fallback is retained only for
+        # local/dev compatibility.
+        try:
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS owner_subscription_control_events(
+                    id BIGSERIAL PRIMARY KEY,
+                    company_id BIGINT NOT NULL,
+                    actor_user_id BIGINT,
+                    action TEXT NOT NULL,
+                    detail TEXT,
+                    created TEXT NOT NULL
+                )
+            """)
+        except Exception:
+            # If this is a local SQLite runtime, BIGSERIAL is not available.
+            # Roll back the failed DDL before issuing the SQLite-compatible DDL.
+            try:
+                c.rollback()
+            except Exception:
+                pass
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS owner_subscription_control_events(
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    company_id INTEGER NOT NULL,
+                    actor_user_id INTEGER,
+                    action TEXT NOT NULL,
+                    detail TEXT,
+                    created TEXT NOT NULL
+                )
+            """)
         c.commit()
     finally:
         c.close()
@@ -56167,6 +56187,60 @@ def bc720_health():
 
 BUILD_COMMAND_RELEASE = BC720_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC720_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.2.1 — PostgreSQL Audit Table Startup Fix
+# ============================================================
+BC721_RELEASE = "7.2.1"
+BC721_RELEASE_NAME = "PostgreSQL Audit Table Startup Fix"
+
+@app.get("/health/postgres-audit-table-fix-7-2-1")
+def bc721_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    c = _runtime.db()
+    audit_table_ok = False
+    try:
+        c.execute("SELECT 1 FROM owner_subscription_control_events LIMIT 1")
+        audit_table_ok = True
+    except Exception:
+        audit_table_ok = False
+    finally:
+        c.close()
+
+    checks = [
+        ("7.2.0 subscription control preserved",
+         "/health/subscription-access-control-7-2-0" in paths),
+        ("owner subscription console preserved",
+         "/owner/subscriptions" in paths),
+        ("audit table available", audit_table_ok),
+        ("master owner protection preserved",
+         globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com"),
+        ("login preserved", "/login" in paths),
+        ("register preserved", "/register" in paths),
+        ("7.1.4 auth flag baseline preserved",
+         "/health/auth-visible-flag-7-1-4" in paths),
+    ]
+    passed = sum(bool(v) for _, v in checks)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC721_RELEASE,
+        "release": BC721_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "postgres_startup_fix": True,
+        "data_reset": False,
+        "checks": [{"case": n, "passed": bool(v)} for n, v in checks],
+    }
+
+BUILD_COMMAND_RELEASE = BC721_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC721_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
