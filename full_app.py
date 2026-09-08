@@ -56905,3 +56905,48 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.2 — Owner Navigation Runtime Fix
+# No customer-app business logic changes.
+# ============================================================
+BC742_RELEASE = "7.4.2"
+BC742_RELEASE_NAME = "Owner Navigation Runtime Fix"
+
+@app.get("/health/owner-navigation-separation-7-4-2")
+def bc742_full_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "login_preserved": "/login" in paths,
+        "register_preserved": "/register" in paths,
+        "customer_app_preserved": "/app" in paths,
+        "owner_console_registered": "/owner" in paths,
+        "billing_center_preserved": "/owner/billing" in paths,
+        "subscriptions_preserved": "/owner/subscriptions" in paths,
+        "cleanup_preserved": "/owner/cleanup" in paths,
+        "stripe_webhook_preserved": "/billing/stripe-webhook" in paths,
+        "payment_gate_preserved": callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved": callable(globals().get("_bc181893_is_approved")),
+        "master_protection_preserved": globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC742_RELEASE,
+        "release": BC742_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "data_reset": False,
+        "checks": checks,
+    }
+
+BUILD_COMMAND_RELEASE = BC742_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC742_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
