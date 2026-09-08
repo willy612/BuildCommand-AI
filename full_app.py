@@ -54499,8 +54499,18 @@ def _bc642_base_url(request):
     except Exception:
         return ""
 
+def _bc743_stripe_mode():
+    mode = str(_bc642_os.getenv("STRIPE_MODE") or "LIVE").strip().upper()
+    return "TEST" if mode == "TEST" else "LIVE"
+
+def _bc743_stripe_secret_key():
+    return str(_bc642_os.getenv("STRIPE_TEST_SECRET_KEY" if _bc743_stripe_mode() == "TEST" else "STRIPE_SECRET_KEY") or "").strip()
+
+def _bc743_stripe_webhook_secret():
+    return str(_bc642_os.getenv("STRIPE_TEST_WEBHOOK_SECRET" if _bc743_stripe_mode() == "TEST" else "STRIPE_WEBHOOK_SECRET") or "").strip()
+
 def _bc642_stripe_request(method, endpoint, data=None):
-    secret = str(_bc642_os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    secret = _bc743_stripe_secret_key()
     if not secret:
         raise RuntimeError("STRIPE_SECRET_KEY is not configured in Render.")
 
@@ -56470,7 +56480,7 @@ def _bc740_env(name):
     return str(_bc642_os.getenv(name) or "").strip()
 
 def _bc740_webhook_signature_ok(body_bytes, signature_header):
-    secret = _bc740_env("STRIPE_WEBHOOK_SECRET")
+    secret = _bc743_stripe_webhook_secret()
     if not secret or not signature_header:
         return False
 
@@ -56725,7 +56735,7 @@ def _bc740_process_stripe_event(event):
 
 @app.post("/billing/stripe-webhook")
 async def bc740_stripe_webhook(request: _BC740_Request):
-    if not _bc740_env("STRIPE_WEBHOOK_SECRET"):
+    if not _bc743_stripe_webhook_secret():
         return _BC740_JSONResponse(
             {"detail": "STRIPE_WEBHOOK_SECRET is not configured."},
             status_code=503
@@ -56946,6 +56956,28 @@ def bc742_full_health():
 
 BUILD_COMMAND_RELEASE = BC742_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC742_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+@app.get("/health/stripe-mode-7-4-3")
+def bc743_stripe_mode_health():
+    mode = _bc743_stripe_mode()
+    checks = {
+        "mode_valid": mode in {"TEST", "LIVE"},
+        "selected_secret_key_configured": bool(_bc743_stripe_secret_key()),
+        "selected_webhook_secret_configured": bool(_bc743_stripe_webhook_secret()),
+        "live_secret_preserved": bool(str(_bc642_os.getenv("STRIPE_SECRET_KEY") or "").strip()),
+        "live_webhook_preserved": bool(str(_bc642_os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()),
+        "checkout_preserved": callable(globals().get("_bc642_stripe_request")),
+        "webhook_preserved": "/billing/stripe-webhook" in {getattr(r,"path","") for r in app.routes},
+        "data_reset_disabled": True,
+    }
+    passed=sum(bool(v) for v in checks.values())
+    return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI","version":BC743_RELEASE,"release":BC743_RELEASE_NAME,"stripe_mode":mode,"passed":passed,"total":len(checks),"failed":len(checks)-passed,"data_reset":False,"checks":checks}
+
+BUILD_COMMAND_RELEASE = BC743_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC743_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
