@@ -56115,41 +56115,42 @@ except Exception:
 
 
 # ============================================================
-# BuildCommand AI 7.2.3 — Company Cleanup Center
-# Owner-only cleanup UI/actions live in owner_console.py.
+# BuildCommand AI 7.2.4 — Owner Console Separation Cleanup
+# Customer application only: owner cleanup UI/actions live in owner_console.py.
 # ============================================================
-BC723_RELEASE = "7.2.3"
-BC723_RELEASE_NAME = "Company Cleanup Center"
+BC724_RELEASE = "7.2.4"
+BC724_RELEASE_NAME = "Owner Console Separation Cleanup"
 
-@app.get("/health/company-cleanup-separation-7-2-3")
-def bc723_full_health():
-    paths = {getattr(r,"path","") for r in app.routes}
-    checks = [
-        ("owner console registered", "/owner" in paths),
-        ("owner cleanup center registered", "/owner/cleanup" in paths),
-        ("selective delete registered", "/owner/cleanup/delete-selected" in paths),
-        ("strict customer payment gate preserved", callable(globals().get("_bc181893_payment_ok"))),
-        ("strict owner approval gate preserved", callable(globals().get("_bc181893_is_approved"))),
-        ("master owner protection preserved", globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com"),
-        ("customer login preserved", "/login" in paths),
-        ("customer register preserved", "/register" in paths),
-    ]
-    passed = sum(bool(v) for _,v in checks)
+@app.get("/health/owner-console-separation-7-2-4")
+def bc724_separation_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "login_preserved": "/login" in paths,
+        "register_preserved": "/register" in paths,
+        "owner_console_registered": "/owner" in paths,
+        "owner_cleanup_registered_by_console": "/owner/cleanup" in paths,
+        "owner_selective_delete_registered_by_console": "/owner/cleanup/delete-selected" in paths,
+        "payment_gate_preserved": callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved": callable(globals().get("_bc181893_is_approved")),
+        "master_owner_protection_preserved": globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+    }
+    passed = sum(1 for v in checks.values() if v)
     return {
-        "status":"ok" if passed==len(checks) else "degraded",
-        "app":"BuildCommand AI",
-        "version":BC723_RELEASE,
-        "release":BC723_RELEASE_NAME,
-        "passed":passed,
-        "total":len(checks),
-        "failed":len(checks)-passed,
-        "owner_business_ui":"owner_console.py",
-        "data_reset":False,
-        "checks":[{"case":n,"passed":bool(v)} for n,v in checks],
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC724_RELEASE,
+        "release": BC724_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "full_app_role": "customer application + access enforcement",
+        "owner_console_role": "owner business controls + cleanup",
+        "data_reset": False,
+        "checks": checks,
     }
 
-BUILD_COMMAND_RELEASE = BC723_RELEASE
-BUILD_COMMAND_RELEASE_NAME = BC723_RELEASE_NAME
+BUILD_COMMAND_RELEASE = BC724_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC724_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
