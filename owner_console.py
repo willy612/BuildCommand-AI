@@ -13,7 +13,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.4.2"
+OWNER_CONSOLE_VERSION = "7.4.3"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -1892,8 +1892,12 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
               <td><a class="btn secondary" href="/owner/customers/{int(r["id"])}">Manage</a></td>
             </tr>"""
 
-        secret_ok = bool(_bc740_owner_env("STRIPE_SECRET_KEY"))
-        webhook_ok = bool(_bc740_owner_env("STRIPE_WEBHOOK_SECRET"))
+        stripe_mode = (_bc740_owner_env("STRIPE_MODE") or "LIVE").upper()
+        if stripe_mode not in {"TEST", "LIVE"}: stripe_mode = "LIVE"
+        secret_name = "STRIPE_TEST_SECRET_KEY" if stripe_mode == "TEST" else "STRIPE_SECRET_KEY"
+        webhook_name = "STRIPE_TEST_WEBHOOK_SECRET" if stripe_mode == "TEST" else "STRIPE_WEBHOOK_SECRET"
+        secret_ok = bool(_bc740_owner_env(secret_name))
+        webhook_ok = bool(_bc740_owner_env(webhook_name))
         base_ok = bool(_bc740_owner_env("APP_BASE_URL"))
 
         body = f"""
@@ -1913,10 +1917,11 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
         <div class="card">
           <div class="eyebrow">STRIPE READINESS</div>
           <h2>Payment Connection</h2>
+          <p><b>STRIPE MODE:</b> <span class="pill {'warn' if stripe_mode == 'TEST' else 'good'}">{stripe_mode}</span></p>
           <table>
             <tr><th>Setting</th><th>Status</th></tr>
-            <tr><td>STRIPE_SECRET_KEY</td><td><span class="pill {'good' if secret_ok else 'warn'}">{"READY" if secret_ok else "NOT CONFIGURED"}</span></td></tr>
-            <tr><td>STRIPE_WEBHOOK_SECRET</td><td><span class="pill {'good' if webhook_ok else 'warn'}">{"READY" if webhook_ok else "NOT CONFIGURED"}</span></td></tr>
+            <tr><td>{secret_name}</td><td><span class="pill {'good' if secret_ok else 'warn'}">{"READY" if secret_ok else "NOT CONFIGURED"}</span></td></tr>
+            <tr><td>{webhook_name}</td><td><span class="pill {'good' if webhook_ok else 'warn'}">{"READY" if webhook_ok else "NOT CONFIGURED"}</span></td></tr>
             <tr><td>APP_BASE_URL</td><td><span class="pill {'good' if base_ok else 'warn'}">{"READY" if base_ok else "NOT CONFIGURED"}</span></td></tr>
           </table>
           <p><b>Webhook URL:</b> https://buildcommandai.com/billing/stripe-webhook</p>
@@ -2243,5 +2248,23 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             "data_reset": False,
             "checks": checks,
         }
+
+    # BuildCommand AI 7.4.3 — Safe Stripe Test / Live Mode
+    @app.get("/health/owner-stripe-mode-7-4-3")
+    def owner_stripe_mode_743_health():
+        mode = (_bc740_owner_env("STRIPE_MODE") or "LIVE").upper()
+        if mode not in {"TEST", "LIVE"}: mode = "LIVE"
+        selected_key = "STRIPE_TEST_SECRET_KEY" if mode == "TEST" else "STRIPE_SECRET_KEY"
+        selected_webhook = "STRIPE_TEST_WEBHOOK_SECRET" if mode == "TEST" else "STRIPE_WEBHOOK_SECRET"
+        checks = {
+            "mode_valid": mode in {"TEST", "LIVE"},
+            "selected_secret_configured": bool(_bc740_owner_env(selected_key)),
+            "selected_webhook_configured": bool(_bc740_owner_env(selected_webhook)),
+            "live_credentials_preserved": bool(_bc740_owner_env("STRIPE_SECRET_KEY")) and bool(_bc740_owner_env("STRIPE_WEBHOOK_SECRET")),
+            "billing_center_preserved": "/owner/billing" in {getattr(r,"path","") for r in app.routes},
+            "data_reset_disabled": True,
+        }
+        passed=sum(bool(v) for v in checks.values())
+        return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI","version":"7.4.3","release":"Safe Stripe Test / Live Mode","stripe_mode":mode,"passed":passed,"total":len(checks),"failed":len(checks)-passed,"data_reset":False,"checks":checks}
 
     return app
