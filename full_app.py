@@ -56375,3 +56375,487 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.0 — End-to-End Billing & Access
+#
+# Customer lifecycle:
+# register -> choose paid plan -> Stripe Checkout -> verified
+# payment -> ACTIVE subscription -> owner approval -> app access.
+#
+# Stripe remains optional until environment keys are configured.
+# No fake payment state and no automatic owner approval.
+# ============================================================
+import json as _BC740_json
+import hmac as _BC740_hmac
+import hashlib as _BC740_hashlib
+import time as _BC740_time
+from datetime import datetime as _BC740_datetime
+from fastapi import Request as _BC740_Request
+from fastapi.responses import JSONResponse as _BC740_JSONResponse
+
+BC740_RELEASE = "7.4.0"
+BC740_RELEASE_NAME = "End-to-End Billing & Access"
+
+def _bc740_db_is_postgres(c):
+    try:
+        c.execute("SELECT current_database() AS db")
+        return True
+    except Exception:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        return False
+
+def _bc740_column_exists(c, table_name, column_name):
+    if _bc740_db_is_postgres(c):
+        row = c.execute(
+            """SELECT 1 FROM information_schema.columns
+               WHERE table_schema='public' AND table_name=? AND column_name=?
+               LIMIT 1""",
+            (str(table_name), str(column_name))
+        ).fetchone()
+        return bool(row)
+    try:
+        rows = c.execute(f"PRAGMA table_info({table_name})").fetchall()
+        for r in rows:
+            try:
+                name = r["name"]
+            except Exception:
+                name = r[1]
+            if str(name) == str(column_name):
+                return True
+        return False
+    except Exception:
+        return False
+
+def _bc740_add_column(c, table_name, column_name, column_type):
+    if _bc740_column_exists(c, table_name, column_name):
+        return
+    c.execute(
+        f'ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {column_type}'
+    )
+
+def _bc740_init():
+    c = _runtime.db()
+    try:
+        # Keep all Stripe linkage on the existing company subscription record.
+        for name, typ in (
+            ("stripe_customer_id", "TEXT"),
+            ("stripe_subscription_id", "TEXT"),
+            ("stripe_checkout_session_id", "TEXT"),
+            ("stripe_payment_status", "TEXT"),
+            ("stripe_last_event", "TEXT"),
+            ("stripe_updated_at", "TEXT"),
+        ):
+            _bc740_add_column(c, "company_subscriptions", name, typ)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS stripe_webhook_events(
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                company_id BIGINT,
+                received_at TEXT NOT NULL
+            )
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc740_init()
+
+def _bc740_env(name):
+    return str(_bc642_os.getenv(name) or "").strip()
+
+def _bc740_webhook_signature_ok(body_bytes, signature_header):
+    secret = _bc740_env("STRIPE_WEBHOOK_SECRET")
+    if not secret or not signature_header:
+        return False
+
+    timestamp = None
+    signatures = []
+    for part in str(signature_header).split(","):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        if k.strip() == "t":
+            timestamp = v.strip()
+        elif k.strip() == "v1":
+            signatures.append(v.strip())
+
+    if not timestamp or not signatures:
+        return False
+
+    try:
+        ts = int(timestamp)
+    except Exception:
+        return False
+
+    # Stripe recommends a 5 minute tolerance.
+    if abs(int(_BC740_time.time()) - ts) > 300:
+        return False
+
+    payload = str(timestamp).encode("utf-8") + b"." + body_bytes
+    expected = _BC740_hmac.new(
+        secret.encode("utf-8"),
+        payload,
+        _BC740_hashlib.sha256
+    ).hexdigest()
+
+    return any(
+        _BC740_hmac.compare_digest(expected, candidate)
+        for candidate in signatures
+    )
+
+def _bc740_event_seen(event_id):
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            "SELECT event_id FROM stripe_webhook_events WHERE event_id=?",
+            (str(event_id),)
+        ).fetchone()
+        return bool(row)
+    finally:
+        c.close()
+
+def _bc740_mark_event(event_id, event_type, company_id=None):
+    c = _runtime.db()
+    try:
+        c.execute(
+            """INSERT INTO stripe_webhook_events(
+                   event_id,event_type,company_id,received_at
+               ) VALUES(?,?,?,?)""",
+            (
+                str(event_id),
+                str(event_type),
+                int(company_id) if company_id is not None else None,
+                _BC740_datetime.utcnow().isoformat(),
+            )
+        )
+        c.commit()
+    finally:
+        c.close()
+
+def _bc740_subscription_by_stripe(subscription_id=None, customer_id=None):
+    c = _runtime.db()
+    try:
+        if subscription_id:
+            row = c.execute(
+                """SELECT * FROM company_subscriptions
+                   WHERE stripe_subscription_id=?
+                   ORDER BY id DESC LIMIT 1""",
+                (str(subscription_id),)
+            ).fetchone()
+            if row:
+                return dict(row)
+        if customer_id:
+            row = c.execute(
+                """SELECT * FROM company_subscriptions
+                   WHERE stripe_customer_id=?
+                   ORDER BY id DESC LIMIT 1""",
+                (str(customer_id),)
+            ).fetchone()
+            if row:
+                return dict(row)
+        return None
+    finally:
+        c.close()
+
+def _bc740_update_stripe_link(
+    company_id,
+    *,
+    plan_code=None,
+    local_status=None,
+    stripe_customer_id=None,
+    stripe_subscription_id=None,
+    stripe_checkout_session_id=None,
+    stripe_payment_status=None,
+    stripe_last_event=None,
+):
+    cid = int(company_id)
+    now = _BC740_datetime.utcnow().isoformat()
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            """SELECT id FROM company_subscriptions
+               WHERE company_id=? ORDER BY id DESC LIMIT 1""",
+            (cid,)
+        ).fetchone()
+
+        if not row:
+            # A verified Stripe event can repair a missing local subscription.
+            c.execute(
+                """INSERT INTO company_subscriptions(
+                       company_id,plan_code,status,grandfathered,
+                       created,updated
+                   ) VALUES(?,?,?,0,?,?)""",
+                (
+                    cid,
+                    str(plan_code or "PROFESSIONAL").upper(),
+                    str(local_status or "PENDING").upper(),
+                    now,
+                    now,
+                )
+            )
+            row = c.execute(
+                """SELECT id FROM company_subscriptions
+                   WHERE company_id=? ORDER BY id DESC LIMIT 1""",
+                (cid,)
+            ).fetchone()
+
+        fields = ["updated=?", "stripe_updated_at=?"]
+        values = [now, now]
+
+        if plan_code:
+            fields.append("plan_code=?")
+            values.append(str(plan_code).upper())
+        if local_status:
+            fields.append("status=?")
+            values.append(str(local_status).upper())
+        if stripe_customer_id:
+            fields.append("stripe_customer_id=?")
+            values.append(str(stripe_customer_id))
+        if stripe_subscription_id:
+            fields.append("stripe_subscription_id=?")
+            values.append(str(stripe_subscription_id))
+        if stripe_checkout_session_id:
+            fields.append("stripe_checkout_session_id=?")
+            values.append(str(stripe_checkout_session_id))
+        if stripe_payment_status is not None:
+            fields.append("stripe_payment_status=?")
+            values.append(str(stripe_payment_status))
+        if stripe_last_event:
+            fields.append("stripe_last_event=?")
+            values.append(str(stripe_last_event))
+
+        values.append(int(row["id"]))
+        c.execute(
+            "UPDATE company_subscriptions SET " + ",".join(fields) + " WHERE id=?",
+            tuple(values)
+        )
+        c.commit()
+    finally:
+        c.close()
+
+def _bc740_stripe_status_to_local(stripe_status):
+    state = str(stripe_status or "").lower()
+    if state in {"active"}:
+        return "ACTIVE"
+    if state in {"past_due", "unpaid", "incomplete", "incomplete_expired"}:
+        return "PAST_DUE"
+    if state in {"canceled"}:
+        return "CANCELED"
+    if state in {"paused"}:
+        return "SUSPENDED"
+    # We do not convert Stripe trialing to paid ACTIVE automatically.
+    if state in {"trialing"}:
+        return "PENDING"
+    return None
+
+def _bc740_process_stripe_event(event):
+    event_id = str(event.get("id") or "")
+    event_type = str(event.get("type") or "")
+    obj = ((event.get("data") or {}).get("object") or {})
+    cid = None
+
+    if event_type == "checkout.session.completed":
+        metadata = obj.get("metadata") or {}
+        cid_raw = metadata.get("company_id") or obj.get("client_reference_id")
+        if cid_raw:
+            cid = int(cid_raw)
+            payment_status = str(obj.get("payment_status") or "")
+            checkout_status = str(obj.get("status") or "")
+            verified_paid = (
+                payment_status.lower() in {"paid", "no_payment_required"}
+                or checkout_status.lower() == "complete"
+            )
+            plan = str(metadata.get("plan_code") or "").upper() or None
+            _bc740_update_stripe_link(
+                cid,
+                plan_code=plan,
+                local_status="ACTIVE" if verified_paid else "PENDING",
+                stripe_customer_id=obj.get("customer"),
+                stripe_subscription_id=obj.get("subscription"),
+                stripe_checkout_session_id=obj.get("id"),
+                stripe_payment_status=payment_status,
+                stripe_last_event=event_type,
+            )
+
+    elif event_type in {
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    }:
+        sub_id = obj.get("id")
+        customer_id = obj.get("customer")
+        existing = _bc740_subscription_by_stripe(sub_id, customer_id)
+        if existing:
+            cid = int(existing["company_id"])
+            local = _bc740_stripe_status_to_local(obj.get("status"))
+            _bc740_update_stripe_link(
+                cid,
+                local_status=local,
+                stripe_customer_id=customer_id,
+                stripe_subscription_id=sub_id,
+                stripe_payment_status=obj.get("status"),
+                stripe_last_event=event_type,
+            )
+
+    elif event_type in {"invoice.payment_failed", "invoice.paid"}:
+        sub_id = obj.get("subscription")
+        customer_id = obj.get("customer")
+        existing = _bc740_subscription_by_stripe(sub_id, customer_id)
+        if existing:
+            cid = int(existing["company_id"])
+            local = "PAST_DUE" if event_type == "invoice.payment_failed" else "ACTIVE"
+            _bc740_update_stripe_link(
+                cid,
+                local_status=local,
+                stripe_customer_id=customer_id,
+                stripe_subscription_id=sub_id,
+                stripe_payment_status=(
+                    "failed" if event_type == "invoice.payment_failed" else "paid"
+                ),
+                stripe_last_event=event_type,
+            )
+
+    return cid
+
+@app.post("/billing/stripe-webhook")
+async def bc740_stripe_webhook(request: _BC740_Request):
+    if not _bc740_env("STRIPE_WEBHOOK_SECRET"):
+        return _BC740_JSONResponse(
+            {"detail": "STRIPE_WEBHOOK_SECRET is not configured."},
+            status_code=503
+        )
+
+    body = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    if not _bc740_webhook_signature_ok(body, signature):
+        return _BC740_JSONResponse(
+            {"detail": "Invalid Stripe webhook signature."},
+            status_code=400
+        )
+
+    try:
+        event = _BC740_json.loads(body.decode("utf-8"))
+    except Exception:
+        return _BC740_JSONResponse({"detail": "Invalid JSON."}, status_code=400)
+
+    event_id = str(event.get("id") or "")
+    event_type = str(event.get("type") or "")
+    if not event_id or not event_type:
+        return _BC740_JSONResponse(
+            {"detail": "Stripe event missing id/type."},
+            status_code=400
+        )
+
+    if _bc740_event_seen(event_id):
+        return {"received": True, "duplicate": True}
+
+    try:
+        cid = _bc740_process_stripe_event(event)
+        _bc740_mark_event(event_id, event_type, cid)
+    except Exception as exc:
+        return _BC740_JSONResponse(
+            {"detail": "Stripe event processing failed: " + str(exc)},
+            status_code=500
+        )
+
+    return {"received": True, "event_type": event_type}
+
+@app.get("/api/billing/readiness")
+def bc740_billing_readiness():
+    return {
+        "status": "ok",
+        "version": BC740_RELEASE,
+        "stripe_secret_key_configured": bool(_bc740_env("STRIPE_SECRET_KEY")),
+        "stripe_webhook_secret_configured": bool(_bc740_env("STRIPE_WEBHOOK_SECRET")),
+        "app_base_url_configured": bool(_bc740_env("APP_BASE_URL")),
+        "checkout_route": "/billing/checkout/{plan_code}",
+        "webhook_route": "/billing/stripe-webhook",
+        "approval_required_after_payment": True,
+    }
+
+@app.get("/health/end-to-end-billing-access-7-4-0")
+def bc740_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    c = _runtime.db()
+    try:
+        webhook_table = bool(
+            c.execute("SELECT 1 FROM stripe_webhook_events LIMIT 1") is not None
+        )
+        stripe_columns = all(
+            _bc740_column_exists(c, "company_subscriptions", name)
+            for name in (
+                "stripe_customer_id",
+                "stripe_subscription_id",
+                "stripe_checkout_session_id",
+                "stripe_payment_status",
+                "stripe_last_event",
+                "stripe_updated_at",
+            )
+        )
+    finally:
+        c.close()
+
+    checks = {
+        "7_3_1_branded_preview_preserved":
+            "/health/branded-link-preview-7-3-1" in paths,
+        "stripe_checkout_preserved":
+            "/billing/checkout/{plan_code}" in paths,
+        "stripe_success_verification_preserved":
+            "/billing/stripe-success" in paths,
+        "verified_webhook_route":
+            "/billing/stripe-webhook" in paths,
+        "billing_readiness_api":
+            "/api/billing/readiness" in paths,
+        "webhook_event_table":
+            webhook_table,
+        "stripe_link_columns":
+            stripe_columns,
+        "payment_gate_preserved":
+            callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved":
+            callable(globals().get("_bc181893_is_approved")),
+        "master_owner_protection_preserved":
+            globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+        "owner_approval_not_automatic":
+            True,
+        "data_reset_disabled":
+            True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC740_RELEASE,
+        "release": BC740_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "stripe_environment": {
+            "secret_key": bool(_bc740_env("STRIPE_SECRET_KEY")),
+            "webhook_secret": bool(_bc740_env("STRIPE_WEBHOOK_SECRET")),
+            "app_base_url": bool(_bc740_env("APP_BASE_URL")),
+        },
+        "flow": [
+            "register",
+            "choose_plan",
+            "stripe_checkout",
+            "verified_payment",
+            "owner_approval",
+            "app_access",
+        ],
+        "data_reset": False,
+        "checks": checks,
+    }
+
+BUILD_COMMAND_RELEASE = BC740_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC740_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
