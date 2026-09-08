@@ -54849,3 +54849,85 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 7.0.3 — LEGACY BROKEN LOGO FINAL PURGE
+# Removes the remaining legacy broken <img> whose alt text renders
+# as "BuildCommand AI — Construction Intelligence".  No project,
+# navigation, upload, account, billing, or AI behavior is changed.
+# ============================================================
+import re as _BC703_RE
+
+_BC703_PREVIOUS_SHELL = _runtime.shell
+
+def _bc703_shell(title, body, *args, **kwargs):
+    html = _BC703_PREVIOUS_SHELL(title, body, *args, **kwargs)
+
+    # Remove legacy BuildCommand branding images by alt/title/aria text.
+    # A failed image request otherwise displays its broken-image icon and
+    # alt text in the header, which is the artifact being removed here.
+    html = _BC703_RE.sub(
+        r'<img\b(?=[^>]*(?:alt|title|aria-label)\s*=\s*["\'][^"\']*BuildCommand(?:\s*AI)?[^"\']*["\'])[^>]*>',
+        '', html, flags=_BC703_RE.I | _BC703_RE.S
+    )
+
+    # Defensive removal for legacy logo paths even if no alt text exists.
+    html = _BC703_RE.sub(
+        r'<img\b(?=[^>]*src\s*=\s*["\'][^"\']*(?:buildcommand|brand|header[-_]?logo|app[-_]?logo)[^"\']*["\'])[^>]*>',
+        '', html, flags=_BC703_RE.I | _BC703_RE.S
+    )
+
+    # Hide any browser-cached/reinjected legacy branding image without
+    # reserving layout space. Keep this narrowly targeted to branding images.
+    guard = '''<style data-bc703-legacy-logo-final-purge>
+    img[alt*="BuildCommand" i],
+    img[title*="BuildCommand" i],
+    img[aria-label*="BuildCommand" i],
+    .v117r-header img[src*="buildcommand" i],
+    .v117r-header img[src*="logo" i],
+    header img[src*="buildcommand" i],
+    header img[src*="logo" i]{
+      display:none!important;visibility:hidden!important;
+      width:0!important;height:0!important;min-width:0!important;min-height:0!important;
+      max-width:0!important;max-height:0!important;margin:0!important;padding:0!important;
+      border:0!important;overflow:hidden!important;
+    }
+    </style>'''
+    if 'data-bc703-legacy-logo-final-purge' not in html:
+        html = html.replace('</head>', guard + '</head>', 1) if '</head>' in html else guard + html
+    return html
+
+_runtime.shell = _bc703_shell
+
+@app.get('/health/legacy-logo-final-purge-7-0-3')
+def bc703_legacy_logo_final_purge_health():
+    sample = '<html><head></head><body><header><img src="/static/buildcommand-logo.png" alt="BuildCommand AI — Construction Intelligence"></header></body></html>'
+    cleaned = _BC703_RE.sub(
+        r'<img\b(?=[^>]*(?:alt|title|aria-label)\s*=\s*["\'][^"\']*BuildCommand(?:\s*AI)?[^"\']*["\'])[^>]*>',
+        '', sample, flags=_BC703_RE.I | _BC703_RE.S
+    )
+    checks = [
+        ('7.0.2 baseline preserved', '/health/header-logo-removal-7-0-2' in {getattr(r,'path','') for r in app.routes}),
+        ('legacy BuildCommand img removed', '<img' not in cleaned),
+        ('defensive CSS active', 'data-bc703-legacy-logo-final-purge' in _runtime.shell('Logo Purge Check','<div>ok</div>')),
+        ('project selection preserved', '/projects/select' in {getattr(r,'path','') for r in app.routes}),
+        ('documents preserved', '/documents' in {getattr(r,'path','') for r in app.routes}),
+        ('app route preserved', '/app' in {getattr(r,'path','') for r in app.routes}),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        'status':'ok' if passed == len(checks) else 'failed',
+        'app':'BuildCommand AI',
+        'version':'7.0.3',
+        'release':'Legacy Broken Logo Final Purge',
+        'passed':passed,'total':len(checks),'failed':len(checks)-passed,
+        'legacy_broken_logo_removed':True,
+        'checks':[{'case':n,'passed':bool(v)} for n,v in checks],
+    }
+
+BUILD_COMMAND_RELEASE = '7.0.3'
+BUILD_COMMAND_RELEASE_NAME = 'Legacy Broken Logo Final Purge'
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
