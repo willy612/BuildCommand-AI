@@ -54791,85 +54791,60 @@ except Exception:
     pass
 
 # ============================================================
-# BuildCommand AI 7.0.1
-# Header Ghost Image Purge
+# BuildCommand AI 7.0.2 — HEADER LOGO REMOVAL
+# Removes the remaining legacy flag/BuildCommand AI logo from
+# the construction-app header. All project, upload, account,
+# navigation, billing, and AI behavior remains unchanged.
 # ============================================================
-_BC701_RELEASE = "Header Ghost Image Purge"
-_BC701_PREVIOUS_SHELL = _runtime.shell
+import re as _BC702_RE
 
-def _bc701_shell(title, body, *args, **kwargs):
-    html = _BC701_PREVIOUS_SHELL(title, body, *args, **kwargs)
-    # The approved BuildCommand AI header logo is CSS/HTML based.  Any image,
-    # picture, or figure element inside the app header is therefore legacy
-    # branding and must never reserve space or show as a broken-image box.
-    purge_css = r'''
-    <style id="bc701-header-ghost-image-purge">
-      .v117r-header img,
-      .v117r-header picture,
-      .v117r-header figure {
-        display:none !important;
-        visibility:hidden !important;
-        width:0 !important;
-        height:0 !important;
-        min-width:0 !important;
-        min-height:0 !important;
-        max-width:0 !important;
-        max-height:0 !important;
-        margin:0 !important;
-        padding:0 !important;
-        border:0 !important;
-        overflow:hidden !important;
-      }
-      .v117r-brand {
-        display:flex !important;
-        visibility:visible !important;
-      }
-    </style>
-    '''
-    if '</head>' in html:
-        html = html.replace('</head>', purge_css + '</head>', 1)
-    else:
-        html = purge_css + html
+_BC702_PREVIOUS_SHELL = _runtime.shell
+
+def _bc702_shell(title, body, *args, **kwargs):
+    html = _BC702_PREVIOUS_SHELL(title, body, *args, **kwargs)
+    # Remove only the active v117r header brand anchor. This eliminates
+    # both the BuildCommand AI text and its CSS-generated flag artwork.
+    html = _BC702_RE.sub(
+        r'<a\b[^>]*class=["\'][^"\']*\bv117r-brand\b[^"\']*["\'][^>]*>.*?</a>',
+        '', html, count=1, flags=_BC702_RE.I | _BC702_RE.S
+    )
+    # Defensive CSS: if any legacy layer re-injects the brand markup,
+    # keep it completely out of layout rather than leaving a blank block.
+    guard = '''<style data-bc702-logo-removal>
+    .v117r-header .v117r-brand{display:none!important;width:0!important;min-width:0!important;height:0!important;padding:0!important;margin:0!important;border:0!important;overflow:hidden!important}
+    </style>'''
+    if 'data-bc702-logo-removal' not in html:
+        html = html.replace('</head>', guard + '</head>', 1) if '</head>' in html else guard + html
     return html
 
-_runtime.shell = _bc701_shell
+_runtime.shell = _bc702_shell
 
-@app.get("/health/header-ghost-image-purge-7-0-1")
-def health_header_ghost_image_purge_701():
-    paths = {getattr(r, "path", "") for r in app.routes}
+@app.get('/health/header-logo-removal-7-0-2')
+def bc702_header_logo_removal_health():
+    sample = _runtime.shell('Header Logo Check', '<div>ok</div>')
     checks = [
-        ("shell override active", _runtime.shell is _bc701_shell),
-        ("previous shell preserved", callable(_BC701_PREVIOUS_SHELL)),
-        ("approved CSS brand preserved", True),
-        ("header img purged", True),
-        ("header picture purged", True),
-        ("header figure purged", True),
-        ("app route preserved", "/app" in paths),
-        ("root route preserved", "/" in paths),
-        ("documents preserved", "/documents" in paths),
-        ("project switch preserved", "/projects/select" in paths),
-        ("no DB migration", True),
-        ("no data deletion", True),
+        ('7.0 clean baseline preserved', '/health/clean-baseline-7-0-0' in {getattr(r,'path','') for r in app.routes}),
+        ('header logo markup removed', 'class="v117r-brand"' not in sample),
+        ('header logo guard active', 'data-bc702-logo-removal' in sample),
+        ('project switcher preserved', 'class="v117r-project"' in sample),
+        ('upload controls preserved', 'class="v117r-search"' in sample),
+        ('navigation preserved', 'class="v117r-menu' in sample),
     ]
     passed = sum(bool(v) for _, v in checks)
     return {
-        "status": "ok" if passed == len(checks) else "failed",
-        "app": "BuildCommand AI",
-        "version": "7.0.1",
-        "release": _BC701_RELEASE,
-        "passed": passed,
-        "total": len(checks),
-        "failed": len(checks) - passed,
-        "behavior": {
-            "legacy_header_images_hidden": True,
-            "approved_css_brand_preserved": True,
-            "header_spacing_collapses": True,
-        },
-        "checks": [{"case": n, "passed": bool(v)} for n, v in checks],
+        'status': 'ok' if passed == len(checks) else 'failed',
+        'app': 'BuildCommand AI',
+        'version': '7.0.2',
+        'release': 'Header Logo Removal',
+        'passed': passed,
+        'total': len(checks),
+        'failed': len(checks)-passed,
+        'logo_removed': True,
+        'checks': [{'case':n,'passed':bool(v)} for n,v in checks],
     }
 
-BUILD_COMMAND_RELEASE = "7.0.1"
-BUILD_COMMAND_RELEASE_NAME = _BC701_RELEASE
+BUILD_COMMAND_RELEASE = '7.0.2'
+BUILD_COMMAND_RELEASE_NAME = 'Header Logo Removal'
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
