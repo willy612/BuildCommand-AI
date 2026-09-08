@@ -13,7 +13,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.4.4"
+OWNER_CONSOLE_VERSION = "7.4.5"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
