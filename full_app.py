@@ -55329,3 +55329,83 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 7.1.0 — CLEAN AUTH BRAND
+# Removes the American-flag imagery from the sign-in/account-creation
+# experience while preserving the approved BuildCommand AI wordmark,
+# dark command-center styling, and existing authentication behavior.
+# ============================================================
+_BC710_PREVIOUS_AUTH_HTML = _bc630_auth_html
+
+def _bc630_auth_html(mode="login", error=None):
+    html = _BC710_PREVIOUS_AUTH_HTML(mode, error)
+
+    # Remove the full-page flag background from the auth experience.
+    html = html.replace(
+        'body{min-height:100vh;background-image:linear-gradient(90deg,rgba(2,8,18,.18),rgba(2,8,18,.10)),url("data:image/png;base64,' + _BC630_FLAG_DATA + '");background-size:cover;background-position:center;background-attachment:fixed}',
+        'body{min-height:100vh;background:#07101d}'
+    )
+
+    # Remove the secondary American-flag image that 6.4.0 injected directly
+    # behind the BuildCommand logo. Keep the logo container clean and dark.
+    html = _bc706_re.sub(
+        r'<div class="logo" style="position:relative;overflow:hidden;border-radius:12px;'
+        r'padding:16px;background-image:linear-gradient\(rgba\(3,10,20,\.30\),rgba\(3,10,20,\.52\)\),'
+        r'url\(&quot;data:image/png;base64,.*?&quot;\);background-size:cover;background-position:center 20%;">',
+        '<div class="logo">',
+        html,
+        count=1,
+        flags=_bc706_re.I | _bc706_re.S,
+    )
+
+    # Defense-in-depth: if an auth-brand flag style survives a formatting change,
+    # strip any inline data-image background from the logo container only.
+    html = _bc706_re.sub(
+        r'<div class="logo"\s+style="[^"]*background-image:[^"]*data:image/png;base64,[^"]*">',
+        '<div class="logo">',
+        html,
+        count=1,
+        flags=_bc706_re.I | _bc706_re.S,
+    )
+
+    return html
+
+@app.get('/health/clean-auth-brand-7-1-0')
+def bc710_clean_auth_brand_health():
+    login_html = _bc630_auth_html('login')
+    signup_html = _bc630_auth_html('signup')
+    paths = {getattr(r, 'path', '') for r in app.routes}
+    login_logo_block = login_html.split('<div class="logo">', 1)[1].split('</div>\n    <div class="tag">', 1)[0] if '<div class="logo">' in login_html else ''
+    checks = [
+        ('7.0.9 baseline preserved', '/health/clean-patriot-header-7-0-9' in paths),
+        ('login route preserved', '/login' in paths),
+        ('signup/register route preserved', any(p in paths for p in ('/signup','/register','/create-account'))),
+        ('full-page flag removed from login', _BC630_FLAG_DATA not in login_html),
+        ('full-page flag removed from signup', _BC630_FLAG_DATA not in signup_html),
+        ('logo flag background removed', 'background-image' not in login_logo_block),
+        ('BuildCommand wordmark preserved', 'BUILDCOMMAND <b>AI</b>' in login_html),
+        ('Construction Intelligence preserved', 'CONSTRUCTION INTELLIGENCE' in login_html),
+        ('Welcome Back preserved', 'Welcome Back' in login_html),
+        ('auth POST targets preserved', 'action="/login"' in login_html and 'action="/register"' in signup_html),
+    ]
+    passed = sum(bool(v) for _, v in checks)
+    return {
+        'status': 'ok' if passed == len(checks) else 'failed',
+        'app': 'BuildCommand AI',
+        'version': '7.1.0',
+        'release': 'Clean Auth Brand',
+        'passed': passed,
+        'total': len(checks),
+        'failed': len(checks) - passed,
+        'login_flag_background_removed': _BC630_FLAG_DATA not in login_html,
+        'logo_flag_background_removed': 'background-image' not in login_logo_block,
+        'checks': [{'case': n, 'passed': bool(v)} for n, v in checks],
+    }
+
+BUILD_COMMAND_RELEASE = '7.1.0'
+BUILD_COMMAND_RELEASE_NAME = 'Clean Auth Brand'
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
