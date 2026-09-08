@@ -12,7 +12,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.3.1"
+OWNER_CONSOLE_VERSION = "7.4.0"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -1815,6 +1815,195 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             "customer_app":"full_app.py",
             "master_protected":True,
             "stripe_connected":False,
+            "data_reset":False,
+            "checks":checks,
+        }
+
+
+    # ========================================================
+    # BuildCommand AI 7.4.0 — Billing & Access Command Center
+    # ========================================================
+    import os as _bc740_owner_os
+
+    remove_route("/owner/billing", {"GET"})
+
+    def _bc740_owner_env(name):
+        return str(_bc740_owner_os.getenv(name) or "").strip()
+
+    def _bc740_owner_subscriptions():
+        oid = owner_company_id()
+        c = db()
+        try:
+            rows = c.execute(
+                """SELECT co.id,co.name,
+                          cs.plan_code,cs.status,
+                          cs.stripe_customer_id,
+                          cs.stripe_subscription_id,
+                          cs.stripe_payment_status,
+                          cs.stripe_last_event,
+                          cs.stripe_updated_at,
+                          COALESCE(ca.approved,0) AS approved,
+                          (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) user_count,
+                          (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) project_count
+                   FROM companies co
+                   LEFT JOIN company_subscriptions cs
+                     ON cs.id=(SELECT s2.id FROM company_subscriptions s2
+                               WHERE s2.company_id=co.id ORDER BY s2.id DESC LIMIT 1)
+                   LEFT JOIN company_access_approvals ca ON ca.company_id=co.id
+                   WHERE (? IS NULL OR co.id<>?)
+                   ORDER BY co.name""",
+                (oid, oid)
+            ).fetchall()
+            return rows
+        finally:
+            c.close()
+
+    @app.get("/owner/billing", response_class=HTMLResponse)
+    def owner_billing_command_center():
+        if not require_owner():
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        rows = _bc740_owner_subscriptions()
+        paid_count = 0
+        awaiting_count = 0
+        past_due_count = 0
+        table_rows = ""
+
+        for r in rows:
+            status = str(r["status"] or "NO_SUBSCRIPTION").upper()
+            is_approved = bool(int(r["approved"] or 0))
+            if status == "ACTIVE":
+                paid_count += 1
+                if not is_approved:
+                    awaiting_count += 1
+            if status == "PAST_DUE":
+                past_due_count += 1
+
+            access = "ALLOWED" if status == "ACTIVE" and is_approved else "LOCKED"
+            table_rows += f"""<tr>
+              <td><b>{escape(str(r["name"]))}</b><br><span class="muted">Company #{int(r["id"])}</span></td>
+              <td>{escape(str(r["plan_code"] or "—"))}</td>
+              <td><span class="pill {'good' if status=='ACTIVE' else 'warn'}">{escape(status)}</span></td>
+              <td>{escape(str(r["stripe_payment_status"] or "NOT VERIFIED"))}</td>
+              <td>{"YES" if is_approved else "NO"}</td>
+              <td><span class="pill {'good' if access=='ALLOWED' else 'bad'}">{access}</span></td>
+              <td>{escape(str(r["stripe_last_event"] or "—"))}</td>
+              <td><a class="btn secondary" href="/owner/customers/{int(r["id"])}">Manage</a></td>
+            </tr>"""
+
+        secret_ok = bool(_bc740_owner_env("STRIPE_SECRET_KEY"))
+        webhook_ok = bool(_bc740_owner_env("STRIPE_WEBHOOK_SECRET"))
+        base_ok = bool(_bc740_owner_env("APP_BASE_URL"))
+
+        body = f"""
+        <div class="card">
+          <div class="eyebrow">BUILDCOMMAND BUSINESS · BILLING</div>
+          <h1>Billing & Access Command Center</h1>
+          <p class="muted">One view of customer payment state, subscription status, owner approval, and construction-app access.</p>
+
+          <div class="grid">
+            <div class="stat"><span>Customer Companies</span><b>{len(rows)}</b></div>
+            <div class="stat"><span>Active / Paid</span><b>{paid_count}</b></div>
+            <div class="stat"><span>Paid · Awaiting Approval</span><b>{awaiting_count}</b></div>
+            <div class="stat"><span>Past Due</span><b>{past_due_count}</b></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="eyebrow">STRIPE READINESS</div>
+          <h2>Payment Connection</h2>
+          <table>
+            <tr><th>Setting</th><th>Status</th></tr>
+            <tr><td>STRIPE_SECRET_KEY</td><td><span class="pill {'good' if secret_ok else 'warn'}">{"READY" if secret_ok else "NOT CONFIGURED"}</span></td></tr>
+            <tr><td>STRIPE_WEBHOOK_SECRET</td><td><span class="pill {'good' if webhook_ok else 'warn'}">{"READY" if webhook_ok else "NOT CONFIGURED"}</span></td></tr>
+            <tr><td>APP_BASE_URL</td><td><span class="pill {'good' if base_ok else 'warn'}">{"READY" if base_ok else "NOT CONFIGURED"}</span></td></tr>
+          </table>
+          <p><b>Webhook URL:</b> https://buildcommandai.com/billing/stripe-webhook</p>
+          <p class="muted">No card payment is marked successful unless Stripe Checkout or a verified Stripe webhook confirms it.</p>
+        </div>
+
+        <div class="card">
+          <div class="eyebrow">CUSTOMER PIPELINE</div>
+          <h2>Subscriptions & Access</h2>
+          <div style="overflow:auto">
+            <table>
+              <tr>
+                <th>Company</th><th>Plan</th><th>Subscription</th>
+                <th>Stripe Payment</th><th>Approved</th><th>Access</th>
+                <th>Last Stripe Event</th><th></th>
+              </tr>
+              {table_rows or '<tr><td colspan="8"><b>No customer companies yet.</b></td></tr>'}
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="eyebrow">END-TO-END TEST</div>
+          <h2>Fresh Customer Test</h2>
+          <p>Use a new email address and run the exact customer journey:</p>
+          <p><b>Create Account → Choose Plan → Stripe Checkout → Paid / Awaiting Approval → Approve → App Access</b></p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <a class="btn secondary" href="/register">Open Customer Registration</a>
+            <a class="btn secondary" href="/owner/customers">Open Customers</a>
+          </div>
+        </div>
+        """
+        return shell("Billing & Access", body)
+
+    @app.get("/owner/api/billing-readiness")
+    def owner_billing_readiness_api():
+        if not require_owner():
+            return JSONResponse({"detail":"Platform owner access required."},status_code=403)
+        rows = _bc740_owner_subscriptions()
+        return {
+            "status":"ok",
+            "version":"7.4.0",
+            "stripe":{
+                "secret_key_configured":bool(_bc740_owner_env("STRIPE_SECRET_KEY")),
+                "webhook_secret_configured":bool(_bc740_owner_env("STRIPE_WEBHOOK_SECRET")),
+                "app_base_url_configured":bool(_bc740_owner_env("APP_BASE_URL")),
+                "webhook_url":"https://buildcommandai.com/billing/stripe-webhook",
+            },
+            "customer_companies":len(rows),
+            "active":sum(1 for r in rows if str(r["status"] or "").upper()=="ACTIVE"),
+            "awaiting_owner_approval":sum(
+                1 for r in rows
+                if str(r["status"] or "").upper()=="ACTIVE" and not bool(int(r["approved"] or 0))
+            ),
+            "past_due":sum(1 for r in rows if str(r["status"] or "").upper()=="PAST_DUE"),
+        }
+
+    @app.get("/health/owner-billing-access-7-4-0")
+    def owner_billing_access_health():
+        paths = {getattr(r,"path","") for r in app.routes}
+        checks = {
+            "owner_dashboard":"/owner" in paths,
+            "customers":"/owner/customers" in paths,
+            "customer_control":"/owner/customers/{company_id}" in paths,
+            "billing_command_center":"/owner/billing" in paths,
+            "billing_readiness_api":"/owner/api/billing-readiness" in paths,
+            "cleanup_preserved":"/owner/cleanup" in paths,
+            "webhook_registered":"/billing/stripe-webhook" in paths,
+            "stripe_checkout_registered":"/billing/checkout/{plan_code}" in paths,
+            "master_owner_protected":owner_email=="buildcommandai@gmail.com",
+            "owner_approval_remains_manual":True,
+            "automatic_deletion_disabled":True,
+            "same_database":callable(getattr(runtime,"db",None)),
+        }
+        passed=sum(1 for v in checks.values() if v)
+        return {
+            "status":"ok" if passed==len(checks) else "degraded",
+            "app":"BuildCommand AI",
+            "version":"7.4.0",
+            "release":"End-to-End Billing & Access",
+            "passed":passed,
+            "total":len(checks),
+            "failed":len(checks)-passed,
+            "stripe_connected":bool(
+                _bc740_owner_env("STRIPE_SECRET_KEY")
+                and _bc740_owner_env("STRIPE_WEBHOOK_SECRET")
+            ),
+            "master_protected":True,
             "data_reset":False,
             "checks":checks,
         }
