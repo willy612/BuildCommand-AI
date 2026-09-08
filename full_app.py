@@ -55611,3 +55611,115 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.1.3 — Visible Flag Behind Auth Box
+# Fixes the 7.1.2 data-URL regression and keeps the flag behind
+# the login/register card while the card stays readable.
+# ============================================================
+
+_BC713_PREV_AUTH_HTML = _bc630_auth_html
+
+def _bc630_auth_html(mode="login", error=None):
+    html = _BC713_PREV_AUTH_HTML(mode, error)
+    flag_data = str(globals().get('_BC630_FLAG_DATA', '') or '')
+
+    if flag_data:
+        flag_url = 'data:image/png;base64,' + flag_data
+
+        # Rebuild the BODY background with a valid embedded image URL.
+        html = _bc706_re.sub(
+            r'body\{min-height:100vh;[^}]*\}',
+            'body{min-height:100vh;'
+            'background-image:'
+            'linear-gradient(90deg,rgba(2,8,18,.28),rgba(2,8,18,.18)),'
+            'url("' + flag_url + '");'
+            'background-size:cover;'
+            'background-position:center center;'
+            'background-repeat:no-repeat;'
+            'background-attachment:fixed;}',
+            html,
+            count=1,
+            flags=_bc706_re.I | _bc706_re.S,
+        )
+
+    # The actual auth component in 7.1.0 is `.card`.
+    # Keep it dark enough to read, but translucent enough to show the flag
+    # around/behind the box.
+    html = _bc706_re.sub(
+        r'\.card\{[^}]*\}',
+        '.card{width:min(445px,94vw);padding:34px 38px 28px;'
+        'border:1px solid rgba(255,255,255,.24);border-radius:14px;'
+        'background:linear-gradient(145deg,rgba(7,14,24,.84),rgba(29,20,22,.82));'
+        'box-shadow:0 28px 70px rgba(0,0,0,.48);'
+        'backdrop-filter:blur(7px)}',
+        html,
+        count=1,
+        flags=_bc706_re.I | _bc706_re.S,
+    )
+
+    # Never put a background image on the logo itself.
+    html = _bc706_re.sub(
+        r'\.logo\{([^}]*)background(?:-image)?\s*:[^;}]+;?([^}]*)\}',
+        r'.logo{\1\2}',
+        html,
+        count=1,
+        flags=_bc706_re.I | _bc706_re.S,
+    )
+
+    return html
+
+@app.get('/health/auth-visible-flag-7-1-3')
+def bc713_auth_visible_flag_health():
+    login_html = _bc630_auth_html('login')
+    signup_html = _bc630_auth_html('signup')
+    flag_data = str(globals().get('_BC630_FLAG_DATA', '') or '')
+    flag_url = 'data:image/png;base64,' + flag_data if flag_data else ''
+
+    def css_block(page, selector):
+        pat = _bc706_re.escape(selector) + r'\{([^}]*)\}'
+        m = _bc706_re.search(pat, page, _bc706_re.I | _bc706_re.S)
+        return m.group(1) if m else ''
+
+    login_body = css_block(login_html, 'body')
+    signup_body = css_block(signup_html, 'body')
+    login_card = css_block(login_html, '.card')
+    signup_card = css_block(signup_html, '.card')
+    login_logo = css_block(login_html, '.logo')
+
+    paths = {getattr(r,'path','') for r in app.routes}
+
+    checks = [
+        ('7.1.2 baseline preserved', '/health/auth-flag-background-7-1-2' in paths),
+        ('valid flag data url on login', bool(flag_url) and flag_url in login_html),
+        ('valid flag data url on signup', bool(flag_url) and flag_url in signup_html),
+        ('login body uses flag background', 'data:image/png;base64,' in login_body),
+        ('signup body uses flag background', 'data:image/png;base64,' in signup_body),
+        ('login card translucent', 'rgba(7,14,24,.84)' in login_card),
+        ('signup card translucent', 'rgba(7,14,24,.84)' in signup_card),
+        ('logo has no background image', 'background-image' not in login_logo),
+        ('login route preserved', '/login' in paths),
+        ('register route preserved', '/register' in paths),
+    ]
+
+    passed = sum(bool(v) for _, v in checks)
+    return {
+        'status': 'ok' if passed == len(checks) else 'failed',
+        'app': 'BuildCommand AI',
+        'version': '7.1.3',
+        'release': 'Visible Flag Behind Auth Box',
+        'passed': passed,
+        'total': len(checks),
+        'failed': len(checks)-passed,
+        'flag_location': 'page background behind auth card',
+        'flag_inside_card': False,
+        'checks': [{'case': n, 'passed': bool(v)} for n,v in checks],
+    }
+
+BUILD_COMMAND_RELEASE = '7.1.3'
+BUILD_COMMAND_RELEASE_NAME = 'Visible Flag Behind Auth Box'
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
