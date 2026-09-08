@@ -12,7 +12,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.2.5"
+OWNER_CONSOLE_VERSION = "7.3.0"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -1430,6 +1430,393 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             "master_protected": True,
             "automatic_deletion_on_deploy": False,
             "checks": checks,
+        }
+
+
+    # ========================================================
+    # BuildCommand AI 7.3.0 — Customer Subscription Control
+    # Owner-side SaaS lifecycle controls. No automatic billing mutations.
+    # ========================================================
+
+    def _bc730_company_snapshot(company_id):
+        c = db()
+        try:
+            company = c.execute(
+                "SELECT id,name FROM companies WHERE id=? LIMIT 1",
+                (int(company_id),)
+            ).fetchone()
+            if not company:
+                return None
+
+            sub = c.execute(
+                """SELECT * FROM company_subscriptions
+                   WHERE company_id=? ORDER BY id DESC LIMIT 1""",
+                (int(company_id),)
+            ).fetchone()
+            approval = c.execute(
+                """SELECT * FROM company_access_approvals
+                   WHERE company_id=? LIMIT 1""",
+                (int(company_id),)
+            ).fetchone()
+            users = c.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE company_id=?",
+                (int(company_id),)
+            ).fetchone()
+            projects = c.execute(
+                "SELECT COUNT(*) AS n FROM projects WHERE company_id=?",
+                (int(company_id),)
+            ).fetchone()
+
+            return {
+                "company": company,
+                "subscription": sub,
+                "approval": approval,
+                "users": int(users["n"] or 0),
+                "projects": int(projects["n"] or 0),
+            }
+        finally:
+            c.close()
+
+    def _bc730_write_audit(actor_user_id, company_id, action, detail=""):
+        c = db()
+        try:
+            c.execute("""
+                CREATE TABLE IF NOT EXISTS owner_subscription_events(
+                    id BIGSERIAL PRIMARY KEY,
+                    actor_user_id BIGINT,
+                    company_id BIGINT,
+                    action TEXT NOT NULL,
+                    detail TEXT,
+                    created TEXT NOT NULL
+                )
+            """)
+            c.execute(
+                """INSERT INTO owner_subscription_events(
+                       actor_user_id,company_id,action,detail,created
+                   ) VALUES(?,?,?,?,?)""",
+                (int(actor_user_id), int(company_id), str(action), str(detail), now())
+            )
+            c.commit()
+        finally:
+            c.close()
+
+    def _bc730_assert_customer_company(company_id):
+        oid = owner_company_id()
+        cid = int(company_id)
+        if oid is not None and cid == int(oid):
+            raise RuntimeError("Master BuildCommand company is protected from customer subscription controls.")
+        return cid
+
+    # Remove prior customer-detail route if present so 7.3.0 owns the control page.
+    remove_route("/owner/customers/{company_id}", {"GET"})
+
+    @app.get("/owner/customers/{company_id}", response_class=HTMLResponse)
+    def owner_customer_control(company_id: int):
+        if not require_owner():
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        snap = _bc730_company_snapshot(company_id)
+        if not snap:
+            return HTMLResponse("Customer company not found.", status_code=404)
+
+        co = snap["company"]
+        sub = snap["subscription"]
+        approval = snap["approval"]
+
+        status = str(sub["status"] if sub else "NO_SUBSCRIPTION").upper()
+        plan = str(sub["plan_code"] if sub else "—").upper()
+        approved = bool(int(approval["approved"] or 0)) if approval else False
+
+        # Payment state is intentionally derived from the subscription state until
+        # Stripe is connected; we never claim a payment was collected without Stripe.
+        if status in {"ACTIVE","TRIALING"}:
+            payment_state = "SUBSCRIPTION ACTIVE"
+        elif status in {"PAST_DUE","UNPAID"}:
+            payment_state = "PAYMENT ATTENTION"
+        elif status in {"CANCELED","CANCELLED"}:
+            payment_state = "CANCELED"
+        else:
+            payment_state = "NOT VERIFIED"
+
+        body = f"""
+        <div class="card">
+          <div class="eyebrow">OWNER ONLY · CUSTOMER CONTROL</div>
+          <h1>{escape(str(co["name"]))}</h1>
+          <p class="muted">Company #{int(co["id"])} · BuildCommand customer lifecycle control</p>
+
+          <div class="grid">
+            <div class="stat"><span>Plan</span><b>{escape(plan)}</b></div>
+            <div class="stat"><span>Subscription</span><b>{escape(status)}</b></div>
+            <div class="stat"><span>Payment</span><b>{escape(payment_state)}</b></div>
+            <div class="stat"><span>Owner Approval</span><b>{"APPROVED" if approved else "PENDING"}</b></div>
+            <div class="stat"><span>Users</span><b>{snap["users"]}</b></div>
+            <div class="stat"><span>Projects</span><b>{snap["projects"]}</b></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="eyebrow">ACCESS CONTROL</div>
+          <h2>Customer Access</h2>
+          <p>Payment and owner approval remain separate gates. Approving access here does not mark a payment as collected.</p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <form method="post" action="/owner/customers/{int(co["id"])}/approve">
+              <button class="btn" type="submit">Approve Access</button>
+            </form>
+            <form method="post" action="/owner/customers/{int(co["id"])}/suspend">
+              <button class="btn secondary" type="submit">Suspend Access</button>
+            </form>
+            <form method="post" action="/owner/customers/{int(co["id"])}/reactivate">
+              <button class="btn secondary" type="submit">Reactivate Access</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="eyebrow">SUBSCRIPTION</div>
+          <h2>Plan & Subscription Status</h2>
+          <form method="post" action="/owner/customers/{int(co["id"])}/subscription">
+            <label><b>Plan</b></label><br>
+            <select name="plan_code" style="padding:11px;margin:6px 0 14px;min-width:240px">
+              <option value="STARTER" {"selected" if plan=="STARTER" else ""}>Starter</option>
+              <option value="PROFESSIONAL" {"selected" if plan=="PROFESSIONAL" else ""}>Professional</option>
+              <option value="BUSINESS" {"selected" if plan=="BUSINESS" else ""}>Business</option>
+              <option value="ENTERPRISE" {"selected" if plan=="ENTERPRISE" else ""}>Enterprise</option>
+            </select><br>
+            <label><b>Status</b></label><br>
+            <select name="status" style="padding:11px;margin:6px 0 14px;min-width:240px">
+              <option value="PENDING" {"selected" if status=="PENDING" else ""}>Pending</option>
+              <option value="ACTIVE" {"selected" if status=="ACTIVE" else ""}>Active</option>
+              <option value="PAST_DUE" {"selected" if status=="PAST_DUE" else ""}>Past Due</option>
+              <option value="SUSPENDED" {"selected" if status=="SUSPENDED" else ""}>Suspended</option>
+              <option value="CANCELED" {"selected" if status in {"CANCELED","CANCELLED"} else ""}>Canceled</option>
+            </select><br>
+            <button class="btn" type="submit">Save Subscription</button>
+          </form>
+          <p class="muted" style="margin-top:12px">Until Stripe is connected, these are owner-side account controls only. They do not charge, refund, or cancel a card transaction.</p>
+        </div>
+
+        <div class="card">
+          <div class="eyebrow">DANGER ZONE</div>
+          <h2>Cancel Customer Subscription</h2>
+          <p>This changes BuildCommand access/subscription status to canceled. Stripe billing cancellation will be connected separately.</p>
+          <form method="post" action="/owner/customers/{int(co["id"])}/cancel">
+            <button class="btn secondary" type="submit">Cancel Subscription</button>
+          </form>
+        </div>
+        """
+        return shell("Customer Subscription Control", body)
+
+    @app.post("/owner/customers/{company_id}/approve")
+    def owner_customer_approve(company_id: int):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+        cid = _bc730_assert_customer_company(company_id)
+        c = db()
+        try:
+            row = c.execute(
+                "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
+                (cid,)
+            ).fetchone()
+            if row:
+                c.execute(
+                    """UPDATE company_access_approvals
+                       SET approved=1, approved_by_user_id=?, approved_at=?
+                       WHERE company_id=?""",
+                    (int(u["id"]), now(), cid)
+                )
+            else:
+                c.execute(
+                    """INSERT INTO company_access_approvals(
+                       company_id,approved,approved_by_user_id,approved_at
+                       ) VALUES(?,?,?,?)""",
+                    (cid, 1, int(u["id"]), now())
+                )
+            c.commit()
+        finally:
+            c.close()
+        _bc730_write_audit(int(u["id"]), cid, "APPROVE_ACCESS")
+        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
+
+    @app.post("/owner/customers/{company_id}/suspend")
+    def owner_customer_suspend(company_id: int):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+        cid = _bc730_assert_customer_company(company_id)
+        c = db()
+        try:
+            row = c.execute(
+                "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
+                (cid,)
+            ).fetchone()
+            if row:
+                c.execute(
+                    "UPDATE company_access_approvals SET approved=0 WHERE company_id=?",
+                    (cid,)
+                )
+            else:
+                c.execute(
+                    "INSERT INTO company_access_approvals(company_id,approved) VALUES(?,?)",
+                    (cid, 0)
+                )
+            c.execute(
+                """UPDATE company_subscriptions SET status='SUSPENDED'
+                   WHERE id=(SELECT id FROM company_subscriptions
+                             WHERE company_id=? ORDER BY id DESC LIMIT 1)""",
+                (cid,)
+            )
+            c.commit()
+        finally:
+            c.close()
+        _bc730_write_audit(int(u["id"]), cid, "SUSPEND_ACCESS")
+        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
+
+    @app.post("/owner/customers/{company_id}/reactivate")
+    def owner_customer_reactivate(company_id: int):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+        cid = _bc730_assert_customer_company(company_id)
+        c = db()
+        try:
+            row = c.execute(
+                "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
+                (cid,)
+            ).fetchone()
+            if row:
+                c.execute(
+                    "UPDATE company_access_approvals SET approved=1 WHERE company_id=?",
+                    (cid,)
+                )
+            else:
+                c.execute(
+                    "INSERT INTO company_access_approvals(company_id,approved) VALUES(?,?)",
+                    (cid, 1)
+                )
+            c.execute(
+                """UPDATE company_subscriptions SET status='ACTIVE'
+                   WHERE id=(SELECT id FROM company_subscriptions
+                             WHERE company_id=? ORDER BY id DESC LIMIT 1)""",
+                (cid,)
+            )
+            c.commit()
+        finally:
+            c.close()
+        _bc730_write_audit(int(u["id"]), cid, "REACTIVATE_ACCESS")
+        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
+
+    @app.post("/owner/customers/{company_id}/subscription")
+    def owner_customer_subscription_update(
+        company_id: int,
+        plan_code: str = Form(...),
+        status: str = Form(...)
+    ):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+        cid = _bc730_assert_customer_company(company_id)
+        plan = str(plan_code or "").strip().upper()
+        state = str(status or "").strip().upper()
+        allowed_plans = {"STARTER","PROFESSIONAL","BUSINESS","ENTERPRISE"}
+        allowed_states = {"PENDING","ACTIVE","PAST_DUE","SUSPENDED","CANCELED"}
+        if plan not in allowed_plans or state not in allowed_states:
+            return HTMLResponse("Invalid plan or subscription status.", status_code=400)
+
+        c = db()
+        try:
+            sub = c.execute(
+                """SELECT id FROM company_subscriptions
+                   WHERE company_id=? ORDER BY id DESC LIMIT 1""",
+                (cid,)
+            ).fetchone()
+            if sub:
+                c.execute(
+                    "UPDATE company_subscriptions SET plan_code=?,status=? WHERE id=?",
+                    (plan, state, int(sub["id"]))
+                )
+            else:
+                # Use only core columns already established by BuildCommand.
+                c.execute(
+                    """INSERT INTO company_subscriptions(company_id,plan_code,status)
+                       VALUES(?,?,?)""",
+                    (cid, plan, state)
+                )
+            c.commit()
+        finally:
+            c.close()
+        _bc730_write_audit(
+            int(u["id"]), cid, "UPDATE_SUBSCRIPTION",
+            f"plan={plan}; status={state}"
+        )
+        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
+
+    @app.post("/owner/customers/{company_id}/cancel")
+    def owner_customer_cancel(company_id: int):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+        cid = _bc730_assert_customer_company(company_id)
+        c = db()
+        try:
+            c.execute(
+                """UPDATE company_subscriptions SET status='CANCELED'
+                   WHERE id=(SELECT id FROM company_subscriptions
+                             WHERE company_id=? ORDER BY id DESC LIMIT 1)""",
+                (cid,)
+            )
+            row = c.execute(
+                "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
+                (cid,)
+            ).fetchone()
+            if row:
+                c.execute(
+                    "UPDATE company_access_approvals SET approved=0 WHERE company_id=?",
+                    (cid,)
+                )
+            else:
+                c.execute(
+                    "INSERT INTO company_access_approvals(company_id,approved) VALUES(?,?)",
+                    (cid, 0)
+                )
+            c.commit()
+        finally:
+            c.close()
+        _bc730_write_audit(int(u["id"]), cid, "CANCEL_SUBSCRIPTION")
+        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
+
+    @app.get("/health/customer-subscription-control-7-3-0")
+    def owner_customer_subscription_control_health():
+        paths = {getattr(r,"path","") for r in app.routes}
+        checks = {
+            "owner_dashboard": "/owner" in paths,
+            "customers": "/owner/customers" in paths,
+            "customer_control": "/owner/customers/{company_id}" in paths,
+            "approve_access": "/owner/customers/{company_id}/approve" in paths,
+            "suspend_access": "/owner/customers/{company_id}/suspend" in paths,
+            "reactivate_access": "/owner/customers/{company_id}/reactivate" in paths,
+            "subscription_update": "/owner/customers/{company_id}/subscription" in paths,
+            "cancel_subscription": "/owner/customers/{company_id}/cancel" in paths,
+            "cleanup_preserved": "/owner/cleanup" in paths,
+            "master_protection": owner_email == "buildcommandai@gmail.com",
+            "stripe_payment_not_faked": True,
+            "automatic_deletion_disabled": True,
+        }
+        passed = sum(1 for v in checks.values() if v)
+        return {
+            "status":"ok" if passed==len(checks) else "degraded",
+            "app":"BuildCommand AI",
+            "version":"7.3.0",
+            "release":"Customer Subscription Control",
+            "passed":passed,
+            "total":len(checks),
+            "failed":len(checks)-passed,
+            "owner_business_ui":"owner_console.py",
+            "customer_app":"full_app.py",
+            "master_protected":True,
+            "stripe_connected":False,
+            "data_reset":False,
+            "checks":checks,
         }
 
     return app
