@@ -56204,3 +56204,46 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.3.0 — Customer Subscription Control
+# Owner controls live in owner_console.py. Customer gates remain here.
+# ============================================================
+BC730_RELEASE = "7.3.0"
+BC730_RELEASE_NAME = "Customer Subscription Control"
+
+@app.get("/health/customer-subscription-enforcement-7-3-0")
+def bc730_customer_enforcement_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = {
+        "login_preserved": "/login" in paths,
+        "register_preserved": "/register" in paths,
+        "owner_console_registered": "/owner" in paths,
+        "customer_control_registered": "/owner/customers/{company_id}" in paths,
+        "payment_gate_preserved": callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved": callable(globals().get("_bc181893_is_approved")),
+        "master_owner_protection_preserved": globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+        "customer_construction_app_preserved": "/app" in paths,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC730_RELEASE,
+        "release":BC730_RELEASE_NAME,
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "full_app_role":"customer application + access enforcement",
+        "owner_console_role":"customer subscription business controls",
+        "data_reset":False,
+        "checks":checks,
+    }
+
+BUILD_COMMAND_RELEASE = BC730_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC730_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
