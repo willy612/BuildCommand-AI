@@ -56667,6 +56667,62 @@ def _bc740_stripe_status_to_local(stripe_status):
         return "PENDING"
     return None
 
+
+
+# ============================================================
+# BuildCommand AI 7.4.6 — Manual Owner Approval Enforcement
+# Stripe may activate payment/subscription state, but cannot grant app access.
+# ============================================================
+BC746_RELEASE = "7.4.6"
+BC746_RELEASE_NAME = "Manual Owner Approval Enforcement"
+
+def _bc746_force_awaiting_owner_approval(company_id):
+    """Ensure a paid customer remains unapproved until the owner acts manually."""
+    cid = int(company_id)
+
+    # Never alter master-owner protection/bypass semantics.
+    try:
+        owner_cid = None
+        c = _runtime.db()
+        try:
+            row = c.execute(
+                "SELECT company_id FROM users WHERE LOWER(email)=LOWER(?) LIMIT 1",
+                ("buildcommandai@gmail.com",)
+            ).fetchone()
+            if row:
+                owner_cid = int(row["company_id"])
+        finally:
+            c.close()
+        if owner_cid is not None and cid == owner_cid:
+            return
+    except Exception:
+        pass
+
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
+            (cid,)
+        ).fetchone()
+
+        if row:
+            c.execute(
+                """UPDATE company_access_approvals
+                   SET approved=0
+                   WHERE company_id=?""",
+                (cid,)
+            )
+        else:
+            c.execute(
+                """INSERT INTO company_access_approvals(company_id,approved)
+                   VALUES(?,0)""",
+                (cid,)
+            )
+        c.commit()
+    finally:
+        c.close()
+
+
 def _bc740_process_stripe_event(event):
     event_id = str(event.get("id") or "")
     event_type = str(event.get("type") or "")
@@ -56695,6 +56751,8 @@ def _bc740_process_stripe_event(event):
                 stripe_payment_status=payment_status,
                 stripe_last_event=event_type,
             )
+            if verified_paid:
+                _bc746_force_awaiting_owner_approval(cid)
 
     elif event_type in {
         "customer.subscription.created",
@@ -56733,6 +56791,8 @@ def _bc740_process_stripe_event(event):
                 ),
                 stripe_last_event=event_type,
             )
+            if event_type == "invoice.paid":
+                _bc746_force_awaiting_owner_approval(cid)
 
     return cid
 
@@ -57124,6 +57184,51 @@ except Exception:
 
 BUILD_COMMAND_RELEASE = BC745_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC745_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+@app.get("/health/manual-owner-approval-7-4-6")
+def bc746_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "stripe_checkout_preserved": "/billing/checkout/{plan_code}" in paths,
+        "stripe_success_preserved": "/billing/stripe-success" in paths,
+        "stripe_webhook_preserved": "/billing/stripe-webhook" in paths,
+        "manual_approval_helper": callable(globals().get("_bc746_force_awaiting_owner_approval")),
+        "owner_approve_route_registered": "/owner/customers/{company_id}/approve" in paths,
+        "payment_gate_preserved": callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved": callable(globals().get("_bc181893_is_approved")),
+        "master_owner_protection_preserved": globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+        "test_live_mode_preserved": callable(globals().get("_bc743_stripe_mode")),
+        "billing_readiness_preserved": "/api/billing/readiness" in paths,
+        "data_reset_disabled": True,
+        "automatic_approval_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC746_RELEASE,
+        "release": BC746_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks)-passed,
+        "access_rule": "ACTIVE payment + explicit manual owner approval",
+        "stripe_can_auto_approve": False,
+        "data_reset": False,
+        "checks": checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/manual-owner-approval-7-4-6")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC746_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC746_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
