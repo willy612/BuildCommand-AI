@@ -55505,3 +55505,109 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.1.2 — Flag Behind Auth Card
+# Restores the patriotic flag as the auth-page background only.
+# The sign-in/register card and logo remain clean with no flag inside.
+# ============================================================
+
+_BC712_PREV_AUTH_HTML = _bc630_auth_html
+
+def _bc630_auth_html(mode="login", error=None):
+    html = _BC712_PREV_AUTH_HTML(mode, error)
+
+    flag_data = str(globals().get('_BC630_FLAG_DATA', '') or '')
+
+    # Put the flag behind the entire auth experience, not inside the card.
+    if flag_data:
+        html = _bc706_re.sub(
+            r'body\{min-height:100vh;[^}]*\}',
+            "body{min-height:100vh;"
+            "background:"
+            "linear-gradient(rgba(3,10,18,.58),rgba(3,10,18,.72)),"
+            "url('" + flag_data + "') center center/cover fixed no-repeat;}",
+            html,
+            count=1,
+            flags=_bc706_re.I | _bc706_re.S,
+        )
+
+    # Keep the actual sign-in/register panel opaque and readable.
+    html = html.replace(
+        '.auth-card{',
+        '.auth-card{background:#0b1420;',
+        1
+    )
+
+    # Keep logo area clean: no background image or flag inside the box.
+    html = _bc706_re.sub(
+        r'<div class="logo"(?:\s+style="[^"]*")?>',
+        '<div class="logo">',
+        html,
+        count=1,
+        flags=_bc706_re.I | _bc706_re.S,
+    )
+
+    # If an inline style anywhere inside the logo picked up the flag, strip it.
+    html = html.replace(
+        "background-image:url('" + flag_data + "');",
+        ""
+    ) if flag_data else html
+
+    return html
+
+@app.get('/health/auth-flag-background-7-1-2')
+def bc712_auth_flag_health():
+    login_html = _bc630_auth_html('login')
+    signup_html = _bc630_auth_html('signup')
+    flag_data = str(globals().get('_BC630_FLAG_DATA', '') or '')
+
+    def body_block(page):
+        m = _bc706_re.search(r'body\{([^}]*)\}', page, _bc706_re.I | _bc706_re.S)
+        return m.group(1) if m else ''
+
+    def logo_block(page):
+        m = _bc706_re.search(
+            r'<div class="logo">(.*?)</div>',
+            page,
+            _bc706_re.I | _bc706_re.S
+        )
+        return m.group(1) if m else ''
+
+    login_body = body_block(login_html)
+    signup_body = body_block(signup_html)
+    login_logo = logo_block(login_html)
+    signup_logo = logo_block(signup_html)
+
+    checks = [
+        ('7.1.1 baseline preserved', '/health/auth-brand-lock-7-1-1' in {getattr(r,'path','') for r in app.routes}),
+        ('flag present behind login page', bool(flag_data) and flag_data in login_body),
+        ('flag present behind signup page', bool(flag_data) and flag_data in signup_body),
+        ('login logo clean', not flag_data or flag_data not in login_logo),
+        ('signup logo clean', not flag_data or flag_data not in signup_logo),
+        ('login route preserved', '/login' in {getattr(r,'path','') for r in app.routes}),
+        ('register route preserved', '/register' in {getattr(r,'path','') for r in app.routes}),
+        ('approved wordmark preserved', 'BUILDCOMMAND <b>AI</b>' in login_html),
+    ]
+    passed = sum(bool(v) for _, v in checks)
+
+    return {
+        'status': 'ok' if passed == len(checks) else 'failed',
+        'app': 'BuildCommand AI',
+        'version': '7.1.2',
+        'release': 'Flag Behind Auth Card',
+        'passed': passed,
+        'total': len(checks),
+        'failed': len(checks) - passed,
+        'flag_behind_auth_card': True,
+        'flag_inside_logo': False,
+        'checks': [{'case': n, 'passed': bool(v)} for n, v in checks],
+    }
+
+BUILD_COMMAND_RELEASE = '7.1.2'
+BUILD_COMMAND_RELEASE_NAME = 'Flag Behind Auth Card'
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
