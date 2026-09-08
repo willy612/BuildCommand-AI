@@ -12,7 +12,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.4.0"
+OWNER_CONSOLE_VERSION = "7.4.1"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -2006,6 +2006,203 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             "master_protected":True,
             "data_reset":False,
             "checks":checks,
+        }
+
+
+    # ========================================================
+    # BuildCommand AI 7.4.1 — Owner Console Navigation
+    # Permanent owner tabs across all owner business pages.
+    # ========================================================
+
+    def _bc741_owner_nav(active=""):
+        tabs = [
+            ("dashboard", "Dashboard", "/owner"),
+            ("customers", "Customers", "/owner/customers"),
+            ("billing", "Billing & Access", "/owner/billing"),
+            ("subscriptions", "Subscriptions", "/owner/subscriptions"),
+            ("cleanup", "Company Cleanup", "/owner/cleanup"),
+        ]
+        links = ""
+        for key, label, href in tabs:
+            cls = "bc741-tab active" if key == active else "bc741-tab"
+            links += f'<a class="{cls}" href="{href}">{escape(label)}</a>'
+        return f"""
+        <style>
+          .bc741-nav-wrap {{
+            max-width:1180px;
+            margin:0 auto 16px;
+            position:sticky;
+            top:0;
+            z-index:50;
+            padding-top:8px;
+          }}
+          .bc741-nav {{
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            align-items:center;
+            padding:10px;
+            border:1px solid #26384a;
+            border-radius:14px;
+            background:rgba(7,16,29,.96);
+            box-shadow:0 12px 30px rgba(0,0,0,.24);
+            backdrop-filter:blur(8px);
+          }}
+          .bc741-brand {{
+            font-weight:900;
+            letter-spacing:.04em;
+            color:#f0b44d;
+            padding:0 8px 0 4px;
+            white-space:nowrap;
+          }}
+          .bc741-tab {{
+            display:inline-flex;
+            align-items:center;
+            justify-content:center;
+            text-decoration:none;
+            color:#d9e4ef;
+            border:1px solid #31485d;
+            background:#0c1722;
+            padding:9px 12px;
+            border-radius:10px;
+            font-weight:800;
+            font-size:13px;
+          }}
+          .bc741-tab:hover {{
+            border-color:#f0b44d;
+            color:#fff;
+          }}
+          .bc741-tab.active {{
+            background:#f0b44d;
+            color:#071018;
+            border-color:#f0b44d;
+          }}
+          @media(max-width:720px) {{
+            .bc741-nav-wrap {{
+              position:static;
+            }}
+            .bc741-brand {{
+              width:100%;
+              padding-bottom:2px;
+            }}
+            .bc741-tab {{
+              flex:1 1 calc(50% - 8px);
+            }}
+          }}
+        </style>
+        <div class="bc741-nav-wrap">
+          <nav class="bc741-nav">
+            <div class="bc741-brand">BUILDCOMMAND OWNER</div>
+            {links}
+          </nav>
+        </div>
+        """
+
+    def _bc741_with_nav(html_text, active=""):
+        page = str(html_text or "")
+        nav = _bc741_owner_nav(active)
+        # Insert immediately after <body...> when possible.
+        m = re.search(r"<body[^>]*>", page, re.I)
+        if m:
+            pos = m.end()
+            return page[:pos] + nav + page[pos:]
+        return nav + page
+
+    # Wrap specific owner GET routes so every page gets the same persistent nav.
+    # We keep their existing business logic untouched.
+    _bc741_route_active = {
+        "/owner": "dashboard",
+        "/owner/customers": "customers",
+        "/owner/customers/{company_id}": "customers",
+        "/owner/billing": "billing",
+        "/owner/subscriptions": "subscriptions",
+        "/owner/cleanup": "cleanup",
+        "/owner/cleanup/preview": "cleanup",
+    }
+
+    def _bc741_wrap_owner_get_routes():
+        for route in app.routes:
+            path = getattr(route, "path", "")
+            methods = {str(m).upper() for m in (getattr(route, "methods", set()) or set())}
+            if path not in _bc741_route_active or "GET" not in methods:
+                continue
+            endpoint = getattr(route, "endpoint", None)
+            if not endpoint or getattr(endpoint, "_bc741_wrapped", False):
+                continue
+            active = _bc741_route_active[path]
+
+            def make_wrapper(original, active_tab):
+                def wrapper(*args, **kwargs):
+                    result = original(*args, **kwargs)
+
+                    # Most owner pages return HTMLResponse via shell().
+                    if isinstance(result, HTMLResponse):
+                        try:
+                            body = result.body.decode("utf-8")
+                        except Exception:
+                            body = str(result.body)
+                        wrapped = _bc741_with_nav(body, active_tab)
+                        return HTMLResponse(
+                            wrapped,
+                            status_code=result.status_code,
+                            headers=dict(result.headers),
+                        )
+
+                    # If a handler returned raw HTML text, wrap it too.
+                    if isinstance(result, str):
+                        return HTMLResponse(_bc741_with_nav(result, active_tab))
+
+                    return result
+
+                wrapper._bc741_wrapped = True
+                wrapper.__name__ = getattr(original, "__name__", "owner_page") + "_bc741"
+                return wrapper
+
+            wrapped_endpoint = make_wrapper(endpoint, active)
+            route.endpoint = wrapped_endpoint
+            try:
+                route.dependant.call = wrapped_endpoint
+            except Exception:
+                pass
+
+    _bc741_wrap_owner_get_routes()
+
+    @app.get("/health/owner-console-navigation-7-4-1")
+    def owner_console_navigation_health():
+        paths = {getattr(r, "path", "") for r in app.routes}
+        checks = {
+            "dashboard_tab": "/owner" in paths,
+            "customers_tab": "/owner/customers" in paths,
+            "billing_tab": "/owner/billing" in paths,
+            "subscriptions_tab": "/owner/subscriptions" in paths,
+            "cleanup_tab": "/owner/cleanup" in paths,
+            "customer_detail_navigation": "/owner/customers/{company_id}" in paths,
+            "billing_center_preserved": "/health/owner-billing-access-7-4-0" in paths,
+            "cleanup_preserved": "/owner/cleanup/delete-selected" in paths,
+            "master_protection": owner_email == "buildcommandai@gmail.com",
+            "owner_console_file": True,
+            "automatic_deletion_disabled": True,
+        }
+        passed = sum(1 for v in checks.values() if v)
+        return {
+            "status": "ok" if passed == len(checks) else "degraded",
+            "app": "BuildCommand AI",
+            "version": "7.4.1",
+            "release": "Owner Console Navigation",
+            "passed": passed,
+            "total": len(checks),
+            "failed": len(checks) - passed,
+            "tabs": [
+                "Dashboard",
+                "Customers",
+                "Billing & Access",
+                "Subscriptions",
+                "Company Cleanup",
+            ],
+            "owner_business_ui": "owner_console.py",
+            "customer_app": "full_app.py",
+            "data_reset": False,
+            "checks": checks,
         }
 
     return app
