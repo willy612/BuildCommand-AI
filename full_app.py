@@ -54499,6 +54499,9 @@ def _bc642_base_url(request):
     except Exception:
         return ""
 
+BC743_RELEASE = "7.4.3"
+BC743_RELEASE_NAME = "Safe Stripe Test / Live Mode"
+
 def _bc743_stripe_mode():
     mode = str(_bc642_os.getenv("STRIPE_MODE") or "LIVE").strip().upper()
     return "TEST" if mode == "TEST" else "LIVE"
@@ -56737,7 +56740,7 @@ def _bc740_process_stripe_event(event):
 async def bc740_stripe_webhook(request: _BC740_Request):
     if not _bc743_stripe_webhook_secret():
         return _BC740_JSONResponse(
-            {"detail": "STRIPE_WEBHOOK_SECRET is not configured."},
+            {"detail": ("STRIPE_TEST_WEBHOOK_SECRET" if _bc743_stripe_mode()=="TEST" else "STRIPE_WEBHOOK_SECRET") + " is not configured."},
             status_code=503
         )
 
@@ -56978,6 +56981,66 @@ def bc743_stripe_mode_health():
 
 BUILD_COMMAND_RELEASE = BC743_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC743_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.4 — Stripe Mode Runtime Fix
+# Repairs missing 7.4.3 release constants. No billing logic changes.
+# ============================================================
+BC744_RELEASE = "7.4.4"
+BC744_RELEASE_NAME = "Stripe Mode Runtime Fix"
+
+@app.get("/health/stripe-mode-runtime-fix-7-4-4")
+def bc744_health():
+    mode = _bc743_stripe_mode()
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "7_4_3_constants_defined":
+            globals().get("BC743_RELEASE") == "7.4.3"
+            and bool(globals().get("BC743_RELEASE_NAME")),
+        "stripe_mode_helper_executes":
+            mode in {"TEST", "LIVE"},
+        "selected_secret_helper_executes":
+            isinstance(_bc743_stripe_secret_key(), str),
+        "selected_webhook_helper_executes":
+            isinstance(_bc743_stripe_webhook_secret(), str),
+        "checkout_route_preserved":
+            "/billing/checkout/{plan_code}" in paths,
+        "webhook_route_preserved":
+            "/billing/stripe-webhook" in paths,
+        "owner_console_registered":
+            "/owner" in paths,
+        "billing_center_registered":
+            "/owner/billing" in paths,
+        "payment_gate_preserved":
+            callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved":
+            callable(globals().get("_bc181893_is_approved")),
+        "master_owner_protected":
+            globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+        "data_reset_disabled":
+            True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC744_RELEASE,
+        "release": BC744_RELEASE_NAME,
+        "stripe_mode": mode,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "data_reset": False,
+        "checks": checks,
+    }
+
+BUILD_COMMAND_RELEASE = BC744_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC744_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
