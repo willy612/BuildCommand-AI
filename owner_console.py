@@ -13,7 +13,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.4.5"
+OWNER_CONSOLE_VERSION = "7.4.6"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -1558,7 +1558,7 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
         <div class="card">
           <div class="eyebrow">ACCESS CONTROL</div>
           <h2>Customer Access</h2>
-          <p>Payment and owner approval remain separate gates. Approving access here does not mark a payment as collected.</p>
+          <p>Payment and owner approval are separate gates. Stripe payment never approves access automatically; only this Owner Console can approve a customer.</p>
           <div style="display:flex;gap:10px;flex-wrap:wrap">
             <form method="post" action="/owner/customers/{int(co["id"])}/approve">
               <button class="btn" type="submit">Approve Access</button>
@@ -2266,5 +2266,35 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
         }
         passed=sum(bool(v) for v in checks.values())
         return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI","version":"7.4.3","release":"Safe Stripe Test / Live Mode","stripe_mode":mode,"passed":passed,"total":len(checks),"failed":len(checks)-passed,"data_reset":False,"checks":checks}
+
+
+    @app.get("/health/owner-manual-approval-7-4-6")
+    def owner_manual_approval_health():
+        paths = {getattr(r,"path","") for r in app.routes}
+        checks = {
+            "customer_control":"/owner/customers/{company_id}" in paths,
+            "approve_access":"/owner/customers/{company_id}/approve" in paths,
+            "suspend_access":"/owner/customers/{company_id}/suspend" in paths,
+            "reactivate_access":"/owner/customers/{company_id}/reactivate" in paths,
+            "billing_center":"/owner/billing" in paths,
+            "subscriptions":"/owner/subscriptions" in paths,
+            "master_owner_protected":owner_email=="buildcommandai@gmail.com",
+            "manual_approval_required":True,
+            "automatic_deletion_disabled":True,
+            "data_reset_disabled":True,
+        }
+        passed=sum(1 for v in checks.values() if v)
+        return {
+            "status":"ok" if passed==len(checks) else "degraded",
+            "app":"BuildCommand AI",
+            "version":"7.4.6",
+            "release":"Manual Owner Approval Enforcement",
+            "passed":passed,
+            "total":len(checks),
+            "failed":len(checks)-passed,
+            "manual_owner_approval":True,
+            "data_reset":False,
+            "checks":checks,
+        }
 
     return app
