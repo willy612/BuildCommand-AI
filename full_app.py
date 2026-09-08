@@ -56859,3 +56859,49 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.1 — Owner Console Navigation
+# Owner navigation lives exclusively in owner_console.py.
+# ============================================================
+BC741_RELEASE = "7.4.1"
+BC741_RELEASE_NAME = "Owner Console Navigation"
+
+@app.get("/health/owner-console-navigation-separation-7-4-1")
+def bc741_full_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "customer_login_preserved": "/login" in paths,
+        "customer_register_preserved": "/register" in paths,
+        "customer_app_preserved": "/app" in paths,
+        "owner_console_registered": "/owner" in paths,
+        "billing_center_registered": "/owner/billing" in paths,
+        "subscriptions_registered": "/owner/subscriptions" in paths,
+        "cleanup_registered": "/owner/cleanup" in paths,
+        "payment_gate_preserved": callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved": callable(globals().get("_bc181893_is_approved")),
+        "branded_preview_preserved": "/health/branded-link-preview-7-3-1" in paths,
+        "billing_webhook_preserved": "/billing/stripe-webhook" in paths,
+        "master_protection_preserved": globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC741_RELEASE,
+        "release": BC741_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "owner_navigation_location": "owner_console.py",
+        "data_reset": False,
+        "checks": checks,
+    }
+
+BUILD_COMMAND_RELEASE = BC741_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC741_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
