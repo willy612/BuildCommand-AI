@@ -56112,3 +56112,45 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.2.3 — Company Cleanup Center
+# Owner-only cleanup UI/actions live in owner_console.py.
+# ============================================================
+BC723_RELEASE = "7.2.3"
+BC723_RELEASE_NAME = "Company Cleanup Center"
+
+@app.get("/health/company-cleanup-separation-7-2-3")
+def bc723_full_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("owner console registered", "/owner" in paths),
+        ("owner cleanup center registered", "/owner/cleanup" in paths),
+        ("selective delete registered", "/owner/cleanup/delete-selected" in paths),
+        ("strict customer payment gate preserved", callable(globals().get("_bc181893_payment_ok"))),
+        ("strict owner approval gate preserved", callable(globals().get("_bc181893_is_approved"))),
+        ("master owner protection preserved", globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com"),
+        ("customer login preserved", "/login" in paths),
+        ("customer register preserved", "/register" in paths),
+    ]
+    passed = sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC723_RELEASE,
+        "release":BC723_RELEASE_NAME,
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "owner_business_ui":"owner_console.py",
+        "data_reset":False,
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks],
+    }
+
+BUILD_COMMAND_RELEASE = BC723_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC723_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
