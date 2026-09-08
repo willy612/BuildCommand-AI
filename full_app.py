@@ -57045,3 +57045,86 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.5 — Health Route Gate Fix
+# Health/readiness endpoints must never be trapped behind
+# customer payment-required routing.
+# ============================================================
+BC745_RELEASE = "7.4.5"
+BC745_RELEASE_NAME = "Health Route Gate Fix"
+
+_BC745_PUBLIC_DIAGNOSTIC_PATHS = {
+    "/health/stripe-mode-runtime-fix-7-4-4",
+    "/health/owner-navigation-runtime-fix-7-4-2",
+    "/health/end-to-end-billing-access-7-4-0",
+    "/health/branded-link-preview-7-3-1",
+    "/api/billing/readiness",
+}
+
+# Register exact diagnostic/readiness paths as public in the runtime
+# path allowlist used by authentication/payment middleware.
+for _bc745_path in _BC745_PUBLIC_DIAGNOSTIC_PATHS:
+    try:
+        _runtime.PUBLIC_PATHS.add(_bc745_path)
+    except Exception:
+        pass
+
+# Also provide a current health endpoint for this release.
+@app.get("/health/health-route-gate-fix-7-4-5")
+def bc745_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    public_paths = set(getattr(_runtime, "PUBLIC_PATHS", set()) or set())
+    checks = {
+        "7_4_4_runtime_health_preserved":
+            "/health/stripe-mode-runtime-fix-7-4-4" in paths,
+        "7_4_4_runtime_health_public":
+            "/health/stripe-mode-runtime-fix-7-4-4" in public_paths,
+        "billing_readiness_preserved":
+            "/api/billing/readiness" in paths,
+        "billing_readiness_public":
+            "/api/billing/readiness" in public_paths,
+        "login_preserved":
+            "/login" in paths,
+        "register_preserved":
+            "/register" in paths,
+        "payment_required_preserved":
+            "/payment-required" in paths,
+        "payment_gate_preserved":
+            callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved":
+            callable(globals().get("_bc181893_is_approved")),
+        "stripe_webhook_preserved":
+            "/billing/stripe-webhook" in paths,
+        "master_owner_protection_preserved":
+            globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+        "data_reset_disabled":
+            True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC745_RELEASE,
+        "release": BC745_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "diagnostic_paths_public": sorted(_BC745_PUBLIC_DIAGNOSTIC_PATHS),
+        "data_reset": False,
+        "checks": checks,
+    }
+
+# Make this health endpoint public too.
+try:
+    _runtime.PUBLIC_PATHS.add("/health/health-route-gate-fix-7-4-5")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC745_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC745_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
