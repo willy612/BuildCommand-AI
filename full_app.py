@@ -55723,3 +55723,84 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 7.1.4 — Auth Flag Validation Fix
+# 7.1.3 visual behavior preserved. This release corrects the
+# health test so it validates the actual background-image rule.
+# ============================================================
+
+@app.get('/health/auth-visible-flag-7-1-4')
+def bc714_auth_visible_flag_health():
+    login_html = _bc630_auth_html('login')
+    signup_html = _bc630_auth_html('signup')
+    flag_data = str(globals().get('_BC630_FLAG_DATA', '') or '')
+    flag_url = 'data:image/png;base64,' + flag_data if flag_data else ''
+
+    paths = {getattr(r,'path','') for r in app.routes}
+
+    def has_flag_background(page):
+        if not flag_url:
+            return False
+        # Validate the actual CSS declaration rather than the first body rule.
+        return bool(_bc706_re.search(
+            r'background-image\s*:[^;}]*linear-gradient\([^}]*?url\(["\']'
+            + _bc706_re.escape(flag_url)
+            + r'["\']\)',
+            page,
+            _bc706_re.I | _bc706_re.S
+        ))
+
+    def css_blocks(page, selector):
+        pat = _bc706_re.escape(selector) + r'\{([^}]*)\}'
+        return _bc706_re.findall(pat, page, _bc706_re.I | _bc706_re.S)
+
+    login_cards = css_blocks(login_html, '.card')
+    signup_cards = css_blocks(signup_html, '.card')
+    login_logos = css_blocks(login_html, '.logo')
+    signup_logos = css_blocks(signup_html, '.logo')
+
+    checks = [
+        ('7.1.3 baseline preserved',
+         '/health/auth-visible-flag-7-1-3' in paths),
+        ('valid flag data url on login',
+         bool(flag_url) and flag_url in login_html),
+        ('valid flag data url on signup',
+         bool(flag_url) and flag_url in signup_html),
+        ('login uses flag background',
+         has_flag_background(login_html)),
+        ('signup uses flag background',
+         has_flag_background(signup_html)),
+        ('login card translucent',
+         any('rgba(7,14,24,.84)' in b for b in login_cards)),
+        ('signup card translucent',
+         any('rgba(7,14,24,.84)' in b for b in signup_cards)),
+        ('login logo has no flag background',
+         all(flag_url not in b for b in login_logos)),
+        ('signup logo has no flag background',
+         all(flag_url not in b for b in signup_logos)),
+        ('login/register routes preserved',
+         '/login' in paths and '/register' in paths),
+    ]
+
+    passed = sum(bool(v) for _, v in checks)
+    return {
+        'status': 'ok' if passed == len(checks) else 'failed',
+        'app': 'BuildCommand AI',
+        'version': '7.1.4',
+        'release': 'Auth Flag Validation Fix',
+        'passed': passed,
+        'total': len(checks),
+        'failed': len(checks)-passed,
+        'visual_change_from_7_1_3': False,
+        'flag_location': 'page background behind auth card',
+        'checks': [{'case': n, 'passed': bool(v)} for n,v in checks],
+    }
+
+BUILD_COMMAND_RELEASE = '7.1.4'
+BUILD_COMMAND_RELEASE_NAME = 'Auth Flag Validation Fix'
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
