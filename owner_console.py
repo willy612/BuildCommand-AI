@@ -12,7 +12,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.2.3"
+OWNER_CONSOLE_VERSION = "7.2.4"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -1399,6 +1399,37 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             "automatic_deletion_on_deploy":False,
             "requires_selection":True,
             "checks":checks,
+        }
+
+
+    @app.get("/health/owner-console-7-2-4")
+    def owner_console_724_health():
+        paths = {getattr(r, "path", "") for r in app.routes}
+        checks = {
+            "owner_dashboard": "/owner" in paths,
+            "customers": "/owner/customers" in paths,
+            "subscriptions": "/owner/subscriptions" in paths,
+            "cleanup_center_owned_here": "/owner/cleanup" in paths,
+            "selective_delete_owned_here": "/owner/cleanup/delete-selected" in paths,
+            "cleanup_preview_api_owned_here": "/owner/api/cleanup-preview" in paths,
+            "master_email_protected": owner_email == "buildcommandai@gmail.com",
+            "same_database": callable(getattr(runtime, "db", None)),
+            "automatic_deletion_on_deploy": False,
+        }
+        passed = sum(1 for v in checks.values() if v)
+        return {
+            "status": "ok" if passed == len(checks) else "degraded",
+            "app": "BuildCommand AI",
+            "version": "7.2.4",
+            "release": "Owner Console Separation Cleanup",
+            "passed": passed,
+            "total": len(checks),
+            "failed": len(checks) - passed,
+            "owner_business_ui": "owner_console.py",
+            "customer_app": "full_app.py",
+            "master_protected": True,
+            "automatic_deletion_on_deploy": False,
+            "checks": checks,
         }
 
     return app
