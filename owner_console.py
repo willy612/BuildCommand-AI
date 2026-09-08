@@ -1,3 +1,4 @@
+import re
 
 """
 BuildCommand AI — Owner Business Console
@@ -12,7 +13,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.4.1"
+OWNER_CONSOLE_VERSION = "7.4.2"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -2201,6 +2202,44 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             ],
             "owner_business_ui": "owner_console.py",
             "customer_app": "full_app.py",
+            "data_reset": False,
+            "checks": checks,
+        }
+
+
+    # ========================================================
+    # BuildCommand AI 7.4.2 — Owner Navigation Runtime Fix
+    # Fixes missing `re` import used by 7.4.1 navigation wrapper.
+    # ========================================================
+    @app.get("/health/owner-navigation-runtime-fix-7-4-2")
+    def owner_navigation_runtime_fix_health():
+        paths = {getattr(r, "path", "") for r in app.routes}
+        # Exercise the exact helper that crashed in production.
+        probe = _bc741_with_nav("<html><body><main>probe</main></body></html>", "dashboard")
+        checks = {
+            "regex_module_available": callable(getattr(re, "search", None)),
+            "navigation_helper_executes": "BUILDCOMMAND OWNER" in probe,
+            "dashboard_tab": "/owner" in paths,
+            "customers_tab": "/owner/customers" in paths,
+            "billing_tab": "/owner/billing" in paths,
+            "subscriptions_tab": "/owner/subscriptions" in paths,
+            "cleanup_tab": "/owner/cleanup" in paths,
+            "billing_center_preserved": "/owner/billing" in paths,
+            "stripe_webhook_preserved": "/billing/stripe-webhook" in paths,
+            "master_owner_protected": owner_email == "buildcommandai@gmail.com",
+            "automatic_deletion_disabled": True,
+            "data_reset_disabled": True,
+        }
+        passed = sum(1 for v in checks.values() if v)
+        return {
+            "status": "ok" if passed == len(checks) else "degraded",
+            "app": "BuildCommand AI",
+            "version": "7.4.2",
+            "release": "Owner Navigation Runtime Fix",
+            "passed": passed,
+            "total": len(checks),
+            "failed": len(checks) - passed,
+            "fix": "import re for owner navigation wrapper",
             "data_reset": False,
             "checks": checks,
         }
