@@ -13790,7 +13790,7 @@ def _bc181812_startup_page():
       <p><a href="/blueprint-brain">Blueprint Brain</a> · <a href="/trade-readiness/{pid}">Trade Readiness</a> · <a href="/superintendent-command/{pid}">Superintendent Command</a></p>
     </div>
     """
-    return _runtime.shell("Project Startup",body)
+    return _BC189_HTMLResponse(_runtime.shell("Project Startup",body))
 
 async def _bc181812_update_item(item_id:int,request:_BC189_Request):
     u,cid,pid=_bc181812_user_project()
@@ -57872,207 +57872,35 @@ except Exception:
 
 
 # ============================================================
-# BuildCommand AI 7.4.14 — STAGING-ONLY Owner Login Bootstrap
-# ============================================================
-# Safety:
-# - Runs only when Render identifies this service/host as staging.
-# - Never runs on a production-looking service/host.
-# - Does not delete/reset the database.
-# - Uses the application's existing db() and hash_password().
-# - Password is supplied only through STAGING_OWNER_PASSWORD.
+# BuildCommand AI 7.4.15 — Project Startup HTML Render Fix
+# Staging patch: render /project-startup as HTML instead of
+# serializing the shell markup as a JSON/plain string.
 # ============================================================
 
-BC7414_RELEASE = "7.4.14"
-BC7414_RELEASE_NAME = "Staging Owner Login Bootstrap"
-
-def _bc7414_staging_identity():
-    service = (os.environ.get("RENDER_SERVICE_NAME") or "").strip().lower()
-    host = (
-        os.environ.get("RENDER_EXTERNAL_HOSTNAME")
-        or os.environ.get("RENDER_EXTERNAL_URL")
-        or ""
-    ).strip().lower()
-    explicit = (os.environ.get("BUILDCOMMAND_ENV") or "").strip().lower()
-
-    production_markers = ("buildcommand-ai", "buildcommandai.com")
-    staging_signal = (
-        explicit == "staging"
-        or "staging" in service
-        or "staging" in host
-    )
-
-    # An explicit production setting always wins.
-    if explicit in {"production", "prod"}:
-        return False, service, host, "explicit-production"
-
-    # A hostname/service containing "staging" is safe even though the
-    # shared BuildCommand name also appears in it.
-    if staging_signal:
-        return True, service, host, "staging-confirmed"
-
-    # No positive staging signal = refuse to bootstrap.
-    return False, service, host, "staging-not-confirmed"
-
-
-def _bc7414_bootstrap_owner():
-    is_staging, service, host, reason = _bc7414_staging_identity()
-    result = {
-        "attempted": False,
-        "staging": is_staging,
-        "service": service,
-        "host": host,
-        "reason": reason,
-        "email": None,
-        "action": "skipped",
-        "error": None,
-    }
-
-    if not is_staging:
-        return result
-
-    password = os.environ.get("STAGING_OWNER_PASSWORD") or ""
-    email = (
-        os.environ.get("STAGING_OWNER_EMAIL")
-        or "buildcommandai@gmail.com"
-    ).strip().lower()
-    display_name = (
-        os.environ.get("STAGING_OWNER_NAME")
-        or "Willy LaHood"
-    ).strip()
-
-    result["email"] = email
-
-    if len(password) < 8:
-        result["reason"] = "STAGING_OWNER_PASSWORD missing or shorter than 8 characters"
-        return result
-
-    runtime_db = getattr(_runtime, "db", None)
-    runtime_hash_password = getattr(_runtime, "hash_password", None)
-    if not callable(runtime_db) or not callable(runtime_hash_password):
-        result["error"] = "runtime auth helpers unavailable"
-        return result
-
-    result["attempted"] = True
-    c = None
-    try:
-        c = runtime_db()
-        user = c.execute(
-            "SELECT * FROM users WHERE lower(email)=lower(?)",
-            (email,),
-        ).fetchone()
-
-        new_hash = runtime_hash_password(password)
-
-        if user:
-            c.execute(
-                "UPDATE users SET password_hash=?, role=?, display_name=? WHERE id=?",
-                (new_hash, "OWNER", display_name, user["id"]),
-            )
-            result["action"] = "owner-password-restored"
-        else:
-            company = c.execute(
-                "SELECT id FROM companies ORDER BY id LIMIT 1"
-            ).fetchone()
-
-            if company:
-                company_id = company["id"]
-            else:
-                from datetime import date as _bc7414_date
-                c.execute(
-                    "INSERT INTO companies(name,created) VALUES(?,?)",
-                    ("BuildCommand AI", _bc7414_date.today().isoformat()),
-                )
-                company_id = c.execute(
-                    "SELECT last_insert_rowid() id"
-                ).fetchone()["id"]
-
-            from datetime import date as _bc7414_date
-            c.execute(
-                """INSERT INTO users
-                   (company_id,email,display_name,password_hash,role,created)
-                   VALUES(?,?,?,?,?,?)""",
-                (
-                    company_id,
-                    email,
-                    display_name,
-                    new_hash,
-                    "OWNER",
-                    _bc7414_date.today().isoformat(),
-                ),
-            )
-            result["action"] = "owner-created"
-
-        c.commit()
-        result["reason"] = "staging owner ready"
-    except Exception as exc:
-        try:
-            if c is not None:
-                c.rollback()
-        except Exception:
-            pass
-        result["action"] = "failed"
-        result["error"] = f"{type(exc).__name__}: {exc}"
-    finally:
-        try:
-            if c is not None:
-                c.close()
-        except Exception:
-            pass
-
-    return result
-
-
-_BC7414_BOOTSTRAP = _bc7414_bootstrap_owner()
-
-
-@app.get("/health/staging-owner-bootstrap-7-4-14")
-def bc7414_staging_owner_health():
-    is_staging, service, host, reason = _bc7414_staging_identity()
-    password_present = len(os.environ.get("STAGING_OWNER_PASSWORD") or "") >= 8
-
-    checks = {
-        "staging_identity_confirmed": is_staging,
-        "staging_password_configured": password_present,
-        "runtime_db_available": callable(getattr(_runtime, "db", None)),
-        "runtime_password_hash_available": callable(getattr(_runtime, "hash_password", None)),
-        "database_reset_disabled": True,
-        "production_bootstrap_refused_without_staging_signal": True,
-        "bootstrap_completed": _BC7414_BOOTSTRAP.get("action") in {
-            "owner-created", "owner-password-restored"
-        },
-    }
-    passed = sum(1 for value in checks.values() if value)
-
+@app.get("/health/project-startup-html-render-7-4-15")
+def bc7415_project_startup_html_render_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("project startup route preserved","/project-startup" in paths),
+        ("project startup item update preserved","/project-startup/item/{item_id}" in paths),
+        ("project startup API preserved","/api/project-startup" in paths),
+        ("project startup snapshot preserved","/api/project-startup/snapshot" in paths),
+        ("HTML response class available",callable(_BC189_HTMLResponse)),
+    ]
+    passed=sum(bool(v) for _,v in checks)
     return {
-        "status": "ok" if passed == len(checks) else "degraded",
-        "app": "BuildCommand AI",
-        "version": BC7414_RELEASE,
-        "release": BC7414_RELEASE_NAME,
-        "passed": passed,
-        "total": len(checks),
-        "failed": len(checks) - passed,
-        "service": service,
-        "host": host,
-        "staging_reason": reason,
-        "bootstrap": {
-            "attempted": _BC7414_BOOTSTRAP.get("attempted"),
-            "email": _BC7414_BOOTSTRAP.get("email"),
-            "action": _BC7414_BOOTSTRAP.get("action"),
-            "reason": _BC7414_BOOTSTRAP.get("reason"),
-            "error": _BC7414_BOOTSTRAP.get("error"),
-        },
-        "checks": checks,
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"7.4.15",
+        "release":"Project Startup HTML Render Fix",
+        "target":"staging",
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
     }
 
-
+BUILD_COMMAND_RELEASE="7.4.15"
+BUILD_COMMAND_RELEASE_NAME="Project Startup HTML Render Fix"
 try:
-    _runtime.PUBLIC_PATHS.add("/health/staging-owner-bootstrap-7-4-14")
-except Exception:
-    pass
-
-BUILD_COMMAND_RELEASE = BC7414_RELEASE
-BUILD_COMMAND_RELEASE_NAME = BC7414_RELEASE_NAME
-try:
-    app.version = BUILD_COMMAND_RELEASE
+    app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
