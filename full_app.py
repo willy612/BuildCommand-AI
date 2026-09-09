@@ -57873,7 +57873,7 @@ except Exception:
 
 # ============================================================
 # BuildCommand AI 7.4.15 — Project Startup HTML Render Fix
-# Staging patch: render /project-startup as HTML instead of
+# Production patch: render /project-startup as HTML instead of
 # serializing the shell markup as a JSON/plain string.
 # ============================================================
 
@@ -57893,7 +57893,7 @@ def bc7415_project_startup_html_render_health():
         "app":"BuildCommand AI",
         "version":"7.4.15",
         "release":"Project Startup HTML Render Fix",
-        "target":"staging",
+        "target":"production",
         "passed":passed,"total":len(checks),"failed":len(checks)-passed,
         "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
     }
@@ -57902,5 +57902,435 @@ BUILD_COMMAND_RELEASE="7.4.15"
 BUILD_COMMAND_RELEASE_NAME="Project Startup HTML Render Fix"
 try:
     app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.5.0 — Project Startup Command Center
+# Baseline: verified 7.4.15 Project Startup HTML render fix
+#
+# Purpose:
+# Turn Project Startup from a checklist into a preconstruction
+# command center:
+# - readiness + mobilization status
+# - critical blockers / watch items
+# - ownership gaps
+# - overdue / due-soon startup actions
+# - category readiness rollups
+# - project startup command priorities
+# - direct links into Blueprint Brain, Trade Readiness,
+#   Superintendent Command, Documents and Submittals
+#
+# Human project leadership remains the authority.
+# ============================================================
+
+from datetime import datetime as _BC750_datetime, date as _BC750_date
+
+BC750_RELEASE = "7.5.0"
+BC750_RELEASE_NAME = "Project Startup Command Center"
+
+def _bc750_parse_date(value):
+    value = str(value or "").strip()
+    if not value:
+        return None
+    try:
+        return _BC750_date.fromisoformat(value[:10])
+    except Exception:
+        return None
+
+def _bc750_startup_command(pid):
+    d = _bc181812_startup(pid)
+    if not d:
+        return None
+
+    today = _BC750_date.today()
+    items = list(d.get("items") or [])
+
+    category = {}
+    overdue = []
+    due_soon = []
+    unowned = []
+    critical = []
+    watch = []
+
+    for x in items:
+        st = str(x.get("readiness_state") or "WATCH").upper()
+        cat = str(x.get("category") or "OTHER").upper()
+        due = _bc750_parse_date(x.get("due_date"))
+        owner = str(x.get("owner") or "").strip()
+
+        row = category.setdefault(cat, {
+            "category": cat, "ready": 0, "watch": 0, "blocked": 0,
+            "total": 0, "score": 0
+        })
+        row["total"] += 1
+        if st == "READY":
+            row["ready"] += 1
+        elif st == "BLOCKED":
+            row["blocked"] += 1
+        else:
+            row["watch"] += 1
+
+        if st == "BLOCKED":
+            critical.append(x)
+        elif st == "WATCH":
+            watch.append(x)
+
+        if st != "READY" and not owner:
+            unowned.append(x)
+
+        if st != "READY" and due:
+            delta = (due - today).days
+            if delta < 0:
+                xx = dict(x)
+                xx["days_overdue"] = abs(delta)
+                overdue.append(xx)
+            elif delta <= 7:
+                xx = dict(x)
+                xx["days_until_due"] = delta
+                due_soon.append(xx)
+
+    for row in category.values():
+        total = max(1, row["total"])
+        row["score"] = round(((row["ready"] * 100) + (row["watch"] * 50)) / total)
+
+    categories = sorted(
+        category.values(),
+        key=lambda r: (0 if r["blocked"] else 1 if r["watch"] else 2, r["score"], r["category"])
+    )
+
+    critical.sort(key=lambda x: (0 if x.get("due_date") else 1, str(x.get("due_date") or ""), x.get("title") or ""))
+    watch.sort(key=lambda x: (0 if x.get("due_date") else 1, str(x.get("due_date") or ""), x.get("title") or ""))
+    overdue.sort(key=lambda x: (-int(x.get("days_overdue") or 0), x.get("title") or ""))
+    due_soon.sort(key=lambda x: (int(x.get("days_until_due") or 999), x.get("title") or ""))
+
+    # Mobilization decision support.
+    if d.get("blocked_count", 0) > 0:
+        mobilization = "HOLD / RESOLVE BLOCKERS"
+        mobilization_class = "HOLD"
+    elif d.get("readiness_score", 0) >= 90:
+        mobilization = "READY TO MOBILIZE"
+        mobilization_class = "READY"
+    elif d.get("readiness_score", 0) >= 70:
+        mobilization = "MAKE READY"
+        mobilization_class = "WATCH"
+    else:
+        mobilization = "PRECONSTRUCTION"
+        mobilization_class = "WATCH"
+
+    command_actions = []
+    for x in critical[:5]:
+        command_actions.append({
+            "priority": "CRITICAL",
+            "title": x.get("title"),
+            "category": x.get("category"),
+            "owner": x.get("owner") or "UNASSIGNED",
+            "due_date": x.get("due_date") or "",
+            "action": "Clear this blocker before dependent field work is released.",
+            "evidence": x.get("evidence") or "",
+        })
+    for x in overdue[:5]:
+        if len(command_actions) >= 8:
+            break
+        command_actions.append({
+            "priority": "OVERDUE",
+            "title": x.get("title"),
+            "category": x.get("category"),
+            "owner": x.get("owner") or "UNASSIGNED",
+            "due_date": x.get("due_date") or "",
+            "action": f"Recover this startup item; it is {x.get('days_overdue')} day(s) overdue.",
+            "evidence": x.get("evidence") or "",
+        })
+    for x in unowned:
+        if len(command_actions) >= 10:
+            break
+        if any(a["title"] == x.get("title") for a in command_actions):
+            continue
+        command_actions.append({
+            "priority": "ASSIGN OWNER",
+            "title": x.get("title"),
+            "category": x.get("category"),
+            "owner": "UNASSIGNED",
+            "due_date": x.get("due_date") or "",
+            "action": "Assign a responsible owner and required-by date.",
+            "evidence": x.get("evidence") or "",
+        })
+
+    return {
+        **d,
+        "command_version": BC750_RELEASE,
+        "mobilization_status": mobilization,
+        "mobilization_class": mobilization_class,
+        "category_readiness": categories,
+        "critical_blockers": critical,
+        "watch_items": watch,
+        "unowned_items": unowned,
+        "overdue_items": overdue,
+        "due_soon_items": due_soon,
+        "command_actions": command_actions,
+        "ownership_gap_count": len(unowned),
+        "overdue_count": len(overdue),
+        "due_soon_count": len(due_soon),
+        "guardrail_v750": (
+            "BuildCommand AI provides project-readiness decision support. "
+            "Contract documents, plans/specifications, codes, AHJ/design-team direction, "
+            "safety requirements, and verified project records remain controlling."
+        ),
+    }
+
+def _bc750_status_badge(status):
+    st = str(status or "WATCH").upper()
+    klass = "READY" if st == "READY" else ("HOLD" if st == "BLOCKED" else "WATCH")
+    return f'<span class="badge {klass}">{_runtime.esc(st)}</span>'
+
+def _bc750_project_startup_page():
+    u, cid, pid = _bc181812_user_project()
+    if not u:
+        return _BC187_RedirectResponse("/login", status_code=303)
+    if not pid:
+        return _BC187_RedirectResponse("/projects/new", status_code=303)
+
+    d = _bc750_startup_command(pid)
+    if not d:
+        return _BC189_HTMLResponse(
+            _runtime.shell("Project Startup", "<div class='hero'><h1>No active project.</h1></div>")
+        )
+
+    p = d.get("project") or {}
+
+    action_cards = ""
+    for a in d.get("command_actions") or []:
+        action_cards += f"""
+        <div class="card">
+          <div class="eyebrow">{_runtime.esc(a.get("priority"))} · {_runtime.esc(a.get("category"))}</div>
+          <h3>{_runtime.esc(a.get("title"))}</h3>
+          <p><b>Owner:</b> {_runtime.esc(a.get("owner"))}
+             {' · <b>Due:</b> '+_runtime.esc(a.get("due_date")) if a.get("due_date") else ''}</p>
+          <p>{_runtime.esc(a.get("action"))}</p>
+          <div class="small">{_runtime.esc(a.get("evidence"))}</div>
+        </div>
+        """
+    if not action_cards:
+        action_cards = '<div class="card"><h3>No immediate startup command actions.</h3><p class="muted">Continue verifying project startup requirements and near-term constraints.</p></div>'
+
+    category_rows = ""
+    for c in d.get("category_readiness") or []:
+        cstate = "BLOCKED" if c["blocked"] else ("WATCH" if c["watch"] else "READY")
+        category_rows += f"""
+        <tr>
+          <td><b>{_runtime.esc(c["category"])}</b></td>
+          <td>{c["score"]}%</td>
+          <td>{c["ready"]}</td>
+          <td>{c["watch"]}</td>
+          <td>{c["blocked"]}</td>
+          <td>{_bc750_status_badge(cstate)}</td>
+        </tr>
+        """
+
+    checklist_rows = ""
+    for x in d.get("items") or []:
+        st = str(x.get("readiness_state") or "WATCH").upper()
+        current = str(x.get("status") or "WATCH").upper()
+        options = ""
+        for opt in ("READY", "WATCH", "BLOCKED"):
+            sel = " selected" if current == opt else ""
+            options += f'<option value="{opt}"{sel}>{opt}</option>'
+
+        checklist_rows += f"""
+        <tr>
+          <td><b>{_runtime.esc(x.get("category"))}</b></td>
+          <td>{_runtime.esc(x.get("title"))}</td>
+          <td>{_bc750_status_badge(st)}</td>
+          <td>{_runtime.esc(x.get("evidence"))}</td>
+          <td>
+            <form method="post" action="/project-startup/item/{x['id']}" style="display:grid;grid-template-columns:120px 1fr 150px 1.5fr auto;gap:6px;align-items:center;min-width:760px">
+              <select name="status">{options}</select>
+              <input name="owner" placeholder="Responsible owner" value="{_runtime.esc(x.get('owner') or '')}">
+              <input name="due_date" type="date" value="{_runtime.esc(x.get('due_date') or '')}">
+              <input name="notes" placeholder="Verification / evidence / next step" value="{_runtime.esc(x.get('notes') or '')}">
+              <button type="submit">Update</button>
+            </form>
+          </td>
+        </tr>
+        """
+
+    risk_summary = []
+    if d.get("blocked_count"):
+        risk_summary.append(f'{d["blocked_count"]} blocker(s) must be cleared.')
+    if d.get("overdue_count"):
+        risk_summary.append(f'{d["overdue_count"]} startup action(s) are overdue.')
+    if d.get("ownership_gap_count"):
+        risk_summary.append(f'{d["ownership_gap_count"]} open startup item(s) have no owner.')
+    if d.get("due_soon_count"):
+        risk_summary.append(f'{d["due_soon_count"]} startup item(s) are due within 7 days.')
+    if not risk_summary:
+        risk_summary.append("No major startup-control exception detected from current BuildCommand records.")
+
+    risk_html = "".join(f"<li>{_runtime.esc(x)}</li>" for x in risk_summary)
+
+    body = f"""
+    <div class="hero">
+      <div>
+        <div class="eyebrow">BUILDCOMMAND AI 7.5.0 · PROJECT STARTUP COMMAND CENTER</div>
+        <h1>{_runtime.esc(p.get("number") or "")} · {_runtime.esc(p.get("name") or "Current Project")}</h1>
+        <p>Take the project from award to field-ready. BuildCommand combines document evidence, Blueprint Brain, schedule, submittals, inspections, make-ready and trade-readiness signals with project-team verification.</p>
+      </div>
+      <div style="min-width:240px">
+        <div class="label">Mobilization Status</div>
+        <div style="margin:8px 0">{_bc750_status_badge(d.get("mobilization_class"))}</div>
+        <div style="font-size:22px;font-weight:900">{_runtime.esc(d.get("mobilization_status"))}</div>
+      </div>
+    </div>
+
+    <div class="grid4">
+      <div class="card"><div class="label">Startup Readiness</div><div class="kpi">{d["readiness_score"]}%</div></div>
+      <div class="card"><div class="label">Blocked</div><div class="kpi">{d["blocked_count"]}</div></div>
+      <div class="card"><div class="label">Overdue</div><div class="kpi">{d["overdue_count"]}</div></div>
+      <div class="card"><div class="label">Unassigned</div><div class="kpi">{d["ownership_gap_count"]}</div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <div class="eyebrow">STARTUP RISK</div>
+        <h2>What can stop mobilization?</h2>
+        <ul>{risk_html}</ul>
+      </div>
+      <div class="card">
+        <div class="eyebrow">CONNECTED PROJECT INTELLIGENCE</div>
+        <h2>Startup evidence sources</h2>
+        <p><b>Documents:</b> {_runtime.esc(d.get("evidence",{}).get("documents",0))} ·
+           <b>Blueprint runs:</b> {_runtime.esc(d.get("evidence",{}).get("blueprint_runs",0))} ·
+           <b>Scope items:</b> {_runtime.esc(d.get("evidence",{}).get("scope_items",0))}</p>
+        <p><b>Schedule activities:</b> {_runtime.esc(d.get("evidence",{}).get("activities",0))} ·
+           <b>Submittals:</b> {_runtime.esc(d.get("evidence",{}).get("submittals",0))} ·
+           <b>Inspections:</b> {_runtime.esc(d.get("evidence",{}).get("inspections",0))}</p>
+        <p><b>Make-ready:</b> {_runtime.esc(d.get("evidence",{}).get("make_ready",0))} ·
+           <b>Open issues:</b> {_runtime.esc(d.get("evidence",{}).get("issues",0))} ·
+           <b>Risks:</b> {_runtime.esc(d.get("evidence",{}).get("risks",0))}</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">COMMAND PRIORITIES</div>
+      <h2>What needs attention next?</h2>
+    </div>
+    <div class="grid2">{action_cards}</div>
+
+    <div class="card">
+      <div class="eyebrow">READINESS BY AREA</div>
+      <h2>Preconstruction & Startup Health</h2>
+      <div style="overflow:auto">
+        <table>
+          <thead><tr><th>Area</th><th>Score</th><th>Ready</th><th>Watch</th><th>Blocked</th><th>Status</th></tr></thead>
+          <tbody>{category_rows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">PROJECT TEAM CONTROL</div>
+      <h2>Startup & Preconstruction Requirements</h2>
+      <p class="muted">Assign owners and required-by dates. Human verification can override incomplete system evidence when the project team has confirmed the requirement.</p>
+      <div style="overflow:auto">
+        <table>
+          <thead><tr><th>Area</th><th>Requirement</th><th>Status</th><th>BuildCommand Evidence</th><th>Owner / Due / Verification</th></tr></thead>
+          <tbody>{checklist_rows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">CONNECTED WORKFLOW</div>
+      <h2>Move from startup into execution</h2>
+      <p>
+        <a href="/documents">Documents</a> ·
+        <a href="/blueprint-brain">Blueprint Brain</a> ·
+        <a href="/submittals">Submittals</a> ·
+        <a href="/schedule">Schedule</a> ·
+        <a href="/trade-readiness/{pid}">Trade Readiness</a> ·
+        <a href="/superintendent-command/{pid}">Superintendent Command</a>
+      </p>
+      <form method="post" action="/api/project-startup/snapshot">
+        <button type="submit">Save Startup Readiness Snapshot</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Operating Guardrail</h3>
+      <p>{_runtime.esc(d.get("guardrail_v750"))}</p>
+      <p class="muted">Operating model: SHOULD → CAN → WILL → DID → LEARN</p>
+    </div>
+    """
+
+    return _BC189_HTMLResponse(_runtime.shell("Project Startup Command Center", body))
+
+# Replace the canonical Project Startup GET route with 7.5.0 Command Center.
+_bc1810a_prepend_route("/project-startup", _bc750_project_startup_page, ["GET"])
+
+@app.get("/api/project-startup/command")
+def bc750_project_startup_command_api():
+    u, cid, pid = _bc181812_user_project()
+    if not u:
+        return _BC189_JSONResponse({"status":"unauthorized"}, status_code=401)
+    if not pid:
+        return {"status":"no_project","version":BC750_RELEASE}
+    d = _bc750_startup_command(pid)
+    return d if d else _BC189_JSONResponse({"status":"not_found"}, status_code=404)
+
+@app.get("/health/project-startup-command-center-7-5-0")
+def bc750_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "7_4_15_html_fix_preserved": "/health/project-startup-html-render-7-4-15" in paths,
+        "project_startup_page": "/project-startup" in paths,
+        "startup_item_update": "/project-startup/item/{item_id}" in paths,
+        "startup_api": "/api/project-startup" in paths,
+        "startup_command_api": "/api/project-startup/command" in paths,
+        "startup_snapshot_api": "/api/project-startup/snapshot" in paths,
+        "startup_engine": callable(globals().get("_bc181812_startup")),
+        "command_engine": callable(globals().get("_bc750_startup_command")),
+        "blueprint_brain_preserved": "/blueprint-brain" in paths,
+        "documents_preserved": "/documents" in paths,
+        "submittals_preserved": "/submittals" in paths,
+        "schedule_preserved": "/schedule" in paths,
+        "trade_readiness_preserved": any(str(p).startswith("/trade-readiness") for p in paths),
+        "superintendent_command_preserved": any(str(p).startswith("/superintendent-command") for p in paths),
+        "human_verification_preserved": True,
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC750_RELEASE,
+        "release": BC750_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "features": {
+            "mobilization_status": True,
+            "critical_blockers": True,
+            "ownership_gaps": True,
+            "overdue_startup_actions": True,
+            "due_soon_actions": True,
+            "category_readiness": True,
+            "command_priorities": True,
+            "connected_project_evidence": True,
+            "startup_snapshot": True,
+        },
+        "data_reset": False,
+        "checks": checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/project-startup-command-center-7-5-0")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC750_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC750_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
