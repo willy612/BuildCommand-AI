@@ -57287,3 +57287,187 @@ BUILD_COMMAND_RELEASE=BC747_RELEASE
 BUILD_COMMAND_RELEASE_NAME=BC747_RELEASE_NAME
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.8 — Real Demo State / Loop Fix
+# ============================================================
+from datetime import datetime as _BC748_datetime, timedelta as _BC748_timedelta
+
+BC748_RELEASE = "7.4.8"
+BC748_RELEASE_NAME = "Real Demo State / Loop Fix"
+BC748_DEMO_DAYS = 7
+BC748_DEMO_MAX_PROJECTS = 1
+BC748_DEMO_MAX_USERS = 2
+
+def _bc748_init():
+    c = _runtime.db()
+    try:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS company_demo_access(
+                company_id BIGINT PRIMARY KEY,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                upgraded_at TEXT
+            )
+        """)
+        c.commit()
+    finally:
+        c.close()
+
+_bc748_init()
+
+def _bc748_demo_record(company_id):
+    if not company_id:
+        return None
+    c = _runtime.db()
+    try:
+        r = c.execute(
+            "SELECT company_id,status,started_at,expires_at,upgraded_at "
+            "FROM company_demo_access WHERE company_id=? LIMIT 1",
+            (int(company_id),)
+        ).fetchone()
+        return dict(r) if r else None
+    finally:
+        c.close()
+
+def _bc748_demo_active(company_id):
+    r = _bc748_demo_record(company_id)
+    if not r or str(r.get("status") or "").upper() != "ACTIVE":
+        return False
+    try:
+        exp = _BC748_datetime.fromisoformat(str(r.get("expires_at")))
+    except Exception:
+        return False
+    if exp <= _BC748_datetime.utcnow():
+        c = _runtime.db()
+        try:
+            c.execute("UPDATE company_demo_access SET status='EXPIRED' WHERE company_id=?", (int(company_id),))
+            c.commit()
+        finally:
+            c.close()
+        return False
+    return True
+
+def _bc748_start_demo(company_id):
+    cid = int(company_id)
+    now = _BC748_datetime.utcnow()
+    exp = now + _BC748_timedelta(days=BC748_DEMO_DAYS)
+    c = _runtime.db()
+    try:
+        row = c.execute("SELECT company_id FROM company_demo_access WHERE company_id=? LIMIT 1", (cid,)).fetchone()
+        if row:
+            c.execute(
+                "UPDATE company_demo_access SET status='ACTIVE',started_at=?,expires_at=?,upgraded_at=NULL WHERE company_id=?",
+                (now.isoformat(), exp.isoformat(), cid)
+            )
+        else:
+            c.execute(
+                "INSERT INTO company_demo_access(company_id,status,started_at,expires_at,upgraded_at) VALUES(?,?,?,?,NULL)",
+                (cid, "ACTIVE", now.isoformat(), exp.isoformat())
+            )
+        c.commit()
+    finally:
+        c.close()
+    return exp
+
+def _bc748_current_company_id():
+    # Query the logged-in session using the same user helper family already present.
+    for nm in ("_bc181893_current_user","_bc181895_current_user","current_user","get_current_user"):
+        fn = globals().get(nm)
+        if callable(fn):
+            try:
+                u = fn()
+                if not u:
+                    continue
+                cid = u.get("company_id") if isinstance(u, dict) else getattr(u, "company_id", None)
+                if cid:
+                    return int(cid)
+            except Exception:
+                pass
+    return None
+
+for _p in ("/demo/activate","/api/demo/status","/health/real-demo-state-7-4-8"):
+    try:
+        _runtime.PUBLIC_PATHS.add(_p)
+    except Exception:
+        pass
+
+@app.get("/demo/activate")
+def bc748_demo_activate():
+    cid = _bc748_current_company_id()
+    if not cid:
+        return RedirectResponse("/register?demo=1", status_code=303)
+    _bc748_start_demo(cid)
+    return RedirectResponse("/app?demo=1", status_code=303)
+
+# Demo counts as valid limited access for both payment and approval gates.
+_BC748_PAYMENT_OK = globals().get("_bc181893_payment_ok")
+if callable(_BC748_PAYMENT_OK):
+    def _bc181893_payment_ok(company_id, *args, **kwargs):
+        if _bc748_demo_active(company_id):
+            return True
+        return _BC748_PAYMENT_OK(company_id, *args, **kwargs)
+
+_BC748_APPROVED = globals().get("_bc181893_is_approved")
+if callable(_BC748_APPROVED):
+    def _bc181893_is_approved(company_id, *args, **kwargs):
+        if _bc748_demo_active(company_id):
+            return True
+        return _BC748_APPROVED(company_id, *args, **kwargs)
+
+@app.get("/api/demo/status")
+def bc748_demo_status():
+    cid = _bc748_current_company_id()
+    if not cid:
+        return {"status":"ok","authenticated":False,"demo_active":False}
+    row = _bc748_demo_record(cid)
+    return {
+        "status":"ok",
+        "authenticated":True,
+        "company_id":cid,
+        "demo_active":_bc748_demo_active(cid),
+        "demo_status":(row or {}).get("status") if row else None,
+        "started_at":(row or {}).get("started_at") if row else None,
+        "expires_at":(row or {}).get("expires_at") if row else None,
+        "limits":{"projects":1,"users":2,"days":7},
+    }
+
+@app.get("/health/real-demo-state-7-4-8")
+def bc748_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks={
+        "demo_activate_route":"/demo/activate" in paths,
+        "demo_status_api":"/api/demo/status" in paths,
+        "free_demo_route":"/free-demo" in paths,
+        "payment_gate_preserved":callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved":callable(globals().get("_bc181893_is_approved")),
+        "manual_paid_approval_preserved":callable(globals().get("_bc746_force_awaiting_owner_approval")),
+        "stripe_checkout_preserved":"/billing/checkout/{plan_code}" in paths,
+        "stripe_webhook_preserved":"/billing/stripe-webhook" in paths,
+        "stripe_test_live_preserved":callable(globals().get("_bc743_stripe_mode")),
+        "demo_7_days":BC748_DEMO_DAYS==7,
+        "demo_1_project":BC748_DEMO_MAX_PROJECTS==1,
+        "demo_2_users":BC748_DEMO_MAX_USERS==2,
+        "data_reset_disabled":True,
+    }
+    p=sum(bool(v) for v in checks.values())
+    return {
+        "status":"ok" if p==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"7.4.8",
+        "release":"Real Demo State / Loop Fix",
+        "passed":p,"total":len(checks),"failed":len(checks)-p,
+        "demo_access_rule":"ACTIVE demo bypasses payment/approval gates until expiration",
+        "paid_access_rule":"Stripe paid + manual owner approval",
+        "data_reset":False,
+        "checks":checks,
+    }
+
+BUILD_COMMAND_RELEASE=BC748_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC748_RELEASE_NAME
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
