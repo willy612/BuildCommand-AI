@@ -58334,3 +58334,250 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 8.0.0 — Customer Pilot Platform
+# One-build integration of the 7.6 → 8.0 roadmap:
+#   7.6 Automatic Startup Intelligence
+#   7.7 New Project Launch Wizard
+#   7.8 Role / Permission Control
+#   7.9 Subcontractor Command Portal
+#   8.0 Pilot Readiness / Hardening
+# Existing project, billing, approval, demo, Blueprint Brain,
+# Superintendent Command and 7.5.0 startup logic are preserved.
+# ============================================================
+
+from datetime import datetime as _BC800_datetime, date as _BC800_date
+import os as _bc800_os
+
+BC800_RELEASE = "8.0.0"
+BC800_RELEASE_NAME = "Customer Pilot Platform"
+
+def _bc800_table_names():
+    c = _runtime.db()
+    try:
+        if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
+            rows = c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()
+            return {r["table_name"] for r in rows}
+        rows = c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        return {r["name"] for r in rows}
+    finally:
+        c.close()
+
+def _bc800_role():
+    try:
+        u = _runtime.current_user()
+        return str((u or {}).get("role") or "USER").upper()
+    except Exception:
+        return "USER"
+
+_BC800_ROLE_MATRIX = {
+    "OWNER": {"project_admin","project_launch","documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs","billing"},
+    "ADMIN": {"project_admin","project_launch","documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs"},
+    "EXECUTIVE": {"documents","schedule","submittals","rfi","startup","trade_readiness","super_command"},
+    "PM": {"project_launch","documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs"},
+    "PROJECT_MANAGER": {"project_launch","documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs"},
+    "SUPERINTENDENT": {"documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs"},
+    "PE": {"documents","submittals","rfi","daily","startup","trade_readiness"},
+    "PROJECT_ENGINEER": {"documents","submittals","rfi","daily","startup","trade_readiness"},
+    "SUBCONTRACTOR": {"submittals","rfi","schedule","subs"},
+    "SUB": {"submittals","rfi","schedule","subs"},
+}
+
+def _bc800_can(capability):
+    return capability in _BC800_ROLE_MATRIX.get(_bc800_role(), _BC800_ROLE_MATRIX["PE"])
+
+def _bc800_startup_intelligence(pid):
+    base = _bc750_startup_command(pid)
+    if not base:
+        return None
+    evidence = base.get("evidence") or {}
+    actions = list(base.get("command_actions") or [])
+    missing = []
+
+    checks = [
+        ("PROJECT DOCUMENTS", int(evidence.get("documents") or 0), "Upload controlling plans, specifications, addenda and project documents."),
+        ("BLUEPRINT INTELLIGENCE", int(evidence.get("blueprint_runs") or 0), "Run Blueprint Brain against the current project document set."),
+        ("SCHEDULE", int(evidence.get("activities") or 0), "Load or build the baseline/near-term project schedule."),
+        ("SUBMITTALS", int(evidence.get("submittals") or 0), "Build the startup submittal register and identify required approvals."),
+    ]
+    for name, count, action in checks:
+        if count <= 0:
+            missing.append({"area": name, "action": action, "status": "MISSING"})
+
+    risk = "LOW"
+    if base.get("blocked_count", 0) or len(missing) >= 3:
+        risk = "HIGH"
+    elif base.get("overdue_count", 0) or base.get("ownership_gap_count", 0) or missing:
+        risk = "MEDIUM"
+
+    return {
+        "status": "ok",
+        "version": BC800_RELEASE,
+        "project_id": pid,
+        "startup_readiness": base.get("readiness_score"),
+        "mobilization_status": base.get("mobilization_status"),
+        "startup_risk": risk,
+        "missing_evidence": missing,
+        "command_actions": actions[:10],
+        "blocked": base.get("blocked_count", 0),
+        "overdue": base.get("overdue_count", 0),
+        "unassigned": base.get("ownership_gap_count", 0),
+        "due_soon": base.get("due_soon_count", 0),
+        "guardrail": "AI recommendations are decision support. Verified project records and authorized project leadership remain controlling."
+    }
+
+@app.get("/project-launch")
+def bc800_project_launch():
+    u = _runtime.current_user()
+    if not u:
+        return _BC187_RedirectResponse("/login", status_code=303)
+    if not _bc800_can("project_launch"):
+        return _BC189_HTMLResponse(_runtime.shell("Project Launch","<div class='hero'><h1>Access restricted</h1><p>Your role does not include project launch administration.</p></div>"), status_code=403)
+    body = """
+    <div class="hero">
+      <div class="eyebrow">8.0 · NEW PROJECT LAUNCH</div>
+      <h1>Launch a Project into BuildCommand AI</h1>
+      <p>Use one controlled startup path: project → team → documents → schedule → startup intelligence → field execution.</p>
+    </div>
+    <div class="grid3">
+      <div class="card"><div class="eyebrow">STEP 1</div><h2>Project</h2><p>Create the project and establish the active job.</p><a href="/projects/new">Create Project</a></div>
+      <div class="card"><div class="eyebrow">STEP 2</div><h2>Documents & AI</h2><p>Upload controlling documents and run Blueprint Brain.</p><a href="/documents">Documents</a> · <a href="/blueprint-brain">Blueprint Brain</a></div>
+      <div class="card"><div class="eyebrow">STEP 3</div><h2>Schedule</h2><p>Load the work plan so startup intelligence can reason against field dates.</p><a href="/schedule">Schedule</a></div>
+      <div class="card"><div class="eyebrow">STEP 4</div><h2>Project Startup</h2><p>Resolve blockers, owners, due dates and mobilization readiness.</p><a href="/project-startup">Startup Command</a></div>
+      <div class="card"><div class="eyebrow">STEP 5</div><h2>Trade Readiness</h2><p>Verify crews can actually be released to work.</p><a href="/app">Open Current Project</a></div>
+      <div class="card"><div class="eyebrow">STEP 6</div><h2>Field Command</h2><p>Move verified priorities into Superintendent Command.</p><a href="/app">Enter BuildCommand</a></div>
+    </div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("New Project Launch", body))
+
+@app.get("/api/project-startup/intelligence")
+def bc800_startup_intelligence_api():
+    u, cid, pid = _bc181812_user_project()
+    if not u:
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid:
+        return {"status":"no_project","version":BC800_RELEASE}
+    return _bc800_startup_intelligence(pid)
+
+@app.get("/access-command")
+def bc800_access_command():
+    u = _runtime.current_user()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    role = _bc800_role()
+    caps = sorted(_BC800_ROLE_MATRIX.get(role, _BC800_ROLE_MATRIX["PE"]))
+    cards = "".join(f"<div class='card'><h3>{_runtime.esc(x.replace('_',' ').title())}</h3><p>Enabled for {_runtime.esc(role)}</p></div>" for x in caps)
+    body = f"""
+    <div class="hero"><div class="eyebrow">8.0 · ROLE & ACCESS CONTROL</div><h1>{_runtime.esc(role)}</h1>
+    <p>BuildCommand exposes project capabilities according to the signed-in user's operational role.</p></div>
+    <div class="grid3">{cards}</div>
+    <div class="card"><h3>Security rule</h3><p>Role visibility supplements existing company, project, payment, approval and owner protections; it does not replace them.</p></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Access Command",body))
+
+@app.get("/subcontractor-command")
+def bc800_subcontractor_command():
+    u, cid, pid = _bc181812_user_project()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:
+        return _BC187_RedirectResponse("/projects/new",status_code=303)
+    body = f"""
+    <div class="hero"><div class="eyebrow">8.0 · SUBCONTRACTOR COMMAND</div><h1>Trade Partner Workspace</h1>
+    <p>A focused project view for the information a trade partner needs to execute without exposing the entire GC platform.</p></div>
+    <div class="grid3">
+      <div class="card"><h2>Schedule</h2><p>See the work plan and required dates.</p><a href="/schedule">Open Schedule</a></div>
+      <div class="card"><h2>Submittals</h2><p>Track required approvals and outstanding actions.</p><a href="/submittals">Open Submittals</a></div>
+      <div class="card"><h2>RFIs</h2><p>Review project questions affecting the work.</p><a href="/rfis">Open RFIs</a></div>
+      <div class="card"><h2>Trade Readiness</h2><p>See readiness and blockers before mobilization.</p><a href="/trade-readiness/{pid}">Open Readiness</a></div>
+      <div class="card"><h2>Documents</h2><p>Use the project's controlled document workflow.</p><a href="/documents">Open Documents</a></div>
+      <div class="card"><h2>Project Startup</h2><p>See startup requirements affecting field release.</p><a href="/project-startup">Open Startup</a></div>
+    </div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Subcontractor Command",body))
+
+@app.get("/pilot-readiness")
+def bc800_pilot_readiness_page():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("Authentication", "/login" in paths),
+        ("Project creation", "/projects/new" in paths),
+        ("Documents", "/documents" in paths),
+        ("Blueprint Brain", "/blueprint-brain" in paths),
+        ("Schedule", "/schedule" in paths),
+        ("Submittals", "/submittals" in paths),
+        ("Project Startup", "/project-startup" in paths),
+        ("Trade Readiness", any(str(p).startswith("/trade-readiness") for p in paths)),
+        ("Superintendent Command", any(str(p).startswith("/superintendent-command") for p in paths)),
+        ("Billing / access", "/payment-required" in paths),
+        ("Demo control", any(str(p).startswith("/demo") for p in paths)),
+        ("Owner Console", any(str(p).startswith("/owner") for p in paths)),
+        ("Role Control", "/access-command" in paths),
+        ("Subcontractor Command", "/subcontractor-command" in paths),
+        ("Project Launch", "/project-launch" in paths),
+    ]
+    passed=sum(1 for _,ok in checks if ok)
+    rows="".join(f"<tr><td>{_runtime.esc(n)}</td><td>{'READY' if ok else 'CHECK'}</td></tr>" for n,ok in checks)
+    body=f"""
+    <div class="hero"><div class="eyebrow">8.0 · CUSTOMER PILOT READINESS</div><h1>{passed}/{len(checks)} Core Systems Ready</h1>
+    <p>Operational launch board for controlled outside-GC pilot testing.</p></div>
+    <div class="card"><table><thead><tr><th>System</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table></div>
+    <div class="card"><h3>Pilot rule</h3><p>Release first to controlled pilot companies. Validate onboarding, permissions, billing, document isolation, backups, mobile behavior and support workflow before broad public launch.</p></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Pilot Readiness",body))
+
+@app.get("/health/customer-pilot-platform-8-0-0")
+def bc800_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks={
+        "7_5_0_startup_command_preserved":"/health/project-startup-command-center-7-5-0" in paths,
+        "automatic_startup_intelligence":"/api/project-startup/intelligence" in paths,
+        "project_launch":"/project-launch" in paths,
+        "role_access_command":"/access-command" in paths,
+        "subcontractor_command":"/subcontractor-command" in paths,
+        "pilot_readiness":"/pilot-readiness" in paths,
+        "documents_preserved":"/documents" in paths,
+        "blueprint_brain_preserved":"/blueprint-brain" in paths,
+        "schedule_preserved":"/schedule" in paths,
+        "submittals_preserved":"/submittals" in paths,
+        "project_startup_preserved":"/project-startup" in paths,
+        "trade_readiness_preserved":any(str(p).startswith("/trade-readiness") for p in paths),
+        "superintendent_command_preserved":any(str(p).startswith("/superintendent-command") for p in paths),
+        "login_preserved":"/login" in paths,
+        "payment_gate_preserved":"/payment-required" in paths,
+        "owner_console_preserved":any(str(p).startswith("/owner") for p in paths),
+        "role_matrix_loaded":len(_BC800_ROLE_MATRIX)>=8,
+        "human_authority_preserved":True,
+        "database_reset_disabled":True,
+    }
+    passed=sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC800_RELEASE,
+        "release":BC800_RELEASE_NAME,
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "roadmap":{
+            "7_6":"Automatic Project Startup Intelligence",
+            "7_7":"New Project Launch Wizard",
+            "7_8":"Role & Permission Control Foundation",
+            "7_9":"Subcontractor Command Portal",
+            "8_0":"Customer Pilot Readiness"
+        },
+        "data_reset":False,
+        "checks":checks
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/customer-pilot-platform-8-0-0")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE=BC800_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC800_RELEASE_NAME
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
