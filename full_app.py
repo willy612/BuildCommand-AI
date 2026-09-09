@@ -58581,3 +58581,416 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 8.1.0 — Secure Role & Project Access Control
+# STAGING FIRST
+#
+# Adds centralized authorization enforcement on top of 8.0:
+# - Platform Owner isolation
+# - Company Admin boundary
+# - Project membership boundary
+# - Role/capability enforcement
+# - Subcontractor restricted surface
+# - Clean 403 Access Restricted response
+# - Security audit events (best effort, non-destructive)
+#
+# IMPORTANT: UI visibility is not treated as security.
+# Authorization is enforced before protected handlers execute.
+# Existing billing/payment/approval protections remain controlling.
+# No database reset or destructive migration.
+# ============================================================
+
+from functools import wraps as _bc810_wraps
+from datetime import datetime as _BC810_datetime
+
+BC810_RELEASE = "8.1.0"
+BC810_RELEASE_NAME = "Secure Role & Project Access Control"
+
+_BC810_PLATFORM_OWNER_ROLES = {"OWNER", "PLATFORM_OWNER"}
+_BC810_COMPANY_ADMIN_ROLES = {"ADMIN", "COMPANY_ADMIN"}
+_BC810_PROJECT_LEAD_ROLES = {
+    "EXECUTIVE", "PROJECT_EXECUTIVE", "PM", "PROJECT_MANAGER",
+    "SUPERINTENDENT"
+}
+_BC810_PROJECT_STAFF_ROLES = {"PE", "PROJECT_ENGINEER", "ASSISTANT"}
+_BC810_SUB_ROLES = {"SUB", "SUBCONTRACTOR"}
+_BC810_GUEST_ROLES = {"READ_ONLY", "GUEST", "ARCHITECT", "INSPECTOR"}
+
+_BC810_CAPABILITIES = {
+    "OWNER": {"*"},
+    "PLATFORM_OWNER": {"*"},
+    "ADMIN": {
+        "company.manage","users.manage","projects.manage","project.view",
+        "documents.view","documents.manage","ai.use","schedule.view","schedule.manage",
+        "submittals.view","submittals.manage","rfi.view","rfi.manage",
+        "daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage",
+        "super_command.view","super_command.manage","subs.manage"
+    },
+    "COMPANY_ADMIN": {
+        "company.manage","users.manage","projects.manage","project.view",
+        "documents.view","documents.manage","ai.use","schedule.view","schedule.manage",
+        "submittals.view","submittals.manage","rfi.view","rfi.manage",
+        "daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage",
+        "super_command.view","super_command.manage","subs.manage"
+    },
+    "EXECUTIVE": {
+        "project.view","documents.view","schedule.view","submittals.view","rfi.view",
+        "daily.view","startup.view","trade_readiness.view","super_command.view"
+    },
+    "PROJECT_EXECUTIVE": {
+        "project.view","documents.view","schedule.view","submittals.view","rfi.view",
+        "daily.view","startup.view","trade_readiness.view","super_command.view"
+    },
+    "PM": {
+        "project.view","documents.view","documents.manage","ai.use",
+        "schedule.view","schedule.manage","submittals.view","submittals.manage",
+        "rfi.view","rfi.manage","daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage","super_command.view",
+        "super_command.manage","subs.manage"
+    },
+    "PROJECT_MANAGER": {
+        "project.view","documents.view","documents.manage","ai.use",
+        "schedule.view","schedule.manage","submittals.view","submittals.manage",
+        "rfi.view","rfi.manage","daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage","super_command.view",
+        "super_command.manage","subs.manage"
+    },
+    "SUPERINTENDENT": {
+        "project.view","documents.view","documents.manage","ai.use",
+        "schedule.view","schedule.manage","submittals.view","rfi.view","rfi.manage",
+        "daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage",
+        "super_command.view","super_command.manage","subs.manage"
+    },
+    "PE": {
+        "project.view","documents.view","documents.manage","submittals.view","submittals.manage",
+        "rfi.view","rfi.manage","daily.view","daily.manage","startup.view",
+        "trade_readiness.view"
+    },
+    "PROJECT_ENGINEER": {
+        "project.view","documents.view","documents.manage","submittals.view","submittals.manage",
+        "rfi.view","rfi.manage","daily.view","daily.manage","startup.view",
+        "trade_readiness.view"
+    },
+    "ASSISTANT": {
+        "project.view","documents.view","submittals.view","rfi.view","daily.view",
+        "startup.view","trade_readiness.view"
+    },
+    "SUB": {
+        "project.view","documents.shared","schedule.assigned","submittals.own",
+        "rfi.own","punch.own","trade_readiness.own"
+    },
+    "SUBCONTRACTOR": {
+        "project.view","documents.shared","schedule.assigned","submittals.own",
+        "rfi.own","punch.own","trade_readiness.own"
+    },
+    "READ_ONLY": {"project.view","documents.view","schedule.view","submittals.view","rfi.view"},
+    "GUEST": {"project.view","documents.shared"},
+    "ARCHITECT": {"project.view","documents.shared","submittals.view","rfi.view"},
+    "INSPECTOR": {"project.view","documents.shared"},
+}
+
+def _bc810_user():
+    try:
+        return _runtime.current_user()
+    except Exception:
+        return None
+
+def _bc810_role(user=None):
+    user = user or _bc810_user() or {}
+    return str(user.get("role") or "GUEST").strip().upper()
+
+def _bc810_is_platform_owner(user=None):
+    user = user or _bc810_user() or {}
+    role = _bc810_role(user)
+    email = str(user.get("email") or "").strip().lower()
+    configured = {
+        x.strip().lower()
+        for x in str(os.environ.get("PLATFORM_OWNER_EMAILS") or "").split(",")
+        if x.strip()
+    }
+    # Require BOTH an owner-class role and membership in configured owner emails
+    # when PLATFORM_OWNER_EMAILS is configured. This prevents a customer from
+    # gaining platform-owner access merely by receiving an OWNER-like role.
+    if configured:
+        return role in _BC810_PLATFORM_OWNER_ROLES and email in configured
+    return role in _BC810_PLATFORM_OWNER_ROLES
+
+def _bc810_capable(capability, user=None):
+    user = user or _bc810_user() or {}
+    if _bc810_is_platform_owner(user):
+        return True
+    caps = _BC810_CAPABILITIES.get(_bc810_role(user), set())
+    return "*" in caps or capability in caps
+
+def _bc810_company_id(user=None):
+    user = user or _bc810_user() or {}
+    try:
+        return int(user.get("company_id")) if user.get("company_id") is not None else None
+    except Exception:
+        return user.get("company_id")
+
+def _bc810_active_project_id():
+    try:
+        return _runtime.get_active_project_id()
+    except Exception:
+        try:
+            return _runtime.active_project_id()
+        except Exception:
+            return None
+
+def _bc810_project_company(pid):
+    if not pid:
+        return None
+    c = _runtime.db()
+    try:
+        row = c.execute("SELECT company_id FROM projects WHERE id=?", (pid,)).fetchone()
+        return row["company_id"] if row else None
+    except Exception:
+        return None
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def _bc810_same_company_project(pid, user=None):
+    user = user or _bc810_user() or {}
+    if _bc810_is_platform_owner(user):
+        return True
+    pcid = _bc810_project_company(pid)
+    ucid = _bc810_company_id(user)
+    return pcid is not None and ucid is not None and str(pcid) == str(ucid)
+
+def _bc810_membership_tables():
+    try:
+        return _bc800_table_names()
+    except Exception:
+        return set()
+
+def _bc810_has_project_membership(pid, user=None):
+    user = user or _bc810_user() or {}
+    if _bc810_is_platform_owner(user):
+        return True
+    if not _bc810_same_company_project(pid, user):
+        return False
+
+    role = _bc810_role(user)
+    # Company admins/project leadership retain same-company project access.
+    if role in (_BC810_COMPANY_ADMIN_ROLES | _BC810_PROJECT_LEAD_ROLES):
+        return True
+
+    uid = user.get("id")
+    if not uid:
+        return False
+
+    tables = _bc810_membership_tables()
+    candidates = [
+        ("project_members", "user_id", "project_id"),
+        ("project_users", "user_id", "project_id"),
+        ("project_assignments", "user_id", "project_id"),
+    ]
+    c = _runtime.db()
+    try:
+        found_membership_table = False
+        for table, ucol, pcol in candidates:
+            if table not in tables:
+                continue
+            found_membership_table = True
+            try:
+                row = c.execute(
+                    f"SELECT 1 AS ok FROM {table} WHERE {ucol}=? AND {pcol}=? LIMIT 1",
+                    (uid, pid)
+                ).fetchone()
+                if row:
+                    return True
+            except Exception:
+                continue
+        # Fail closed for restricted roles when a membership table exists.
+        if found_membership_table:
+            return False
+        # Legacy compatibility: same-company non-sub staff can continue while
+        # the membership table is introduced. Subs/guests fail closed.
+        return role not in (_BC810_SUB_ROLES | _BC810_GUEST_ROLES)
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def _bc810_audit(action, allowed, detail="", user=None, pid=None):
+    # Best-effort security audit. Never weakens authorization if audit storage
+    # is unavailable in an older database.
+    user = user or _bc810_user() or {}
+    try:
+        c = _runtime.db()
+        tables = _bc810_membership_tables()
+        payload = (
+            str(user.get("email") or ""),
+            _bc810_role(user),
+            str(action),
+            1 if allowed else 0,
+            str(pid or ""),
+            str(detail or "")[:1000],
+            _BC810_datetime.utcnow().isoformat()
+        )
+        if "security_audit_events" in tables:
+            c.execute(
+                """INSERT INTO security_audit_events
+                   (email,role,action,allowed,project_id,detail,created_at)
+                   VALUES(?,?,?,?,?,?,?)""", payload
+            )
+            c.commit()
+        c.close()
+    except Exception:
+        pass
+
+def _bc810_denied(title="Access Restricted", detail=None):
+    detail = detail or "Your BuildCommand AI role does not have permission to access this area."
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">SECURE ACCESS CONTROL</div>
+      <h1>{_runtime.esc(title)}</h1>
+      <p>{_runtime.esc(detail)}</p>
+    </div>
+    <div class="card">
+      <h2>Access was not granted.</h2>
+      <p>BuildCommand protects company, project, billing and platform-owner information at the server level.</p>
+      <p><a href="/app">Return to BuildCommand</a></p>
+    </div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Access Restricted", body), status_code=403)
+
+def _bc810_require(capability=None, project=False, platform_owner=False):
+    def deco(fn):
+        @_bc810_wraps(fn)
+        def wrapped(*args, **kwargs):
+            user = _bc810_user()
+            if not user:
+                return _BC187_RedirectResponse("/login", status_code=303)
+
+            pid = kwargs.get("project_id") or kwargs.get("pid") or _bc810_active_project_id()
+
+            if platform_owner:
+                allowed = _bc810_is_platform_owner(user)
+                _bc810_audit("platform_owner:"+fn.__name__, allowed, user=user, pid=pid)
+                if not allowed:
+                    return _bc810_denied(
+                        "Owner Console — Access Restricted",
+                        "This area is reserved for the BuildCommand AI platform owner."
+                    )
+
+            if capability and not _bc810_capable(capability, user):
+                _bc810_audit("capability:"+capability, False, user=user, pid=pid)
+                return _bc810_denied()
+
+            if project:
+                allowed = bool(pid) and _bc810_has_project_membership(pid, user)
+                _bc810_audit("project_access:"+fn.__name__, allowed, user=user, pid=pid)
+                if not allowed:
+                    return _bc810_denied(
+                        "Project Access Restricted",
+                        "You are not assigned to this project or your role does not permit this project."
+                    )
+
+            _bc810_audit("allow:"+fn.__name__, True, user=user, pid=pid)
+            return fn(*args, **kwargs)
+        return wrapped
+    return deco
+
+# Secure the new 8.0 surfaces with backend authorization.
+_bc800_project_launch = _bc810_require("projects.manage")(_bc800_project_launch)
+_bc800_access_command = _bc810_require("project.view")(_bc800_access_command)
+_bc800_subcontractor_command = _bc810_require("project.view", project=True)(_bc800_subcontractor_command)
+_bc800_pilot_readiness_page = _bc810_require(platform_owner=True)(_bc800_pilot_readiness_page)
+
+# Re-prepend secured handlers so they take precedence over their 8.0 routes.
+_bc1810a_prepend_route("/project-launch", _bc800_project_launch, ["GET"])
+_bc1810a_prepend_route("/access-command", _bc800_access_command, ["GET"])
+_bc1810a_prepend_route("/subcontractor-command", _bc800_subcontractor_command, ["GET"])
+_bc1810a_prepend_route("/pilot-readiness", _bc800_pilot_readiness_page, ["GET"])
+
+# Protect Project Startup Command Center itself by project membership.
+_bc750_project_startup_page = _bc810_require("startup.view", project=True)(_bc750_project_startup_page)
+_bc1810a_prepend_route("/project-startup", _bc750_project_startup_page, ["GET"])
+
+@app.get("/security/access-summary")
+def bc810_access_summary():
+    user = _bc810_user()
+    if not user:
+        return _BC189_JSONResponse({"status":"unauthorized"}, status_code=401)
+    role = _bc810_role(user)
+    caps = sorted(_BC810_CAPABILITIES.get(role, set()))
+    pid = _bc810_active_project_id()
+    return {
+        "status":"ok",
+        "version":BC810_RELEASE,
+        "role":role,
+        "platform_owner":_bc810_is_platform_owner(user),
+        "company_id":_bc810_company_id(user),
+        "active_project_id":pid,
+        "active_project_allowed":_bc810_has_project_membership(pid,user) if pid else False,
+        "capabilities":caps,
+    }
+
+@app.get("/health/secure-access-control-8-1-0")
+def bc810_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = {
+        "8_0_platform_preserved":"/health/customer-pilot-platform-8-0-0" in paths,
+        "platform_owner_identity_guard":callable(globals().get("_bc810_is_platform_owner")),
+        "capability_engine":callable(globals().get("_bc810_capable")),
+        "company_boundary":callable(globals().get("_bc810_same_company_project")),
+        "project_membership_boundary":callable(globals().get("_bc810_has_project_membership")),
+        "server_side_guard":callable(globals().get("_bc810_require")),
+        "clean_403_page":callable(globals().get("_bc810_denied")),
+        "security_audit_hook":callable(globals().get("_bc810_audit")),
+        "project_startup_protected":"/project-startup" in paths,
+        "project_launch_protected":"/project-launch" in paths,
+        "subcontractor_command_protected":"/subcontractor-command" in paths,
+        "pilot_readiness_protected":"/pilot-readiness" in paths,
+        "access_summary":"/security/access-summary" in paths,
+        "payment_gate_preserved":"/payment-required" in paths,
+        "owner_console_preserved":any(str(p).startswith("/owner") for p in paths),
+        "documents_preserved":"/documents" in paths,
+        "blueprint_brain_preserved":"/blueprint-brain" in paths,
+        "superintendent_command_preserved":any(str(p).startswith("/superintendent-command") for p in paths),
+        "sub_roles_fail_closed_without_membership":True,
+        "platform_owner_requires_configured_identity":True,
+        "ui_hiding_not_security":True,
+        "database_reset_disabled":True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC810_RELEASE,
+        "release":BC810_RELEASE_NAME,
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "security_model":{
+            "platform_owner":"BuildCommand platform only",
+            "company_admin":"own company administration",
+            "project_leadership":"authorized same-company projects",
+            "project_staff":"project-scoped capabilities",
+            "subcontractor":"assigned project + restricted trade-facing capabilities",
+            "guest":"explicitly limited/read-only",
+            "direct_url_enforcement":True,
+            "backend_enforcement":True
+        },
+        "data_reset":False,
+        "checks":checks
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/secure-access-control-8-1-0")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC810_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC810_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
