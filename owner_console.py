@@ -13,7 +13,7 @@ from html import escape
 from fastapi import Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-OWNER_CONSOLE_VERSION = "7.4.10"
+OWNER_CONSOLE_VERSION = "7.4.11"
 OWNER_EMAIL = "buildcommandai@gmail.com"
 
 
@@ -2024,6 +2024,7 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
         tabs = [
             ("dashboard", "Dashboard", "/owner"),
             ("customers", "Customers", "/owner/customers"),
+            ("demos", "Demo Requests", "/owner/demos"),
             ("billing", "Billing & Access", "/owner/billing"),
             ("subscriptions", "Subscriptions", "/owner/subscriptions"),
             ("cleanup", "Company Cleanup", "/owner/cleanup"),
@@ -2293,6 +2294,183 @@ form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
             "total":len(checks),
             "failed":len(checks)-passed,
             "manual_owner_approval":True,
+            "data_reset":False,
+            "checks":checks,
+        }
+
+
+    # ========================================================
+    # BuildCommand AI 7.4.11 — Demo Request Control
+    # ========================================================
+
+    def _bc7411_demo_rows():
+        c = db()
+        try:
+            rows = c.execute("""
+                SELECT d.company_id,d.status,d.started_at,d.expires_at,
+                       co.name AS company_name,
+                       (SELECT COUNT(*) FROM users u WHERE u.company_id=d.company_id) user_count
+                FROM company_demo_access d
+                JOIN companies co ON co.id=d.company_id
+                ORDER BY
+                    CASE WHEN UPPER(d.status)='PENDING_APPROVAL' THEN 0
+                         WHEN UPPER(d.status)='ACTIVE' THEN 1
+                         ELSE 2 END,
+                    d.started_at DESC
+            """).fetchall()
+            return rows
+        finally:
+            c.close()
+
+    @app.get("/owner/demos", response_class=HTMLResponse)
+    def owner_demo_requests():
+        if not require_owner():
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        rows = _bc7411_demo_rows()
+        pending = sum(1 for r in rows if str(r["status"] or "").upper()=="PENDING_APPROVAL")
+        active = sum(1 for r in rows if str(r["status"] or "").upper()=="ACTIVE")
+
+        trs = ""
+        for r in rows:
+            cid = int(r["company_id"])
+            status = str(r["status"] or "").upper()
+            actions = ""
+            if status == "PENDING_APPROVAL":
+                actions = f"""
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <form method="post" action="/owner/demos/{cid}/approve">
+                    <button class="btn" type="submit">Approve Demo</button>
+                  </form>
+                  <form method="post" action="/owner/demos/{cid}/deny">
+                    <button class="btn secondary" type="submit">Deny</button>
+                  </form>
+                </div>"""
+            elif status == "ACTIVE":
+                actions = f"""
+                <form method="post" action="/owner/demos/{cid}/deny">
+                  <button class="btn secondary" type="submit">End Demo</button>
+                </form>"""
+            else:
+                actions = "—"
+
+            trs += f"""<tr>
+              <td><b>{escape(str(r["company_name"]))}</b><br><span class="muted">Company #{cid}</span></td>
+              <td><span class="pill {'good' if status=='ACTIVE' else 'warn'}">{escape(status)}</span></td>
+              <td>{int(r["user_count"] or 0)}</td>
+              <td>{escape(str(r["started_at"] or "—"))}</td>
+              <td>{escape(str(r["expires_at"] or "—"))}</td>
+              <td>{actions}</td>
+            </tr>"""
+
+        body = f"""
+        <div class="card">
+          <div class="eyebrow">OWNER ONLY · DEMO CONTROL</div>
+          <h1>Demo Requests</h1>
+          <p class="muted">Free demos never use Stripe. You decide who gets a demo, and the 7-day clock starts only when you approve it.</p>
+          <div class="grid">
+            <div class="stat"><span>Pending Approval</span><b>{pending}</b></div>
+            <div class="stat"><span>Active Demos</span><b>{active}</b></div>
+            <div class="stat"><span>Total Demo Records</span><b>{len(rows)}</b></div>
+          </div>
+          <div style="overflow:auto;margin-top:16px">
+            <table>
+              <tr><th>Company</th><th>Status</th><th>Users</th><th>Requested/Started</th><th>Expires</th><th>Control</th></tr>
+              {trs or '<tr><td colspan="6"><b>No demo requests yet.</b></td></tr>'}
+            </table>
+          </div>
+        </div>"""
+        return shell("Demo Requests", body)
+
+    @app.post("/owner/demos/{company_id}/approve")
+    def owner_demo_approve(company_id: int):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        cid = int(company_id)
+        if is_master_company(cid):
+            return HTMLResponse("Master company does not need a demo.", status_code=409)
+
+        from datetime import datetime as _dtdemo, timedelta as _tddemo
+        start = _dtdemo.utcnow()
+        expires = start + _tddemo(days=7)
+
+        c = db()
+        try:
+            row = c.execute(
+                "SELECT company_id FROM company_demo_access WHERE company_id=? LIMIT 1",
+                (cid,)
+            ).fetchone()
+            if not row:
+                return HTMLResponse("Demo request not found.", status_code=404)
+
+            c.execute(
+                """UPDATE company_demo_access
+                   SET status='ACTIVE', started_at=?, expires_at=?, upgraded_at=NULL
+                   WHERE company_id=?""",
+                (start.isoformat(), expires.isoformat(), cid)
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        return RedirectResponse("/owner/demos", status_code=303)
+
+    @app.post("/owner/demos/{company_id}/deny")
+    def owner_demo_deny(company_id: int):
+        u = require_owner()
+        if not u:
+            return HTMLResponse("Platform owner access required.", status_code=403)
+
+        cid = int(company_id)
+        if is_master_company(cid):
+            return HTMLResponse("Master company demo status cannot be changed.", status_code=409)
+
+        c = db()
+        try:
+            row = c.execute(
+                "SELECT company_id FROM company_demo_access WHERE company_id=? LIMIT 1",
+                (cid,)
+            ).fetchone()
+            if not row:
+                return HTMLResponse("Demo request not found.", status_code=404)
+            c.execute(
+                "UPDATE company_demo_access SET status='DENIED' WHERE company_id=?",
+                (cid,)
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        return RedirectResponse("/owner/demos", status_code=303)
+
+    @app.get("/health/owner-demo-control-7-4-11")
+    def owner_demo_control_health():
+        paths = {getattr(r,"path","") for r in app.routes}
+        checks = {
+            "owner_demo_page": "/owner/demos" in paths,
+            "approve_demo": "/owner/demos/{company_id}/approve" in paths,
+            "deny_demo": "/owner/demos/{company_id}/deny" in paths,
+            "owner_dashboard": "/owner" in paths,
+            "customers": "/owner/customers" in paths,
+            "billing": "/owner/billing" in paths,
+            "subscriptions": "/owner/subscriptions" in paths,
+            "cleanup": "/owner/cleanup" in paths,
+            "master_protection": owner_email=="buildcommandai@gmail.com",
+            "manual_demo_approval": True,
+            "demo_no_stripe": True,
+            "data_reset_disabled": True,
+        }
+        p = sum(1 for v in checks.values() if v)
+        return {
+            "status":"ok" if p==len(checks) else "degraded",
+            "app":"BuildCommand AI",
+            "version":"7.4.11",
+            "release":"Owner-Approved Demo Control",
+            "passed":p,
+            "total":len(checks),
+            "failed":len(checks)-p,
             "data_reset":False,
             "checks":checks,
         }
