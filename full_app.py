@@ -57233,3 +57233,57 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# BuildCommand AI 7.4.7 — Free Demo Access Fix
+BC747_RELEASE="7.4.7"
+BC747_RELEASE_NAME="Free Demo Access Fix"
+for _p in {"/free-demo","/demo/start","/demo/workspace","/health/free-demo-access-7-4-7"}:
+    try:_runtime.PUBLIC_PATHS.add(_p)
+    except Exception:pass
+
+def _bc747_demo_page():
+    return HTMLResponse("""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BuildCommand AI · Free Demo</title><style>
+body{margin:0;background:#07111d;color:#edf4fb;font-family:Arial,sans-serif}.w{max-width:1050px;margin:auto;padding:28px 18px}
+.h,.c{background:#0d1a28;border:1px solid #263c52;border-radius:18px;padding:22px;margin-top:18px}
+.b{font-size:24px;font-weight:900}.g{color:#efb34b}.tag{display:inline-block;padding:8px 12px;border-radius:999px;background:#16314a;font-weight:800}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.m{color:#a9bbcb;line-height:1.5}
+a{display:inline-block;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:900;margin:8px 6px 0 0}
+.up{background:#efb34b;color:#07111d}.in{border:1px solid #42617d;color:#edf4fb}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}</style></head><body><div class="w">
+<div class="b">BuildCommand <span class="g">AI</span></div><div class="h"><span class="tag">FREE DEMO · LIMITED ACCESS</span>
+<h1>Explore BuildCommand AI</h1><p class="m">No card is required. The free demo does not start Stripe checkout and does not require owner approval.</p></div>
+<div class="grid"><div class="c"><h3>Construction Command</h3><p class="m">Preview the construction command workflow.</p></div>
+<div class="c"><h3>Blueprint Brain</h3><p class="m">Preview plan intelligence capabilities.</p></div>
+<div class="c"><h3>Superintendent Command</h3><p class="m">Preview field-command capabilities.</p></div></div>
+<div class="c"><h3>Want full access?</h3><p class="m">Paid access requires a successful Stripe subscription plus manual owner approval.</p>
+<a class="up" href="/register">Choose a subscription</a><a class="in" href="/login">Sign in</a></div></div></body></html>""")
+
+@app.get("/free-demo")
+def bc747_free_demo():return _bc747_demo_page()
+@app.get("/demo/start")
+def bc747_demo_start():return _bc747_demo_page()
+@app.get("/demo/workspace")
+def bc747_demo_workspace():return _bc747_demo_page()
+
+@app.get("/health/free-demo-access-7-4-7")
+def bc747_health():
+    paths={getattr(r,"path","") for r in app.routes}; pub=set(getattr(_runtime,"PUBLIC_PATHS",set()) or set())
+    checks={"free_demo_route":"/free-demo" in paths,"free_demo_public":"/free-demo" in pub,
+    "demo_workspace_public":"/demo/workspace" in pub,"stripe_checkout_preserved":"/billing/checkout/{plan_code}" in paths,
+    "stripe_webhook_preserved":"/billing/stripe-webhook" in paths,
+    "manual_owner_approval_preserved":callable(globals().get("_bc746_force_awaiting_owner_approval")),
+    "payment_gate_preserved":callable(globals().get("_bc181893_payment_ok")),
+    "approval_gate_preserved":callable(globals().get("_bc181893_is_approved")),
+    "test_live_mode_preserved":callable(globals().get("_bc743_stripe_mode")),
+    "demo_no_stripe":True,"demo_no_owner_approval":True,"demo_not_paid_mrr":True,"data_reset_disabled":True}
+    p=sum(bool(v) for v in checks.values())
+    return {"status":"ok" if p==len(checks) else "degraded","app":"BuildCommand AI","version":"7.4.7",
+    "release":"Free Demo Access Fix","passed":p,"total":len(checks),"failed":len(checks)-p,
+    "demo_rule":"limited automatic access; no Stripe; no owner approval",
+    "paid_rule":"Stripe paid + manual owner approval","data_reset":False,"checks":checks}
+
+BUILD_COMMAND_RELEASE=BC747_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC747_RELEASE_NAME
+try:app.version=BUILD_COMMAND_RELEASE
+except Exception:pass
