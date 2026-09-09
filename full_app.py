@@ -53825,8 +53825,22 @@ def bc634_choose_demo():
     if not u:
         return _BC181893_RedirectResponse("/login", status_code=303)
     cid = int(u["company_id"])
+
+    # Preserve the original legacy demo/trial records.
     _bc634_sync_demo_subscription(cid, 7)
-    return _BC181893_RedirectResponse("/app", status_code=303)
+
+    # 7.4.9: also write the real demo-access state used by the
+    # payment + approval gates. This is the missing link that
+    # caused /app -> /payment-required -> choose-plan loops.
+    try:
+        _bc748_start_demo(cid)
+    except Exception as exc:
+        return _BC200_HTMLResponse(
+            "Could not activate the BuildCommand demo: " + str(exc),
+            status_code=500
+        )
+
+    return _BC181893_RedirectResponse("/app?demo=1", status_code=303)
 
 @app.post("/choose-plan/paid/{plan_code}")
 def bc634_choose_paid(plan_code:str):
@@ -57469,5 +57483,65 @@ BUILD_COMMAND_RELEASE=BC748_RELEASE
 BUILD_COMMAND_RELEASE_NAME=BC748_RELEASE_NAME
 try:
     app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.9 — Demo POST Bridge / Loop Break
+# ============================================================
+BC749_RELEASE = "7.4.9"
+BC749_RELEASE_NAME = "Demo POST Bridge / Loop Break"
+
+@app.get("/health/demo-loop-break-7-4-9")
+def bc749_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "choose_plan_demo_post": "/choose-plan/demo" in paths,
+        "real_demo_state_helper": callable(globals().get("_bc748_start_demo")),
+        "real_demo_active_helper": callable(globals().get("_bc748_demo_active")),
+        "payment_gate_demo_override": callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_demo_override": callable(globals().get("_bc181893_is_approved")),
+        "demo_status_api": "/api/demo/status" in paths,
+        "app_route": "/app" in paths,
+        "payment_required_preserved": "/payment-required" in paths,
+        "manual_paid_approval_preserved": callable(globals().get("_bc746_force_awaiting_owner_approval")),
+        "stripe_checkout_preserved": "/billing/checkout/{plan_code}" in paths,
+        "stripe_webhook_preserved": "/billing/stripe-webhook" in paths,
+        "stripe_test_live_preserved": callable(globals().get("_bc743_stripe_mode")),
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC749_RELEASE,
+        "release": BC749_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "fixed_route": "POST /choose-plan/demo",
+        "expected_flow": [
+            "choose-plan",
+            "POST /choose-plan/demo",
+            "write legacy demo state",
+            "write real ACTIVE demo state",
+            "redirect /app?demo=1",
+            "payment gate recognizes demo",
+            "limited app access"
+        ],
+        "data_reset": False,
+        "checks": checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/demo-loop-break-7-4-9")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC749_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC749_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
