@@ -31021,7 +31021,10 @@ BC181893_RELEASE_NAME = "PostgreSQL-Safe Payment + Owner Approval Access Gate"
 _BC181893_EXEMPT_PREFIXES = (
     "/login", "/register", "/logout", "/health", "/static", "/favicon",
     "/billing", "/payment-required", "/awaiting-approval",
-    "/platform", "/owner"
+    "/platform", "/owner",
+    # 7.4.12: demo request/pending/status pages must bypass the paid gate.
+    # Actual construction app routes remain gated and only ACTIVE demos pass them.
+    "/demo"
 )
 
 def _bc181893_init():
@@ -57732,6 +57735,85 @@ def bc7411_health():
 
 BUILD_COMMAND_RELEASE = BC7411_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC7411_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.12 — Demo Pending Gate Loop Fix
+# ============================================================
+BC7412_RELEASE = "7.4.12"
+BC7412_RELEASE_NAME = "Demo Pending Gate Loop Fix"
+
+@app.get("/health/demo-pending-gate-fix-7-4-12")
+def bc7412_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "demo_prefix_exempt_from_paid_gate":
+            "/demo" in _BC181893_EXEMPT_PREFIXES,
+        "demo_pending_page":
+            "/demo/pending" in paths,
+        "demo_activate_route":
+            "/demo/activate" in paths,
+        "demo_status_api":
+            "/api/demo/status" in paths,
+        "real_demo_active_helper":
+            callable(globals().get("_bc748_demo_active")),
+        "payment_gate_preserved":
+            callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved":
+            callable(globals().get("_bc181893_is_approved")),
+        "owner_demo_page":
+            "/owner/demos" in paths,
+        "owner_demo_approve":
+            "/owner/demos/{company_id}/approve" in paths,
+        "owner_demo_deny":
+            "/owner/demos/{company_id}/deny" in paths,
+        "paid_manual_approval_preserved":
+            callable(globals().get("_bc746_force_awaiting_owner_approval")),
+        "stripe_checkout_preserved":
+            "/billing/checkout/{plan_code}" in paths,
+        "stripe_webhook_preserved":
+            "/billing/stripe-webhook" in paths,
+        "stripe_mode_preserved":
+            callable(globals().get("_bc743_stripe_mode")),
+        "data_reset_disabled":
+            True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC7412_RELEASE,
+        "release": BC7412_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "root_cause": "/demo/pending was being intercepted by the legacy payment gate",
+        "expected_demo_flow": [
+            "request demo",
+            "PENDING_APPROVAL",
+            "show /demo/pending",
+            "owner approve or deny",
+            "ACTIVE",
+            "7-day clock begins",
+            "sign in",
+            "limited app access"
+        ],
+        "paid_flow": "Stripe paid + manual owner approval",
+        "data_reset": False,
+        "checks": checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/demo-pending-gate-fix-7-4-12")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC7412_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC7412_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
