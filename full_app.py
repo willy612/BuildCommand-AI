@@ -13790,7 +13790,7 @@ def _bc181812_startup_page():
       <p><a href="/blueprint-brain">Blueprint Brain</a> · <a href="/trade-readiness/{pid}">Trade Readiness</a> · <a href="/superintendent-command/{pid}">Superintendent Command</a></p>
     </div>
     """
-    return _runtime.shell("Project Startup",body)
+    return _BC189_HTMLResponse(_runtime.shell("Project Startup",body))
 
 async def _bc181812_update_item(item_id:int,request:_BC189_Request):
     u,cid,pid=_bc181812_user_project()
@@ -57867,5 +57867,40 @@ BUILD_COMMAND_RELEASE = BC7413_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC7413_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.15 — Project Startup HTML Render Fix
+# Production patch: render /project-startup as HTML instead of
+# serializing the shell markup as a JSON/plain string.
+# ============================================================
+
+@app.get("/health/project-startup-html-render-7-4-15")
+def bc7415_project_startup_html_render_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks=[
+        ("project startup route preserved","/project-startup" in paths),
+        ("project startup item update preserved","/project-startup/item/{item_id}" in paths),
+        ("project startup API preserved","/api/project-startup" in paths),
+        ("project startup snapshot preserved","/api/project-startup/snapshot" in paths),
+        ("HTML response class available",callable(_BC189_HTMLResponse)),
+    ]
+    passed=sum(bool(v) for _,v in checks)
+    return {
+        "status":"ok" if passed==len(checks) else "failed",
+        "app":"BuildCommand AI",
+        "version":"7.4.15",
+        "release":"Project Startup HTML Render Fix",
+        "target":"production",
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "checks":[{"case":n,"passed":bool(v)} for n,v in checks]
+    }
+
+BUILD_COMMAND_RELEASE="7.4.15"
+BUILD_COMMAND_RELEASE_NAME="Project Startup HTML Render Fix"
+try:
+    app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
