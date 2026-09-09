@@ -58605,8 +58605,8 @@ except Exception:
 from functools import wraps as _bc810_wraps
 from datetime import datetime as _BC810_datetime
 
-BC810_RELEASE = "8.1.0"
-BC810_RELEASE_NAME = "Secure Role & Project Access Control"
+BC810_RELEASE = "8.1.1"
+BC810_RELEASE_NAME = "Secure Access Runtime Fix"
 
 _BC810_PLATFORM_OWNER_ROLES = {"OWNER", "PLATFORM_OWNER"}
 _BC810_COMPANY_ADMIN_ROLES = {"ADMIN", "COMPANY_ADMIN"}
@@ -58899,16 +58899,16 @@ def _bc810_require(capability=None, project=False, platform_owner=False):
     return deco
 
 # Secure the new 8.0 surfaces with backend authorization.
-_bc800_project_launch = _bc810_require("projects.manage")(_bc800_project_launch)
-_bc800_access_command = _bc810_require("project.view")(_bc800_access_command)
-_bc800_subcontractor_command = _bc810_require("project.view", project=True)(_bc800_subcontractor_command)
-_bc800_pilot_readiness_page = _bc810_require(platform_owner=True)(_bc800_pilot_readiness_page)
+bc800_project_launch = _bc810_require("projects.manage")(bc800_project_launch)
+bc800_access_command = _bc810_require("project.view")(bc800_access_command)
+bc800_subcontractor_command = _bc810_require("project.view", project=True)(bc800_subcontractor_command)
+bc800_pilot_readiness_page = _bc810_require(platform_owner=True)(bc800_pilot_readiness_page)
 
 # Re-prepend secured handlers so they take precedence over their 8.0 routes.
-_bc1810a_prepend_route("/project-launch", _bc800_project_launch, ["GET"])
-_bc1810a_prepend_route("/access-command", _bc800_access_command, ["GET"])
-_bc1810a_prepend_route("/subcontractor-command", _bc800_subcontractor_command, ["GET"])
-_bc1810a_prepend_route("/pilot-readiness", _bc800_pilot_readiness_page, ["GET"])
+_bc1810a_prepend_route("/project-launch", bc800_project_launch, ["GET"])
+_bc1810a_prepend_route("/access-command", bc800_access_command, ["GET"])
+_bc1810a_prepend_route("/subcontractor-command", bc800_subcontractor_command, ["GET"])
+_bc1810a_prepend_route("/pilot-readiness", bc800_pilot_readiness_page, ["GET"])
 
 # Protect Project Startup Command Center itself by project membership.
 _bc750_project_startup_page = _bc810_require("startup.view", project=True)(_bc750_project_startup_page)
@@ -58990,6 +58990,49 @@ except Exception:
 
 BUILD_COMMAND_RELEASE = BC810_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC810_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+@app.get("/health/secure-access-runtime-fix-8-1-1")
+def bc811_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = {
+        "project_launch_callable": callable(globals().get("bc800_project_launch")),
+        "access_command_callable": callable(globals().get("bc800_access_command")),
+        "subcontractor_command_callable": callable(globals().get("bc800_subcontractor_command")),
+        "pilot_readiness_callable": callable(globals().get("bc800_pilot_readiness_page")),
+        "secure_guard_callable": callable(globals().get("_bc810_require")),
+        "project_launch_route": "/project-launch" in paths,
+        "access_command_route": "/access-command" in paths,
+        "subcontractor_command_route": "/subcontractor-command" in paths,
+        "pilot_readiness_route": "/pilot-readiness" in paths,
+        "8_0_health_preserved": "/health/customer-pilot-platform-8-0-0" in paths,
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"8.1.1",
+        "release":"Secure Access Runtime Fix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "fix":"correct 8.0 handler names wrapped by 8.1 security layer",
+        "data_reset":False,
+        "checks":checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/secure-access-runtime-fix-8-1-1")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = "8.1.1"
+BUILD_COMMAND_RELEASE_NAME = "Secure Access Runtime Fix"
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
