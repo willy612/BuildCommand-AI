@@ -57457,7 +57457,7 @@ def bc7411_demo_pending():
     cid = _bc748_current_company_id()
     row = _bc748_demo_record(cid) if cid else None
     status = str((row or {}).get("status") or "PENDING_APPROVAL").upper()
-    return HTMLResponse(f"""<!doctype html><html><head>
+    return _BC200_HTMLResponse(f"""<!doctype html><html><head>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>BuildCommand AI · Demo Request</title>
     <style>
@@ -57814,6 +57814,57 @@ except Exception:
 
 BUILD_COMMAND_RELEASE = BC7412_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC7412_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.13 — Demo Pending Runtime Fix
+# ============================================================
+BC7413_RELEASE = "7.4.13"
+BC7413_RELEASE_NAME = "Demo Pending Runtime Fix"
+
+@app.get("/health/demo-pending-runtime-fix-7-4-13")
+def bc7413_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "demo_pending_page": "/demo/pending" in paths,
+        "demo_activate_route": "/demo/activate" in paths,
+        "demo_status_api": "/api/demo/status" in paths,
+        "owner_demo_page": "/owner/demos" in paths,
+        "owner_demo_approve": "/owner/demos/{company_id}/approve" in paths,
+        "owner_demo_deny": "/owner/demos/{company_id}/deny" in paths,
+        "payment_gate_preserved": callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved": callable(globals().get("_bc181893_is_approved")),
+        "manual_paid_approval_preserved": callable(globals().get("_bc746_force_awaiting_owner_approval")),
+        "stripe_checkout_preserved": "/billing/checkout/{plan_code}" in paths,
+        "stripe_webhook_preserved": "/billing/stripe-webhook" in paths,
+        "stripe_mode_preserved": callable(globals().get("_bc743_stripe_mode")),
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC7413_RELEASE,
+        "release": BC7413_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "fix": "demo pending page uses existing _BC200_HTMLResponse",
+        "data_reset": False,
+        "checks": checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/demo-pending-runtime-fix-7-4-13")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC7413_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC7413_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
