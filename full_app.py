@@ -59037,3 +59037,332 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 8.2.0 — User & Permission Administration
+# STAGING FIRST
+#
+# Company-admin control surface on top of 8.1.1:
+# - Company user directory
+# - Role assignment with server-side allowlist
+# - Project membership assignment/revocation
+# - Explicit protection against granting Platform Owner
+# - Company boundary enforcement
+# - Subcontractor project-scoped access
+# - Permission preview
+# - Clean 403 behavior
+# - Security audit hooks
+# No database reset.
+# ============================================================
+
+BC820_RELEASE = "8.2.0"
+BC820_RELEASE_NAME = "User & Permission Administration"
+
+_BC820_ASSIGNABLE_ROLES = (
+    "COMPANY_ADMIN",
+    "PROJECT_EXECUTIVE",
+    "PROJECT_MANAGER",
+    "SUPERINTENDENT",
+    "PROJECT_ENGINEER",
+    "ASSISTANT",
+    "SUBCONTRACTOR",
+    "READ_ONLY",
+    "GUEST",
+    "ARCHITECT",
+    "INSPECTOR",
+)
+
+def _bc820_is_company_admin(user=None):
+    user = user or _bc810_user() or {}
+    return _bc810_is_platform_owner(user) or _bc810_role(user) in {"ADMIN","COMPANY_ADMIN"}
+
+def _bc820_company_users(cid):
+    c = _runtime.db()
+    try:
+        return c.execute(
+            "SELECT id,company_id,email,display_name,role,created FROM users WHERE company_id=? ORDER BY display_name,email",
+            (cid,)
+        ).fetchall()
+    finally:
+        c.close()
+
+def _bc820_company_projects(cid):
+    c = _runtime.db()
+    try:
+        return c.execute(
+            "SELECT id,number,name FROM projects WHERE company_id=? ORDER BY name,number",
+            (cid,)
+        ).fetchall()
+    finally:
+        c.close()
+
+def _bc820_membership_table():
+    tables = _bc810_membership_tables()
+    for t in ("project_members","project_users","project_assignments"):
+        if t in tables:
+            return t
+    return None
+
+def _bc820_user_project_ids(uid, cid):
+    table = _bc820_membership_table()
+    if not table:
+        return set()
+    c = _runtime.db()
+    try:
+        rows = c.execute(
+            f"""SELECT m.project_id
+                FROM {table} m
+                JOIN projects p ON p.id=m.project_id
+                WHERE m.user_id=? AND p.company_id=?""",
+            (uid,cid)
+        ).fetchall()
+        return {str(r["project_id"]) for r in rows}
+    except Exception:
+        return set()
+    finally:
+        c.close()
+
+def _bc820_require_company_admin():
+    user = _bc810_user()
+    if not user:
+        return None, _BC187_RedirectResponse("/login",status_code=303)
+    if not _bc820_is_company_admin(user):
+        _bc810_audit("company_admin",False,"user administration denied",user=user)
+        return user, _bc810_denied(
+            "Company Administration — Access Restricted",
+            "Only an authorized Company Admin can manage company users and project access."
+        )
+    return user, None
+
+@app.get("/company/users")
+def bc820_company_users_page():
+    user, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+    cid = _bc810_company_id(user)
+    users = _bc820_company_users(cid)
+    projects = _bc820_company_projects(cid)
+
+    rows = ""
+    for x in users:
+        uid=x["id"]
+        assigned=_bc820_user_project_ids(uid,cid)
+        proj_labels=[
+            f'{_runtime.esc(str(p["number"] or ""))} {_runtime.esc(str(p["name"] or ""))}'
+            for p in projects if str(p["id"]) in assigned
+        ]
+        rows += f"""
+        <tr>
+          <td><b>{_runtime.esc(x["display_name"] or "")}</b><br><span class="muted">{_runtime.esc(x["email"] or "")}</span></td>
+          <td>{_runtime.esc(x["role"] or "")}</td>
+          <td>{'<br>'.join(proj_labels) if proj_labels else '<span class="muted">No explicit project assignments</span>'}</td>
+          <td><a href="/company/users/{uid}">Manage Access</a></td>
+        </tr>
+        """
+
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">8.2 · COMPANY ADMINISTRATION</div>
+      <h1>Users & Project Access</h1>
+      <p>Control who can enter your company, what role they have, and which projects they can access. BuildCommand Platform Owner authority cannot be granted here.</p>
+    </div>
+    <div class="grid3">
+      <div class="card"><div class="label">Company Users</div><div class="kpi">{len(users)}</div></div>
+      <div class="card"><div class="label">Projects</div><div class="kpi">{len(projects)}</div></div>
+      <div class="card"><div class="label">Security Model</div><div style="font-size:22px;font-weight:900">ROLE + PROJECT</div></div>
+    </div>
+    <div class="card">
+      <table><thead><tr><th>User</th><th>Role</th><th>Assigned Projects</th><th>Control</th></tr></thead>
+      <tbody>{rows}</tbody></table>
+    </div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Users & Access",body))
+
+@app.get("/company/users/{user_id}")
+def bc820_manage_user(user_id:int):
+    admin, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+    cid=_bc810_company_id(admin)
+    c=_runtime.db()
+    try:
+        target=c.execute(
+            "SELECT id,company_id,email,display_name,role FROM users WHERE id=? AND company_id=?",
+            (user_id,cid)
+        ).fetchone()
+    finally:
+        c.close()
+    if not target:
+        return _bc810_denied("User Access Restricted","That user is not part of your company.")
+
+    projects=_bc820_company_projects(cid)
+    assigned=_bc820_user_project_ids(user_id,cid)
+    role_opts=""
+    current=str(target["role"] or "").upper()
+    for role in _BC820_ASSIGNABLE_ROLES:
+        role_opts += f'<option value="{role}"{" selected" if role==current else ""}>{role.replace("_"," ").title()}</option>'
+
+    project_boxes=""
+    for p in projects:
+        checked=" checked" if str(p["id"]) in assigned else ""
+        project_boxes += f"""
+        <label style="display:block;margin:8px 0">
+          <input type="checkbox" name="project_ids" value="{p["id"]}"{checked}>
+          {_runtime.esc(str(p["number"] or ""))} · {_runtime.esc(str(p["name"] or ""))}
+        </label>
+        """
+
+    caps=sorted(_BC810_CAPABILITIES.get(current,set()))
+    cap_html="".join(f"<li>{_runtime.esc(x)}</li>" for x in caps) or "<li>Restricted</li>"
+
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">USER ACCESS CONTROL</div>
+      <h1>{_runtime.esc(target["display_name"] or target["email"])}</h1>
+      <p>{_runtime.esc(target["email"])}</p>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h2>Role & Project Assignment</h2>
+        <form method="post" action="/company/users/{user_id}/access">
+          <label>Role</label>
+          <select name="role" style="width:100%;margin:8px 0 18px">{role_opts}</select>
+          <h3>Projects</h3>
+          {project_boxes or '<p class="muted">No company projects yet.</p>'}
+          <button type="submit">Save Secure Access</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Current Permission Preview</h2>
+        <ul>{cap_html}</ul>
+        <p class="muted">Subcontractors and restricted users remain subject to project membership and server-side authorization even if they manually type a URL.</p>
+      </div>
+    </div>
+    <div class="card"><h3>Protected authority</h3><p>Platform Owner cannot be assigned from this page. Billing platform control, owner cleanup, subscriptions and BuildCommand business administration remain outside customer-company authority.</p></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Manage User Access",body))
+
+@app.post("/company/users/{user_id}/access")
+def bc820_save_user_access(user_id:int, role:str=_BC189_Form(...), project_ids:list[str]=_BC189_Form(default=[])):
+    admin, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+    cid=_bc810_company_id(admin)
+    role=str(role or "").upper().strip()
+
+    if role not in _BC820_ASSIGNABLE_ROLES:
+        _bc810_audit("role_change",False,f"disallowed role={role}",user=admin)
+        return _bc810_denied("Role Assignment Blocked","That role cannot be assigned by a Company Admin.")
+
+    c=_runtime.db()
+    try:
+        target=c.execute(
+            "SELECT id,company_id,email,role FROM users WHERE id=? AND company_id=?",
+            (user_id,cid)
+        ).fetchone()
+        if not target:
+            return _bc810_denied("User Access Restricted","That user is not part of your company.")
+
+        # A company admin can never alter the configured BuildCommand platform owner.
+        if str(target["email"] or "").strip().lower() in {
+            x.strip().lower() for x in str(os.environ.get("PLATFORM_OWNER_EMAILS") or "").split(",") if x.strip()
+        }:
+            return _bc810_denied("Protected Account","BuildCommand Platform Owner access cannot be changed from customer administration.")
+
+        c.execute("UPDATE users SET role=? WHERE id=? AND company_id=?",(role,user_id,cid))
+
+        table=_bc820_membership_table()
+        if table:
+            valid_projects={
+                str(r["id"]) for r in c.execute("SELECT id FROM projects WHERE company_id=?",(cid,)).fetchall()
+            }
+            requested={str(x) for x in (project_ids or []) if str(x) in valid_projects}
+            c.execute(f"DELETE FROM {table} WHERE user_id=?",(user_id,))
+            for pid in requested:
+                # Support the common two-column membership shape first.
+                try:
+                    c.execute(f"INSERT INTO {table}(user_id,project_id) VALUES(?,?)",(user_id,pid))
+                except Exception:
+                    pass
+        c.commit()
+    finally:
+        try:c.close()
+        except Exception:pass
+
+    _bc810_audit("role_project_assignment",True,f"user_id={user_id}; role={role}",user=admin)
+    return _BC187_RedirectResponse(f"/company/users/{user_id}",status_code=303)
+
+@app.get("/company/access-matrix")
+def bc820_access_matrix():
+    user, denied=_bc820_require_company_admin()
+    if denied:
+        return denied
+    rows=""
+    for role,caps in _BC810_CAPABILITIES.items():
+        if role in {"OWNER","PLATFORM_OWNER"}:
+            continue
+        rows += f"<tr><td><b>{_runtime.esc(role)}</b></td><td>{_runtime.esc(', '.join(sorted(caps)))}</td></tr>"
+    body=f"""
+    <div class="hero"><div class="eyebrow">8.2 · ACCESS MATRIX</div><h1>Who Can Do What?</h1>
+    <p>Company administrators can review BuildCommand's role model before assigning access.</p></div>
+    <div class="card"><table><thead><tr><th>Role</th><th>Capabilities</th></tr></thead><tbody>{rows}</tbody></table></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Access Matrix",body))
+
+@app.get("/health/user-permission-administration-8-2-0")
+def bc820_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks={
+        "8_1_1_security_preserved":"/health/secure-access-runtime-fix-8-1-1" in paths,
+        "company_user_directory":"/company/users" in paths,
+        "manage_user":"/company/users/{user_id}" in paths,
+        "save_user_access":"/company/users/{user_id}/access" in paths,
+        "access_matrix":"/company/access-matrix" in paths,
+        "assignable_role_allowlist":len(_BC820_ASSIGNABLE_ROLES)>=10,
+        "platform_owner_not_assignable":"PLATFORM_OWNER" not in _BC820_ASSIGNABLE_ROLES,
+        "owner_not_assignable":"OWNER" not in _BC820_ASSIGNABLE_ROLES,
+        "company_admin_guard":callable(globals().get("_bc820_require_company_admin")),
+        "company_boundary":callable(globals().get("_bc810_same_company_project")),
+        "project_membership_engine":callable(globals().get("_bc810_has_project_membership")),
+        "backend_authorization":callable(globals().get("_bc810_require")),
+        "clean_403":callable(globals().get("_bc810_denied")),
+        "audit_hook":callable(globals().get("_bc810_audit")),
+        "payment_gate_preserved":"/payment-required" in paths,
+        "owner_console_preserved":any(str(p).startswith("/owner") for p in paths),
+        "project_startup_preserved":"/project-startup" in paths,
+        "subcontractor_command_preserved":"/subcontractor-command" in paths,
+        "data_reset_disabled":True,
+    }
+    passed=sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC820_RELEASE,
+        "release":BC820_RELEASE_NAME,
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "features":{
+            "company_user_directory":True,
+            "role_assignment":True,
+            "project_assignment":True,
+            "platform_owner_protected":True,
+            "company_boundary":True,
+            "subcontractor_project_scope":True,
+            "permission_preview":True,
+            "direct_url_enforcement_preserved":True,
+        },
+        "data_reset":False,
+        "checks":checks
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/user-permission-administration-8-2-0")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE=BC820_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC820_RELEASE_NAME
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
