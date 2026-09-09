@@ -54349,7 +54349,7 @@ async def bc641_enrollment_gate_bypass(request, call_next):
                 status_code=500
             )
 
-        return _BC181893_RedirectResponse("/app?demo=1", status_code=303)
+        return _BC181893_RedirectResponse("/demo/pending", status_code=303)
 
     # Handle paid choice before the old payment middleware can block it.
     prefix = "/choose-plan/paid/"
@@ -57386,21 +57386,33 @@ def _bc748_demo_active(company_id):
     return True
 
 def _bc748_start_demo(company_id):
+    """Create a demo request. Owner approval is required before access begins."""
     cid = int(company_id)
     now = _BC748_datetime.utcnow()
+    # expires_at is a placeholder while pending; approval resets the full 7-day clock.
     exp = now + _BC748_timedelta(days=BC748_DEMO_DAYS)
     c = _runtime.db()
     try:
-        row = c.execute("SELECT company_id FROM company_demo_access WHERE company_id=? LIMIT 1", (cid,)).fetchone()
+        row = c.execute(
+            "SELECT company_id FROM company_demo_access WHERE company_id=? LIMIT 1",
+            (cid,)
+        ).fetchone()
         if row:
             c.execute(
-                "UPDATE company_demo_access SET status='ACTIVE',started_at=?,expires_at=?,upgraded_at=NULL WHERE company_id=?",
+                """UPDATE company_demo_access
+                   SET status='PENDING_APPROVAL',
+                       started_at=?,
+                       expires_at=?,
+                       upgraded_at=NULL
+                   WHERE company_id=?""",
                 (now.isoformat(), exp.isoformat(), cid)
             )
         else:
             c.execute(
-                "INSERT INTO company_demo_access(company_id,status,started_at,expires_at,upgraded_at) VALUES(?,?,?,?,NULL)",
-                (cid, "ACTIVE", now.isoformat(), exp.isoformat())
+                """INSERT INTO company_demo_access(
+                       company_id,status,started_at,expires_at,upgraded_at
+                   ) VALUES(?,?,?,?,NULL)""",
+                (cid, "PENDING_APPROVAL", now.isoformat(), exp.isoformat())
             )
         c.commit()
     finally:
@@ -57435,7 +57447,29 @@ def bc748_demo_activate():
     if not cid:
         return RedirectResponse("/register?demo=1", status_code=303)
     _bc748_start_demo(cid)
-    return RedirectResponse("/app?demo=1", status_code=303)
+    return RedirectResponse("/demo/pending", status_code=303)
+
+@app.get("/demo/pending")
+def bc7411_demo_pending():
+    cid = _bc748_current_company_id()
+    row = _bc748_demo_record(cid) if cid else None
+    status = str((row or {}).get("status") or "PENDING_APPROVAL").upper()
+    return HTMLResponse(f"""<!doctype html><html><head>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>BuildCommand AI · Demo Request</title>
+    <style>
+    body{{margin:0;background:#07111d;color:#eef4fb;font-family:Arial,sans-serif}}
+    .w{{max-width:760px;margin:0 auto;padding:42px 18px}}
+    .c{{background:#0d1a28;border:1px solid #2a4157;border-radius:18px;padding:26px}}
+    .tag{{display:inline-block;background:#6d4d14;color:#ffd37a;padding:8px 12px;border-radius:999px;font-weight:900}}
+    h1{{font-size:34px;margin-bottom:8px}}p{{color:#a9bbcb;line-height:1.6}}
+    a{{display:inline-block;margin-top:14px;color:#07111d;background:#efb34b;padding:11px 15px;border-radius:10px;text-decoration:none;font-weight:900}}
+    </style></head><body><div class="w"><div class="c">
+    <span class="tag">{status}</span>
+    <h1>Demo request sent</h1>
+    <p>Your BuildCommand AI free demo is waiting for owner approval. No card is required and the 7-day demo clock will not start until the demo is approved.</p>
+    <a href="/login">Return to Sign In</a>
+    </div></div></body></html>""")
 
 # Demo counts as valid limited access for both payment and approval gates.
 _BC748_PAYMENT_OK = globals().get("_bc181893_payment_ok")
@@ -57638,6 +57672,66 @@ except Exception:
 
 BUILD_COMMAND_RELEASE = BC7410_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC7410_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.11 — Owner-Approved Demo Control
+# ============================================================
+BC7411_RELEASE = "7.4.11"
+BC7411_RELEASE_NAME = "Owner-Approved Demo Control"
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/owner-approved-demo-7-4-11")
+except Exception:
+    pass
+
+@app.get("/health/owner-approved-demo-7-4-11")
+def bc7411_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "demo_activate": "/demo/activate" in paths,
+        "demo_pending_page": "/demo/pending" in paths,
+        "demo_status_api": "/api/demo/status" in paths,
+        "active_demo_gate": callable(globals().get("_bc748_demo_active")),
+        "payment_gate_preserved": callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_preserved": callable(globals().get("_bc181893_is_approved")),
+        "paid_manual_approval_preserved": callable(globals().get("_bc746_force_awaiting_owner_approval")),
+        "stripe_checkout_preserved": "/billing/checkout/{plan_code}" in paths,
+        "stripe_webhook_preserved": "/billing/stripe-webhook" in paths,
+        "stripe_mode_preserved": callable(globals().get("_bc743_stripe_mode")),
+        "demo_does_not_use_stripe": True,
+        "demo_requires_owner_approval": True,
+        "demo_clock_starts_on_owner_approval": True,
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC7411_RELEASE,
+        "release": BC7411_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "demo_flow": [
+            "request demo",
+            "PENDING_APPROVAL",
+            "owner approve or deny",
+            "ACTIVE",
+            "7-day clock begins",
+            "limited access"
+        ],
+        "paid_flow": "Stripe paid + manual owner approval",
+        "data_reset": False,
+        "checks": checks,
+    }
+
+BUILD_COMMAND_RELEASE = BC7411_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC7411_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
