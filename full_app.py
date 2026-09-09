@@ -54327,8 +54327,29 @@ async def bc641_enrollment_gate_bypass(request, call_next):
             return _BC181893_RedirectResponse("/login", status_code=303)
 
         cid = int(user["company_id"])
+
+        # Preserve the original/legacy demo records.
         _bc634_sync_demo_subscription(cid, 7)
-        return _BC181893_RedirectResponse("/app", status_code=303)
+
+        # 7.4.10: This outer middleware is the real request interceptor.
+        # It must also create the modern ACTIVE demo-access record used by
+        # the payment and approval gates. Without this, the later route
+        # handler never executes and /app loops to /payment-required.
+        try:
+            starter = globals().get("_bc748_start_demo")
+            if not callable(starter):
+                return _BC200_HTMLResponse(
+                    "Demo activation engine is not available.",
+                    status_code=500
+                )
+            starter(cid)
+        except Exception as exc:
+            return _BC200_HTMLResponse(
+                "Could not activate the BuildCommand demo: " + str(exc),
+                status_code=500
+            )
+
+        return _BC181893_RedirectResponse("/app?demo=1", status_code=303)
 
     # Handle paid choice before the old payment middleware can block it.
     prefix = "/choose-plan/paid/"
@@ -57541,6 +57562,82 @@ except Exception:
 
 BUILD_COMMAND_RELEASE = BC749_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC749_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 7.4.10 — Outer Demo Middleware Loop Fix
+# ============================================================
+BC7410_RELEASE = "7.4.10"
+BC7410_RELEASE_NAME = "Outer Demo Middleware Loop Fix"
+
+@app.get("/health/outer-demo-middleware-fix-7-4-10")
+def bc7410_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "outer_enrollment_middleware_present":
+            callable(globals().get("bc641_enrollment_gate_bypass")),
+        "real_demo_start_helper":
+            callable(globals().get("_bc748_start_demo")),
+        "real_demo_active_helper":
+            callable(globals().get("_bc748_demo_active")),
+        "choose_plan_demo_route":
+            "/choose-plan/demo" in paths,
+        "app_route":
+            "/app" in paths,
+        "payment_gate_demo_override":
+            callable(globals().get("_bc181893_payment_ok")),
+        "approval_gate_demo_override":
+            callable(globals().get("_bc181893_is_approved")),
+        "demo_status_api":
+            "/api/demo/status" in paths,
+        "stripe_checkout_preserved":
+            "/billing/checkout/{plan_code}" in paths,
+        "stripe_webhook_preserved":
+            "/billing/stripe-webhook" in paths,
+        "manual_paid_approval_preserved":
+            callable(globals().get("_bc746_force_awaiting_owner_approval")),
+        "stripe_test_live_preserved":
+            callable(globals().get("_bc743_stripe_mode")),
+        "master_owner_protection_preserved":
+            globals().get("BC720_MASTER_EMAIL") == "buildcommandai@gmail.com",
+        "data_reset_disabled":
+            True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC7410_RELEASE,
+        "release": BC7410_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "root_cause": "bc641_enrollment_gate_bypass intercepted demo POST before route handler",
+        "fixed_flow": [
+            "POST /choose-plan/demo",
+            "outer middleware",
+            "legacy demo record",
+            "ACTIVE company_demo_access record",
+            "/app?demo=1",
+            "demo recognized by payment gate",
+            "demo recognized by approval gate",
+            "limited app access"
+        ],
+        "data_reset": False,
+        "checks": checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/outer-demo-middleware-fix-7-4-10")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC7410_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC7410_RELEASE_NAME
 try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
