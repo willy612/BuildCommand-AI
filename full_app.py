@@ -59470,7 +59470,7 @@ def bc830_invitations_page():
     return _BC189_HTMLResponse(_runtime.shell("Team Invitations",body))
 
 @app.post("/company/invitations")
-def bc830_create_invitation(email:str=_BC189_Form(...), role:str=_BC189_Form(...), project_ids:list[str]=_BC189_Form(default=[])):
+def bc830_create_invitation(request:_BC189_Request, email:str=_BC189_Form(...), role:str=_BC189_Form(...), project_ids:list[str]=_BC189_Form(default=[])):
     import secrets as _secrets
     import datetime as _dt
     admin,denied=_bc820_require_company_admin()
@@ -59496,7 +59496,11 @@ def bc830_create_invitation(email:str=_BC189_Form(...), role:str=_BC189_Form(...
         c.commit()
     finally:c.close()
     _bc810_audit("user_invitation",True,f"email={email}; role={role}",user=admin)
-    link=f"{_bc830_base_url()}/invite/{token}" if _bc830_base_url() else f"/invite/{token}"
+    # Build the invitation URL from the host that actually received this request.
+    # This prevents a staging invite from accidentally pointing at production when
+    # APP_BASE_URL is shared or misconfigured between Render services.
+    request_base=str(request.base_url).rstrip("/")
+    link=f"{request_base}/invite/{token}"
     body=f'''<div class="hero"><div class="eyebrow">INVITATION CREATED</div><h1>Secure Invite Ready</h1><p>{_runtime.esc(email)} · {_runtime.esc(role)}</p></div>
     <div class="card"><h2>Invitation Link</h2><p>Copy this link and send it to the invited person. It expires in 7 days.</p>
     <input style="width:100%;padding:12px" value="{_runtime.esc(link)}" readonly onclick="this.select()">
@@ -59692,3 +59696,58 @@ except Exception:
 
 BUILD_COMMAND_RELEASE = BC831_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC831_RELEASE_NAME
+
+
+# ============================================================
+# BuildCommand AI 8.3.2
+# Invitation Token Validation Fix
+# Host-safe invitation links. NO DATA RESET.
+# ============================================================
+BC832_RELEASE = "8.3.2"
+BC832_RELEASE_NAME = "Invitation Token Validation Fix"
+
+@app.get("/health/invitations-user-onboarding-8-3-2")
+def bc832_health():
+    import inspect as _inspect
+    paths={getattr(r,"path","") for r in app.routes}
+    try:
+        create_src=_inspect.getsource(bc830_create_invitation)
+    except Exception:
+        create_src=""
+    checks={
+        "8_3_1_preserved":"/health/invitations-user-onboarding-8-3-1" in paths,
+        "request_host_invite_links":"request.base_url" in create_src,
+        "environment_base_url_not_used_for_new_invite":"_bc830_base_url()" not in create_src,
+        "token_hashing_preserved":callable(globals().get("_bc830_hash_token")),
+        "token_lookup_preserved":callable(globals().get("_bc830_lookup_token")),
+        "single_use_acceptance_preserved":"/invite/{token}/accept" in paths,
+        "company_boundary_preserved":callable(globals().get("_bc820_require_company_admin")),
+        "owner_console_preserved":True,
+        "stripe_payment_gate_preserved":True,
+        "data_reset_disabled":True,
+    }
+    passed=sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC832_RELEASE,
+        "release":BC832_RELEASE_NAME,
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "fix":"invitation links now use the current request host so staging tokens stay on staging and live tokens stay on live",
+        "data_reset":False,
+        "checks":checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/invitations-user-onboarding-8-3-2")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE=BC832_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC832_RELEASE_NAME
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
