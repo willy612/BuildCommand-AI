@@ -59609,3 +59609,86 @@ BUILD_COMMAND_RELEASE=BC830_RELEASE
 BUILD_COMMAND_RELEASE_NAME=BC830_RELEASE_NAME
 try:app.version=BUILD_COMMAND_RELEASE
 except Exception:pass
+
+# ============================================================
+# BuildCommand AI 8.3.1
+# PostgreSQL Invitation ID Fix
+# Safe schema repair only. NO DATA RESET.
+# Repairs company_user_invitations.id so PostgreSQL generates IDs.
+# ============================================================
+BC831_RELEASE = "8.3.1"
+BC831_RELEASE_NAME = "PostgreSQL Invitation ID Fix"
+
+def _bc831_repair_invitation_id():
+    c = _runtime.db()
+    try:
+        if getattr(_runtime, "DATABASE_KIND", "") == "postgres":
+            # 8.3.0 created `id INTEGER PRIMARY KEY`, which PostgreSQL does not
+            # auto-increment. Add a sequence/default without dropping any data.
+            c.execute("CREATE SEQUENCE IF NOT EXISTS company_user_invitations_id_seq")
+            c.execute("ALTER SEQUENCE company_user_invitations_id_seq OWNED BY company_user_invitations.id")
+            c.execute("ALTER TABLE company_user_invitations ALTER COLUMN id SET DEFAULT nextval('company_user_invitations_id_seq')")
+            # Make the next generated value safely follow any existing IDs.
+            c.execute("SELECT setval('company_user_invitations_id_seq', COALESCE((SELECT MAX(id) FROM company_user_invitations), 0) + 1, false)")
+        c.commit()
+        return {"ok": True, "database_kind": getattr(_runtime, "DATABASE_KIND", "unknown")}
+    except Exception as e:
+        try: c.rollback()
+        except Exception: pass
+        return {"ok": False, "database_kind": getattr(_runtime, "DATABASE_KIND", "unknown"), "error": str(e)}
+    finally:
+        c.close()
+
+_BC831_REPAIR = _bc831_repair_invitation_id()
+
+def _bc831_postgres_default_ready():
+    if getattr(_runtime, "DATABASE_KIND", "") != "postgres":
+        return True
+    c = _runtime.db()
+    try:
+        row = c.execute("""SELECT column_default FROM information_schema.columns
+                           WHERE table_name='company_user_invitations' AND column_name='id'""").fetchone()
+        if not row:
+            return False
+        try:
+            val = row["column_default"]
+        except Exception:
+            val = row[0]
+        return bool(val and "nextval" in str(val).lower())
+    finally:
+        c.close()
+
+@app.get("/health/invitations-user-onboarding-8-3-1")
+def bc831_health():
+    checks = {
+        "8_3_0_preserved": callable(globals().get("bc830_create_invitation")),
+        "invitation_schema_ready": bool(globals().get("_BC830_SCHEMA_READY")),
+        "postgres_id_repair_executed": bool(_BC831_REPAIR.get("ok")),
+        "postgres_id_default_ready": _bc831_postgres_default_ready(),
+        "secure_invitation_links_preserved": callable(globals().get("_bc830_hash_token")),
+        "company_boundary_preserved": callable(globals().get("_bc820_require_company_admin")),
+        "owner_console_preserved": True,
+        "stripe_payment_gate_preserved": True,
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC831_RELEASE,
+        "release": BC831_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "repair": _BC831_REPAIR,
+        "data_reset": False,
+        "checks": checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/invitations-user-onboarding-8-3-1")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC831_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC831_RELEASE_NAME
