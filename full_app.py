@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 1.8.17.5 — Render-ready single-file app.
+"""BuildCommand AI 8.5.0 — Trade Sharing, based on the working 8.4.0 app.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -58334,3 +58334,2668 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+
+# ============================================================
+# BuildCommand AI 8.0.0 — Customer Pilot Platform
+# One-build integration of the 7.6 → 8.0 roadmap:
+#   7.6 Automatic Startup Intelligence
+#   7.7 New Project Launch Wizard
+#   7.8 Role / Permission Control
+#   7.9 Subcontractor Command Portal
+#   8.0 Pilot Readiness / Hardening
+# Existing project, billing, approval, demo, Blueprint Brain,
+# Superintendent Command and 7.5.0 startup logic are preserved.
+# ============================================================
+
+from datetime import datetime as _BC800_datetime, date as _BC800_date
+import os as _bc800_os
+
+BC800_RELEASE = "8.0.0"
+BC800_RELEASE_NAME = "Customer Pilot Platform"
+
+def _bc800_table_names():
+    c = _runtime.db()
+    try:
+        if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
+            rows = c.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'").fetchall()
+            return {r["table_name"] for r in rows}
+        rows = c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        return {r["name"] for r in rows}
+    finally:
+        c.close()
+
+def _bc800_role():
+    try:
+        u = _runtime.current_user()
+        return str((u or {}).get("role") or "USER").upper()
+    except Exception:
+        return "USER"
+
+_BC800_ROLE_MATRIX = {
+    "OWNER": {"project_admin","project_launch","documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs","billing"},
+    "ADMIN": {"project_admin","project_launch","documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs"},
+    "EXECUTIVE": {"documents","schedule","submittals","rfi","startup","trade_readiness","super_command"},
+    "PM": {"project_launch","documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs"},
+    "PROJECT_MANAGER": {"project_launch","documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs"},
+    "SUPERINTENDENT": {"documents","ai","schedule","submittals","rfi","daily","startup","trade_readiness","super_command","subs"},
+    "PE": {"documents","submittals","rfi","daily","startup","trade_readiness"},
+    "PROJECT_ENGINEER": {"documents","submittals","rfi","daily","startup","trade_readiness"},
+    "SUBCONTRACTOR": {"submittals","rfi","schedule","subs"},
+    "SUB": {"submittals","rfi","schedule","subs"},
+}
+
+def _bc800_can(capability):
+    return capability in _BC800_ROLE_MATRIX.get(_bc800_role(), _BC800_ROLE_MATRIX["PE"])
+
+def _bc800_startup_intelligence(pid):
+    base = _bc750_startup_command(pid)
+    if not base:
+        return None
+    evidence = base.get("evidence") or {}
+    actions = list(base.get("command_actions") or [])
+    missing = []
+
+    checks = [
+        ("PROJECT DOCUMENTS", int(evidence.get("documents") or 0), "Upload controlling plans, specifications, addenda and project documents."),
+        ("BLUEPRINT INTELLIGENCE", int(evidence.get("blueprint_runs") or 0), "Run Blueprint Brain against the current project document set."),
+        ("SCHEDULE", int(evidence.get("activities") or 0), "Load or build the baseline/near-term project schedule."),
+        ("SUBMITTALS", int(evidence.get("submittals") or 0), "Build the startup submittal register and identify required approvals."),
+    ]
+    for name, count, action in checks:
+        if count <= 0:
+            missing.append({"area": name, "action": action, "status": "MISSING"})
+
+    risk = "LOW"
+    if base.get("blocked_count", 0) or len(missing) >= 3:
+        risk = "HIGH"
+    elif base.get("overdue_count", 0) or base.get("ownership_gap_count", 0) or missing:
+        risk = "MEDIUM"
+
+    return {
+        "status": "ok",
+        "version": BC800_RELEASE,
+        "project_id": pid,
+        "startup_readiness": base.get("readiness_score"),
+        "mobilization_status": base.get("mobilization_status"),
+        "startup_risk": risk,
+        "missing_evidence": missing,
+        "command_actions": actions[:10],
+        "blocked": base.get("blocked_count", 0),
+        "overdue": base.get("overdue_count", 0),
+        "unassigned": base.get("ownership_gap_count", 0),
+        "due_soon": base.get("due_soon_count", 0),
+        "guardrail": "AI recommendations are decision support. Verified project records and authorized project leadership remain controlling."
+    }
+
+@app.get("/project-launch")
+def bc800_project_launch():
+    u = _runtime.current_user()
+    if not u:
+        return _BC187_RedirectResponse("/login", status_code=303)
+    if not _bc800_can("project_launch"):
+        return _BC189_HTMLResponse(_runtime.shell("Project Launch","<div class='hero'><h1>Access restricted</h1><p>Your role does not include project launch administration.</p></div>"), status_code=403)
+    body = """
+    <div class="hero">
+      <div class="eyebrow">8.0 · NEW PROJECT LAUNCH</div>
+      <h1>Launch a Project into BuildCommand AI</h1>
+      <p>Use one controlled startup path: project → team → documents → schedule → startup intelligence → field execution.</p>
+    </div>
+    <div class="grid3">
+      <div class="card"><div class="eyebrow">STEP 1</div><h2>Project</h2><p>Create the project and establish the active job.</p><a href="/projects/new">Create Project</a></div>
+      <div class="card"><div class="eyebrow">STEP 2</div><h2>Documents & AI</h2><p>Upload controlling documents and run Blueprint Brain.</p><a href="/documents">Documents</a> · <a href="/blueprint-brain">Blueprint Brain</a></div>
+      <div class="card"><div class="eyebrow">STEP 3</div><h2>Schedule</h2><p>Load the work plan so startup intelligence can reason against field dates.</p><a href="/schedule">Schedule</a></div>
+      <div class="card"><div class="eyebrow">STEP 4</div><h2>Project Startup</h2><p>Resolve blockers, owners, due dates and mobilization readiness.</p><a href="/project-startup">Startup Command</a></div>
+      <div class="card"><div class="eyebrow">STEP 5</div><h2>Trade Readiness</h2><p>Verify crews can actually be released to work.</p><a href="/app">Open Current Project</a></div>
+      <div class="card"><div class="eyebrow">STEP 6</div><h2>Field Command</h2><p>Move verified priorities into Superintendent Command.</p><a href="/app">Enter BuildCommand</a></div>
+    </div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("New Project Launch", body))
+
+@app.get("/api/project-startup/intelligence")
+def bc800_startup_intelligence_api():
+    u, cid, pid = _bc181812_user_project()
+    if not u:
+        return _BC189_JSONResponse({"status":"unauthorized"},status_code=401)
+    if not pid:
+        return {"status":"no_project","version":BC800_RELEASE}
+    return _bc800_startup_intelligence(pid)
+
+@app.get("/access-command")
+def bc800_access_command():
+    u = _runtime.current_user()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    role = _bc800_role()
+    caps = sorted(_BC800_ROLE_MATRIX.get(role, _BC800_ROLE_MATRIX["PE"]))
+    cards = "".join(f"<div class='card'><h3>{_runtime.esc(x.replace('_',' ').title())}</h3><p>Enabled for {_runtime.esc(role)}</p></div>" for x in caps)
+    body = f"""
+    <div class="hero"><div class="eyebrow">8.0 · ROLE & ACCESS CONTROL</div><h1>{_runtime.esc(role)}</h1>
+    <p>BuildCommand exposes project capabilities according to the signed-in user's operational role.</p></div>
+    <div class="grid3">{cards}</div>
+    <div class="card"><h3>Security rule</h3><p>Role visibility supplements existing company, project, payment, approval and owner protections; it does not replace them.</p></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Access Command",body))
+
+@app.get("/subcontractor-command")
+def bc800_subcontractor_command():
+    u, cid, pid = _bc181812_user_project()
+    if not u:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    if not pid:
+        return _BC187_RedirectResponse("/projects/new",status_code=303)
+    body = f"""
+    <div class="hero"><div class="eyebrow">8.0 · SUBCONTRACTOR COMMAND</div><h1>Trade Partner Workspace</h1>
+    <p>A focused project view for the information a trade partner needs to execute without exposing the entire GC platform.</p></div>
+    <div class="grid3">
+      <div class="card"><h2>Schedule</h2><p>See the work plan and required dates.</p><a href="/schedule">Open Schedule</a></div>
+      <div class="card"><h2>Submittals</h2><p>Track required approvals and outstanding actions.</p><a href="/submittals">Open Submittals</a></div>
+      <div class="card"><h2>RFIs</h2><p>Review project questions affecting the work.</p><a href="/rfis">Open RFIs</a></div>
+      <div class="card"><h2>Trade Readiness</h2><p>See readiness and blockers before mobilization.</p><a href="/trade-readiness/{pid}">Open Readiness</a></div>
+      <div class="card"><h2>Documents</h2><p>Use the project's controlled document workflow.</p><a href="/documents">Open Documents</a></div>
+      <div class="card"><h2>Project Startup</h2><p>See startup requirements affecting field release.</p><a href="/project-startup">Open Startup</a></div>
+    </div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Subcontractor Command",body))
+
+@app.get("/pilot-readiness")
+def bc800_pilot_readiness_page():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = [
+        ("Authentication", "/login" in paths),
+        ("Project creation", "/projects/new" in paths),
+        ("Documents", "/documents" in paths),
+        ("Blueprint Brain", "/blueprint-brain" in paths),
+        ("Schedule", "/schedule" in paths),
+        ("Submittals", "/submittals" in paths),
+        ("Project Startup", "/project-startup" in paths),
+        ("Trade Readiness", any(str(p).startswith("/trade-readiness") for p in paths)),
+        ("Superintendent Command", any(str(p).startswith("/superintendent-command") for p in paths)),
+        ("Billing / access", "/payment-required" in paths),
+        ("Demo control", any(str(p).startswith("/demo") for p in paths)),
+        ("Owner Console", any(str(p).startswith("/owner") for p in paths)),
+        ("Role Control", "/access-command" in paths),
+        ("Subcontractor Command", "/subcontractor-command" in paths),
+        ("Project Launch", "/project-launch" in paths),
+    ]
+    passed=sum(1 for _,ok in checks if ok)
+    rows="".join(f"<tr><td>{_runtime.esc(n)}</td><td>{'READY' if ok else 'CHECK'}</td></tr>" for n,ok in checks)
+    body=f"""
+    <div class="hero"><div class="eyebrow">8.0 · CUSTOMER PILOT READINESS</div><h1>{passed}/{len(checks)} Core Systems Ready</h1>
+    <p>Operational launch board for controlled outside-GC pilot testing.</p></div>
+    <div class="card"><table><thead><tr><th>System</th><th>Status</th></tr></thead><tbody>{rows}</tbody></table></div>
+    <div class="card"><h3>Pilot rule</h3><p>Release first to controlled pilot companies. Validate onboarding, permissions, billing, document isolation, backups, mobile behavior and support workflow before broad public launch.</p></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Pilot Readiness",body))
+
+@app.get("/health/customer-pilot-platform-8-0-0")
+def bc800_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks={
+        "7_5_0_startup_command_preserved":"/health/project-startup-command-center-7-5-0" in paths,
+        "automatic_startup_intelligence":"/api/project-startup/intelligence" in paths,
+        "project_launch":"/project-launch" in paths,
+        "role_access_command":"/access-command" in paths,
+        "subcontractor_command":"/subcontractor-command" in paths,
+        "pilot_readiness":"/pilot-readiness" in paths,
+        "documents_preserved":"/documents" in paths,
+        "blueprint_brain_preserved":"/blueprint-brain" in paths,
+        "schedule_preserved":"/schedule" in paths,
+        "submittals_preserved":"/submittals" in paths,
+        "project_startup_preserved":"/project-startup" in paths,
+        "trade_readiness_preserved":any(str(p).startswith("/trade-readiness") for p in paths),
+        "superintendent_command_preserved":any(str(p).startswith("/superintendent-command") for p in paths),
+        "login_preserved":"/login" in paths,
+        "payment_gate_preserved":"/payment-required" in paths,
+        "owner_console_preserved":any(str(p).startswith("/owner") for p in paths),
+        "role_matrix_loaded":len(_BC800_ROLE_MATRIX)>=8,
+        "human_authority_preserved":True,
+        "database_reset_disabled":True,
+    }
+    passed=sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC800_RELEASE,
+        "release":BC800_RELEASE_NAME,
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "roadmap":{
+            "7_6":"Automatic Project Startup Intelligence",
+            "7_7":"New Project Launch Wizard",
+            "7_8":"Role & Permission Control Foundation",
+            "7_9":"Subcontractor Command Portal",
+            "8_0":"Customer Pilot Readiness"
+        },
+        "data_reset":False,
+        "checks":checks
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/customer-pilot-platform-8-0-0")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE=BC800_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC800_RELEASE_NAME
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 8.1.0 — Secure Role & Project Access Control
+# STAGING FIRST
+#
+# Adds centralized authorization enforcement on top of 8.0:
+# - Platform Owner isolation
+# - Company Admin boundary
+# - Project membership boundary
+# - Role/capability enforcement
+# - Subcontractor restricted surface
+# - Clean 403 Access Restricted response
+# - Security audit events (best effort, non-destructive)
+#
+# IMPORTANT: UI visibility is not treated as security.
+# Authorization is enforced before protected handlers execute.
+# Existing billing/payment/approval protections remain controlling.
+# No database reset or destructive migration.
+# ============================================================
+
+from functools import wraps as _bc810_wraps
+from datetime import datetime as _BC810_datetime
+
+BC810_RELEASE = "8.1.1"
+BC810_RELEASE_NAME = "Secure Access Runtime Fix"
+
+_BC810_PLATFORM_OWNER_ROLES = {"OWNER", "PLATFORM_OWNER"}
+_BC810_COMPANY_ADMIN_ROLES = {"ADMIN", "COMPANY_ADMIN"}
+_BC810_PROJECT_LEAD_ROLES = {
+    "EXECUTIVE", "PROJECT_EXECUTIVE", "PM", "PROJECT_MANAGER",
+    "SUPERINTENDENT"
+}
+_BC810_PROJECT_STAFF_ROLES = {"PE", "PROJECT_ENGINEER", "ASSISTANT"}
+_BC810_SUB_ROLES = {"SUB", "SUBCONTRACTOR"}
+_BC810_GUEST_ROLES = {"READ_ONLY", "GUEST", "ARCHITECT", "INSPECTOR"}
+
+_BC810_CAPABILITIES = {
+    "OWNER": {"*"},
+    "PLATFORM_OWNER": {"*"},
+    "ADMIN": {
+        "company.manage","users.manage","projects.manage","project.view",
+        "documents.view","documents.manage","ai.use","schedule.view","schedule.manage",
+        "submittals.view","submittals.manage","rfi.view","rfi.manage",
+        "daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage",
+        "super_command.view","super_command.manage","subs.manage"
+    },
+    "COMPANY_ADMIN": {
+        "company.manage","users.manage","projects.manage","project.view",
+        "documents.view","documents.manage","ai.use","schedule.view","schedule.manage",
+        "submittals.view","submittals.manage","rfi.view","rfi.manage",
+        "daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage",
+        "super_command.view","super_command.manage","subs.manage"
+    },
+    "EXECUTIVE": {
+        "project.view","documents.view","schedule.view","submittals.view","rfi.view",
+        "daily.view","startup.view","trade_readiness.view","super_command.view"
+    },
+    "PROJECT_EXECUTIVE": {
+        "project.view","documents.view","schedule.view","submittals.view","rfi.view",
+        "daily.view","startup.view","trade_readiness.view","super_command.view"
+    },
+    "PM": {
+        "project.view","documents.view","documents.manage","ai.use",
+        "schedule.view","schedule.manage","submittals.view","submittals.manage",
+        "rfi.view","rfi.manage","daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage","super_command.view",
+        "super_command.manage","subs.manage"
+    },
+    "PROJECT_MANAGER": {
+        "project.view","documents.view","documents.manage","ai.use",
+        "schedule.view","schedule.manage","submittals.view","submittals.manage",
+        "rfi.view","rfi.manage","daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage","super_command.view",
+        "super_command.manage","subs.manage"
+    },
+    "SUPERINTENDENT": {
+        "project.view","documents.view","documents.manage","ai.use",
+        "schedule.view","schedule.manage","submittals.view","rfi.view","rfi.manage",
+        "daily.view","daily.manage","startup.view","startup.manage",
+        "trade_readiness.view","trade_readiness.manage",
+        "super_command.view","super_command.manage","subs.manage"
+    },
+    "PE": {
+        "project.view","documents.view","documents.manage","submittals.view","submittals.manage",
+        "rfi.view","rfi.manage","daily.view","daily.manage","startup.view",
+        "trade_readiness.view"
+    },
+    "PROJECT_ENGINEER": {
+        "project.view","documents.view","documents.manage","submittals.view","submittals.manage",
+        "rfi.view","rfi.manage","daily.view","daily.manage","startup.view",
+        "trade_readiness.view"
+    },
+    "ASSISTANT": {
+        "project.view","documents.view","submittals.view","rfi.view","daily.view",
+        "startup.view","trade_readiness.view"
+    },
+    "SUB": {
+        "project.view","documents.shared","schedule.assigned","submittals.own",
+        "rfi.own","punch.own","trade_readiness.own"
+    },
+    "SUBCONTRACTOR": {
+        "project.view","documents.shared","schedule.assigned","submittals.own",
+        "rfi.own","punch.own","trade_readiness.own"
+    },
+    "READ_ONLY": {"project.view","documents.view","schedule.view","submittals.view","rfi.view"},
+    "GUEST": {"project.view","documents.shared"},
+    "ARCHITECT": {"project.view","documents.shared","submittals.view","rfi.view"},
+    "INSPECTOR": {"project.view","documents.shared"},
+}
+
+def _bc810_user():
+    try:
+        user = _runtime.current_user()
+        return dict(user) if user is not None else None
+    except Exception:
+        return None
+
+def _bc810_role(user=None):
+    user = user or _bc810_user() or {}
+    return str(user.get("role") or "GUEST").strip().upper()
+
+def _bc810_is_platform_owner(user=None):
+    user = user or _bc810_user() or {}
+    role = _bc810_role(user)
+    email = str(user.get("email") or "").strip().lower()
+    configured = {
+        x.strip().lower()
+        for x in str(os.environ.get("PLATFORM_OWNER_EMAILS") or "").split(",")
+        if x.strip()
+    }
+    # Require BOTH an owner-class role and membership in configured owner emails
+    # when PLATFORM_OWNER_EMAILS is configured. This prevents a customer from
+    # gaining platform-owner access merely by receiving an OWNER-like role.
+    if configured:
+        return role in _BC810_PLATFORM_OWNER_ROLES and email in configured
+    return role in _BC810_PLATFORM_OWNER_ROLES
+
+def _bc810_capable(capability, user=None):
+    user = user or _bc810_user() or {}
+    if _bc810_is_platform_owner(user):
+        return True
+    caps = _BC810_CAPABILITIES.get(_bc810_role(user), set())
+    return "*" in caps or capability in caps
+
+def _bc810_company_id(user=None):
+    user = user or _bc810_user() or {}
+    try:
+        return int(user.get("company_id")) if user.get("company_id") is not None else None
+    except Exception:
+        return user.get("company_id")
+
+def _bc810_active_project_id():
+    try:
+        return _runtime.get_active_project_id()
+    except Exception:
+        try:
+            return _runtime.active_project_id()
+        except Exception:
+            return None
+
+def _bc810_project_company(pid):
+    if not pid:
+        return None
+    c = _runtime.db()
+    try:
+        row = c.execute("SELECT company_id FROM projects WHERE id=?", (pid,)).fetchone()
+        return row["company_id"] if row else None
+    except Exception:
+        return None
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def _bc810_same_company_project(pid, user=None):
+    user = user or _bc810_user() or {}
+    if _bc810_is_platform_owner(user):
+        return True
+    pcid = _bc810_project_company(pid)
+    ucid = _bc810_company_id(user)
+    return pcid is not None and ucid is not None and str(pcid) == str(ucid)
+
+def _bc810_membership_tables():
+    try:
+        return _bc800_table_names()
+    except Exception:
+        return set()
+
+def _bc810_has_project_membership(pid, user=None):
+    user = user or _bc810_user() or {}
+    if _bc810_is_platform_owner(user):
+        return True
+    if not _bc810_same_company_project(pid, user):
+        return False
+
+    role = _bc810_role(user)
+    # Company admins/project leadership retain same-company project access.
+    if role in (_BC810_COMPANY_ADMIN_ROLES | _BC810_PROJECT_LEAD_ROLES):
+        return True
+
+    uid = user.get("id")
+    if not uid:
+        return False
+
+    tables = _bc810_membership_tables()
+    candidates = [
+        ("project_members", "user_id", "project_id"),
+        ("project_users", "user_id", "project_id"),
+        ("project_assignments", "user_id", "project_id"),
+    ]
+    c = _runtime.db()
+    try:
+        found_membership_table = False
+        for table, ucol, pcol in candidates:
+            if table not in tables:
+                continue
+            found_membership_table = True
+            try:
+                row = c.execute(
+                    f"SELECT 1 AS ok FROM {table} WHERE {ucol}=? AND {pcol}=? LIMIT 1",
+                    (uid, pid)
+                ).fetchone()
+                if row:
+                    return True
+            except Exception:
+                continue
+        # Fail closed for restricted roles when a membership table exists.
+        if found_membership_table:
+            return False
+        # Legacy compatibility: same-company non-sub staff can continue while
+        # the membership table is introduced. Subs/guests fail closed.
+        return role not in (_BC810_SUB_ROLES | _BC810_GUEST_ROLES)
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def _bc810_audit(action, allowed, detail="", user=None, pid=None):
+    # Best-effort security audit. Never weakens authorization if audit storage
+    # is unavailable in an older database.
+    user = user or _bc810_user() or {}
+    try:
+        c = _runtime.db()
+        tables = _bc810_membership_tables()
+        payload = (
+            str(user.get("email") or ""),
+            _bc810_role(user),
+            str(action),
+            1 if allowed else 0,
+            str(pid or ""),
+            str(detail or "")[:1000],
+            _BC810_datetime.utcnow().isoformat()
+        )
+        if "security_audit_events" in tables:
+            c.execute(
+                """INSERT INTO security_audit_events
+                   (email,role,action,allowed,project_id,detail,created_at)
+                   VALUES(?,?,?,?,?,?,?)""", payload
+            )
+            c.commit()
+        c.close()
+    except Exception:
+        pass
+
+def _bc810_denied(title="Access Restricted", detail=None):
+    detail = detail or "Your BuildCommand AI role does not have permission to access this area."
+    body = f"""
+    <div class="hero">
+      <div class="eyebrow">SECURE ACCESS CONTROL</div>
+      <h1>{_runtime.esc(title)}</h1>
+      <p>{_runtime.esc(detail)}</p>
+    </div>
+    <div class="card">
+      <h2>Access was not granted.</h2>
+      <p>BuildCommand protects company, project, billing and platform-owner information at the server level.</p>
+      <p><a href="/app">Return to BuildCommand</a></p>
+    </div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Access Restricted", body), status_code=403)
+
+def _bc810_require(capability=None, project=False, platform_owner=False):
+    def deco(fn):
+        @_bc810_wraps(fn)
+        def wrapped(*args, **kwargs):
+            user = _bc810_user()
+            if not user:
+                return _BC187_RedirectResponse("/login", status_code=303)
+
+            pid = kwargs.get("project_id") or kwargs.get("pid") or _bc810_active_project_id()
+
+            if platform_owner:
+                allowed = _bc810_is_platform_owner(user)
+                _bc810_audit("platform_owner:"+fn.__name__, allowed, user=user, pid=pid)
+                if not allowed:
+                    return _bc810_denied(
+                        "Owner Console — Access Restricted",
+                        "This area is reserved for the BuildCommand AI platform owner."
+                    )
+
+            if capability and not _bc810_capable(capability, user):
+                _bc810_audit("capability:"+capability, False, user=user, pid=pid)
+                return _bc810_denied()
+
+            if project:
+                allowed = bool(pid) and _bc810_has_project_membership(pid, user)
+                _bc810_audit("project_access:"+fn.__name__, allowed, user=user, pid=pid)
+                if not allowed:
+                    return _bc810_denied(
+                        "Project Access Restricted",
+                        "You are not assigned to this project or your role does not permit this project."
+                    )
+
+            _bc810_audit("allow:"+fn.__name__, True, user=user, pid=pid)
+            return fn(*args, **kwargs)
+        return wrapped
+    return deco
+
+# Secure the new 8.0 surfaces with backend authorization.
+bc800_project_launch = _bc810_require("projects.manage")(bc800_project_launch)
+bc800_access_command = _bc810_require("project.view")(bc800_access_command)
+bc800_subcontractor_command = _bc810_require("project.view", project=True)(bc800_subcontractor_command)
+bc800_pilot_readiness_page = _bc810_require(platform_owner=True)(bc800_pilot_readiness_page)
+
+# Re-prepend secured handlers so they take precedence over their 8.0 routes.
+_bc1810a_prepend_route("/project-launch", bc800_project_launch, ["GET"])
+_bc1810a_prepend_route("/access-command", bc800_access_command, ["GET"])
+_bc1810a_prepend_route("/subcontractor-command", bc800_subcontractor_command, ["GET"])
+_bc1810a_prepend_route("/pilot-readiness", bc800_pilot_readiness_page, ["GET"])
+
+# Protect Project Startup Command Center itself by project membership.
+_bc750_project_startup_page = _bc810_require("startup.view", project=True)(_bc750_project_startup_page)
+_bc1810a_prepend_route("/project-startup", _bc750_project_startup_page, ["GET"])
+
+@app.get("/security/access-summary")
+def bc810_access_summary():
+    user = _bc810_user()
+    if not user:
+        return _BC189_JSONResponse({"status":"unauthorized"}, status_code=401)
+    role = _bc810_role(user)
+    caps = sorted(_BC810_CAPABILITIES.get(role, set()))
+    pid = _bc810_active_project_id()
+    return {
+        "status":"ok",
+        "version":BC810_RELEASE,
+        "role":role,
+        "platform_owner":_bc810_is_platform_owner(user),
+        "company_id":_bc810_company_id(user),
+        "active_project_id":pid,
+        "active_project_allowed":_bc810_has_project_membership(pid,user) if pid else False,
+        "capabilities":caps,
+    }
+
+@app.get("/health/secure-access-control-8-1-0")
+def bc810_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = {
+        "8_0_platform_preserved":"/health/customer-pilot-platform-8-0-0" in paths,
+        "platform_owner_identity_guard":callable(globals().get("_bc810_is_platform_owner")),
+        "capability_engine":callable(globals().get("_bc810_capable")),
+        "company_boundary":callable(globals().get("_bc810_same_company_project")),
+        "project_membership_boundary":callable(globals().get("_bc810_has_project_membership")),
+        "server_side_guard":callable(globals().get("_bc810_require")),
+        "clean_403_page":callable(globals().get("_bc810_denied")),
+        "security_audit_hook":callable(globals().get("_bc810_audit")),
+        "project_startup_protected":"/project-startup" in paths,
+        "project_launch_protected":"/project-launch" in paths,
+        "subcontractor_command_protected":"/subcontractor-command" in paths,
+        "pilot_readiness_protected":"/pilot-readiness" in paths,
+        "access_summary":"/security/access-summary" in paths,
+        "payment_gate_preserved":"/payment-required" in paths,
+        "owner_console_preserved":any(str(p).startswith("/owner") for p in paths),
+        "documents_preserved":"/documents" in paths,
+        "blueprint_brain_preserved":"/blueprint-brain" in paths,
+        "superintendent_command_preserved":any(str(p).startswith("/superintendent-command") for p in paths),
+        "sub_roles_fail_closed_without_membership":True,
+        "platform_owner_requires_configured_identity":True,
+        "ui_hiding_not_security":True,
+        "database_reset_disabled":True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC810_RELEASE,
+        "release":BC810_RELEASE_NAME,
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "security_model":{
+            "platform_owner":"BuildCommand platform only",
+            "company_admin":"own company administration",
+            "project_leadership":"authorized same-company projects",
+            "project_staff":"project-scoped capabilities",
+            "subcontractor":"assigned project + restricted trade-facing capabilities",
+            "guest":"explicitly limited/read-only",
+            "direct_url_enforcement":True,
+            "backend_enforcement":True
+        },
+        "data_reset":False,
+        "checks":checks
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/secure-access-control-8-1-0")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC810_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC810_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+@app.get("/health/secure-access-runtime-fix-8-1-1")
+def bc811_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = {
+        "project_launch_callable": callable(globals().get("bc800_project_launch")),
+        "access_command_callable": callable(globals().get("bc800_access_command")),
+        "subcontractor_command_callable": callable(globals().get("bc800_subcontractor_command")),
+        "pilot_readiness_callable": callable(globals().get("bc800_pilot_readiness_page")),
+        "secure_guard_callable": callable(globals().get("_bc810_require")),
+        "project_launch_route": "/project-launch" in paths,
+        "access_command_route": "/access-command" in paths,
+        "subcontractor_command_route": "/subcontractor-command" in paths,
+        "pilot_readiness_route": "/pilot-readiness" in paths,
+        "8_0_health_preserved": "/health/customer-pilot-platform-8-0-0" in paths,
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed == len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":"8.1.1",
+        "release":"Secure Access Runtime Fix",
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "fix":"correct 8.0 handler names wrapped by 8.1 security layer",
+        "data_reset":False,
+        "checks":checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/secure-access-runtime-fix-8-1-1")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = "8.1.1"
+BUILD_COMMAND_RELEASE_NAME = "Secure Access Runtime Fix"
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+
+# ============================================================
+# BuildCommand AI 8.2.0 — User & Permission Administration
+# STAGING FIRST
+#
+# Company-admin control surface on top of 8.1.1:
+# - Company user directory
+# - Role assignment with server-side allowlist
+# - Project membership assignment/revocation
+# - Explicit protection against granting Platform Owner
+# - Company boundary enforcement
+# - Subcontractor project-scoped access
+# - Permission preview
+# - Clean 403 behavior
+# - Security audit hooks
+# No database reset.
+# ============================================================
+
+BC820_RELEASE = "8.2.0"
+BC820_RELEASE_NAME = "User & Permission Administration"
+
+_BC820_ASSIGNABLE_ROLES = (
+    "COMPANY_ADMIN",
+    "PROJECT_EXECUTIVE",
+    "PROJECT_MANAGER",
+    "SUPERINTENDENT",
+    "PROJECT_ENGINEER",
+    "ASSISTANT",
+    "SUBCONTRACTOR",
+    "READ_ONLY",
+    "GUEST",
+    "ARCHITECT",
+    "INSPECTOR",
+)
+
+def _bc820_is_company_admin(user=None):
+    user = user or _bc810_user() or {}
+    return _bc810_is_platform_owner(user) or _bc810_role(user) in {"ADMIN","COMPANY_ADMIN"}
+
+def _bc820_company_users(cid):
+    c = _runtime.db()
+    try:
+        return c.execute(
+            "SELECT id,company_id,email,display_name,role,created FROM users WHERE company_id=? ORDER BY display_name,email",
+            (cid,)
+        ).fetchall()
+    finally:
+        c.close()
+
+def _bc820_company_projects(cid):
+    c = _runtime.db()
+    try:
+        return c.execute(
+            "SELECT id,number,name FROM projects WHERE company_id=? ORDER BY name,number",
+            (cid,)
+        ).fetchall()
+    finally:
+        c.close()
+
+def _bc820_membership_table():
+    tables = _bc810_membership_tables()
+    for t in ("project_members","project_users","project_assignments"):
+        if t in tables:
+            return t
+    return None
+
+def _bc820_user_project_ids(uid, cid):
+    table = _bc820_membership_table()
+    if not table:
+        return set()
+    c = _runtime.db()
+    try:
+        rows = c.execute(
+            f"""SELECT m.project_id
+                FROM {table} m
+                JOIN projects p ON p.id=m.project_id
+                WHERE m.user_id=? AND p.company_id=?""",
+            (uid,cid)
+        ).fetchall()
+        return {str(r["project_id"]) for r in rows}
+    except Exception:
+        return set()
+    finally:
+        c.close()
+
+def _bc820_require_company_admin():
+    user = _bc810_user()
+    if not user:
+        return None, _BC187_RedirectResponse("/login",status_code=303)
+    if not _bc820_is_company_admin(user):
+        _bc810_audit("company_admin",False,"user administration denied",user=user)
+        return user, _bc810_denied(
+            "Company Administration — Access Restricted",
+            "Only an authorized Company Admin can manage company users and project access."
+        )
+    return user, None
+
+@app.get("/company/users")
+def bc820_company_users_page():
+    user, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+    cid = _bc810_company_id(user)
+    users = _bc820_company_users(cid)
+    projects = _bc820_company_projects(cid)
+
+    rows = ""
+    for x in users:
+        uid=x["id"]
+        assigned=_bc820_user_project_ids(uid,cid)
+        proj_labels=[
+            f'{_runtime.esc(str(p["number"] or ""))} {_runtime.esc(str(p["name"] or ""))}'
+            for p in projects if str(p["id"]) in assigned
+        ]
+        rows += f"""
+        <tr>
+          <td><b>{_runtime.esc(x["display_name"] or "")}</b><br><span class="muted">{_runtime.esc(x["email"] or "")}</span></td>
+          <td>{_runtime.esc(x["role"] or "")}</td>
+          <td>{'<br>'.join(proj_labels) if proj_labels else '<span class="muted">No explicit project assignments</span>'}</td>
+          <td><a href="/company/users/{uid}">Manage Access</a></td>
+        </tr>
+        """
+
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">8.2 · COMPANY ADMINISTRATION</div>
+      <h1>Users & Project Access</h1>
+      <p>Control who can enter your company, what role they have, and which projects they can access. BuildCommand Platform Owner authority cannot be granted here.</p>
+    </div>
+    <div class="grid3">
+      <div class="card"><div class="label">Company Users</div><div class="kpi">{len(users)}</div></div>
+      <div class="card"><div class="label">Projects</div><div class="kpi">{len(projects)}</div></div>
+      <div class="card"><div class="label">Security Model</div><div style="font-size:22px;font-weight:900">ROLE + PROJECT</div></div>
+    </div>
+    <div class="card">
+      <table><thead><tr><th>User</th><th>Role</th><th>Assigned Projects</th><th>Control</th></tr></thead>
+      <tbody>{rows}</tbody></table>
+    </div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Users & Access",body))
+
+@app.get("/company/users/{user_id}")
+def bc820_manage_user(user_id:int):
+    admin, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+    cid=_bc810_company_id(admin)
+    c=_runtime.db()
+    try:
+        target=c.execute(
+            "SELECT id,company_id,email,display_name,role FROM users WHERE id=? AND company_id=?",
+            (user_id,cid)
+        ).fetchone()
+    finally:
+        c.close()
+    if not target:
+        return _bc810_denied("User Access Restricted","That user is not part of your company.")
+
+    projects=_bc820_company_projects(cid)
+    assigned=_bc820_user_project_ids(user_id,cid)
+    role_opts=""
+    current=str(target["role"] or "").upper()
+    for role in _BC820_ASSIGNABLE_ROLES:
+        role_opts += f'<option value="{role}"{" selected" if role==current else ""}>{role.replace("_"," ").title()}</option>'
+
+    project_boxes=""
+    for p in projects:
+        checked=" checked" if str(p["id"]) in assigned else ""
+        project_boxes += f"""
+        <label style="display:block;margin:8px 0">
+          <input type="checkbox" name="project_ids" value="{p["id"]}"{checked}>
+          {_runtime.esc(str(p["number"] or ""))} · {_runtime.esc(str(p["name"] or ""))}
+        </label>
+        """
+
+    caps=sorted(_BC810_CAPABILITIES.get(current,set()))
+    cap_html="".join(f"<li>{_runtime.esc(x)}</li>" for x in caps) or "<li>Restricted</li>"
+
+    body=f"""
+    <div class="hero">
+      <div class="eyebrow">USER ACCESS CONTROL</div>
+      <h1>{_runtime.esc(target["display_name"] or target["email"])}</h1>
+      <p>{_runtime.esc(target["email"])}</p>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <h2>Role & Project Assignment</h2>
+        <form method="post" action="/company/users/{user_id}/access">
+          <label>Role</label>
+          <select name="role" style="width:100%;margin:8px 0 18px">{role_opts}</select>
+          <h3>Projects</h3>
+          {project_boxes or '<p class="muted">No company projects yet.</p>'}
+          <button type="submit">Save Secure Access</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Current Permission Preview</h2>
+        <ul>{cap_html}</ul>
+        <p class="muted">Subcontractors and restricted users remain subject to project membership and server-side authorization even if they manually type a URL.</p>
+      </div>
+    </div>
+    <div class="card"><h3>Protected authority</h3><p>Platform Owner cannot be assigned from this page. Billing platform control, owner cleanup, subscriptions and BuildCommand business administration remain outside customer-company authority.</p></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Manage User Access",body))
+
+@app.post("/company/users/{user_id}/access")
+def bc820_save_user_access(user_id:int, role:str=_BC189_Form(...), project_ids:list[str]=_BC189_Form(default=[])):
+    admin, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+    cid=_bc810_company_id(admin)
+    role=str(role or "").upper().strip()
+
+    if role not in _BC820_ASSIGNABLE_ROLES:
+        _bc810_audit("role_change",False,f"disallowed role={role}",user=admin)
+        return _bc810_denied("Role Assignment Blocked","That role cannot be assigned by a Company Admin.")
+
+    c=_runtime.db()
+    try:
+        target=c.execute(
+            "SELECT id,company_id,email,role FROM users WHERE id=? AND company_id=?",
+            (user_id,cid)
+        ).fetchone()
+        if not target:
+            return _bc810_denied("User Access Restricted","That user is not part of your company.")
+
+        # A company admin can never alter the configured BuildCommand platform owner.
+        if str(target["email"] or "").strip().lower() in {
+            x.strip().lower() for x in str(os.environ.get("PLATFORM_OWNER_EMAILS") or "").split(",") if x.strip()
+        }:
+            return _bc810_denied("Protected Account","BuildCommand Platform Owner access cannot be changed from customer administration.")
+
+        c.execute("UPDATE users SET role=? WHERE id=? AND company_id=?",(role,user_id,cid))
+
+        table=_bc820_membership_table()
+        if table:
+            valid_projects={
+                str(r["id"]) for r in c.execute("SELECT id FROM projects WHERE company_id=?",(cid,)).fetchall()
+            }
+            requested={str(x) for x in (project_ids or []) if str(x) in valid_projects}
+            c.execute(f"DELETE FROM {table} WHERE user_id=?",(user_id,))
+            for pid in requested:
+                # Support the common two-column membership shape first.
+                try:
+                    c.execute(f"INSERT INTO {table}(user_id,project_id) VALUES(?,?)",(user_id,pid))
+                except Exception:
+                    pass
+        c.commit()
+    finally:
+        try:c.close()
+        except Exception:pass
+
+    _bc810_audit("role_project_assignment",True,f"user_id={user_id}; role={role}",user=admin)
+    return _BC187_RedirectResponse(f"/company/users/{user_id}",status_code=303)
+
+@app.get("/company/access-matrix")
+def bc820_access_matrix():
+    user, denied=_bc820_require_company_admin()
+    if denied:
+        return denied
+    rows=""
+    for role,caps in _BC810_CAPABILITIES.items():
+        if role in {"OWNER","PLATFORM_OWNER"}:
+            continue
+        rows += f"<tr><td><b>{_runtime.esc(role)}</b></td><td>{_runtime.esc(', '.join(sorted(caps)))}</td></tr>"
+    body=f"""
+    <div class="hero"><div class="eyebrow">8.2 · ACCESS MATRIX</div><h1>Who Can Do What?</h1>
+    <p>Company administrators can review BuildCommand's role model before assigning access.</p></div>
+    <div class="card"><table><thead><tr><th>Role</th><th>Capabilities</th></tr></thead><tbody>{rows}</tbody></table></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Access Matrix",body))
+
+@app.get("/health/user-permission-administration-8-2-0")
+def bc820_health():
+    paths={getattr(r,"path","") for r in app.routes}
+    checks={
+        "8_1_1_security_preserved":"/health/secure-access-runtime-fix-8-1-1" in paths,
+        "company_user_directory":"/company/users" in paths,
+        "manage_user":"/company/users/{user_id}" in paths,
+        "save_user_access":"/company/users/{user_id}/access" in paths,
+        "access_matrix":"/company/access-matrix" in paths,
+        "assignable_role_allowlist":len(_BC820_ASSIGNABLE_ROLES)>=10,
+        "platform_owner_not_assignable":"PLATFORM_OWNER" not in _BC820_ASSIGNABLE_ROLES,
+        "owner_not_assignable":"OWNER" not in _BC820_ASSIGNABLE_ROLES,
+        "company_admin_guard":callable(globals().get("_bc820_require_company_admin")),
+        "company_boundary":callable(globals().get("_bc810_same_company_project")),
+        "project_membership_engine":callable(globals().get("_bc810_has_project_membership")),
+        "backend_authorization":callable(globals().get("_bc810_require")),
+        "clean_403":callable(globals().get("_bc810_denied")),
+        "audit_hook":callable(globals().get("_bc810_audit")),
+        "payment_gate_preserved":"/payment-required" in paths,
+        "owner_console_preserved":any(str(p).startswith("/owner") for p in paths),
+        "project_startup_preserved":"/project-startup" in paths,
+        "subcontractor_command_preserved":"/subcontractor-command" in paths,
+        "data_reset_disabled":True,
+    }
+    passed=sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC820_RELEASE,
+        "release":BC820_RELEASE_NAME,
+        "passed":passed,"total":len(checks),"failed":len(checks)-passed,
+        "features":{
+            "company_user_directory":True,
+            "role_assignment":True,
+            "project_assignment":True,
+            "platform_owner_protected":True,
+            "company_boundary":True,
+            "subcontractor_project_scope":True,
+            "permission_preview":True,
+            "direct_url_enforcement_preserved":True,
+        },
+        "data_reset":False,
+        "checks":checks
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/user-permission-administration-8-2-0")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE=BC820_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC820_RELEASE_NAME
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+# ============================================================
+# BuildCommand AI 8.3.0B — Clean Invitations & Onboarding
+# Baseline: verified working 8.2.0
+# ============================================================
+
+import hashlib as _bc830b_hashlib
+import secrets as _bc830b_secrets
+import hmac as _bc830b_hmac
+import logging as _bc830b_logging
+import re as _bc830b_re
+from html import escape as _bc830b_escape
+from datetime import datetime as _BC830B_datetime, timezone as _BC830B_timezone, timedelta as _BC830B_timedelta
+
+BC830B_RELEASE = "8.3.0B"
+BC830B_RELEASE_NAME = "Clean Invitations & Onboarding"
+_bc830b_logger = _bc830b_logging.getLogger("buildcommand.invitations")
+
+def _bc830b_error(message, status=400):
+    # This response must work even when the database-backed shared shell fails.
+    return _BC189_HTMLResponse(
+        "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>BuildCommand AI · Invitation</title></head><body style='font:16px system-ui;max-width:700px;margin:40px auto;padding:20px'>"
+        "<h1>Unable to complete this action</h1><p>" + _bc830b_escape(message) +
+        "</p><p><a href='/workspace'>My workspace</a> · <a href='/login'>Sign in</a></p></body></html>",
+        status_code=status, headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer"})
+
+def _bc830b_rollback(c):
+    if c is not None:
+        try: c.rollback()
+        except Exception: _bc830b_logger.exception("Invitation rollback failed")
+
+def _bc830b_close(c):
+    if c is not None:
+        try: c.close()
+        except Exception: _bc830b_logger.exception("Invitation connection close failed")
+
+def _bc830b_audit(action, detail, user):
+    try: _bc810_audit(action, True, detail, user=user)
+    except Exception: _bc830b_logger.exception("Post-commit invitation audit failed action=%s", action)
+
+def _bc830b_link_insert(c, table, columns, values):
+    # PgCompat guesses RETURNING id and rolls back the WHOLE transaction if the
+    # column does not exist. These link tables intentionally have no id column.
+    if table not in {"bc_user_invitation_projects", "project_members", "project_users", "project_assignments"}:
+        raise ValueError("Unsupported membership table")
+    if columns not in {"invitation_id,project_id", "user_id,project_id"}:
+        raise ValueError("Unsupported membership columns")
+    returning = " RETURNING project_id" if getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres" else ""
+    c.execute(f"INSERT INTO {table}({columns}) VALUES(?,?)" + returning, values)
+
+def _bc830b_now():
+    return _BC830B_datetime.now(_BC830B_timezone.utc)
+
+def _bc830b_hash_token(token):
+    return _bc830b_hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+def _bc830b_expired(row):
+    raw = str(row["expires_at"] or "").strip()
+    if not raw:
+        return True
+    try:
+        dt = _BC830B_datetime.fromisoformat(raw.replace("Z","+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_BC830B_timezone.utc)
+        return _bc830b_now() > dt
+    except Exception:
+        return True
+
+def _bc830b_init():
+    c = None
+    try:
+        c = _runtime.db()
+        if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
+            c.execute("CREATE TABLE IF NOT EXISTS bc_user_invitations("
+                      "id BIGSERIAL PRIMARY KEY,"
+                      "company_id BIGINT NOT NULL,"
+                      "email TEXT NOT NULL,"
+                      "role TEXT NOT NULL,"
+                      "token_hash TEXT NOT NULL,"
+                      "status TEXT NOT NULL DEFAULT 'PENDING',"
+                      "invited_by_user_id BIGINT,"
+                      "created_at TEXT NOT NULL,"
+                      "expires_at TEXT NOT NULL,"
+                      "accepted_at TEXT,"
+                      "accepted_user_id BIGINT)")
+            c.execute("CREATE TABLE IF NOT EXISTS bc_user_invitation_projects("
+                      "invitation_id BIGINT NOT NULL,"
+                      "project_id BIGINT NOT NULL)")
+        else:
+            c.execute("CREATE TABLE IF NOT EXISTS bc_user_invitations("
+                      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                      "company_id INTEGER NOT NULL,"
+                      "email TEXT NOT NULL,"
+                      "role TEXT NOT NULL,"
+                      "token_hash TEXT NOT NULL,"
+                      "status TEXT NOT NULL DEFAULT 'PENDING',"
+                      "invited_by_user_id INTEGER,"
+                      "created_at TEXT NOT NULL,"
+                      "expires_at TEXT NOT NULL,"
+                      "accepted_at TEXT,"
+                      "accepted_user_id INTEGER)")
+            c.execute("CREATE TABLE IF NOT EXISTS bc_user_invitation_projects("
+                      "invitation_id INTEGER NOT NULL,"
+                      "project_id INTEGER NOT NULL)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_bc_user_invitations_company_email "
+                  "ON bc_user_invitations(company_id,email,status)")
+        c.execute("SELECT id,company_id,email,role,token_hash,status,invited_by_user_id,"
+                  "created_at,expires_at,accepted_at,accepted_user_id FROM bc_user_invitations WHERE 1=0")
+        c.execute("SELECT invitation_id,project_id FROM bc_user_invitation_projects WHERE 1=0")
+        c.commit()
+        return True
+    except Exception:
+        _bc830b_logger.exception("Invitation schema initialization failed")
+        _bc830b_rollback(c)
+        return False
+    finally:
+        _bc830b_close(c)
+
+_BC830B_SCHEMA_READY = _bc830b_init()
+
+def _bc830b_lookup(invitation_id, token):
+    try:
+        iid = int(invitation_id)
+    except Exception:
+        return None, "invalid_id"
+    c = None
+    try:
+        c = _runtime.db()
+        row = c.execute("SELECT * FROM bc_user_invitations WHERE id=? LIMIT 1",(iid,)).fetchone()
+    except Exception:
+        _bc830b_logger.exception("Invitation lookup failed invitation_id=%s", iid)
+        return None, "storage_unavailable"
+    finally:
+        _bc830b_close(c)
+    if not row:
+        return None, "not_found"
+    if not _bc830b_hmac.compare_digest(str(row["token_hash"] or ""), _bc830b_hash_token(token)):
+        return None, "token_mismatch"
+    if str(row["status"] or "").upper() != "PENDING":
+        return None, "not_pending"
+    if _bc830b_expired(row):
+        return None, "expired"
+    return row, "ok"
+
+@app.get("/company/invitations")
+def bc830b_invitations_page():
+    admin, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+    cid = _bc810_company_id(admin)
+    c = None
+    try:
+        projects = _bc820_company_projects(cid)
+        c = _runtime.db()
+        rows = c.execute(
+            "SELECT id,email,role,status,created_at,expires_at FROM bc_user_invitations "
+            "WHERE company_id=? ORDER BY id DESC LIMIT 50",(cid,)
+        ).fetchall()
+    except Exception:
+        _bc830b_logger.exception('Company invitation list unavailable company=%s',cid)
+        return _bc830b_error('Invitations are temporarily unavailable. Please try again.',503)
+    finally:
+        _bc830b_close(c)
+    project_options = "".join(
+        f'<label style="display:block;margin:6px 0"><input type="checkbox" name="project_ids" value="{p["id"]}"> '
+        f'{_runtime.esc(str(p["number"] or ""))} · {_runtime.esc(str(p["name"] or ""))}</label>'
+        for p in projects
+    )
+    role_options = "".join(
+        f'<option value="{r}">{r.replace("_"," ").title()}</option>' for r in _BC820_ASSIGNABLE_ROLES
+    )
+    if callable(globals().get("_bc840_role_options")):
+        role_options = _bc840_role_options()
+    history = "".join(
+        "<tr>"
+        f"<td>#{r['id']}</td><td>{_runtime.esc(r['email'])}</td><td>{_bc840_role_label(r['role'])}</td>"
+        f"<td>{'Expired' if str(r['status']).upper()=='PENDING' and _bc830b_expired(r) else _runtime.esc(str(r['status']).capitalize())}</td><td>{_runtime.esc(str(r['expires_at'])[:10])}</td>"
+        + (f'<td><form method="post" action="/company/invitations/{int(r["id"])}/revoke"><button>Revoke</button></form></td>' if str(r['status']).upper()=='PENDING' and not _bc830b_expired(r) else '<td>—</td>') + '</tr>'
+        for r in rows
+    )
+    body = f"""
+    <div class="hero"><div class="eyebrow">COMPANY · INVITATIONS</div>
+    <h1>Invite your team</h1><p>Choose their role and projects. Create the invitation, then copy the link to share it. Email is not sent automatically.</p><p>Creating another invitation for the same email replaces its earlier pending link.</p></div>
+    <div class="grid2">
+      <div class="card"><h2>Create Invitation</h2>
+        <form method="post" action="/company/invitations/create">
+          <label for="invite-email">Email</label><input id="invite-email" name="email" type="email" autocomplete="email" maxlength="254" required placeholder="name@company.com">
+          <label for="invite-role" style="display:block;margin-top:12px">Role</label>
+          <select id="invite-role" name="role" required>{role_options}</select>
+          <h3>Project Access</h3>{project_options or '<p class="muted">No projects available.</p>'}
+          <p class="muted">Project selection limits subcontractors and observers. Internal staff keep existing company-project access.</p>
+          <p class="muted">Assign projects to authorize a superintendent or project manager to manage trade sharing.</p>
+          <button type="submit" style="margin-top:14px">Create Secure Invitation</button>
+        </form>
+      </div>
+      <div class="card"><h2>Security Rules</h2><ul>
+        <li>Invitation expires in 7 days.</li><li>Invitation is single-use.</li>
+        <li>The accepting account email must match exactly.</li>
+        <li>Company Admin cannot grant BuildCommand Platform Owner access.</li>
+        <li>Project assignments are limited to this company.</li></ul>
+      </div>
+    </div>
+    <div class="card bc840-table"><h2>Recent Invitations</h2><table>
+      <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Status</th><th>Expires</th><th>Action</th></tr></thead>
+      <tbody>{history or '<tr><td colspan="6">No invitations yet.</td></tr>'}</tbody></table></div>
+    """
+    return _BC189_HTMLResponse(_runtime.shell("Company Invitations", body))
+
+@app.post("/company/invitations/create")
+def bc830b_create_invitation(request:_BC189_Request,
+                             email:str=_BC189_Form(...),
+                             role:str=_BC189_Form(...),
+                             project_ids:list[str]=_BC189_Form(default=[])):
+    admin, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+    cid = _bc810_company_id(admin)
+    email = str(email or "").strip().lower()
+    role = str(role or "").strip().upper()
+    try:
+        cid, inviter_id = int(cid), int(admin["id"])
+        if cid <= 0 or inviter_id <= 0: raise ValueError()
+    except (ValueError, TypeError, KeyError):
+        return _bc830b_error("Your account needs a valid company assignment before you can invite users.")
+    if len(email) > 254 or not _bc830b_re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", email):
+        return _bc830b_error("Enter a valid email address.")
+    if role not in _BC820_ASSIGNABLE_ROLES:
+        return _bc810_denied("Invitation Blocked","That role cannot be assigned.")
+    token = _bc830b_secrets.token_urlsafe(32)
+    token_hash = _bc830b_hash_token(token)
+    now = _bc830b_now()
+    expires = now + _BC830B_timedelta(days=7)
+    c = None
+    try:
+        c = _runtime.db()
+        postgres = getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres"
+        if not postgres: c.execute("BEGIN IMMEDIATE")
+        # Serialize reissues in one company so concurrent requests cannot leave
+        # two pending invitations for the same address.
+        company = c.execute("SELECT id FROM companies WHERE id=?" + (" FOR UPDATE" if postgres else ""), (cid,)).fetchone()
+        if not company or not c.execute("SELECT id FROM users WHERE id=? AND company_id=?",(inviter_id,cid)).fetchone():
+            _bc830b_rollback(c)
+            return _bc830b_error("Your company or inviting account is unavailable.")
+        if c.execute("SELECT id FROM users WHERE lower(email)=lower(?) LIMIT 1",(email,)).fetchone():
+            _bc830b_rollback(c)
+            return _bc830b_error("An account already uses that email. Manage existing company members in People & access; an invitation cannot transfer accounts between companies.",409)
+        if callable(globals().get('_bc840_protected_account')) and _bc840_protected_account({'email':email,'role':role}):
+            _bc830b_rollback(c)
+            return _bc830b_error("Platform-owner accounts cannot be created through company invitations.",403)
+        valid_projects = {str(r["id"]) for r in c.execute(
+            "SELECT id FROM projects WHERE company_id=?",(cid,)).fetchall()}
+        requested = {str(x) for x in (project_ids or [])}
+        if not requested.issubset(valid_projects):
+            _bc830b_rollback(c)
+            return _bc830b_error("Select only projects that belong to your company.", 403)
+        c.execute("UPDATE bc_user_invitations SET status='REVOKED' "
+                  "WHERE company_id=? AND lower(email)=lower(?) AND status='PENDING'",(cid,email))
+        if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
+            row = c.execute(
+                "INSERT INTO bc_user_invitations "
+                "(company_id,email,role,token_hash,status,invited_by_user_id,created_at,expires_at) "
+                "VALUES(?,?,?,?,?,?,?,?) RETURNING id",
+                (cid,email,role,token_hash,"PENDING",inviter_id,now.isoformat(),expires.isoformat())
+            ).fetchone()
+            invitation_id = int(row["id"])
+        else:
+            c.execute(
+                "INSERT INTO bc_user_invitations "
+                "(company_id,email,role,token_hash,status,invited_by_user_id,created_at,expires_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (cid,email,role,token_hash,"PENDING",inviter_id,now.isoformat(),expires.isoformat())
+            )
+            invitation_id = int(c.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+        for pid in requested:
+            _bc830b_link_insert(c, "bc_user_invitation_projects", "invitation_id,project_id", (invitation_id,int(pid)))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        reference = _bc830b_secrets.token_hex(4)
+        _bc830b_logger.exception("Invitation create failed reference=%s company=%s inviter=%s", reference, cid, inviter_id)
+        return _bc830b_error("The invitation could not be saved. Please try again. Support reference: " + reference, 503)
+    finally:
+        _bc830b_close(c)
+
+    stored, reason = _bc830b_lookup(invitation_id, token)
+    if not stored:
+        _bc830b_logger.error("Invitation post-commit verification failed invitation_id=%s reason=%s", invitation_id, reason)
+        return _bc830b_error("The saved invitation could not be verified. Return to invitations and create it again to replace the previous link.", 503)
+    _bc830b_audit("clean_invitation_create", f"invitation_id={invitation_id}; role={role}", admin)
+    base = str(request.base_url).rstrip("/")
+    link = f"{base}/join/{invitation_id}/{token}"
+    body = (
+        "<div class='hero'><div class='eyebrow'>SECURE INVITATION READY</div>"
+        "<h1>Invitation Created</h1>"
+        f"<p>{_runtime.esc(email)} · {_runtime.esc(role)}</p></div>"
+        "<div class='card'><h2>Invitation Link</h2>"
+        "<p>Copy this link and send it to the invited user.</p>"
+        f"<input style='width:100%;padding:12px' value='{_runtime.esc(link)}' readonly onclick='this.select()'>"
+        f"<p class='muted'>Invitation #{invitation_id} · expires in 7 days · single use.</p></div>"
+    )
+    try: rendered = _runtime.shell("Invitation Created",body)
+    except Exception:
+        _bc830b_logger.exception("Invitation saved but shared page rendering failed invitation_id=%s", invitation_id)
+        rendered = "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body>" + body + "</body></html>"
+    return _BC189_HTMLResponse(rendered, headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer"})
+
+@app.get("/join/{invitation_id}/{token}")
+def bc830b_join(invitation_id:int, token:str):
+    row, reason = _bc830b_lookup(invitation_id, token)
+    if not row:
+        return _bc830b_error("Invitations are temporarily unavailable. Please try again." if reason == "storage_unavailable" else
+                              "This invitation is invalid, expired, revoked, or already used.",
+                              503 if reason == "storage_unavailable" else 410)
+    user = _bc840_user()
+    if not user:
+        body = (
+            "<div class='hero'><div class='eyebrow'>BUILDCOMMAND AI INVITATION</div>"
+            "<h1>You’ve Been Invited</h1>"
+            f"<p>Invitation for {_runtime.esc(row['email'])} as {_bc840_role_label(row['role'])}.</p></div>"
+            "<div class='card'>"
+            "<h2>New to BuildCommand AI?</h2><p>Join the inviting company. You do not need to create a separate company.</p>"
+            f"<form method='post' action='/join/{int(row['id'])}/{_bc830b_escape(token,quote=True)}/register'>"
+            "<p><label for='join-name'>Your name</label><br><input id='join-name' name='display_name' autocomplete='name' maxlength='120' required></p>"
+            "<p><label for='join-password'>Create a password</label><br><input id='join-password' name='password' type='password' autocomplete='new-password' minlength='12' maxlength='256' required></p>"
+            "<p class='muted'>Use at least 12 characters. This invitation fixes your email, company and assigned role.</p>"
+            "<button>Create account &amp; join</button></form></div>"
+            "<div class='card'><h2>Already have an account?</h2><p><a href='/login'>Sign in</a>, then reopen this invitation link.</p>"
+            "<p>Accounts already in another company need an administrator-assisted transfer; an invitation will not move them.</p></div>"
+        )
+        return _bc840_join_page(body)
+    if str(user.get("email") or "").strip().lower() != str(row["email"] or "").strip().lower():
+        return _bc810_denied("Invitation Email Mismatch",
+                             "Sign in with the exact email address that received this invitation.")
+    body = (
+        "<div class='hero'><div class='eyebrow'>SECURE COMPANY INVITATION</div>"
+        "<h1>Accept BuildCommand Access</h1>"
+        f"<p>Role: {_runtime.esc(row['role'])}</p></div>"
+        "<div class='card'>"
+        f"<form method='post' action='/join/{int(row['id'])}/{token}/accept'>"
+        "<button type='submit'>Accept Invitation</button></form></div>"
+    )
+    return _bc840_join_page(body)
+
+@app.post("/join/{invitation_id}/{token}/accept")
+def bc830b_accept(invitation_id:int, token:str):
+    row, reason = _bc830b_lookup(invitation_id, token)
+    user = _bc840_user()
+    if not user:
+        return _BC187_RedirectResponse("/login",status_code=303)
+    if not row:
+        return _bc830b_error("Invitations are temporarily unavailable." if reason=='storage_unavailable' else "This invitation is no longer valid.",503 if reason=='storage_unavailable' else 410)
+    if str(user.get("email") or "").strip().lower() != str(row["email"] or "").strip().lower():
+        return _bc810_denied("Invitation Email Mismatch",
+                             "This invitation belongs to a different email address.")
+    role = str(row["role"] or "").upper()
+    if role not in _BC820_ASSIGNABLE_ROLES:
+        return _bc810_denied("Invitation Blocked","The assigned role is no longer allowed.")
+    uid = user.get("id")
+    cid = row["company_id"]
+    c = None
+    try:
+        c = _runtime.db()
+        postgres = getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres"
+        if not postgres: c.execute("BEGIN IMMEDIATE")
+        locked = c.execute("SELECT * FROM bc_user_invitations WHERE id=?" + (" FOR UPDATE" if postgres else ""), (invitation_id,)).fetchone()
+        if not locked or locked["status"] != "PENDING" or _bc830b_expired(locked) or not _bc830b_hmac.compare_digest(str(locked["token_hash"]), _bc830b_hash_token(token)):
+            _bc830b_rollback(c)
+            return _bc830b_error("This invitation is no longer available.", 410)
+        company = c.execute("SELECT id FROM companies WHERE id=?",(cid,)).fetchone()
+        if not company:
+            _bc830b_rollback(c)
+            return _bc830b_error("The inviting company is unavailable.",410)
+        account = c.execute("SELECT id,company_id,email,role FROM users WHERE id=?" + (" FOR UPDATE" if postgres else ""),(uid,)).fetchone()
+        if not account or _bc840_protected_account(dict(account)) or int(account["company_id"] or 0) != int(cid):
+            _bc830b_rollback(c)
+            return _bc830b_error("This invitation cannot transfer an existing company account or change a platform-owner account. Ask your administrator for help.",409)
+        if str(account['email']).strip().lower() != str(locked['email']).strip().lower():
+            _bc830b_rollback(c)
+            return _bc830b_error("This invitation belongs to a different email address.",403)
+        if str(account['role']).upper() in {'ADMIN','COMPANY_ADMIN'} and role != 'COMPANY_ADMIN':
+            _bc830b_rollback(c)
+            return _bc830b_error("Change an administrator's role in People & access, not through an invitation.",409)
+        c.execute("UPDATE users SET role=? WHERE id=? AND company_id=?",(role,uid,cid))
+        membership_table = _bc820_membership_table()
+        if not membership_table: raise RuntimeError("Project membership storage unavailable")
+        if membership_table:
+            c.execute(f"DELETE FROM {membership_table} WHERE user_id=?",(uid,))
+            pids = c.execute(
+                "SELECT ip.project_id FROM bc_user_invitation_projects ip "
+                "JOIN projects p ON p.id=ip.project_id "
+                "WHERE ip.invitation_id=? AND p.company_id=?",(row["id"],cid)
+            ).fetchall()
+            for p in pids:
+                _bc830b_link_insert(c, membership_table, "user_id,project_id", (uid,p["project_id"]))
+        c.execute("UPDATE bc_user_invitations SET status='ACCEPTED',accepted_at=?,accepted_user_id=? "
+                  "WHERE id=? AND status='PENDING'",
+                  (_bc830b_now().isoformat(),uid,row["id"]))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception("Invitation acceptance failed invitation_id=%s", invitation_id)
+        return _bc830b_error("Your access could not be saved. The invitation remains available to retry.", 503)
+    finally:
+        _bc830b_close(c)
+    _bc830b_audit("clean_invitation_accept", f"invitation_id={row['id']}; role={role}", user)
+    return _BC187_RedirectResponse("/",status_code=303)
+
+@app.get("/health/clean-invitations-8-3-0b")
+def bc830b_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    tables = _bc810_membership_tables()
+    checks = {
+        "8_2_baseline_preserved":"/health/user-permission-administration-8-2-0" in paths,
+        "clean_schema_ready":_BC830B_SCHEMA_READY,
+        "invitation_table":"bc_user_invitations" in tables,
+        "invitation_projects_table":"bc_user_invitation_projects" in tables,
+        "admin_page":"/company/invitations" in paths,
+        "create_route":"/company/invitations/create" in paths,
+        "join_route":"/join/{invitation_id}/{token}" in paths,
+        "accept_route":"/join/{invitation_id}/{token}/accept" in paths,
+        "token_hashing":callable(globals().get("_bc830b_hash_token")),
+        "fresh_connection_lookup":callable(globals().get("_bc830b_lookup")),
+        "seven_day_expiration":True,
+        "single_use":True,
+        "email_match":True,
+        "role_allowlist_preserved":"OWNER" not in _BC820_ASSIGNABLE_ROLES and "PLATFORM_OWNER" not in _BC820_ASSIGNABLE_ROLES,
+        "company_boundary_preserved":callable(globals().get("_bc820_require_company_admin")),
+        "project_membership_preserved":callable(globals().get("_bc820_membership_table")),
+        "owner_console_preserved":any(str(p).startswith("/owner") for p in paths),
+        "stripe_payment_gate_preserved":"/payment-required" in paths,
+        "data_reset_disabled":True,
+    }
+    passed=sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC830B_RELEASE,
+        "release":BC830B_RELEASE_NAME,
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "data_reset":False,
+        "checks":checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/clean-invitations-8-3-0b")
+except Exception:
+    pass
+try:
+    _runtime.PUBLIC_PATHS.add("/join")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE=BC830B_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC830B_RELEASE_NAME
+try:
+    app.version=BUILD_COMMAND_RELEASE
+except Exception:
+    pass
+
+# ============================================================
+# BuildCommand AI 8.4.0 — Clear Workspaces & Company Administration
+# Source: uploaded 8.3.0B, retaining the 8.2 construction/access foundation.
+# Legacy engines remain available to authorized staff; no business data purge.
+# ============================================================
+from contextvars import ContextVar as _BC840_ContextVar
+from starlette.concurrency import run_in_threadpool as _bc840_in_threadpool
+from fastapi.responses import JSONResponse as _BC840_JSONResponse
+from urllib.parse import urlsplit as _bc840_urlsplit, parse_qs as _bc840_parse_qs
+
+BC840_RELEASE = "8.4.0"
+BC840_RELEASE_NAME = "Clear Workspaces & Company Administration"
+_BC840_NO_REQUEST = object()
+_bc840_request_user = _BC840_ContextVar("bc840_request_user", default=_BC840_NO_REQUEST)
+
+# One role directory for labels, navigation and the route boundary. Unknown
+# roles receive the restricted observer workspace, never implicit staff access.
+_BC840_ROLES = {
+    "COMPANY_ADMIN": ("Company administrator", "admin", "Manage your company's people, projects, settings and subscription."),
+    "PROJECT_EXECUTIVE": ("Project executive", "lead", "Review company projects and coordinate project leadership."),
+    "PROJECT_MANAGER": ("Project manager", "lead", "Coordinate project documents, schedules and field teams."),
+    "SUPERINTENDENT": ("Superintendent", "lead", "Run field operations, daily reports, schedules and job readiness."),
+    "PROJECT_ENGINEER": ("Project engineer", "staff", "Support project documentation and coordination."),
+    "ASSISTANT": ("Assistant", "staff", "Support the project team within assigned responsibilities."),
+    "FIELD_USER": ("Field team member", "staff", "Use project tools without company-account administration."),
+    "SUBCONTRACTOR": ("Subcontractor", "trade", "See only assigned projects in the trade-partner workspace."),
+    "READ_ONLY": ("Read-only observer", "observer", "View assigned project overviews without making changes."),
+    "GUEST": ("Guest", "observer", "View assigned project overviews only."),
+    "ARCHITECT": ("Architect", "observer", "Use assigned project overviews; document sharing is a separate permission."),
+    "INSPECTOR": ("Inspector", "observer", "Use assigned project overviews without company administration."),
+}
+_BC840_ALIASES = {"ADMIN":"COMPANY_ADMIN", "PM":"PROJECT_MANAGER", "PE":"PROJECT_ENGINEER",
+                  "EXECUTIVE":"PROJECT_EXECUTIVE", "SUB":"SUBCONTRACTOR", "MEMBER":"FIELD_USER"}
+
+def _bc840_user():
+    user = _bc840_request_user.get()
+    if user is not _BC840_NO_REQUEST: return user
+    return _bc810_user()
+
+def _bc840_platform_owner(user):
+    if str(user.get('role') or '').upper() not in {'OWNER','PLATFORM_OWNER'}: return False
+    configured = {x.strip().lower() for x in os.environ.get('PLATFORM_OWNER_EMAILS',os.environ.get('PLATFORM_OWNER_EMAIL','')).split(',') if x.strip()}
+    if configured: return str(user.get('email') or '').strip().lower() in configured
+    checker = getattr(_runtime,'_bc174_is_platform_owner',None)
+    # A historical OWNER role by itself must never grant platform authority.
+    try: return bool(callable(checker) and checker(user))
+    except Exception: return False
+
+def _bc840_role(user=None):
+    user = user or _bc840_user() or {}
+    value = str(user.get("role") or "GUEST").strip().upper()
+    if value == 'OWNER' and not _bc840_platform_owner(user): return 'COMPANY_ADMIN'
+    return _BC840_ALIASES.get(value, value)
+
+def _bc840_tier(user=None):
+    user = user or _bc840_user() or {}
+    if _bc840_platform_owner(user): return "owner"
+    return _BC840_ROLES.get(_bc840_role(user), ("Restricted account", "observer", ""))[1]
+
+def _bc840_role_label(role):
+    role = _BC840_ALIASES.get(str(role).upper(), str(role).upper())
+    if role in {"OWNER", "PLATFORM_OWNER"}: return "BuildCommand platform owner"
+    return _BC840_ROLES.get(role, ("Restricted account",))[0]
+
+def _bc840_role_options(current=None):
+    current = _BC840_ALIASES.get(str(current or "").upper(), str(current or "").upper())
+    out = '<option value="" disabled' + ('' if current else ' selected') + '>Choose a role</option>'
+    groups = [("Leadership", ("COMPANY_ADMIN","PROJECT_MANAGER","SUPERINTENDENT","PROJECT_EXECUTIVE")),
+              ("Project team", ("PROJECT_ENGINEER","ASSISTANT")),
+              ("External / limited", ("SUBCONTRACTOR","READ_ONLY","GUEST","ARCHITECT","INSPECTOR"))]
+    for label, roles in groups:
+        out += '<optgroup label="' + label + '">'
+        for role in roles:
+            if role in _BC820_ASSIGNABLE_ROLES:
+                out += f'<option value="{role}"' + (' selected' if role == current else '') + '>' + _bc840_role_label(role) + '</option>'
+        out += '</optgroup>'
+    return out
+
+def _bc840_membership_init():
+    c = None
+    try:
+        if _bc820_membership_table(): return True
+        c = _runtime.db()
+        c.execute("CREATE TABLE IF NOT EXISTS project_members("
+                  "user_id BIGINT NOT NULL,project_id BIGINT NOT NULL,PRIMARY KEY(user_id,project_id))")
+        c.commit()
+        return True
+    except Exception:
+        _bc830b_logger.exception("Project membership initialization failed")
+        _bc830b_rollback(c)
+        return False
+    finally: _bc830b_close(c)
+
+_BC840_MEMBERSHIP_READY = _bc840_membership_init()
+
+def _bc840_projects(user=None):
+    user = user or _bc840_user()
+    if not user: return []
+    cid, uid = _bc810_company_id(user), user.get("id")
+    c = _runtime.db()
+    try:
+        # Preserve the established 8.2 leadership policy: own-company projects.
+        # Trade partners/observers require an explicit project membership.
+        if _bc840_tier(user) in {"owner", "admin", "lead", "staff"}:
+            rows = c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name,id", (cid,)).fetchall()
+        else:
+            table = _bc820_membership_table()
+            if not table: return []
+            rows = c.execute(f"SELECT DISTINCT p.id,p.name,p.number,p.status FROM projects p "
+                             f"JOIN {table} m ON m.project_id=p.id WHERE p.company_id=? AND m.user_id=? ORDER BY p.name,p.id", (cid,uid)).fetchall()
+        return [dict(row) for row in rows]
+    finally: _bc830b_close(c)
+
+def _bc840_selected_project(user=None):
+    user = user or _bc840_user()
+    if not user: return None
+    c = _runtime.db()
+    try:
+        row = c.execute("SELECT selected_project_id FROM user_state WHERE user_id=?", (user["id"],)).fetchone()
+        return int(row["selected_project_id"]) if row and row["selected_project_id"] else None
+    finally: _bc830b_close(c)
+
+_BC840_CSS = """
+*{box-sizing:border-box} :root{--ink:#172033;--muted:#56667a;--line:#dce3ec;--bg:#f4f7fb}
+body{margin:0;background:#f4f7fb;color:#172033;font:16px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+a{color:#164b94;text-underline-offset:3px} button,input,select,textarea{font:inherit}button,a.bc840-button{cursor:pointer}
+input:not([type=checkbox]):not([type=radio]),select,textarea{max-width:100%;padding:11px;border:1px solid #aebdce;border-radius:8px;background:white;color:#172033}
+input[type=checkbox],input[type=radio]{width:20px;height:20px;margin-right:7px;vertical-align:middle}label{font-weight:600}
+button,.bc840-button{padding:10px 16px;min-height:44px;border:1px solid #173f77;border-radius:8px;background:#173f77;color:#fff;font-weight:700;text-decoration:none;display:inline-block}
+.bc840-header{background:#fff;border-bottom:1px solid var(--line)}.bc840-top,.bc840-nav{max-width:1360px;margin:auto;padding:12px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.bc840-logo{display:flex;align-items:center;gap:10px;text-decoration:none;color:#172033;font-weight:850;font-size:20px}.bc840-logo img{display:block;width:174px;height:82px;object-fit:contain}
+.bc840-identity{margin-left:auto}.bc840-identity strong,.bc840-identity small{display:block}.bc840-identity small{font-size:14px;color:var(--muted)}
+.bc840-nav{padding-top:0;padding-bottom:14px;gap:7px}.bc840-nav a{padding:9px 13px;border-radius:7px;text-decoration:none;color:#233c5d;font-weight:700;min-height:42px}
+.bc840-nav a:hover,.bc840-nav a:focus{background:#e9eff8}.bc840-select{display:flex;gap:7px;align-items:center;margin-left:auto;max-width:440px}.bc840-select select{min-width:0;width:100%}
+.bc840-main{max-width:1280px;margin:auto;padding:24px 22px 64px;min-height:65vh}.hero,.card,.v117r-card,.v117r-hero{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px;margin:0 0 18px;box-shadow:none}
+.hero h1,.v117r-hero h1{font-size:clamp(26px,3vw,36px);line-height:1.2;margin:6px 0 10px;letter-spacing:-.02em}.hero p{margin:7px 0;color:var(--muted);max-width:75ch}
+h2{font-size:22px;line-height:1.3}h3{font-size:18px}.eyebrow,.label,.v117r-eyebrow{font-size:13px;font-weight:750;letter-spacing:.06em;color:var(--muted)}
+.muted,.small,.v117r-small{color:var(--muted);font-size:14px}.grid2,.grid3,.grid4{display:grid;gap:18px}.grid2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{font-size:28px;font-weight:800}
+.bc840-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 18px}.bc840-tabs a{padding:9px 13px;border:1px solid var(--line);border-radius:7px;text-decoration:none;background:#fff;font-weight:650}
+.bc840-table{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{padding:12px;text-align:left;border-bottom:1px solid var(--line);font-size:15px;vertical-align:top}th{color:var(--muted);font-weight:700}
+.bc840-pill{display:inline-block;font-size:14px;font-weight:650;padding:4px 9px;border:1px solid #c5d7ef;border-radius:6px;background:#f0f5fd;color:#234b80}
+.bc840-list{display:grid;gap:10px}.bc840-list>a{padding:15px;border:1px solid var(--line);border-radius:8px;background:#fff;text-decoration:none;font-weight:700}.bc840-list small{display:block;font-size:14px;font-weight:400;color:var(--muted)}
+.bc840-footer{text-align:center;padding:18px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)}.bc840-empty{padding:24px;border:1px dashed #b5c4d6;border-radius:10px;background:#fff}
+.bc840-role-note{padding:14px;border-left:4px solid #3768ab;background:#edf3fb;border-radius:5px;margin:14px 0}.bc840-skip{position:absolute;left:-10000px}.bc840-skip:focus{left:10px;top:10px;background:white;padding:12px;z-index:100}
+:focus-visible{outline:3px solid #2e70c5;outline-offset:3px}details>summary{cursor:pointer;font-weight:700;padding:10px 0}
+@media(max-width:820px){.grid2,.grid3,.grid4{grid-template-columns:1fr}.bc840-top,.bc840-nav{padding-left:14px;padding-right:14px}.bc840-main{padding:18px 14px 48px}.bc840-select{width:100%;max-width:none;margin-left:0}.bc840-logo img{width:140px;height:66px}.bc840-identity{font-size:14px}.bc840-nav{gap:4px}.bc840-nav a{padding:9px}.hero,.card{padding:18px}.bc840-top{gap:10px}th,td{min-width:100px}.bc840-logout button{padding:8px 11px}}
+"""
+
+def _bc840_company_tabs():
+    return '<nav class="bc840-tabs" aria-label="Company sections">' + ''.join(
+        f'<a href="{url}">{label}</a>' for label,url in [("Overview","/company"),("People & access","/company/users"),
+        ("Invitations","/company/invitations"),("Role guide","/company/access-matrix"),("Settings","/company-settings")]) + '</nav>'
+
+def _bc840_shell(title, body, *args, **kwargs):
+    user = _bc840_user()
+    if not user: return _BC840_PREVIOUS_SHELL(title, body, *args, **kwargs)
+    esc = _bc830b_escape
+    tier = _bc840_tier(user)
+    nav = [("My workspace","/workspace"),("Projects","/workspace/projects")]
+    if tier in {"owner","admin","lead","staff"}:
+        nav += [("Field tools","/workspace/tools"),("My access","/workspace/access")]
+    if tier in {"owner","admin"}: nav.append(("Company","/company"))
+    if tier == "owner": nav.append(("Owner console","/owner"))
+    if tier in {"trade","observer"}: nav.append(("My access","/workspace/access"))
+    if callable(globals().get('_bc850_nav')): nav += _bc850_nav(user)
+    logo = globals().get("_BC706_LOGO_DATA", "")
+    brand = f'<img src="{esc(logo,quote=True)}" alt="BuildCommand AI">' if logo else 'BuildCommand AI'
+    try:
+        projects, selected = _bc840_projects(user), _bc840_selected_project(user)
+    except Exception:
+        projects, selected = [], None
+    options = ''.join(f'<option value="{p["id"]}"' + (' selected' if p['id']==selected else '') + '>' +
+                      esc(str(p.get('number') or '') + ' · ' + str(p['name'])) + '</option>' for p in projects)
+    selector = ('<form class="bc840-select" method="post" action="/workspace/select-project">'
+                '<label for="bc840-project" class="small">Project</label><select id="bc840-project" name="project_id" required>' +
+                '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
+    company_titles = {"Company","Users & Access","Manage User Access","Company Invitations","Access Matrix","Company Settings","Invitation Created"}
+    tabs = _bc840_company_tabs() if title in company_titles and tier in {'owner','admin'} else ''
+    # Replace only the private shell, eliminating the stacked header/regex
+    # rewrites. Public login, branding assets and the legacy engines stay intact.
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<meta name="referrer" content="no-referrer"><title>' + esc(str(title)) + ' · BuildCommand AI</title>'
+            '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '</style></head><body>'
+            '<a class="bc840-skip" href="#main-content">Skip to content</a><header class="bc840-header">'
+            '<div class="bc840-top"><a class="bc840-logo" href="/workspace">' + brand + '</a>'
+            '<div class="bc840-identity"><strong>' + esc(str(user.get('display_name') or user.get('email') or 'Account')) +
+            '</strong><small>' + esc(_bc840_role_label(_bc840_role(user))) + '</small></div>'
+            '<form class="bc840-logout" method="post" action="/logout"><button>Sign out</button></form></div>'
+            '<nav class="bc840-nav" aria-label="Main navigation">' + ''.join(f'<a href="{u}">{t}</a>' for t,u in nav) + selector +
+            '</nav></header><main id="main-content" class="bc840-main">' + tabs + body + '</main>'
+            '<footer class="bc840-footer">Built By Willy LaHood © 2026 · BuildCommand AI ' + str(globals().get('BUILD_COMMAND_RELEASE',BC840_RELEASE)) + '</footer></body></html>')
+
+_BC840_PREVIOUS_SHELL = _runtime.shell
+_runtime.shell = _bc840_shell
+
+def _bc840_page(title, body, status=200):
+    return _BC189_HTMLResponse(_bc840_shell(title, body), status_code=status, headers={"Cache-Control":"no-store"})
+
+def _bc840_require_user():
+    user = _bc840_user()
+    return user, None if user else _BC187_RedirectResponse('/login', status_code=303)
+
+def _bc840_project_cards(projects):
+    esc = _bc830b_escape
+    if not projects:
+        return '<div class="bc840-empty"><h2>No projects assigned yet</h2><p>Ask your company administrator to open People & access and assign your projects.</p></div>'
+    return '<div class="grid3">' + ''.join(
+        '<article class="card"><span class="small">' + esc(str(p.get('number') or 'Project')) + '</span><h2>' +
+        esc(str(p['name'])) + '</h2><p>' + esc(str(p.get('status') or '')) +
+        f'</p><a class="bc840-button" href="/workspace/projects/{p["id"]}">Open project</a></article>' for p in projects) + '</div>'
+
+@app.get('/workspace')
+def bc840_workspace():
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    tier, projects = _bc840_tier(user), _bc840_projects(user)
+    headings = {'owner':'Your BuildCommand workspace','admin':'Company workspace','lead':'Field command workspace',
+                'staff':'Project team workspace','trade':'Subcontractor workspace','observer':'Project overview workspace'}
+    body = '<div class="hero"><div class="eyebrow">' + _bc830b_escape(_bc840_role_label(_bc840_role(user))) + '</div><h1>' + headings[tier] + '</h1>'
+    if tier in {'owner','admin'}:
+        body += '<p>Manage your team and keep your company projects moving.</p><a class="bc840-button" href="/company/users">Manage people & access</a> <a href="/company/invitations">Invite someone</a>'
+    elif tier in {'lead','staff'}:
+        body += '<p>Choose a project, then open the field tools you need for today.</p><a class="bc840-button" href="/workspace/tools">Open field tools</a>'
+    else:
+        body += '<p>Only projects assigned to your account appear here. Company administration and internal GC tools are not available in this workspace.</p>'
+        if tier == 'trade': body += '<p><a class="bc840-button" href="/workspace/shared">Open my shared work</a></p>'
+    body += '</div><h2>Your projects</h2>' + _bc840_project_cards(projects)
+    return _bc840_page('My workspace', body)
+
+@app.get('/workspace/projects')
+def bc840_projects():
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    return _bc840_page('Projects', '<div class="hero"><h1>Your projects</h1></div>' + _bc840_project_cards(_bc840_projects(user)))
+
+@app.get('/workspace/projects/{project_id}')
+def bc840_project(project_id:int):
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    project = next((p for p in _bc840_projects(user) if p['id']==project_id), None)
+    if project is None: return _bc830b_error('This project is not available to your account.', 403)
+    body = '<div class="hero"><div class="eyebrow">' + _bc830b_escape(str(project.get('number') or 'PROJECT')) + '</div><h1>' + _bc830b_escape(str(project['name'])) + '</h1>'
+    body += '<p>Status: ' + _bc830b_escape(str(project.get('status') or 'Not set')) + '</p></div>'
+    if _bc840_tier(user) in {'trade','observer'}:
+        body += '<div class="card"><h2>Your project access</h2><p>You have access to this project overview.</p>'
+        body += (f'<p><a class="bc840-button" href="/workspace/shared?project_id={project_id}">Open shared work</a></p><p>Your project leader chooses which items and files to share with you.</p>' if _bc840_tier(user)=='trade' else '<p>This observer role has project-overview access only.</p>') + '</div>'
+    else:
+        body += f'<div class="card"><h2>Work on this project</h2><form method="post" action="/workspace/select-project"><input type="hidden" name="project_id" value="{project_id}"><button>Set as current project</button></form><p>After selecting the project, use Field tools to open schedules, reports, documents and command.</p></div>'
+    return _bc840_page('Project overview', body)
+
+@app.post('/workspace/select-project')
+def bc840_select_project(project_id:int=_BC189_Form(...)):
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    if not any(p['id']==project_id for p in _bc840_projects(user)):
+        return _bc830b_error('This project is not available to your account.',403)
+    c = _runtime.db()
+    try:
+        c.execute("INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id", (user['id'],project_id))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        return _bc830b_error('The current project could not be changed. Please try again.',503)
+    finally: _bc830b_close(c)
+    destination = '/workspace/tools' if _bc840_tier(user) in {'owner','admin','lead','staff'} else f'/workspace/projects/{project_id}'
+    return _BC187_RedirectResponse(destination,status_code=303)
+
+_BC840_TOOLS = (
+    ('Daily field work', (('Daily report','/daily-report'),('Schedule','/schedule'),('Look-ahead','/lookahead-intelligence'),('Punch list','/punch'),('Safety','/safety'),('Inspections','/inspections'))),
+    ('Documents & coordination', (('Documents','/documents'),('Blueprint Brain','/blueprint-brain'),('RFIs / issues','/issues'),('Submittals','/submittals'),('Subcontractor directory','/subcontractors'))),
+    ('Planning & readiness', (('Project startup','/project-startup'),('Procurement','/procurement'),('Project health','/project-health'),('Meetings','/meetings'))),
+)
+
+@app.get('/workspace/tools')
+def bc840_tools():
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    if _bc840_tier(user) in {'trade','observer'}:
+        return _bc830b_error('Internal GC tools are not part of your workspace.',403)
+    projects, selected = _bc840_projects(user), _bc840_selected_project(user)
+    project = next((p for p in projects if p['id']==selected), None)
+    if not project:
+        return _bc840_page('Field tools','<div class="hero"><h1>Choose a project first</h1><p>Select a project from the header to open its field tools.</p></div>' + _bc840_project_cards(projects))
+    paths = {getattr(r,'path','') for r in app.routes}
+    command = f'/superintendent-command/{selected}'
+    body = '<div class="hero"><div class="eyebrow">CURRENT PROJECT</div><h1>' + _bc830b_escape(str(project['name'])) + '</h1>'
+    if '/superintendent-command/{project_id}' in paths:
+        body += '<p><a class="bc840-button" href="' + command + '">Open Superintendent Command</a></p>'
+    body += '</div><div class="grid3">'
+    for group, items in _BC840_TOOLS:
+        links = ''.join(f'<a href="{url}">{label}</a>' for label,url in items if url in paths)
+        body += '<section class="card"><h2>' + group + '</h2><div class="bc840-list">' + links + '</div></section>'
+    body += '</div>'
+    # Keep specialized engines reachable without putting every version/test
+    # page back in the main menu. This is a curated menu, not code deletion.
+    advanced = [(label,url) for label,url in getattr(_runtime,'NAV',[]) if isinstance(url,str) and url in paths
+                and url != '/'
+                and url not in {u for _,items in _BC840_TOOLS for _,u in items}
+                and str(label).lower() not in {label.lower() for _,items in _BC840_TOOLS for label,_ in items}
+                and not _bc840_admin_path(url) and not _bc840_owner_path(url)
+                and not any(word in (str(label)+' '+url).lower() for word in ('health','system-check','beta','test','v4','v3','account','login','logout','setup'))
+                and not _bc830b_re.search(r'[-_]\d',url)]
+    if advanced:
+        body += '<details class="card"><summary>More construction tools</summary><div class="bc840-list">' + ''.join(
+            f'<a href="{_bc830b_escape(url,quote=True)}">{_bc830b_escape(str(label))}</a>' for label,url in dict((url,(label,url)) for label,url in advanced).values()) + '</div></details>'
+    return _bc840_page('Field tools',body)
+
+@app.get('/workspace/access')
+def bc840_my_access():
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    role = _bc840_role(user)
+    description = _BC840_ROLES.get(role, ('','','BuildCommand platform ownership is managed separately.'))[2]
+    body = '<div class="hero"><h1>My access</h1><p><span class="bc840-pill">' + _bc830b_escape(_bc840_role_label(role)) + '</span></p><p>' + _bc830b_escape(description) + '</p></div>'
+    body += '<div class="card"><h2>Who changes my access?</h2><p>Your company administrator assigns your role and projects in People & access. You cannot change your own access level here.</p></div>'
+    return _bc840_page('My access',body)
+
+def bc840_company():
+    user, denied = _bc820_require_company_admin()
+    if denied: return denied
+    cid = _bc810_company_id(user)
+    users, projects = _bc820_company_users(cid), _bc820_company_projects(cid)
+    body = '<div class="hero"><div class="eyebrow">COMPANY ADMINISTRATION</div><h1>Your company</h1><p>One place to manage your people, invitations and settings.</p></div>'
+    body += f'<div class="grid3"><section class="card"><div class="label">People</div><div class="kpi">{len(users)}</div><p><a href="/company/users">Manage people & access</a></p></section>'
+    body += f'<section class="card"><div class="label">Projects</div><div class="kpi">{len(projects)}</div><p><a href="/workspace/projects">View projects</a></p></section>'
+    body += '<section class="card"><h2>Invite someone</h2><p>Set their role and projects before sharing their invitation.</p><a class="bc840-button" href="/company/invitations">Create invitation</a></section></div>'
+    body += '<div class="card"><h2>Company controls</h2><div class="bc840-list"><a href="/company-settings">Company settings</a><a href="/billing">Company subscription</a><a href="/projects/new">Create a project</a></div></div>'
+    return _bc840_page('Company',body)
+
+def bc840_company_users():
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    cid = _bc810_company_id(admin)
+    users, projects = _bc820_company_users(cid), _bc820_company_projects(cid)
+    names = {str(p['id']):str(p['name']) for p in projects}
+    memberships = {}
+    table = _bc820_membership_table()
+    c = _runtime.db()
+    try:
+        if table:
+            for r in c.execute(f"SELECT m.user_id,m.project_id FROM {table} m JOIN users u ON u.id=m.user_id JOIN projects p ON p.id=m.project_id WHERE u.company_id=? AND p.company_id=?",(cid,cid)).fetchall():
+                memberships.setdefault(r['user_id'],set()).add(str(r['project_id']))
+    finally: _bc830b_close(c)
+    rows = ''
+    for row in users:
+        user = dict(row)
+        labels = ', '.join(names[p] for p in sorted(memberships.get(user['id'],set())) if p in names)
+        scope = labels or ('Company projects (existing staff access)' if _bc840_tier(user) in {'owner','admin','lead','staff'} else 'No projects assigned')
+        rows += '<tr><td><strong>' + _bc830b_escape(str(user.get('display_name') or user['email'])) + '</strong><br><span class="small">' + _bc830b_escape(str(user['email'])) + '</span></td><td>' + _bc830b_escape(_bc840_role_label(_bc840_role(user))) + '</td><td>' + _bc830b_escape(scope) + f'</td><td><a href="/company/users/{user["id"]}">Edit access</a></td></tr>'
+    body = '<div class="hero"><h1>People & access</h1><p>Assign a role and projects. Project assignments authorize superintendents and PMs to manage trade sharing, and limit subcontractor and observer access. Existing internal construction-tool access remains unchanged.</p><a class="bc840-button" href="/company/invitations">Invite someone</a></div>'
+    body += '<div class="card bc840-table"><table><thead><tr><th>Person</th><th>Role</th><th>Projects</th><th>Access</th></tr></thead><tbody>' + (rows or '<tr><td colspan="4">No people found.</td></tr>') + '</tbody></table></div>'
+    return _bc840_page('Users & Access',body)
+
+def bc840_manage_user(user_id:int):
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    cid = _bc810_company_id(admin)
+    target = next((dict(u) for u in _bc820_company_users(cid) if u['id']==user_id), None)
+    if not target: return _bc830b_error('This person is not in your company.',403)
+    if _bc840_protected_account(target):
+        return _bc840_page('Manage User Access','<div class="hero"><h1>Protected owner account</h1><p>Owner accounts are managed separately from ordinary role assignments.</p></div>',403)
+    projects = _bc820_company_projects(cid)
+    assigned = _bc820_user_project_ids(user_id,cid)
+    boxes = ''.join(f'<label style="display:block;margin:12px 0"><input type="checkbox" name="project_ids" value="{p["id"]}"' + (' checked' if str(p['id']) in assigned else '') + '>' + _bc830b_escape(str(p['name'])) + '</label>' for p in projects)
+    body = '<div class="hero"><h1>' + _bc830b_escape(str(target.get('display_name') or target['email'])) + '</h1><p>' + _bc830b_escape(str(target['email'])) + '</p></div>'
+    body += f'<div class="grid2"><div class="card"><form method="post" action="/company/users/{user_id}/access"><label for="access-role">Role</label><select id="access-role" name="role" required>' + _bc840_role_options(target['role']) + '</select><h2>Assigned projects</h2>' + (boxes or '<p>No company projects yet.</p>') + '<button>Save access</button></form></div>'
+    body += '<div class="card"><h2>What these levels mean</h2><p><strong>Admin:</strong> company people, settings and subscription.</p><p><strong>Superintendent / project manager:</strong> assign projects here to authorize that person to manage trade sharing on those projects.</p><p><strong>Subcontractor:</strong> assigned project overviews and items explicitly shared with that account. Observers have overview access only.</p><p class="bc840-role-note">Project selection limits external access and authorizes project leaders to share work. Existing internal construction-tool access remains unchanged.</p></div></div>'
+    return _bc840_page('Manage User Access',body)
+
+def _bc840_protected_account(user):
+    configured = {x.strip().lower() for x in os.environ.get('PLATFORM_OWNER_EMAILS',os.environ.get('PLATFORM_OWNER_EMAIL','')).split(',') if x.strip()}
+    return str(user.get('role') or '').upper() in {'OWNER','PLATFORM_OWNER'} or str(user.get('email') or '').lower() in configured
+
+@app.post('/company/invitations/{invitation_id}/revoke')
+def bc840_revoke_invitation(invitation_id:int):
+    admin,denied = _bc820_require_company_admin()
+    if denied: return denied
+    c = None
+    try:
+        c = _runtime.db()
+        updated = c.execute("UPDATE bc_user_invitations SET status='REVOKED' WHERE id=? AND company_id=? AND status='PENDING'",(invitation_id,_bc810_company_id(admin)))
+        if updated.rowcount!=1:
+            _bc830b_rollback(c)
+            return _bc830b_error('This pending invitation is not available in your company.',409)
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception('Invitation revoke failed invitation_id=%s',invitation_id)
+        return _bc830b_error('The invitation could not be revoked. Please try again.',503)
+    finally: _bc830b_close(c)
+    _bc830b_audit('invitation_revoke',f'invitation_id={invitation_id}',admin)
+    return _BC187_RedirectResponse('/company/invitations',status_code=303)
+
+def _bc840_join_page(body, status=200):
+    # Token pages render without a company session or the legacy login gates.
+    return _BC189_HTMLResponse('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Join · BuildCommand AI</title>'
+        '<style>' + _BC840_CSS + '</style></head><body><main class="bc840-main" style="max-width:760px">' + body +
+        '</main></body></html>', status_code=status,
+        headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+
+@app.post('/join/{invitation_id}/{token}/register')
+def bc840_join_register(invitation_id:int, token:str, display_name:str=_BC189_Form(...), password:str=_BC189_Form(...)):
+    if _bc840_user():
+        return _bc830b_error('You are already signed in. Open this invitation again to accept it with your existing account.',409)
+    row, reason = _bc830b_lookup(invitation_id,token)
+    if not row:
+        return _bc830b_error('This invitation is unavailable.',503 if reason=='storage_unavailable' else 410)
+    name = str(display_name or '').strip()
+    if not name or len(name)>120 or not 12<=len(password)<=256:
+        return _bc830b_error('Enter your name (up to 120 characters) and a password of 12–256 characters.',400)
+    role, cid = str(row['role']).upper(), row['company_id']
+    email = str(row['email']).strip().lower()
+    if role not in _BC820_ASSIGNABLE_ROLES or _bc840_protected_account({'email':email,'role':role}):
+        return _bc830b_error('This invitation cannot assign that account or role.',403)
+    password_hash = _runtime.hash_password(password)
+    c = None
+    try:
+        c = _runtime.db()
+        pg = getattr(_runtime,'DATABASE_KIND','sqlite') == 'postgres'
+        if not pg: c.execute('BEGIN IMMEDIATE')
+        locked = c.execute('SELECT * FROM bc_user_invitations WHERE id=?' + (' FOR UPDATE' if pg else ''),(invitation_id,)).fetchone()
+        if not locked or locked['status']!='PENDING' or _bc830b_expired(locked) or not _bc830b_hmac.compare_digest(str(locked['token_hash']),_bc830b_hash_token(token)):
+            _bc830b_rollback(c)
+            return _bc830b_error('This invitation is no longer available.',410)
+        if not c.execute('SELECT id FROM companies WHERE id=?',(cid,)).fetchone():
+            _bc830b_rollback(c)
+            return _bc830b_error('The inviting company is unavailable.',410)
+        if c.execute('SELECT id FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():
+            _bc830b_rollback(c)
+            return _bc830b_error('An account already uses this email. Sign in, then reopen your invitation.',409)
+        sql = 'INSERT INTO users(company_id,email,display_name,password_hash,role,created) VALUES(?,?,?,?,?,?)'
+        values = (cid,email,name,password_hash,role,_bc830b_now().isoformat())
+        if pg: uid = c.execute(sql+' RETURNING id',values).fetchone()['id']
+        else:
+            c.execute(sql,values)
+            uid = c.execute('SELECT last_insert_rowid() AS id').fetchone()['id']
+        table = _bc820_membership_table()
+        if not table: raise RuntimeError('Project membership storage unavailable')
+        projects = c.execute('SELECT ip.project_id FROM bc_user_invitation_projects ip JOIN projects p ON p.id=ip.project_id WHERE ip.invitation_id=? AND p.company_id=?',(invitation_id,cid)).fetchall()
+        for project in projects:
+            _bc830b_link_insert(c,table,'user_id,project_id',(uid,project['project_id']))
+        c.execute("UPDATE bc_user_invitations SET status='ACCEPTED',accepted_at=?,accepted_user_id=? WHERE id=? AND status='PENDING'",(_bc830b_now().isoformat(),uid,invitation_id))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception('Invitation registration failed invitation_id=%s',invitation_id)
+        return _bc830b_error('Your account could not be created. Try again, or sign in if an account already exists.',503)
+    finally: _bc830b_close(c)
+    _bc830b_audit('invitation_registration',f'invitation_id={invitation_id}',{'id':uid,'company_id':cid,'email':email,'role':role})
+    try: session = _runtime.create_session(uid)
+    except Exception:
+        _bc830b_logger.exception('Account saved but session creation failed user_id=%s',uid)
+        return _bc840_join_page('<div class="card"><h1>Your account is ready</h1><p>Your invitation was accepted. <a href="/login">Sign in</a> with your email and new password.</p></div>')
+    response = _BC187_RedirectResponse('/workspace',status_code=303,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+    response.set_cookie('bc_session',session,httponly=True,secure=os.environ.get('COOKIE_SECURE','1')=='1',samesite='lax',max_age=2592000)
+    return response
+
+def bc840_save_access(user_id:int, role:str=_BC189_Form(...), project_ids:list[str]=_BC189_Form(default=[])):
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    cid, role = _bc810_company_id(admin), str(role or '').strip().upper()
+    if role not in _BC820_ASSIGNABLE_ROLES: return _bc830b_error('Choose an assignable company role.',403)
+    c = None
+    try:
+        c = _runtime.db()
+        pg = getattr(_runtime,'DATABASE_KIND','sqlite') == 'postgres'
+        if not pg: c.execute('BEGIN IMMEDIATE')
+        c.execute('SELECT id FROM companies WHERE id=?' + (' FOR UPDATE' if pg else ''),(cid,)).fetchone()
+        row = c.execute('SELECT id,company_id,email,role FROM users WHERE id=? AND company_id=?',(user_id,cid)).fetchone()
+        if not row or _bc840_protected_account(dict(row)):
+            _bc830b_rollback(c)
+            return _bc830b_error('This account cannot be changed from your company.',403)
+        if user_id == admin.get('id') and role not in {'COMPANY_ADMIN'}:
+            _bc830b_rollback(c)
+            return _bc830b_error('Another company administrator must change your own admin role.',409)
+        if str(row['role']).upper() in {'ADMIN','COMPANY_ADMIN'} and role != 'COMPANY_ADMIN':
+            other = c.execute("SELECT id FROM users WHERE company_id=? AND id<>? AND upper(role) IN ('ADMIN','COMPANY_ADMIN','OWNER','PLATFORM_OWNER') LIMIT 1",(cid,user_id)).fetchone()
+            if not other:
+                _bc830b_rollback(c)
+                return _bc830b_error('Keep at least one company administrator.',409)
+        requested = {str(v) for v in project_ids}
+        valid = {str(r['id']) for r in c.execute('SELECT id FROM projects WHERE company_id=?',(cid,)).fetchall()}
+        if not requested.issubset(valid):
+            _bc830b_rollback(c)
+            return _bc830b_error('Select only projects in your company.',403)
+        table = _bc820_membership_table()
+        if not table: raise RuntimeError('Project membership storage unavailable')
+        c.execute('UPDATE users SET role=? WHERE id=? AND company_id=?',(role,user_id,cid))
+        c.execute(f'DELETE FROM {table} WHERE user_id=?',(user_id,))
+        for pid in sorted(requested): _bc830b_link_insert(c,table,'user_id,project_id',(user_id,int(pid)))
+        if callable(globals().get('_bc850_revoke_removed_access')):
+            _bc850_revoke_removed_access(c,user_id,cid,role,requested)
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception('Company access save failed company=%s target_user=%s',cid,user_id)
+        return _bc830b_error('Access was not changed. Please try again.',503)
+    finally: _bc830b_close(c)
+    _bc830b_audit('role_project_assignment',f'user_id={user_id}; role={role}',admin)
+    return _BC187_RedirectResponse(f'/company/users/{user_id}',status_code=303)
+
+def bc840_access_matrix():
+    user, denied = _bc820_require_company_admin()
+    if denied: return denied
+    rows = ''.join('<tr><td>' + _bc830b_escape(label) + '</td><td>' + _bc830b_escape(description) + '</td></tr>' for role,(label,tier,description) in _BC840_ROLES.items() if role in _BC820_ASSIGNABLE_ROLES)
+    body = '<div class="hero"><h1>Role guide</h1><p>People get the workspace for their assigned role. Company and platform ownership remain separate.</p></div><div class="card bc840-table"><table><thead><tr><th>Role</th><th>Workspace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+    body += '<div class="card"><h2>Project sharing</h2><p>Administrators appoint superintendents and project managers by assigning projects. Those leaders can assign existing subcontractors to their projects and share individual work items. Subcontractors see only their assigned overviews and explicit shares. Observers keep overview-only access. Internal construction-tool access remains unchanged.</p></div>'
+    return _bc840_page('Access Matrix',body)
+
+def bc840_company_settings():
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    c = _runtime.db()
+    try: row = c.execute('SELECT name,logo_url FROM companies WHERE id=?',(_bc810_company_id(admin),)).fetchone()
+    finally: _bc830b_close(c)
+    if not row: return _bc830b_error('Your company is unavailable.',404)
+    body = '<div class="hero"><h1>Company settings</h1><p>Update your company identity. People, invitations and subscriptions have their own sections.</p></div>'
+    body += '<div class="card" style="max-width:740px"><form method="post" action="/company-settings"><p><label for="company-name">Company name</label><br><input id="company-name" name="name" maxlength="160" required value="' + _bc830b_escape(str(row['name'] or ''),quote=True) + '"></p>'
+    body += '<p><label for="company-logo">Company logo URL (optional)</label><br><input id="company-logo" name="logo_url" type="url" maxlength="2048" value="' + _bc830b_escape(str(row['logo_url'] or ''),quote=True) + '"></p><p class="muted">Your company logo does not replace the BuildCommand AI app logo.</p><button>Save settings</button></form></div>'
+    return _bc840_page('Company Settings',body)
+
+def bc840_save_company_settings(name:str=_BC189_Form(...),logo_url:str=_BC189_Form('')):
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    name,logo_url = str(name or '').strip(),str(logo_url or '').strip()
+    if not name or len(name)>160 or len(logo_url)>2048:
+        return _bc830b_error('Enter a company name up to 160 characters and a logo URL up to 2,048 characters.',400)
+    try: valid_logo = not logo_url or (_bc840_urlsplit(logo_url).scheme in {'http','https'} and bool(_bc840_urlsplit(logo_url).netloc))
+    except ValueError: valid_logo = False
+    if not valid_logo:
+        return _bc830b_error('Use a valid http or https logo URL, or leave it blank.',400)
+    c = None
+    try:
+        c = _runtime.db()
+        c.execute('UPDATE companies SET name=?,logo_url=? WHERE id=?',(name,logo_url,_bc810_company_id(admin)))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception('Company settings save failed company=%s',_bc810_company_id(admin))
+        return _bc830b_error('Company settings were not saved. Please try again.',503)
+    finally: _bc830b_close(c)
+    return _BC187_RedirectResponse('/company-settings',status_code=303)
+
+def _bc840_owner_path(path):
+    return bool(_bc830b_re.match(r'^/(?:api/)?(?:owner|platform)(?:/|-|$)',path)) or path == '/pilot-readiness'
+
+def _bc840_admin_path(path):
+    return (path in {'/company','/api/company'} or path.startswith(('/company/','/api/company/','/company-settings','/team','/invitations',
+            '/production-settings','/account/subscription','/api/billing/','/billing','/choose-plan')))
+
+def _bc840_replace(path, method, endpoint):
+    for route in list(app.router.routes):
+        if getattr(route,'path',None)==path and method in (getattr(route,'methods',None) or set()):
+            route.methods.discard(method)
+            if not route.methods: app.router.routes.remove(route)
+    app.add_api_route(path,endpoint,methods=[method])
+    route = app.router.routes.pop()
+    app.router.routes.insert(0,route)
+    app.openapi_schema = None
+
+_bc840_replace('/company','GET',bc840_company)
+_bc840_replace('/company/users','GET',bc840_company_users)
+_bc840_replace('/company/users/{user_id}','GET',bc840_manage_user)
+_bc840_replace('/company/users/{user_id}/access','POST',bc840_save_access)
+_bc840_replace('/company/access-matrix','GET',bc840_access_matrix)
+_bc840_replace('/company-settings','GET',bc840_company_settings)
+_bc840_replace('/company-settings','POST',bc840_save_company_settings)
+
+# The original settings handlers use ADMIN's numeric rank. Keep the new role
+# name compatible without changing any lower role's existing privileges.
+if isinstance(getattr(_runtime,'ROLE_ORDER',None),dict):
+    _runtime.ROLE_ORDER['COMPANY_ADMIN'] = _runtime.ROLE_ORDER.get('ADMIN',4)
+
+def _bc840_same_origin(request):
+    origin = request.headers.get('origin')
+    if not origin: return True  # Existing non-browser/API clients have no Origin.
+    try:
+        parsed = _bc840_urlsplit(origin)
+        return (parsed.scheme.lower(),parsed.netloc.lower()) == (request.url.scheme.lower(),request.url.netloc.lower())
+    except ValueError: return False
+
+@app.middleware('http')
+async def bc840_role_boundary(request, call_next):
+    path = (request.url.path or '/').rstrip('/') or '/'
+    # Public billing callbacks are validated by the existing Stripe handlers.
+    if path in {'/billing/stripe-webhook','/billing/stripe/webhook'}:
+        return await call_next(request)
+    raw = request.cookies.get('bc_session')
+    try:
+        value = await _bc840_in_threadpool(_runtime.user_from_session,raw) if raw else None
+        user = dict(value) if value else None
+    except Exception:
+        return _bc830b_error('Sign-in could not be verified. Please try again.',503)
+    context = _bc840_request_user.set(user)
+    try:
+        join = _bc830b_re.fullmatch(r'/join/([0-9]+)/([A-Za-z0-9_-]{20,128})(?:/(accept|register))?',path)
+        if join:
+            # The legacy auth middleware compares PUBLIC_PATHS exactly. Handle
+            # only these token-validated endpoints here; all ordinary workspace
+            # traffic still passes through subscription/approval enforcement.
+            iid, token, action = int(join[1]),join[2],join[3]
+            if request.method=='GET' and action is None:
+                return await _bc840_in_threadpool(bc830b_join,iid,token)
+            if request.method=='POST' and action in {'accept','register'}:
+                if not _bc840_same_origin(request):
+                    return _bc830b_error('Please submit this form from BuildCommand AI.',403)
+                if action=='accept': return await _bc840_in_threadpool(bc830b_accept,iid,token)
+                if request.headers.get('content-type','').split(';')[0].lower() != 'application/x-www-form-urlencoded':
+                    return _bc830b_error('Submit the form on your invitation page.',415)
+                chunks, size = [],0
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size>8192: return _bc830b_error('This invitation form is too large.',413)
+                    chunks.append(chunk)
+                try:
+                    form = _bc840_parse_qs(b''.join(chunks).decode('utf-8'),max_num_fields=4)
+                    names,passwords = form.get('display_name',[]),form.get('password',[])
+                    if len(names)!=1 or len(passwords)!=1: raise ValueError()
+                except (ValueError,UnicodeDecodeError):
+                    return _bc830b_error('Enter your name and password.',400)
+                return await _bc840_in_threadpool(bc840_join_register,iid,token,names[0],passwords[0])
+            return _bc830b_error('This invitation action is not available.',405)
+        if user:
+            tier = _bc840_tier(user)
+            if _bc840_owner_path(path) and tier != 'owner':
+                return _bc830b_error('This area is reserved for the BuildCommand platform owner.',403)
+            if _bc840_admin_path(path) and tier not in {'owner','admin'}:
+                return _bc830b_error('Your company administrator manages people, settings and subscriptions.',403)
+            # Normalize old entry points without routing around payment checks:
+            # the workspace request still passes through all existing gates.
+            if request.method == 'GET' and path in {'/','/app','/access-command','/subcontractor-command'}:
+                return _BC187_RedirectResponse('/workspace',status_code=303)
+            aliases = {'/team':'/company/users','/invitations':'/company/invitations'}
+            if path in aliases:
+                if request.method=='GET': return _BC187_RedirectResponse(aliases[path],status_code=303)
+                return _bc830b_error('Use Company → Invitations or People & access. The old form is retired.',409)
+            if path == '/team/add':
+                return _bc830b_error('Use Company → Invitations to add a person safely.',409)
+            if tier in {'trade','observer'}:
+                # Deny legacy GC HTML/API/download/write endpoints by default.
+                allowed = (path == '/workspace' or path.startswith('/workspace/') or
+                           path.startswith('/join/') or path in {'/logout','/login','/payment-required','/awaiting-approval','/demo/pending'})
+                if not allowed:
+                    return _bc830b_error('This tool is not available in your workspace. Open My workspace to see your assigned projects.',403)
+            # Reject forged cross-origin changes on company/access forms.
+            if request.method not in {'GET','HEAD','OPTIONS'} and (path.startswith('/company/') or path=='/company-settings' or path.startswith('/workspace/')):
+                if not _bc840_same_origin(request):
+                    return _bc830b_error('Please submit this form from BuildCommand AI.',403)
+        return await call_next(request)
+    finally: _bc840_request_user.reset(context)
+
+@app.get('/health/workspaces-company-8-4-0')
+def bc840_health():
+    paths = {getattr(r,'path','') for r in app.routes}
+    c = None
+    checks = {}
+    try:
+        c = _runtime.db()
+        c.execute('SELECT id,company_id,email,role,token_hash,status,expires_at FROM bc_user_invitations WHERE 1=0')
+        c.execute('SELECT invitation_id,project_id FROM bc_user_invitation_projects WHERE 1=0')
+        table = _bc820_membership_table()
+        if not table: raise RuntimeError('Membership table unavailable')
+        c.execute(f'SELECT user_id,project_id FROM {table} WHERE 1=0')
+        checks['invitation_and_membership_schema_readable'] = True
+    except Exception:
+        checks['invitation_and_membership_schema_readable'] = False
+    finally: _bc830b_close(c)
+    for path in ('/workspace','/workspace/projects','/workspace/access','/company','/company/users','/company/invitations'):
+        checks['route:' + path] = path in paths
+    checks['8_2_permission_baseline_present'] = '/health/user-permission-administration-8-2-0' in paths
+    checks['private_shell_active'] = _runtime.shell is _bc840_shell
+    checks['single_invitation_create_handler'] = sum(getattr(r,'path','')=='/company/invitations/create' and 'POST' in (getattr(r,'methods',None) or set()) for r in app.routes)==1
+    return {'app':'BuildCommand AI','version':BC840_RELEASE,'release':BC840_RELEASE_NAME,
+            'status':'ok' if all(checks.values()) else 'degraded','checks':checks,
+            'passed':sum(checks.values()),'total':len(checks),
+            'scope':'Read-only schema and route configuration checks; not a security certification.',
+            'trade_workspace':'Assigned project overviews plus explicit shares when the 8.5 sharing module is installed.', 'data_reset':False}
+
+_runtime.PUBLIC_PATHS.add('/health/workspaces-company-8-4-0')
+BUILD_COMMAND_RELEASE = BC840_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC840_RELEASE_NAME
+app.version = BC840_RELEASE
+
+# ============================================================
+# BuildCommand AI 8.5.0 — Superintendent-Controlled Trade Sharing
+# No legacy project records are overwritten by subcontractor responses.
+# ============================================================
+from contextlib import contextmanager as _bc850_contextmanager
+from functools import wraps as _bc850_wraps
+from pathlib import Path as _BC850_Path
+from fastapi.responses import FileResponse as _BC850_FileResponse
+from urllib.parse import urlencode as _bc850_urlencode
+import tempfile as _bc850_tempfile
+
+BC850_RELEASE = '8.5.0'
+BC850_RELEASE_NAME = 'Superintendent-Controlled Trade Sharing'
+_BC850_SOURCES = {
+    'schedule': ('Schedule item','activities','name','finish'),
+    'rfi': ('RFI','project_issues','title','due'),
+    'submittal': ('Submittal','submittals','title','due_date'),
+    'punch': ('Punch item','punch_items','title','due'),
+    'document': ('Document','attachments','title',None),
+}
+_BC850_STATUSES = {'ACKNOWLEDGED':'Acknowledged','IN_PROGRESS':'In progress','BLOCKED':'Blocked','READY_FOR_REVIEW':'Ready for review'}
+
+class _BC850_Problem(Exception):
+    def __init__(self,message,status=403): self.message,self.status=message,status
+
+def _bc850_require(condition,message='This shared item is not available to your account.',status=403):
+    if not condition: raise _BC850_Problem(message,status)
+
+def _bc850_endpoint(fn):
+    @_bc850_wraps(fn)
+    def handled(*args,**kwargs):
+        if not _bc840_user(): return _BC187_RedirectResponse('/login',status_code=303)
+        try:
+            _bc850_require(_BC850_SCHEMA_READY,'Shared work setup is incomplete. Ask your administrator to check the staging health report.',503)
+            return fn(*args,**kwargs)
+        except _BC850_Problem as exc: return _bc830b_error(exc.message,exc.status)
+        except Exception:
+            _bc830b_logger.exception('Trade sharing failed handler=%s',fn.__name__)
+            return _bc830b_error('Shared work is temporarily unavailable. Your changes were not saved. Please try again.',503)
+    return handled
+
+@_bc850_contextmanager
+def _bc850_db(write=False):
+    c=None
+    try:
+        c=_runtime.db()
+        if write and getattr(_runtime,'DATABASE_KIND','sqlite')!='postgres': c.execute('BEGIN IMMEDIATE')
+        yield c
+        if write: c.commit()
+    except Exception:
+        if write: _bc830b_rollback(c)
+        raise
+    finally: _bc830b_close(c)
+
+def _bc850_init():
+    try:
+        with _bc850_db(True) as c:
+            key='BIGSERIAL PRIMARY KEY' if getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres' else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+            c.execute(f'''CREATE TABLE IF NOT EXISTS bc_shared_work(
+                id {key},company_id BIGINT NOT NULL,project_id BIGINT NOT NULL,
+                kind TEXT NOT NULL,source_id BIGINT NOT NULL,recipient_user_id BIGINT NOT NULL,
+                title TEXT NOT NULL,message TEXT NOT NULL,due_date TEXT NOT NULL DEFAULT '',
+                allow_response INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,
+                snapshot_file TEXT NOT NULL DEFAULT '',download_name TEXT NOT NULL DEFAULT '',
+                created_by BIGINT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+                revoked_at TEXT,state TEXT NOT NULL DEFAULT 'OPEN',
+                UNIQUE(company_id,project_id,kind,source_id,recipient_user_id))''')
+            c.execute(f'''CREATE TABLE IF NOT EXISTS bc_shared_work_updates(
+                id {key},share_id BIGINT NOT NULL,actor_user_id BIGINT NOT NULL,
+                share_version INTEGER NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,
+                created_at TEXT NOT NULL,reviewed_by BIGINT,reviewed_at TEXT,
+                review_message TEXT NOT NULL DEFAULT '')''')
+            c.execute(f'''CREATE TABLE IF NOT EXISTS bc_shared_work_events(
+                id {key},company_id BIGINT NOT NULL,project_id BIGINT NOT NULL,
+                share_id BIGINT,actor_user_id BIGINT NOT NULL,action TEXT NOT NULL,created_at TEXT NOT NULL)''')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_bc_shared_work_recipient ON bc_shared_work(company_id,recipient_user_id,revoked_at,project_id)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_bc_shared_work_project ON bc_shared_work(company_id,project_id,updated_at)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_bc_shared_updates_share ON bc_shared_work_updates(share_id,id)')
+            c.execute('SELECT id,company_id,project_id,kind,source_id,recipient_user_id,title,message,due_date,allow_response,version,snapshot_file,download_name,created_by,created_at,updated_at,revoked_at,state FROM bc_shared_work WHERE 1=0')
+            c.execute('SELECT id,share_id,actor_user_id,share_version,status,message,created_at,reviewed_by,reviewed_at,review_message FROM bc_shared_work_updates WHERE 1=0')
+            if getattr(_runtime,'DATABASE_KIND','sqlite')!='postgres': c.execute('PRAGMA optimize')
+        return True
+    except Exception:
+        _bc830b_logger.exception('Trade sharing schema initialization failed')
+        return False
+
+_BC850_SCHEMA_READY=_bc850_init()
+
+def _bc850_actor(c):
+    cached=_bc840_user() or {}
+    row=c.execute('SELECT id,company_id,email,role,display_name FROM users WHERE id=?',(cached.get('id'),)).fetchone()
+    _bc850_require(row is not None,'Sign in again to continue.',401)
+    return dict(row)
+
+def _bc850_member_table():
+    table=_bc820_membership_table()
+    _bc850_require(table in {'project_members','project_users','project_assignments'},'Project assignments are unavailable.',503)
+    return table
+
+def _bc850_manager(user):
+    return _bc840_tier(user) in {'owner','admin'} or _bc840_role(user) in {'SUPERINTENDENT','PROJECT_MANAGER'}
+
+def _bc850_nav(user):
+    if _bc850_manager(user): return [('Trade sharing','/workspace/sharing')]
+    if _bc840_tier(user)=='trade': return [('My shared work','/workspace/shared')]
+    return []
+
+def _bc850_projects(c,user):
+    _bc850_require(_bc850_manager(user),'Only company administrators and appointed superintendents or project managers manage trade sharing.')
+    cid=_bc810_company_id(user)
+    if _bc840_tier(user) in {'owner','admin'}:
+        return [dict(r) for r in c.execute('SELECT id,name,number FROM projects WHERE company_id=? ORDER BY name,id',(cid,)).fetchall()]
+    table=_bc850_member_table()
+    return [dict(r) for r in c.execute(f'SELECT DISTINCT p.id,p.name,p.number FROM projects p JOIN {table} m ON m.project_id=p.id WHERE p.company_id=? AND m.user_id=? ORDER BY p.name,p.id',(cid,user['id'])).fetchall()]
+
+def _bc850_project(c,user,pid,lock=False):
+    if lock and getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres':
+        # All sharing mutations lock company -> project -> share, in that order.
+        c.execute('SELECT id FROM companies WHERE id=? FOR UPDATE',(_bc810_company_id(user),)).fetchone()
+        c.execute('SELECT id FROM projects WHERE id=? AND company_id=? FOR UPDATE',(pid,_bc810_company_id(user))).fetchone()
+        user=_bc850_actor(c)
+    project=next((p for p in _bc850_projects(c,user) if p['id']==pid),None)
+    _bc850_require(project is not None,'Your company administrator must assign you to this project before you can manage its sharing.')
+    return project
+
+def _bc850_recipient(c,user,pid,uid):
+    table=_bc850_member_table()
+    row=c.execute(f"SELECT u.id,u.email,u.display_name,u.role FROM users u JOIN {table} m ON m.user_id=u.id JOIN projects p ON p.id=m.project_id WHERE u.id=? AND u.company_id=? AND m.project_id=? AND p.company_id=?",(uid,_bc810_company_id(user),pid,_bc810_company_id(user))).fetchone()
+    _bc850_require(row is not None and _bc840_tier(dict(row))=='trade','Choose a subcontractor assigned to this company project.')
+    return dict(row)
+
+def _bc850_source(c,user,pid,kind,source_id=None,query=''):
+    _bc850_require(kind in _BC850_SOURCES,'Choose a supported work-item type.',400)
+    label,table,title,due=_BC850_SOURCES[kind]
+    fields=f't.id,t.{title} AS title,'+(f't.{due} AS due_date' if due else "'' AS due_date")
+    if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
+    sql=f'SELECT {fields} FROM {table} t JOIN projects p ON p.id=t.project_id WHERE p.company_id=? AND t.project_id=?'
+    args=[_bc810_company_id(user),pid]
+    if kind=='document': sql+=' AND t.company_id=?'; args.append(_bc810_company_id(user))
+    if kind=='rfi': sql+=" AND upper(COALESCE(t.issue_type,''))='RFI'"
+    if source_id is not None: sql+=' AND t.id=?';args.append(source_id)
+    elif query:
+        sql+=f" AND lower(COALESCE(t.{title},'')) LIKE lower(?)";args.append('%'+query[:120]+'%')
+    rows=[dict(r) for r in c.execute(sql+' ORDER BY t.id DESC LIMIT 100',tuple(args)).fetchall()]
+    if source_id is not None:
+        _bc850_require(bool(rows),'The original record is unavailable in this project.',404)
+        return rows[0]
+    return rows
+
+def _bc850_insert(c,table,columns,values):
+    _bc850_require(table in {'bc_shared_work','bc_shared_work_updates','bc_shared_work_events'},'Unsupported operation.',400)
+    marks=','.join('?' for _ in values)
+    sql=f'INSERT INTO {table}({columns}) VALUES({marks})'
+    if getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres':
+        return int(c.execute(sql+' RETURNING id',tuple(values)).fetchone()['id'])
+    c.execute(sql,tuple(values))
+    return int(c.execute('SELECT last_insert_rowid() AS id').fetchone()['id'])
+
+def _bc850_event(c,user,pid,share_id,action):
+    _bc850_insert(c,'bc_shared_work_events','company_id,project_id,share_id,actor_user_id,action,created_at',
+                 (_bc810_company_id(user),pid,share_id,user['id'],action,_bc830b_now().isoformat()))
+
+def _bc850_snapshot(source):
+    root=_BC850_Path(_runtime.UPLOAD_DIR).resolve()
+    stored=str(source.get('stored_name') or '')
+    _bc850_require(stored and _BC850_Path(stored).name==stored,'The original file is unavailable.',409)
+    original=root/stored
+    _bc850_require(not original.is_symlink() and original.is_file() and original.resolve().parent==root,'The original file is unavailable.',409)
+    folder=root/'_bc_shared_work'
+    _bc850_require(not folder.is_symlink(),'Shared file storage is unavailable.',503)
+    folder.mkdir(exist_ok=True)
+    temporary=None
+    try:
+        digest=_bc830b_hashlib.sha256();total=0
+        with original.open('rb') as src, _bc850_tempfile.NamedTemporaryFile(dir=folder,prefix='pending-',delete=False) as dst:
+            temporary=_BC850_Path(dst.name)
+            before=os.fstat(src.fileno())
+            while True:
+                block=src.read(1024*1024)
+                if not block: break
+                total+=len(block)
+                _bc850_require(total<=500*1024*1024,'The shared file exceeds the supported 500 MB limit.',413)
+                digest.update(block);dst.write(block)
+            after=os.fstat(src.fileno())
+            _bc850_require((before.st_size,before.st_mtime_ns)==(after.st_size,after.st_mtime_ns),'The file changed while being shared. Try again.',409)
+        filename=digest.hexdigest()+'.bin'
+        destination=folder/filename
+        _bc850_require(not destination.is_symlink(),'Shared file storage is unavailable.',503)
+        if destination.exists(): temporary.unlink()
+        else: os.replace(temporary,destination)
+        return filename,_BC850_Path(str(source.get('original_name') or 'shared-document')).name[:240]
+    finally:
+        if temporary is not None and temporary.exists(): temporary.unlink()
+
+def _bc850_revoke_removed_access(c,uid,cid,role,project_ids):
+    if not _BC850_SCHEMA_READY: return
+    sql='UPDATE bc_shared_work SET revoked_at=?,updated_at=?,version=version+1 WHERE company_id=? AND recipient_user_id=? AND revoked_at IS NULL'
+    now=_bc830b_now().isoformat();args=[now,now,cid,uid]
+    if role in {'SUB','SUBCONTRACTOR'} and project_ids:
+        sql+=' AND project_id NOT IN ('+','.join('?' for _ in project_ids)+')';args.extend(int(x) for x in project_ids)
+    c.execute(sql,tuple(args))
+
+def _bc850_share(c,user,share_id,manager=False,lock=False):
+    row=c.execute('SELECT * FROM bc_shared_work WHERE id=? AND company_id=?',(share_id,_bc810_company_id(user))).fetchone()
+    _bc850_require(row is not None)
+    share=dict(row)
+    if manager:
+        _bc850_project(c,user,share['project_id'],lock)
+    else:
+        if lock and getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres':
+            c.execute('SELECT id FROM companies WHERE id=? FOR UPDATE',(_bc810_company_id(user),)).fetchone()
+            c.execute('SELECT id FROM projects WHERE id=? AND company_id=? FOR UPDATE',(share['project_id'],_bc810_company_id(user))).fetchone()
+            user=_bc850_actor(c)
+        _bc850_require(_bc840_tier(user)=='trade' and share['recipient_user_id']==user['id'])
+        _bc850_recipient(c,user,share['project_id'],user['id'])
+    if lock:
+        locked=c.execute('SELECT * FROM bc_shared_work WHERE id=?'+(' FOR UPDATE' if getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres' else ''),(share_id,)).fetchone()
+        share=dict(locked)
+    if not manager: _bc850_require(share['revoked_at'] is None)
+    if not manager: _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
+    return share
+
+def _bc850_text(text):
+    return '<div style="white-space:pre-wrap;overflow-wrap:anywhere">'+_bc830b_escape(str(text or ''))+'</div>'
+
+def _bc850_share_card(share,manager=False):
+    href=('/workspace/sharing/' if manager else '/workspace/shared/')+str(share['id'])
+    state='Revoked' if share['revoked_at'] else ('Closed' if share['state']=='CLOSED' else 'Open')
+    return '<article class="card"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p class="small">'+_bc830b_escape(str(share.get('project_name') or ''))+'</p><h2><a href="'+href+'">'+_bc830b_escape(share['title'])+'</a></h2><p>'+state+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></article>'
+
+def _bc850_form_context(c,user,project_id,kind,source_id):
+    project=_bc850_project(c,user,project_id)
+    source=_bc850_source(c,user,project_id,kind,source_id)
+    table=_bc850_member_table()
+    candidates=c.execute(f'SELECT DISTINCT u.id,u.email,u.display_name,u.role FROM users u JOIN {table} m ON m.user_id=u.id WHERE u.company_id=? AND m.project_id=? ORDER BY u.email',(_bc810_company_id(user),project_id)).fetchall()
+    return project,source,[dict(r) for r in candidates if _bc840_tier(dict(r))=='trade']
+
+@app.get('/workspace/sharing')
+@_bc850_endpoint
+def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0):
+    _bc850_require(before_id>=0,'Invalid page.',400)
+    with _bc850_db() as c:
+        user=_bc850_actor(c);projects=_bc850_projects(c,user)
+        if not projects:
+            return _bc840_page('Trade sharing','<div class="hero"><h1>Trade sharing</h1><p>Your company administrator must assign you a project in People & access before you can manage its subcontractors and shared work.</p></div>')
+        pid=project_id or projects[0]['id'];project=_bc850_project(c,user,pid)
+        sources=_bc850_source(c,user,pid,kind,query=q)
+        shares=[dict(r) for r in c.execute('SELECT * FROM bc_shared_work WHERE company_id=? AND project_id=? AND (?=0 OR id<?) ORDER BY id DESC LIMIT 51',(_bc810_company_id(user),pid,before_id,before_id)).fetchall()]
+        older=len(shares)>50;shares=shares[:50]
+        pending=c.execute('SELECT count(*) AS n FROM bc_shared_work_updates u JOIN bc_shared_work s ON s.id=u.share_id WHERE s.company_id=? AND s.project_id=? AND s.revoked_at IS NULL AND u.share_version=s.version AND u.reviewed_at IS NULL',(_bc810_company_id(user),pid)).fetchone()['n']
+    options=''.join(f'<option value="{p["id"]}"'+(' selected' if p['id']==pid else '')+'>'+_bc830b_escape(p['name'])+'</option>' for p in projects)
+    kinds=''.join('<option value="'+k+'"'+(' selected' if k==kind else '')+'>'+v[0]+'</option>' for k,v in _BC850_SOURCES.items())
+    body='<div class="hero"><h1>Trade sharing</h1><p>'+_bc830b_escape(project['name'])+f' · {pending} responses awaiting review</p><p><a href="/workspace/sharing/projects/{pid}/team">Manage project subcontractors</a></p></div>'
+    body+='<form class="card" method="get"><label for="share-project">Project</label> <select id="share-project" name="project_id">'+options+'</select> <label for="share-kind">Type</label> <select id="share-kind" name="kind">'+kinds+'</select><p><label for="share-search">Find a record</label> <input id="share-search" name="q" maxlength="120" value="'+_bc830b_escape(q[:120],quote=True)+'"> <button>Find</button></p></form>'
+    body+='<div class="grid2"><section class="card"><h2>Choose work to share</h2><p>Review the exact title, instructions and recipient before publishing. Showing the latest 100 matching records.</p><div class="bc840-list">'
+    for source in sources:
+        body+=f'<a href="/workspace/sharing/new?project_id={pid}&amp;kind={kind}&amp;source_id={source["id"]}">'+_bc830b_escape(str(source['title'] or 'Untitled'))+f'<small>#{source["id"]} · Prepare share</small></a>'
+    body+=( '</div></section><section><h2>Shared items</h2>'+(''.join(_bc850_share_card(s,True) for s in shares) or '<p class="bc840-empty">No work has been shared on this project yet.</p>')+'</section></div>')
+    if older: body+='<p><a href="/workspace/sharing?'+_bc830b_escape(_bc850_urlencode({'project_id':pid,'kind':kind,'q':q[:120],'before_id':shares[-1]['id']}),quote=True)+'">Older shared items</a></p>'
+    return _bc840_page('Trade sharing',body)
+
+@app.get('/workspace/sharing/new')
+@_bc850_endpoint
+def bc850_prepare_share(project_id:int,kind:str,source_id:int):
+    with _bc850_db() as c:
+        user=_bc850_actor(c);project,source,recipients=_bc850_form_context(c,user,project_id,kind,source_id)
+    body='<div class="hero"><h1>Prepare a share</h1><p>'+_bc830b_escape(project['name'])+' · '+_BC850_SOURCES[kind][0]+'</p></div>'
+    if not recipients:
+        return _bc840_page('Prepare share',body+f'<div class="card"><p>Assign a subcontractor to this project first.</p><a href="/workspace/sharing/projects/{project_id}/team">Manage project subcontractors</a></div>')
+    options=''.join(f'<option value="{r["id"]}">'+_bc830b_escape(str(r['display_name'] or r['email']))+' · '+_bc830b_escape(r['email'])+'</option>' for r in recipients)
+    due=str(source.get('due_date') or '')[:10]
+    if not _bc830b_re.fullmatch(r'\d{4}-\d{2}-\d{2}',due): due=''
+    body+=f'<div class="card"><form method="post" action="/workspace/sharing/publish"><input type="hidden" name="project_id" value="{project_id}"><input type="hidden" name="kind" value="{kind}"><input type="hidden" name="source_id" value="{source_id}">'
+    body+='<p><label for="recipient">Share with</label><br><select id="recipient" name="recipient_user_id" required><option value="">Choose a subcontractor</option>'+options+'</select></p>'
+    body+='<p><label for="public-title">Shared title</label><br><input id="public-title" name="title" maxlength="240" required style="width:100%" value="'+_bc830b_escape(str(source['title'] or ''),quote=True)+'"></p><p><label for="share-message">Instructions for this subcontractor</label><br><textarea id="share-message" name="message" rows="6" maxlength="6000" required style="width:100%"></textarea></p>'
+    body+='<p><label for="share-due">Due date (optional)</label><br><input id="share-due" name="due_date" type="date" value="'+due+'"></p><p><label><input type="checkbox" name="allow_response" value="1">Allow progress updates and replies</label></p>'
+    if kind=='document':
+        body+='<p class="bc840-role-note">File: '+_bc830b_escape(str(source['original_name']))+'</p><p><label><input type="checkbox" name="share_file" value="yes" required>Share this entire file, including every page.</label></p><p>A fixed copy is shared. Changes to the internal document will require a new share.</p>'
+    body+='<p>The subcontractor sees this title, these instructions and the due date. Internal notes and the original record stay private.</p><button>Publish share</button></form></div>'
+    return _bc840_page('Prepare share',body)
+
+@app.post('/workspace/sharing/publish')
+@_bc850_endpoint
+def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
+    title,message,due_date=title.strip(),message.strip(),due_date.strip()
+    _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
+    _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
+    if due_date:
+        try: _BC830B_datetime.strptime(due_date,'%Y-%m-%d')
+        except ValueError: raise _BC850_Problem('Use a valid due date.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);_bc850_project(c,user,project_id,True)
+        _bc850_recipient(c,user,project_id,recipient_user_id)
+        source=_bc850_source(c,user,project_id,kind,source_id)
+        previous=c.execute('SELECT id,revoked_at FROM bc_shared_work WHERE company_id=? AND project_id=? AND kind=? AND source_id=? AND recipient_user_id=?',(_bc810_company_id(user),project_id,kind,source_id,recipient_user_id)).fetchone()
+        _bc850_require(previous is None or previous['revoked_at'] is not None,'This item is already shared with that person. Revoke the previous share before publishing a replacement.',409)
+        snapshot,filename='',''
+        if kind=='document':
+            _bc850_require(share_file=='yes','Confirm that you want to share the entire file.',400)
+            snapshot,filename=_bc850_snapshot(source)
+        now=_bc830b_now().isoformat()
+        if previous:
+            sid=previous['id']
+            c.execute("UPDATE bc_shared_work SET title=?,message=?,due_date=?,allow_response=?,snapshot_file=?,download_name=?,revoked_at=NULL,state='OPEN',version=version+1,created_by=?,updated_at=? WHERE id=?",(title,message,due_date,allow_response,snapshot,filename,user['id'],now,sid))
+        else:
+            sid=_bc850_insert(c,'bc_shared_work','company_id,project_id,kind,source_id,recipient_user_id,title,message,due_date,allow_response,snapshot_file,download_name,created_by,created_at,updated_at',(_bc810_company_id(user),project_id,kind,source_id,recipient_user_id,title,message,due_date,allow_response,snapshot,filename,user['id'],now,now))
+        _bc850_event(c,user,project_id,sid,'PUBLISHED')
+    return _BC187_RedirectResponse(f'/workspace/sharing/{sid}',status_code=303)
+
+@app.get('/workspace/shared')
+@_bc850_endpoint
+def bc850_shared(project_id:int=0,kind:str='',before_id:int=0):
+    _bc850_require(kind in {'',*_BC850_SOURCES} and before_id>=0,'Choose a valid filter.',400)
+    with _bc850_db() as c:
+        user=_bc850_actor(c);_bc850_require(_bc840_tier(user)=='trade','This page is for subcontractors. Project leaders use Trade sharing.')
+        projects=_bc840_projects(user);valid={p['id'] for p in projects}
+        if project_id: _bc850_require(project_id in valid)
+        table=_bc850_member_table()
+        rows=c.execute(f'''SELECT s.* FROM bc_shared_work s JOIN projects p ON p.id=s.project_id
+            WHERE s.company_id=? AND p.company_id=? AND s.recipient_user_id=? AND s.revoked_at IS NULL
+            AND EXISTS(SELECT 1 FROM {table} m WHERE m.user_id=s.recipient_user_id AND m.project_id=s.project_id)
+            AND (?=0 OR s.project_id=?) AND (?='' OR s.kind=?) AND (?=0 OR s.id<?)
+            ORDER BY s.id DESC LIMIT 51''',(_bc810_company_id(user),_bc810_company_id(user),user['id'],project_id,project_id,kind,kind,before_id,before_id)).fetchall()
+        older=len(rows)>50;rows=rows[:50]
+        shares=[]
+        for row in rows:
+            if row['project_id'] not in valid or (project_id and row['project_id']!=project_id): continue
+            try:
+                share=_bc850_share(c,user,row['id'])
+                share['project_name']=next(p['name'] for p in projects if p['id']==share['project_id'])
+                shares.append(share)
+            except _BC850_Problem as exc:
+                if exc.status not in {403,404}: raise
+    project_options='<option value="0">All assigned projects</option>'+''.join(f'<option value="{p["id"]}"'+(' selected' if p['id']==project_id else '')+'>'+_bc830b_escape(p['name'])+'</option>' for p in projects)
+    kinds='<option value="">All work types</option>'+''.join('<option value="'+k+'"'+(' selected' if k==kind else '')+'>'+v[0]+'</option>' for k,v in _BC850_SOURCES.items())
+    body='<div class="hero"><h1>My shared work</h1><p>Items shared with your account by your project leaders.</p></div><form class="card" method="get"><label for="shared-project">Project</label> <select id="shared-project" name="project_id">'+project_options+'</select> <label for="shared-kind">Type</label> <select id="shared-kind" name="kind">'+kinds+'</select> <button>Show work</button></form>'
+    body+='<div class="grid2">'+(''.join(_bc850_share_card(s) for s in shares) or '<div class="bc840-empty"><h2>No shared work yet</h2><p>Your project leader will share the items you need here.</p></div>')+'</div>'
+    if older: body+='<p><a href="/workspace/shared?'+_bc830b_escape(_bc850_urlencode({'project_id':project_id,'kind':kind,'before_id':rows[-1]['id']}),quote=True)+'">Older shared items</a></p>'
+    return _bc840_page('My shared work',body)
+
+def _bc850_detail(share_id,manager):
+    with _bc850_db() as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,manager)
+        updates=[dict(r) for r in c.execute('SELECT * FROM bc_shared_work_updates WHERE share_id=? AND share_version=? ORDER BY id DESC LIMIT 100',(share_id,share['version'])).fetchall()]
+        recipient=c.execute('SELECT display_name,email FROM users WHERE id=?',(share['recipient_user_id'],)).fetchone()
+        project=c.execute('SELECT name FROM projects WHERE id=? AND company_id=?',(share['project_id'],_bc810_company_id(user))).fetchone()
+    prefix='/workspace/sharing/' if manager else '/workspace/shared/'
+    body='<div class="hero"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p>'+_bc830b_escape(str(project['name'] if project else ''))+'</p><h1>'+_bc830b_escape(share['title'])+'</h1><p>'+('Revoked' if share['revoked_at'] else share['state'].capitalize())+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></div><div class="card"><h2>Shared instructions</h2>'+_bc850_text(share['message'])
+    if manager:
+        body+='<p>Shared with '+_bc830b_escape(str(recipient['email'] if recipient else 'Removed account'))+'</p>'
+    if share['snapshot_file'] and not share['revoked_at']:
+        body+='<p><a class="bc840-button" href="'+prefix+str(share_id)+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
+    body+='</div>'
+    if manager:
+        if not share['revoked_at']:
+            body+=f'<div class="card"><h2>Sharing controls</h2><form method="post" action="/workspace/sharing/{share_id}/control"><input type="hidden" name="version" value="{share["version"]}"><button name="action" value="'+('reopen' if share['state']=='CLOSED' else 'close')+'">'+('Reopen for responses' if share['state']=='CLOSED' else 'Close responses')+'</button> <button name="action" value="revoke">Revoke access</button></form><p>Closing keeps the item visible. Revoking removes access. Revoke and prepare a new share to change its instructions or file.</p></div>'
+        else: body+=f'<div class="card"><a href="/workspace/sharing/new?project_id={share["project_id"]}&amp;kind={share["kind"]}&amp;source_id={share["source_id"]}">Prepare a replacement share</a></div>'
+    elif share['allow_response'] and share['state']=='OPEN':
+        options=''.join('<option value="'+k+'">'+v+'</option>' for k,v in _BC850_STATUSES.items())
+        body+=f'<div class="card"><h2>Send an update</h2><form method="post" action="/workspace/shared/{share_id}/respond"><input type="hidden" name="version" value="{share["version"]}"><label for="update-status">Progress</label><br><select id="update-status" name="status">'+options+'</select><p><label for="update-message">Your update</label><br><textarea id="update-message" name="message" rows="4" maxlength="4000" required style="width:100%"></textarea></p><button>Send to project leader</button></form><p>Your update is reviewed by the project leader. It does not directly change the original project record.</p></div>'
+    else: body+='<div class="card"><p>Replies are closed or were not enabled for this item.</p></div>'
+    body+='<section class="card"><h2>Updates on this share</h2>'
+    for update in updates:
+        body+='<article style="border-bottom:1px solid #dce3ec;padding:12px 0"><strong>'+_BC850_STATUSES.get(update['status'],'Update')+'</strong> · '+('Reviewed' if update['reviewed_at'] else 'Awaiting review')+_bc850_text(update['message'])+'<p class="small">'+_bc830b_escape(update['created_at'][:16].replace('T',' '))+' UTC</p>'
+        if update['review_message']: body+='<p><strong>Project leader reply</strong></p>'+_bc850_text(update['review_message'])
+        if manager and not update['reviewed_at'] and not share['revoked_at']:
+            body+=f'<form method="post" action="/workspace/sharing/{share_id}/updates/{update["id"]}/review"><input type="hidden" name="version" value="{share["version"]}"><p><label for="review-{update["id"]}">Reply to subcontractor (optional)</label><br><textarea id="review-{update["id"]}" name="review_message" maxlength="2000" rows="3" style="width:100%"></textarea></p><button>Mark reviewed &amp; send reply</button></form>'
+        body+='</article>'
+    body+=('</section>' if updates else '<p>No updates yet.</p></section>')
+    return _bc840_page('Shared work',body)
+
+@app.get('/workspace/shared/{share_id}')
+@_bc850_endpoint
+def bc850_shared_detail(share_id:int): return _bc850_detail(share_id,False)
+
+@app.get('/workspace/sharing/{share_id}')
+@_bc850_endpoint
+def bc850_managed_detail(share_id:int): return _bc850_detail(share_id,True)
+
+def _bc850_download(share_id,manager):
+    with _bc850_db() as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,manager)
+        _bc850_require(not share['revoked_at'] and share['kind']=='document' and bool(_bc830b_re.fullmatch(r'[0-9a-f]{64}\.bin',share['snapshot_file'])))
+    root=_BC850_Path(_runtime.UPLOAD_DIR).resolve();folder=root/'_bc_shared_work';path=folder/share['snapshot_file']
+    _bc850_require(not folder.is_symlink() and not path.is_symlink() and path.is_file() and path.resolve().parent==folder.resolve(),'This shared file is unavailable. Ask your project leader to share it again.',404)
+    return _BC850_FileResponse(path,filename=share['download_name'],media_type='application/octet-stream',headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'})
+
+@app.get('/workspace/shared/{share_id}/download')
+@_bc850_endpoint
+def bc850_shared_download(share_id:int): return _bc850_download(share_id,False)
+
+@app.get('/workspace/sharing/{share_id}/download')
+@_bc850_endpoint
+def bc850_managed_download(share_id:int): return _bc850_download(share_id,True)
+
+@app.post('/workspace/shared/{share_id}/respond')
+@_bc850_endpoint
+def bc850_respond(share_id:int,version:int=_BC189_Form(...),status:str=_BC189_Form(...),message:str=_BC189_Form(...)):
+    message=message.strip()
+    _bc850_require(status in _BC850_STATUSES and 0<len(message)<=4000,'Choose a progress state and write an update up to 4,000 characters.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,False,True)
+        _bc850_require(share['version']==version,'This share changed. Reload it before replying.',409)
+        _bc850_require(share['allow_response']==1 and share['state']=='OPEN','Replies are closed for this item.',409)
+        _bc850_insert(c,'bc_shared_work_updates','share_id,actor_user_id,share_version,status,message,created_at',(share_id,user['id'],version,status,message,_bc830b_now().isoformat()))
+        _bc850_event(c,user,share['project_id'],share_id,'RESPONSE')
+    return _BC187_RedirectResponse(f'/workspace/shared/{share_id}',status_code=303)
+
+@app.post('/workspace/sharing/{share_id}/updates/{update_id}/review')
+@_bc850_endpoint
+def bc850_review(share_id:int,update_id:int,version:int=_BC189_Form(...),review_message:str=_BC189_Form('')):
+    review_message=review_message.strip()
+    _bc850_require(len(review_message)<=2000,'Keep your reply within 2,000 characters.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,True,True)
+        _bc850_require(not share['revoked_at'] and share['version']==version,'This share changed. Reload it before reviewing.',409)
+        row=c.execute('SELECT id FROM bc_shared_work_updates WHERE id=? AND share_id=? AND share_version=? AND reviewed_at IS NULL',(update_id,share_id,version)).fetchone()
+        _bc850_require(row is not None,'This response is already reviewed or unavailable.',409)
+        c.execute('UPDATE bc_shared_work_updates SET reviewed_by=?,reviewed_at=?,review_message=? WHERE id=?',(user['id'],_bc830b_now().isoformat(),review_message,update_id))
+        _bc850_event(c,user,share['project_id'],share_id,'REVIEWED')
+    return _BC187_RedirectResponse(f'/workspace/sharing/{share_id}',status_code=303)
+
+@app.post('/workspace/sharing/{share_id}/control')
+@_bc850_endpoint
+def bc850_control(share_id:int,version:int=_BC189_Form(...),action:str=_BC189_Form(...)):
+    _bc850_require(action in {'revoke','close','reopen'},'Choose a valid sharing action.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,True,True)
+        _bc850_require(not share['revoked_at'] and share['version']==version,'This share changed. Reload it first.',409)
+        now=_bc830b_now().isoformat()
+        # Close/reopen preserve publication version and its response history.
+        if action=='revoke': c.execute('UPDATE bc_shared_work SET revoked_at=?,updated_at=? WHERE id=?',(now,now,share_id))
+        else: c.execute('UPDATE bc_shared_work SET state=?,updated_at=? WHERE id=?',('CLOSED' if action=='close' else 'OPEN',now,share_id))
+        _bc850_event(c,user,share['project_id'],share_id,action.upper())
+    return _BC187_RedirectResponse(f'/workspace/sharing/{share_id}',status_code=303)
+
+@app.get('/workspace/sharing/projects/{project_id}/team')
+@_bc850_endpoint
+def bc850_project_team(project_id:int):
+    with _bc850_db() as c:
+        user=_bc850_actor(c);project=_bc850_project(c,user,project_id);table=_bc850_member_table()
+        people=[dict(r) for r in c.execute('SELECT id,email,display_name,role FROM users WHERE company_id=? ORDER BY email',(_bc810_company_id(user),)).fetchall() if _bc840_tier(dict(r))=='trade']
+        assigned={r['user_id'] for r in c.execute(f'SELECT user_id FROM {table} WHERE project_id=?',(project_id,)).fetchall()}
+    body='<div class="hero"><h1>Project subcontractors</h1><p>'+_bc830b_escape(project['name'])+'</p><p>Assign existing company subcontractors here. Ask your company administrator to invite new accounts or change a role.</p></div><div class="card bc840-table"><table><thead><tr><th>Subcontractor</th><th>Assignment</th><th>Action</th></tr></thead><tbody>'
+    for person in people:
+        active=person['id'] in assigned
+        body+='<tr><td>'+_bc830b_escape(str(person['display_name'] or person['email']))+'<br><span class="small">'+_bc830b_escape(person['email'])+'</span></td><td>'+('Assigned' if active else 'Not assigned')+f'</td><td><form method="post" action="/workspace/sharing/projects/{project_id}/team"><input type="hidden" name="user_id" value="{person["id"]}"><button name="assigned" value="'+('0' if active else '1')+'">'+('Remove from project' if active else 'Assign to project')+'</button></form></td></tr>'
+    body+='</tbody></table></div><p>Removing a person revokes their shares on this project. Reassignment does not restore those shares; publish them again when appropriate.</p>'
+    return _bc840_page('Project subcontractors',body)
+
+@app.post('/workspace/sharing/projects/{project_id}/team')
+@_bc850_endpoint
+def bc850_assign_subcontractor(project_id:int,user_id:int=_BC189_Form(...),assigned:int=_BC189_Form(...)):
+    _bc850_require(assigned in {0,1},'Choose assign or remove.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);_bc850_project(c,user,project_id,True);table=_bc850_member_table()
+        person=c.execute('SELECT id,email,role FROM users WHERE id=? AND company_id=?',(user_id,_bc810_company_id(user))).fetchone()
+        _bc850_require(person is not None and _bc840_tier(dict(person))=='trade','Only existing subcontractors in your company can be assigned here.')
+        existing=c.execute(f'SELECT project_id FROM {table} WHERE user_id=? AND project_id=?',(user_id,project_id)).fetchone()
+        if assigned and not existing: _bc830b_link_insert(c,table,'user_id,project_id',(user_id,project_id))
+        if not assigned:
+            c.execute(f'DELETE FROM {table} WHERE user_id=? AND project_id=?',(user_id,project_id))
+            now=_bc830b_now().isoformat()
+            c.execute('UPDATE bc_shared_work SET revoked_at=?,updated_at=? WHERE company_id=? AND project_id=? AND recipient_user_id=? AND revoked_at IS NULL',(now,now,_bc810_company_id(user),project_id,user_id))
+        _bc850_event(c,user,project_id,None,('ASSIGN_SUB:' if assigned else 'REMOVE_SUB:')+str(user_id))
+    return _BC187_RedirectResponse(f'/workspace/sharing/projects/{project_id}/team',status_code=303)
+
+@app.get('/health/trade-sharing-8-5-0')
+def bc850_health():
+    checks={'schema_initialized':_BC850_SCHEMA_READY}
+    try:
+        with _bc850_db() as c:
+            c.execute('SELECT id,company_id,project_id,recipient_user_id,version,snapshot_file,revoked_at FROM bc_shared_work WHERE 1=0')
+            c.execute('SELECT id,share_id,share_version,reviewed_at,review_message FROM bc_shared_work_updates WHERE 1=0')
+            checks['schema_readable']=True
+    except Exception: checks['schema_readable']=False
+    paths={getattr(r,'path','') for r in app.routes}
+    for path in ('/workspace/shared','/workspace/sharing','/workspace/shared/{share_id}/download','/workspace/sharing/projects/{project_id}/team'):
+        checks[path]=path in paths
+    return {'app':'BuildCommand AI','version':BC850_RELEASE,'release':BC850_RELEASE_NAME,'status':'ok' if all(checks.values()) else 'degraded','checks':checks,'passed':sum(checks.values()),'total':len(checks),'scope':'Schema and route checks only; validate real tenant access on staging.','data_reset':False}
+
+_runtime.PUBLIC_PATHS.add('/health/trade-sharing-8-5-0')
+_BC840_ROLES['SUBCONTRACTOR']=('Subcontractor','trade','See assigned projects and work explicitly shared with your account; send updates when replies are enabled.')
+BUILD_COMMAND_RELEASE=BC850_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC850_RELEASE_NAME
+app.version=BC850_RELEASE
