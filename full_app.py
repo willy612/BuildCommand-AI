@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 8.4.0 — staging candidate from uploaded 8.3.0B / 8.2.
+"""BuildCommand AI 8.5.0 — Trade Sharing, based on the working 8.4.0 app.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -59559,6 +59559,7 @@ def bc830b_invitations_page():
           <select id="invite-role" name="role" required>{role_options}</select>
           <h3>Project Access</h3>{project_options or '<p class="muted">No projects available.</p>'}
           <p class="muted">Project selection limits subcontractors and observers. Internal staff keep existing company-project access.</p>
+          <p class="muted">Assign projects to authorize a superintendent or project manager to manage trade sharing.</p>
           <button type="submit" style="margin-top:14px">Create Secure Invitation</button>
         </form>
       </div>
@@ -59992,6 +59993,7 @@ def _bc840_shell(title, body, *args, **kwargs):
     if tier in {"owner","admin"}: nav.append(("Company","/company"))
     if tier == "owner": nav.append(("Owner console","/owner"))
     if tier in {"trade","observer"}: nav.append(("My access","/workspace/access"))
+    if callable(globals().get('_bc850_nav')): nav += _bc850_nav(user)
     logo = globals().get("_BC706_LOGO_DATA", "")
     brand = f'<img src="{esc(logo,quote=True)}" alt="BuildCommand AI">' if logo else 'BuildCommand AI'
     try:
@@ -60017,7 +60019,7 @@ def _bc840_shell(title, body, *args, **kwargs):
             '<form class="bc840-logout" method="post" action="/logout"><button>Sign out</button></form></div>'
             '<nav class="bc840-nav" aria-label="Main navigation">' + ''.join(f'<a href="{u}">{t}</a>' for t,u in nav) + selector +
             '</nav></header><main id="main-content" class="bc840-main">' + tabs + body + '</main>'
-            '<footer class="bc840-footer">Built By Willy LaHood © 2026 · BuildCommand AI ' + BC840_RELEASE + '</footer></body></html>')
+            '<footer class="bc840-footer">Built By Willy LaHood © 2026 · BuildCommand AI ' + str(globals().get('BUILD_COMMAND_RELEASE',BC840_RELEASE)) + '</footer></body></html>')
 
 _BC840_PREVIOUS_SHELL = _runtime.shell
 _runtime.shell = _bc840_shell
@@ -60052,6 +60054,7 @@ def bc840_workspace():
         body += '<p>Choose a project, then open the field tools you need for today.</p><a class="bc840-button" href="/workspace/tools">Open field tools</a>'
     else:
         body += '<p>Only projects assigned to your account appear here. Company administration and internal GC tools are not available in this workspace.</p>'
+        if tier == 'trade': body += '<p><a class="bc840-button" href="/workspace/shared">Open my shared work</a></p>'
     body += '</div><h2>Your projects</h2>' + _bc840_project_cards(projects)
     return _bc840_page('My workspace', body)
 
@@ -60071,7 +60074,7 @@ def bc840_project(project_id:int):
     body += '<p>Status: ' + _bc830b_escape(str(project.get('status') or 'Not set')) + '</p></div>'
     if _bc840_tier(user) in {'trade','observer'}:
         body += '<div class="card"><h2>Your project access</h2><p>You have access to this project overview.</p>'
-        body += '<p>Trade-specific schedules, RFIs, submittals and shared documents are not exposed here yet. Those require separate record-level sharing rules before they can be enabled safely.</p></div>'
+        body += (f'<p><a class="bc840-button" href="/workspace/shared?project_id={project_id}">Open shared work</a></p><p>Your project leader chooses which items and files to share with you.</p>' if _bc840_tier(user)=='trade' else '<p>This observer role has project-overview access only.</p>') + '</div>'
     else:
         body += f'<div class="card"><h2>Work on this project</h2><form method="post" action="/workspace/select-project"><input type="hidden" name="project_id" value="{project_id}"><button>Set as current project</button></form><p>After selecting the project, use Field tools to open schedules, reports, documents and command.</p></div>'
     return _bc840_page('Project overview', body)
@@ -60175,7 +60178,7 @@ def bc840_company_users():
         labels = ', '.join(names[p] for p in sorted(memberships.get(user['id'],set())) if p in names)
         scope = labels or ('Company projects (existing staff access)' if _bc840_tier(user) in {'owner','admin','lead','staff'} else 'No projects assigned')
         rows += '<tr><td><strong>' + _bc830b_escape(str(user.get('display_name') or user['email'])) + '</strong><br><span class="small">' + _bc830b_escape(str(user['email'])) + '</span></td><td>' + _bc830b_escape(_bc840_role_label(_bc840_role(user))) + '</td><td>' + _bc830b_escape(scope) + f'</td><td><a href="/company/users/{user["id"]}">Edit access</a></td></tr>'
-    body = '<div class="hero"><h1>People & access</h1><p>Assign a role, then choose projects for subcontractors and observers. Existing internal staff retain their own-company project access.</p><a class="bc840-button" href="/company/invitations">Invite someone</a></div>'
+    body = '<div class="hero"><h1>People & access</h1><p>Assign a role and projects. Project assignments authorize superintendents and PMs to manage trade sharing, and limit subcontractor and observer access. Existing internal construction-tool access remains unchanged.</p><a class="bc840-button" href="/company/invitations">Invite someone</a></div>'
     body += '<div class="card bc840-table"><table><thead><tr><th>Person</th><th>Role</th><th>Projects</th><th>Access</th></tr></thead><tbody>' + (rows or '<tr><td colspan="4">No people found.</td></tr>') + '</tbody></table></div>'
     return _bc840_page('Users & Access',body)
 
@@ -60192,7 +60195,7 @@ def bc840_manage_user(user_id:int):
     boxes = ''.join(f'<label style="display:block;margin:12px 0"><input type="checkbox" name="project_ids" value="{p["id"]}"' + (' checked' if str(p['id']) in assigned else '') + '>' + _bc830b_escape(str(p['name'])) + '</label>' for p in projects)
     body = '<div class="hero"><h1>' + _bc830b_escape(str(target.get('display_name') or target['email'])) + '</h1><p>' + _bc830b_escape(str(target['email'])) + '</p></div>'
     body += f'<div class="grid2"><div class="card"><form method="post" action="/company/users/{user_id}/access"><label for="access-role">Role</label><select id="access-role" name="role" required>' + _bc840_role_options(target['role']) + '</select><h2>Assigned projects</h2>' + (boxes or '<p>No company projects yet.</p>') + '<button>Save access</button></form></div>'
-    body += '<div class="card"><h2>What these levels mean</h2><p><strong>Admin:</strong> company people, settings and subscription.</p><p><strong>Superintendent / project manager:</strong> internal project and field work, without company account controls.</p><p><strong>Subcontractor / observer:</strong> assigned project overviews only. Internal GC pages are blocked.</p><p class="bc840-role-note">Project selection restricts external roles. It does not narrow the established own-company access of internal staff in this release.</p></div></div>'
+    body += '<div class="card"><h2>What these levels mean</h2><p><strong>Admin:</strong> company people, settings and subscription.</p><p><strong>Superintendent / project manager:</strong> assign projects here to authorize that person to manage trade sharing on those projects.</p><p><strong>Subcontractor:</strong> assigned project overviews and items explicitly shared with that account. Observers have overview access only.</p><p class="bc840-role-note">Project selection limits external access and authorizes project leaders to share work. Existing internal construction-tool access remains unchanged.</p></div></div>'
     return _bc840_page('Manage User Access',body)
 
 def _bc840_protected_account(user):
@@ -60317,6 +60320,8 @@ def bc840_save_access(user_id:int, role:str=_BC189_Form(...), project_ids:list[s
         c.execute('UPDATE users SET role=? WHERE id=? AND company_id=?',(role,user_id,cid))
         c.execute(f'DELETE FROM {table} WHERE user_id=?',(user_id,))
         for pid in sorted(requested): _bc830b_link_insert(c,table,'user_id,project_id',(user_id,int(pid)))
+        if callable(globals().get('_bc850_revoke_removed_access')):
+            _bc850_revoke_removed_access(c,user_id,cid,role,requested)
         c.commit()
     except Exception:
         _bc830b_rollback(c)
@@ -60331,7 +60336,7 @@ def bc840_access_matrix():
     if denied: return denied
     rows = ''.join('<tr><td>' + _bc830b_escape(label) + '</td><td>' + _bc830b_escape(description) + '</td></tr>' for role,(label,tier,description) in _BC840_ROLES.items() if role in _BC820_ASSIGNABLE_ROLES)
     body = '<div class="hero"><h1>Role guide</h1><p>People get the workspace for their assigned role. Company and platform ownership remain separate.</p></div><div class="card bc840-table"><table><thead><tr><th>Role</th><th>Workspace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
-    body += '<div class="card"><h2>Current boundary</h2><p>Internal staff retain existing own-company project access. Subcontractors and observers require explicit project assignment and can view project overviews only. Trade-level sharing of documents, schedules, RFIs and submittals is a later step—not granted by this role guide.</p></div>'
+    body += '<div class="card"><h2>Project sharing</h2><p>Administrators appoint superintendents and project managers by assigning projects. Those leaders can assign existing subcontractors to their projects and share individual work items. Subcontractors see only their assigned overviews and explicit shares. Observers keep overview-only access. Internal construction-tool access remains unchanged.</p></div>'
     return _bc840_page('Access Matrix',body)
 
 def bc840_company_settings():
@@ -60501,9 +60506,496 @@ def bc840_health():
             'status':'ok' if all(checks.values()) else 'degraded','checks':checks,
             'passed':sum(checks.values()),'total':len(checks),
             'scope':'Read-only schema and route configuration checks; not a security certification.',
-            'trade_workspace':'Assigned project overviews only; record-level sharing not enabled.', 'data_reset':False}
+            'trade_workspace':'Assigned project overviews plus explicit shares when the 8.5 sharing module is installed.', 'data_reset':False}
 
 _runtime.PUBLIC_PATHS.add('/health/workspaces-company-8-4-0')
 BUILD_COMMAND_RELEASE = BC840_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC840_RELEASE_NAME
 app.version = BC840_RELEASE
+
+# ============================================================
+# BuildCommand AI 8.5.0 — Superintendent-Controlled Trade Sharing
+# No legacy project records are overwritten by subcontractor responses.
+# ============================================================
+from contextlib import contextmanager as _bc850_contextmanager
+from functools import wraps as _bc850_wraps
+from pathlib import Path as _BC850_Path
+from fastapi.responses import FileResponse as _BC850_FileResponse
+from urllib.parse import urlencode as _bc850_urlencode
+import tempfile as _bc850_tempfile
+
+BC850_RELEASE = '8.5.0'
+BC850_RELEASE_NAME = 'Superintendent-Controlled Trade Sharing'
+_BC850_SOURCES = {
+    'schedule': ('Schedule item','activities','name','finish'),
+    'rfi': ('RFI','project_issues','title','due'),
+    'submittal': ('Submittal','submittals','title','due_date'),
+    'punch': ('Punch item','punch_items','title','due'),
+    'document': ('Document','attachments','title',None),
+}
+_BC850_STATUSES = {'ACKNOWLEDGED':'Acknowledged','IN_PROGRESS':'In progress','BLOCKED':'Blocked','READY_FOR_REVIEW':'Ready for review'}
+
+class _BC850_Problem(Exception):
+    def __init__(self,message,status=403): self.message,self.status=message,status
+
+def _bc850_require(condition,message='This shared item is not available to your account.',status=403):
+    if not condition: raise _BC850_Problem(message,status)
+
+def _bc850_endpoint(fn):
+    @_bc850_wraps(fn)
+    def handled(*args,**kwargs):
+        if not _bc840_user(): return _BC187_RedirectResponse('/login',status_code=303)
+        try:
+            _bc850_require(_BC850_SCHEMA_READY,'Shared work setup is incomplete. Ask your administrator to check the staging health report.',503)
+            return fn(*args,**kwargs)
+        except _BC850_Problem as exc: return _bc830b_error(exc.message,exc.status)
+        except Exception:
+            _bc830b_logger.exception('Trade sharing failed handler=%s',fn.__name__)
+            return _bc830b_error('Shared work is temporarily unavailable. Your changes were not saved. Please try again.',503)
+    return handled
+
+@_bc850_contextmanager
+def _bc850_db(write=False):
+    c=None
+    try:
+        c=_runtime.db()
+        if write and getattr(_runtime,'DATABASE_KIND','sqlite')!='postgres': c.execute('BEGIN IMMEDIATE')
+        yield c
+        if write: c.commit()
+    except Exception:
+        if write: _bc830b_rollback(c)
+        raise
+    finally: _bc830b_close(c)
+
+def _bc850_init():
+    try:
+        with _bc850_db(True) as c:
+            key='BIGSERIAL PRIMARY KEY' if getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres' else 'INTEGER PRIMARY KEY AUTOINCREMENT'
+            c.execute(f'''CREATE TABLE IF NOT EXISTS bc_shared_work(
+                id {key},company_id BIGINT NOT NULL,project_id BIGINT NOT NULL,
+                kind TEXT NOT NULL,source_id BIGINT NOT NULL,recipient_user_id BIGINT NOT NULL,
+                title TEXT NOT NULL,message TEXT NOT NULL,due_date TEXT NOT NULL DEFAULT '',
+                allow_response INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,
+                snapshot_file TEXT NOT NULL DEFAULT '',download_name TEXT NOT NULL DEFAULT '',
+                created_by BIGINT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+                revoked_at TEXT,state TEXT NOT NULL DEFAULT 'OPEN',
+                UNIQUE(company_id,project_id,kind,source_id,recipient_user_id))''')
+            c.execute(f'''CREATE TABLE IF NOT EXISTS bc_shared_work_updates(
+                id {key},share_id BIGINT NOT NULL,actor_user_id BIGINT NOT NULL,
+                share_version INTEGER NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL,
+                created_at TEXT NOT NULL,reviewed_by BIGINT,reviewed_at TEXT,
+                review_message TEXT NOT NULL DEFAULT '')''')
+            c.execute(f'''CREATE TABLE IF NOT EXISTS bc_shared_work_events(
+                id {key},company_id BIGINT NOT NULL,project_id BIGINT NOT NULL,
+                share_id BIGINT,actor_user_id BIGINT NOT NULL,action TEXT NOT NULL,created_at TEXT NOT NULL)''')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_bc_shared_work_recipient ON bc_shared_work(company_id,recipient_user_id,revoked_at,project_id)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_bc_shared_work_project ON bc_shared_work(company_id,project_id,updated_at)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_bc_shared_updates_share ON bc_shared_work_updates(share_id,id)')
+            c.execute('SELECT id,company_id,project_id,kind,source_id,recipient_user_id,title,message,due_date,allow_response,version,snapshot_file,download_name,created_by,created_at,updated_at,revoked_at,state FROM bc_shared_work WHERE 1=0')
+            c.execute('SELECT id,share_id,actor_user_id,share_version,status,message,created_at,reviewed_by,reviewed_at,review_message FROM bc_shared_work_updates WHERE 1=0')
+            if getattr(_runtime,'DATABASE_KIND','sqlite')!='postgres': c.execute('PRAGMA optimize')
+        return True
+    except Exception:
+        _bc830b_logger.exception('Trade sharing schema initialization failed')
+        return False
+
+_BC850_SCHEMA_READY=_bc850_init()
+
+def _bc850_actor(c):
+    cached=_bc840_user() or {}
+    row=c.execute('SELECT id,company_id,email,role,display_name FROM users WHERE id=?',(cached.get('id'),)).fetchone()
+    _bc850_require(row is not None,'Sign in again to continue.',401)
+    return dict(row)
+
+def _bc850_member_table():
+    table=_bc820_membership_table()
+    _bc850_require(table in {'project_members','project_users','project_assignments'},'Project assignments are unavailable.',503)
+    return table
+
+def _bc850_manager(user):
+    return _bc840_tier(user) in {'owner','admin'} or _bc840_role(user) in {'SUPERINTENDENT','PROJECT_MANAGER'}
+
+def _bc850_nav(user):
+    if _bc850_manager(user): return [('Trade sharing','/workspace/sharing')]
+    if _bc840_tier(user)=='trade': return [('My shared work','/workspace/shared')]
+    return []
+
+def _bc850_projects(c,user):
+    _bc850_require(_bc850_manager(user),'Only company administrators and appointed superintendents or project managers manage trade sharing.')
+    cid=_bc810_company_id(user)
+    if _bc840_tier(user) in {'owner','admin'}:
+        return [dict(r) for r in c.execute('SELECT id,name,number FROM projects WHERE company_id=? ORDER BY name,id',(cid,)).fetchall()]
+    table=_bc850_member_table()
+    return [dict(r) for r in c.execute(f'SELECT DISTINCT p.id,p.name,p.number FROM projects p JOIN {table} m ON m.project_id=p.id WHERE p.company_id=? AND m.user_id=? ORDER BY p.name,p.id',(cid,user['id'])).fetchall()]
+
+def _bc850_project(c,user,pid,lock=False):
+    if lock and getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres':
+        # All sharing mutations lock company -> project -> share, in that order.
+        c.execute('SELECT id FROM companies WHERE id=? FOR UPDATE',(_bc810_company_id(user),)).fetchone()
+        c.execute('SELECT id FROM projects WHERE id=? AND company_id=? FOR UPDATE',(pid,_bc810_company_id(user))).fetchone()
+        user=_bc850_actor(c)
+    project=next((p for p in _bc850_projects(c,user) if p['id']==pid),None)
+    _bc850_require(project is not None,'Your company administrator must assign you to this project before you can manage its sharing.')
+    return project
+
+def _bc850_recipient(c,user,pid,uid):
+    table=_bc850_member_table()
+    row=c.execute(f"SELECT u.id,u.email,u.display_name,u.role FROM users u JOIN {table} m ON m.user_id=u.id JOIN projects p ON p.id=m.project_id WHERE u.id=? AND u.company_id=? AND m.project_id=? AND p.company_id=?",(uid,_bc810_company_id(user),pid,_bc810_company_id(user))).fetchone()
+    _bc850_require(row is not None and _bc840_tier(dict(row))=='trade','Choose a subcontractor assigned to this company project.')
+    return dict(row)
+
+def _bc850_source(c,user,pid,kind,source_id=None,query=''):
+    _bc850_require(kind in _BC850_SOURCES,'Choose a supported work-item type.',400)
+    label,table,title,due=_BC850_SOURCES[kind]
+    fields=f't.id,t.{title} AS title,'+(f't.{due} AS due_date' if due else "'' AS due_date")
+    if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
+    sql=f'SELECT {fields} FROM {table} t JOIN projects p ON p.id=t.project_id WHERE p.company_id=? AND t.project_id=?'
+    args=[_bc810_company_id(user),pid]
+    if kind=='document': sql+=' AND t.company_id=?'; args.append(_bc810_company_id(user))
+    if kind=='rfi': sql+=" AND upper(COALESCE(t.issue_type,''))='RFI'"
+    if source_id is not None: sql+=' AND t.id=?';args.append(source_id)
+    elif query:
+        sql+=f" AND lower(COALESCE(t.{title},'')) LIKE lower(?)";args.append('%'+query[:120]+'%')
+    rows=[dict(r) for r in c.execute(sql+' ORDER BY t.id DESC LIMIT 100',tuple(args)).fetchall()]
+    if source_id is not None:
+        _bc850_require(bool(rows),'The original record is unavailable in this project.',404)
+        return rows[0]
+    return rows
+
+def _bc850_insert(c,table,columns,values):
+    _bc850_require(table in {'bc_shared_work','bc_shared_work_updates','bc_shared_work_events'},'Unsupported operation.',400)
+    marks=','.join('?' for _ in values)
+    sql=f'INSERT INTO {table}({columns}) VALUES({marks})'
+    if getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres':
+        return int(c.execute(sql+' RETURNING id',tuple(values)).fetchone()['id'])
+    c.execute(sql,tuple(values))
+    return int(c.execute('SELECT last_insert_rowid() AS id').fetchone()['id'])
+
+def _bc850_event(c,user,pid,share_id,action):
+    _bc850_insert(c,'bc_shared_work_events','company_id,project_id,share_id,actor_user_id,action,created_at',
+                 (_bc810_company_id(user),pid,share_id,user['id'],action,_bc830b_now().isoformat()))
+
+def _bc850_snapshot(source):
+    root=_BC850_Path(_runtime.UPLOAD_DIR).resolve()
+    stored=str(source.get('stored_name') or '')
+    _bc850_require(stored and _BC850_Path(stored).name==stored,'The original file is unavailable.',409)
+    original=root/stored
+    _bc850_require(not original.is_symlink() and original.is_file() and original.resolve().parent==root,'The original file is unavailable.',409)
+    folder=root/'_bc_shared_work'
+    _bc850_require(not folder.is_symlink(),'Shared file storage is unavailable.',503)
+    folder.mkdir(exist_ok=True)
+    temporary=None
+    try:
+        digest=_bc830b_hashlib.sha256();total=0
+        with original.open('rb') as src, _bc850_tempfile.NamedTemporaryFile(dir=folder,prefix='pending-',delete=False) as dst:
+            temporary=_BC850_Path(dst.name)
+            before=os.fstat(src.fileno())
+            while True:
+                block=src.read(1024*1024)
+                if not block: break
+                total+=len(block)
+                _bc850_require(total<=500*1024*1024,'The shared file exceeds the supported 500 MB limit.',413)
+                digest.update(block);dst.write(block)
+            after=os.fstat(src.fileno())
+            _bc850_require((before.st_size,before.st_mtime_ns)==(after.st_size,after.st_mtime_ns),'The file changed while being shared. Try again.',409)
+        filename=digest.hexdigest()+'.bin'
+        destination=folder/filename
+        _bc850_require(not destination.is_symlink(),'Shared file storage is unavailable.',503)
+        if destination.exists(): temporary.unlink()
+        else: os.replace(temporary,destination)
+        return filename,_BC850_Path(str(source.get('original_name') or 'shared-document')).name[:240]
+    finally:
+        if temporary is not None and temporary.exists(): temporary.unlink()
+
+def _bc850_revoke_removed_access(c,uid,cid,role,project_ids):
+    if not _BC850_SCHEMA_READY: return
+    sql='UPDATE bc_shared_work SET revoked_at=?,updated_at=?,version=version+1 WHERE company_id=? AND recipient_user_id=? AND revoked_at IS NULL'
+    now=_bc830b_now().isoformat();args=[now,now,cid,uid]
+    if role in {'SUB','SUBCONTRACTOR'} and project_ids:
+        sql+=' AND project_id NOT IN ('+','.join('?' for _ in project_ids)+')';args.extend(int(x) for x in project_ids)
+    c.execute(sql,tuple(args))
+
+def _bc850_share(c,user,share_id,manager=False,lock=False):
+    row=c.execute('SELECT * FROM bc_shared_work WHERE id=? AND company_id=?',(share_id,_bc810_company_id(user))).fetchone()
+    _bc850_require(row is not None)
+    share=dict(row)
+    if manager:
+        _bc850_project(c,user,share['project_id'],lock)
+    else:
+        if lock and getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres':
+            c.execute('SELECT id FROM companies WHERE id=? FOR UPDATE',(_bc810_company_id(user),)).fetchone()
+            c.execute('SELECT id FROM projects WHERE id=? AND company_id=? FOR UPDATE',(share['project_id'],_bc810_company_id(user))).fetchone()
+            user=_bc850_actor(c)
+        _bc850_require(_bc840_tier(user)=='trade' and share['recipient_user_id']==user['id'])
+        _bc850_recipient(c,user,share['project_id'],user['id'])
+    if lock:
+        locked=c.execute('SELECT * FROM bc_shared_work WHERE id=?'+(' FOR UPDATE' if getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres' else ''),(share_id,)).fetchone()
+        share=dict(locked)
+    if not manager: _bc850_require(share['revoked_at'] is None)
+    if not manager: _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
+    return share
+
+def _bc850_text(text):
+    return '<div style="white-space:pre-wrap;overflow-wrap:anywhere">'+_bc830b_escape(str(text or ''))+'</div>'
+
+def _bc850_share_card(share,manager=False):
+    href=('/workspace/sharing/' if manager else '/workspace/shared/')+str(share['id'])
+    state='Revoked' if share['revoked_at'] else ('Closed' if share['state']=='CLOSED' else 'Open')
+    return '<article class="card"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p class="small">'+_bc830b_escape(str(share.get('project_name') or ''))+'</p><h2><a href="'+href+'">'+_bc830b_escape(share['title'])+'</a></h2><p>'+state+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></article>'
+
+def _bc850_form_context(c,user,project_id,kind,source_id):
+    project=_bc850_project(c,user,project_id)
+    source=_bc850_source(c,user,project_id,kind,source_id)
+    table=_bc850_member_table()
+    candidates=c.execute(f'SELECT DISTINCT u.id,u.email,u.display_name,u.role FROM users u JOIN {table} m ON m.user_id=u.id WHERE u.company_id=? AND m.project_id=? ORDER BY u.email',(_bc810_company_id(user),project_id)).fetchall()
+    return project,source,[dict(r) for r in candidates if _bc840_tier(dict(r))=='trade']
+
+@app.get('/workspace/sharing')
+@_bc850_endpoint
+def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0):
+    _bc850_require(before_id>=0,'Invalid page.',400)
+    with _bc850_db() as c:
+        user=_bc850_actor(c);projects=_bc850_projects(c,user)
+        if not projects:
+            return _bc840_page('Trade sharing','<div class="hero"><h1>Trade sharing</h1><p>Your company administrator must assign you a project in People & access before you can manage its subcontractors and shared work.</p></div>')
+        pid=project_id or projects[0]['id'];project=_bc850_project(c,user,pid)
+        sources=_bc850_source(c,user,pid,kind,query=q)
+        shares=[dict(r) for r in c.execute('SELECT * FROM bc_shared_work WHERE company_id=? AND project_id=? AND (?=0 OR id<?) ORDER BY id DESC LIMIT 51',(_bc810_company_id(user),pid,before_id,before_id)).fetchall()]
+        older=len(shares)>50;shares=shares[:50]
+        pending=c.execute('SELECT count(*) AS n FROM bc_shared_work_updates u JOIN bc_shared_work s ON s.id=u.share_id WHERE s.company_id=? AND s.project_id=? AND s.revoked_at IS NULL AND u.share_version=s.version AND u.reviewed_at IS NULL',(_bc810_company_id(user),pid)).fetchone()['n']
+    options=''.join(f'<option value="{p["id"]}"'+(' selected' if p['id']==pid else '')+'>'+_bc830b_escape(p['name'])+'</option>' for p in projects)
+    kinds=''.join('<option value="'+k+'"'+(' selected' if k==kind else '')+'>'+v[0]+'</option>' for k,v in _BC850_SOURCES.items())
+    body='<div class="hero"><h1>Trade sharing</h1><p>'+_bc830b_escape(project['name'])+f' · {pending} responses awaiting review</p><p><a href="/workspace/sharing/projects/{pid}/team">Manage project subcontractors</a></p></div>'
+    body+='<form class="card" method="get"><label for="share-project">Project</label> <select id="share-project" name="project_id">'+options+'</select> <label for="share-kind">Type</label> <select id="share-kind" name="kind">'+kinds+'</select><p><label for="share-search">Find a record</label> <input id="share-search" name="q" maxlength="120" value="'+_bc830b_escape(q[:120],quote=True)+'"> <button>Find</button></p></form>'
+    body+='<div class="grid2"><section class="card"><h2>Choose work to share</h2><p>Review the exact title, instructions and recipient before publishing. Showing the latest 100 matching records.</p><div class="bc840-list">'
+    for source in sources:
+        body+=f'<a href="/workspace/sharing/new?project_id={pid}&amp;kind={kind}&amp;source_id={source["id"]}">'+_bc830b_escape(str(source['title'] or 'Untitled'))+f'<small>#{source["id"]} · Prepare share</small></a>'
+    body+=( '</div></section><section><h2>Shared items</h2>'+(''.join(_bc850_share_card(s,True) for s in shares) or '<p class="bc840-empty">No work has been shared on this project yet.</p>')+'</section></div>')
+    if older: body+='<p><a href="/workspace/sharing?'+_bc830b_escape(_bc850_urlencode({'project_id':pid,'kind':kind,'q':q[:120],'before_id':shares[-1]['id']}),quote=True)+'">Older shared items</a></p>'
+    return _bc840_page('Trade sharing',body)
+
+@app.get('/workspace/sharing/new')
+@_bc850_endpoint
+def bc850_prepare_share(project_id:int,kind:str,source_id:int):
+    with _bc850_db() as c:
+        user=_bc850_actor(c);project,source,recipients=_bc850_form_context(c,user,project_id,kind,source_id)
+    body='<div class="hero"><h1>Prepare a share</h1><p>'+_bc830b_escape(project['name'])+' · '+_BC850_SOURCES[kind][0]+'</p></div>'
+    if not recipients:
+        return _bc840_page('Prepare share',body+f'<div class="card"><p>Assign a subcontractor to this project first.</p><a href="/workspace/sharing/projects/{project_id}/team">Manage project subcontractors</a></div>')
+    options=''.join(f'<option value="{r["id"]}">'+_bc830b_escape(str(r['display_name'] or r['email']))+' · '+_bc830b_escape(r['email'])+'</option>' for r in recipients)
+    due=str(source.get('due_date') or '')[:10]
+    if not _bc830b_re.fullmatch(r'\d{4}-\d{2}-\d{2}',due): due=''
+    body+=f'<div class="card"><form method="post" action="/workspace/sharing/publish"><input type="hidden" name="project_id" value="{project_id}"><input type="hidden" name="kind" value="{kind}"><input type="hidden" name="source_id" value="{source_id}">'
+    body+='<p><label for="recipient">Share with</label><br><select id="recipient" name="recipient_user_id" required><option value="">Choose a subcontractor</option>'+options+'</select></p>'
+    body+='<p><label for="public-title">Shared title</label><br><input id="public-title" name="title" maxlength="240" required style="width:100%" value="'+_bc830b_escape(str(source['title'] or ''),quote=True)+'"></p><p><label for="share-message">Instructions for this subcontractor</label><br><textarea id="share-message" name="message" rows="6" maxlength="6000" required style="width:100%"></textarea></p>'
+    body+='<p><label for="share-due">Due date (optional)</label><br><input id="share-due" name="due_date" type="date" value="'+due+'"></p><p><label><input type="checkbox" name="allow_response" value="1">Allow progress updates and replies</label></p>'
+    if kind=='document':
+        body+='<p class="bc840-role-note">File: '+_bc830b_escape(str(source['original_name']))+'</p><p><label><input type="checkbox" name="share_file" value="yes" required>Share this entire file, including every page.</label></p><p>A fixed copy is shared. Changes to the internal document will require a new share.</p>'
+    body+='<p>The subcontractor sees this title, these instructions and the due date. Internal notes and the original record stay private.</p><button>Publish share</button></form></div>'
+    return _bc840_page('Prepare share',body)
+
+@app.post('/workspace/sharing/publish')
+@_bc850_endpoint
+def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
+    title,message,due_date=title.strip(),message.strip(),due_date.strip()
+    _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
+    _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
+    if due_date:
+        try: _BC830B_datetime.strptime(due_date,'%Y-%m-%d')
+        except ValueError: raise _BC850_Problem('Use a valid due date.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);_bc850_project(c,user,project_id,True)
+        _bc850_recipient(c,user,project_id,recipient_user_id)
+        source=_bc850_source(c,user,project_id,kind,source_id)
+        previous=c.execute('SELECT id,revoked_at FROM bc_shared_work WHERE company_id=? AND project_id=? AND kind=? AND source_id=? AND recipient_user_id=?',(_bc810_company_id(user),project_id,kind,source_id,recipient_user_id)).fetchone()
+        _bc850_require(previous is None or previous['revoked_at'] is not None,'This item is already shared with that person. Revoke the previous share before publishing a replacement.',409)
+        snapshot,filename='',''
+        if kind=='document':
+            _bc850_require(share_file=='yes','Confirm that you want to share the entire file.',400)
+            snapshot,filename=_bc850_snapshot(source)
+        now=_bc830b_now().isoformat()
+        if previous:
+            sid=previous['id']
+            c.execute("UPDATE bc_shared_work SET title=?,message=?,due_date=?,allow_response=?,snapshot_file=?,download_name=?,revoked_at=NULL,state='OPEN',version=version+1,created_by=?,updated_at=? WHERE id=?",(title,message,due_date,allow_response,snapshot,filename,user['id'],now,sid))
+        else:
+            sid=_bc850_insert(c,'bc_shared_work','company_id,project_id,kind,source_id,recipient_user_id,title,message,due_date,allow_response,snapshot_file,download_name,created_by,created_at,updated_at',(_bc810_company_id(user),project_id,kind,source_id,recipient_user_id,title,message,due_date,allow_response,snapshot,filename,user['id'],now,now))
+        _bc850_event(c,user,project_id,sid,'PUBLISHED')
+    return _BC187_RedirectResponse(f'/workspace/sharing/{sid}',status_code=303)
+
+@app.get('/workspace/shared')
+@_bc850_endpoint
+def bc850_shared(project_id:int=0,kind:str='',before_id:int=0):
+    _bc850_require(kind in {'',*_BC850_SOURCES} and before_id>=0,'Choose a valid filter.',400)
+    with _bc850_db() as c:
+        user=_bc850_actor(c);_bc850_require(_bc840_tier(user)=='trade','This page is for subcontractors. Project leaders use Trade sharing.')
+        projects=_bc840_projects(user);valid={p['id'] for p in projects}
+        if project_id: _bc850_require(project_id in valid)
+        table=_bc850_member_table()
+        rows=c.execute(f'''SELECT s.* FROM bc_shared_work s JOIN projects p ON p.id=s.project_id
+            WHERE s.company_id=? AND p.company_id=? AND s.recipient_user_id=? AND s.revoked_at IS NULL
+            AND EXISTS(SELECT 1 FROM {table} m WHERE m.user_id=s.recipient_user_id AND m.project_id=s.project_id)
+            AND (?=0 OR s.project_id=?) AND (?='' OR s.kind=?) AND (?=0 OR s.id<?)
+            ORDER BY s.id DESC LIMIT 51''',(_bc810_company_id(user),_bc810_company_id(user),user['id'],project_id,project_id,kind,kind,before_id,before_id)).fetchall()
+        older=len(rows)>50;rows=rows[:50]
+        shares=[]
+        for row in rows:
+            if row['project_id'] not in valid or (project_id and row['project_id']!=project_id): continue
+            try:
+                share=_bc850_share(c,user,row['id'])
+                share['project_name']=next(p['name'] for p in projects if p['id']==share['project_id'])
+                shares.append(share)
+            except _BC850_Problem as exc:
+                if exc.status not in {403,404}: raise
+    project_options='<option value="0">All assigned projects</option>'+''.join(f'<option value="{p["id"]}"'+(' selected' if p['id']==project_id else '')+'>'+_bc830b_escape(p['name'])+'</option>' for p in projects)
+    kinds='<option value="">All work types</option>'+''.join('<option value="'+k+'"'+(' selected' if k==kind else '')+'>'+v[0]+'</option>' for k,v in _BC850_SOURCES.items())
+    body='<div class="hero"><h1>My shared work</h1><p>Items shared with your account by your project leaders.</p></div><form class="card" method="get"><label for="shared-project">Project</label> <select id="shared-project" name="project_id">'+project_options+'</select> <label for="shared-kind">Type</label> <select id="shared-kind" name="kind">'+kinds+'</select> <button>Show work</button></form>'
+    body+='<div class="grid2">'+(''.join(_bc850_share_card(s) for s in shares) or '<div class="bc840-empty"><h2>No shared work yet</h2><p>Your project leader will share the items you need here.</p></div>')+'</div>'
+    if older: body+='<p><a href="/workspace/shared?'+_bc830b_escape(_bc850_urlencode({'project_id':project_id,'kind':kind,'before_id':rows[-1]['id']}),quote=True)+'">Older shared items</a></p>'
+    return _bc840_page('My shared work',body)
+
+def _bc850_detail(share_id,manager):
+    with _bc850_db() as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,manager)
+        updates=[dict(r) for r in c.execute('SELECT * FROM bc_shared_work_updates WHERE share_id=? AND share_version=? ORDER BY id DESC LIMIT 100',(share_id,share['version'])).fetchall()]
+        recipient=c.execute('SELECT display_name,email FROM users WHERE id=?',(share['recipient_user_id'],)).fetchone()
+        project=c.execute('SELECT name FROM projects WHERE id=? AND company_id=?',(share['project_id'],_bc810_company_id(user))).fetchone()
+    prefix='/workspace/sharing/' if manager else '/workspace/shared/'
+    body='<div class="hero"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p>'+_bc830b_escape(str(project['name'] if project else ''))+'</p><h1>'+_bc830b_escape(share['title'])+'</h1><p>'+('Revoked' if share['revoked_at'] else share['state'].capitalize())+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></div><div class="card"><h2>Shared instructions</h2>'+_bc850_text(share['message'])
+    if manager:
+        body+='<p>Shared with '+_bc830b_escape(str(recipient['email'] if recipient else 'Removed account'))+'</p>'
+    if share['snapshot_file'] and not share['revoked_at']:
+        body+='<p><a class="bc840-button" href="'+prefix+str(share_id)+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
+    body+='</div>'
+    if manager:
+        if not share['revoked_at']:
+            body+=f'<div class="card"><h2>Sharing controls</h2><form method="post" action="/workspace/sharing/{share_id}/control"><input type="hidden" name="version" value="{share["version"]}"><button name="action" value="'+('reopen' if share['state']=='CLOSED' else 'close')+'">'+('Reopen for responses' if share['state']=='CLOSED' else 'Close responses')+'</button> <button name="action" value="revoke">Revoke access</button></form><p>Closing keeps the item visible. Revoking removes access. Revoke and prepare a new share to change its instructions or file.</p></div>'
+        else: body+=f'<div class="card"><a href="/workspace/sharing/new?project_id={share["project_id"]}&amp;kind={share["kind"]}&amp;source_id={share["source_id"]}">Prepare a replacement share</a></div>'
+    elif share['allow_response'] and share['state']=='OPEN':
+        options=''.join('<option value="'+k+'">'+v+'</option>' for k,v in _BC850_STATUSES.items())
+        body+=f'<div class="card"><h2>Send an update</h2><form method="post" action="/workspace/shared/{share_id}/respond"><input type="hidden" name="version" value="{share["version"]}"><label for="update-status">Progress</label><br><select id="update-status" name="status">'+options+'</select><p><label for="update-message">Your update</label><br><textarea id="update-message" name="message" rows="4" maxlength="4000" required style="width:100%"></textarea></p><button>Send to project leader</button></form><p>Your update is reviewed by the project leader. It does not directly change the original project record.</p></div>'
+    else: body+='<div class="card"><p>Replies are closed or were not enabled for this item.</p></div>'
+    body+='<section class="card"><h2>Updates on this share</h2>'
+    for update in updates:
+        body+='<article style="border-bottom:1px solid #dce3ec;padding:12px 0"><strong>'+_BC850_STATUSES.get(update['status'],'Update')+'</strong> · '+('Reviewed' if update['reviewed_at'] else 'Awaiting review')+_bc850_text(update['message'])+'<p class="small">'+_bc830b_escape(update['created_at'][:16].replace('T',' '))+' UTC</p>'
+        if update['review_message']: body+='<p><strong>Project leader reply</strong></p>'+_bc850_text(update['review_message'])
+        if manager and not update['reviewed_at'] and not share['revoked_at']:
+            body+=f'<form method="post" action="/workspace/sharing/{share_id}/updates/{update["id"]}/review"><input type="hidden" name="version" value="{share["version"]}"><p><label for="review-{update["id"]}">Reply to subcontractor (optional)</label><br><textarea id="review-{update["id"]}" name="review_message" maxlength="2000" rows="3" style="width:100%"></textarea></p><button>Mark reviewed &amp; send reply</button></form>'
+        body+='</article>'
+    body+=('</section>' if updates else '<p>No updates yet.</p></section>')
+    return _bc840_page('Shared work',body)
+
+@app.get('/workspace/shared/{share_id}')
+@_bc850_endpoint
+def bc850_shared_detail(share_id:int): return _bc850_detail(share_id,False)
+
+@app.get('/workspace/sharing/{share_id}')
+@_bc850_endpoint
+def bc850_managed_detail(share_id:int): return _bc850_detail(share_id,True)
+
+def _bc850_download(share_id,manager):
+    with _bc850_db() as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,manager)
+        _bc850_require(not share['revoked_at'] and share['kind']=='document' and bool(_bc830b_re.fullmatch(r'[0-9a-f]{64}\.bin',share['snapshot_file'])))
+    root=_BC850_Path(_runtime.UPLOAD_DIR).resolve();folder=root/'_bc_shared_work';path=folder/share['snapshot_file']
+    _bc850_require(not folder.is_symlink() and not path.is_symlink() and path.is_file() and path.resolve().parent==folder.resolve(),'This shared file is unavailable. Ask your project leader to share it again.',404)
+    return _BC850_FileResponse(path,filename=share['download_name'],media_type='application/octet-stream',headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'})
+
+@app.get('/workspace/shared/{share_id}/download')
+@_bc850_endpoint
+def bc850_shared_download(share_id:int): return _bc850_download(share_id,False)
+
+@app.get('/workspace/sharing/{share_id}/download')
+@_bc850_endpoint
+def bc850_managed_download(share_id:int): return _bc850_download(share_id,True)
+
+@app.post('/workspace/shared/{share_id}/respond')
+@_bc850_endpoint
+def bc850_respond(share_id:int,version:int=_BC189_Form(...),status:str=_BC189_Form(...),message:str=_BC189_Form(...)):
+    message=message.strip()
+    _bc850_require(status in _BC850_STATUSES and 0<len(message)<=4000,'Choose a progress state and write an update up to 4,000 characters.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,False,True)
+        _bc850_require(share['version']==version,'This share changed. Reload it before replying.',409)
+        _bc850_require(share['allow_response']==1 and share['state']=='OPEN','Replies are closed for this item.',409)
+        _bc850_insert(c,'bc_shared_work_updates','share_id,actor_user_id,share_version,status,message,created_at',(share_id,user['id'],version,status,message,_bc830b_now().isoformat()))
+        _bc850_event(c,user,share['project_id'],share_id,'RESPONSE')
+    return _BC187_RedirectResponse(f'/workspace/shared/{share_id}',status_code=303)
+
+@app.post('/workspace/sharing/{share_id}/updates/{update_id}/review')
+@_bc850_endpoint
+def bc850_review(share_id:int,update_id:int,version:int=_BC189_Form(...),review_message:str=_BC189_Form('')):
+    review_message=review_message.strip()
+    _bc850_require(len(review_message)<=2000,'Keep your reply within 2,000 characters.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,True,True)
+        _bc850_require(not share['revoked_at'] and share['version']==version,'This share changed. Reload it before reviewing.',409)
+        row=c.execute('SELECT id FROM bc_shared_work_updates WHERE id=? AND share_id=? AND share_version=? AND reviewed_at IS NULL',(update_id,share_id,version)).fetchone()
+        _bc850_require(row is not None,'This response is already reviewed or unavailable.',409)
+        c.execute('UPDATE bc_shared_work_updates SET reviewed_by=?,reviewed_at=?,review_message=? WHERE id=?',(user['id'],_bc830b_now().isoformat(),review_message,update_id))
+        _bc850_event(c,user,share['project_id'],share_id,'REVIEWED')
+    return _BC187_RedirectResponse(f'/workspace/sharing/{share_id}',status_code=303)
+
+@app.post('/workspace/sharing/{share_id}/control')
+@_bc850_endpoint
+def bc850_control(share_id:int,version:int=_BC189_Form(...),action:str=_BC189_Form(...)):
+    _bc850_require(action in {'revoke','close','reopen'},'Choose a valid sharing action.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);share=_bc850_share(c,user,share_id,True,True)
+        _bc850_require(not share['revoked_at'] and share['version']==version,'This share changed. Reload it first.',409)
+        now=_bc830b_now().isoformat()
+        # Close/reopen preserve publication version and its response history.
+        if action=='revoke': c.execute('UPDATE bc_shared_work SET revoked_at=?,updated_at=? WHERE id=?',(now,now,share_id))
+        else: c.execute('UPDATE bc_shared_work SET state=?,updated_at=? WHERE id=?',('CLOSED' if action=='close' else 'OPEN',now,share_id))
+        _bc850_event(c,user,share['project_id'],share_id,action.upper())
+    return _BC187_RedirectResponse(f'/workspace/sharing/{share_id}',status_code=303)
+
+@app.get('/workspace/sharing/projects/{project_id}/team')
+@_bc850_endpoint
+def bc850_project_team(project_id:int):
+    with _bc850_db() as c:
+        user=_bc850_actor(c);project=_bc850_project(c,user,project_id);table=_bc850_member_table()
+        people=[dict(r) for r in c.execute('SELECT id,email,display_name,role FROM users WHERE company_id=? ORDER BY email',(_bc810_company_id(user),)).fetchall() if _bc840_tier(dict(r))=='trade']
+        assigned={r['user_id'] for r in c.execute(f'SELECT user_id FROM {table} WHERE project_id=?',(project_id,)).fetchall()}
+    body='<div class="hero"><h1>Project subcontractors</h1><p>'+_bc830b_escape(project['name'])+'</p><p>Assign existing company subcontractors here. Ask your company administrator to invite new accounts or change a role.</p></div><div class="card bc840-table"><table><thead><tr><th>Subcontractor</th><th>Assignment</th><th>Action</th></tr></thead><tbody>'
+    for person in people:
+        active=person['id'] in assigned
+        body+='<tr><td>'+_bc830b_escape(str(person['display_name'] or person['email']))+'<br><span class="small">'+_bc830b_escape(person['email'])+'</span></td><td>'+('Assigned' if active else 'Not assigned')+f'</td><td><form method="post" action="/workspace/sharing/projects/{project_id}/team"><input type="hidden" name="user_id" value="{person["id"]}"><button name="assigned" value="'+('0' if active else '1')+'">'+('Remove from project' if active else 'Assign to project')+'</button></form></td></tr>'
+    body+='</tbody></table></div><p>Removing a person revokes their shares on this project. Reassignment does not restore those shares; publish them again when appropriate.</p>'
+    return _bc840_page('Project subcontractors',body)
+
+@app.post('/workspace/sharing/projects/{project_id}/team')
+@_bc850_endpoint
+def bc850_assign_subcontractor(project_id:int,user_id:int=_BC189_Form(...),assigned:int=_BC189_Form(...)):
+    _bc850_require(assigned in {0,1},'Choose assign or remove.',400)
+    with _bc850_db(True) as c:
+        user=_bc850_actor(c);_bc850_project(c,user,project_id,True);table=_bc850_member_table()
+        person=c.execute('SELECT id,email,role FROM users WHERE id=? AND company_id=?',(user_id,_bc810_company_id(user))).fetchone()
+        _bc850_require(person is not None and _bc840_tier(dict(person))=='trade','Only existing subcontractors in your company can be assigned here.')
+        existing=c.execute(f'SELECT project_id FROM {table} WHERE user_id=? AND project_id=?',(user_id,project_id)).fetchone()
+        if assigned and not existing: _bc830b_link_insert(c,table,'user_id,project_id',(user_id,project_id))
+        if not assigned:
+            c.execute(f'DELETE FROM {table} WHERE user_id=? AND project_id=?',(user_id,project_id))
+            now=_bc830b_now().isoformat()
+            c.execute('UPDATE bc_shared_work SET revoked_at=?,updated_at=? WHERE company_id=? AND project_id=? AND recipient_user_id=? AND revoked_at IS NULL',(now,now,_bc810_company_id(user),project_id,user_id))
+        _bc850_event(c,user,project_id,None,('ASSIGN_SUB:' if assigned else 'REMOVE_SUB:')+str(user_id))
+    return _BC187_RedirectResponse(f'/workspace/sharing/projects/{project_id}/team',status_code=303)
+
+@app.get('/health/trade-sharing-8-5-0')
+def bc850_health():
+    checks={'schema_initialized':_BC850_SCHEMA_READY}
+    try:
+        with _bc850_db() as c:
+            c.execute('SELECT id,company_id,project_id,recipient_user_id,version,snapshot_file,revoked_at FROM bc_shared_work WHERE 1=0')
+            c.execute('SELECT id,share_id,share_version,reviewed_at,review_message FROM bc_shared_work_updates WHERE 1=0')
+            checks['schema_readable']=True
+    except Exception: checks['schema_readable']=False
+    paths={getattr(r,'path','') for r in app.routes}
+    for path in ('/workspace/shared','/workspace/sharing','/workspace/shared/{share_id}/download','/workspace/sharing/projects/{project_id}/team'):
+        checks[path]=path in paths
+    return {'app':'BuildCommand AI','version':BC850_RELEASE,'release':BC850_RELEASE_NAME,'status':'ok' if all(checks.values()) else 'degraded','checks':checks,'passed':sum(checks.values()),'total':len(checks),'scope':'Schema and route checks only; validate real tenant access on staging.','data_reset':False}
+
+_runtime.PUBLIC_PATHS.add('/health/trade-sharing-8-5-0')
+_BC840_ROLES['SUBCONTRACTOR']=('Subcontractor','trade','See assigned projects and work explicitly shared with your account; send updates when replies are enabled.')
+BUILD_COMMAND_RELEASE=BC850_RELEASE
+BUILD_COMMAND_RELEASE_NAME=BC850_RELEASE_NAME
+app.version=BC850_RELEASE
