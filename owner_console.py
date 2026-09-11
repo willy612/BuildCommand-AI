@@ -1,2478 +1,1056 @@
+"""BuildCommand AI — Professional Owner Console 8.5.1.
+
+Drop-in companion for full_app.py 8.5.0. Uses the existing database and
+session. Account changes are local controls; this module never calls Stripe.
+"""
+import hashlib
+import hmac
+import json
+import logging
+import os
 import re
-
-"""
-BuildCommand AI — Owner Business Console
-Version 1.8.18.97
-
-Separate business-control module for BuildCommand AI.
-Uses the same FastAPI application and PostgreSQL database as full_app.py.
-"""
-
-from datetime import datetime
+import secrets
+import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from html import escape
-from fastapi import Form
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from urllib.parse import urlencode, urlsplit
 
-OWNER_CONSOLE_VERSION = "7.4.13"
+from fastapi import Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
+
+OWNER_CONSOLE_VERSION = "8.5.1"
 OWNER_EMAIL = "buildcommandai@gmail.com"
+RELEASE_NAME = "Professional Owner Console"
+LOG = logging.getLogger("buildcommand.owner")
+CSRF_COOKIE = "bc_owner_csrf"
+STATES = ("PENDING", "ACTIVE", "TRIAL", "PAST_DUE", "SUSPENDED", "CANCELED", "LEGACY")
+DEMO_ENROLLMENT_STATES = {"NO_SUBSCRIPTION", "PENDING", "PENDING_PAYMENT", "TRIAL", "TRIAL_EXPIRED", "TRIALING"}
+LABELS = {
+    "NO_SUBSCRIPTION": "No subscription", "PENDING": "Pending", "ACTIVE": "Active",
+    "TRIAL": "Trial", "TRIALING": "Trial", "TRIAL_EXPIRED": "Trial expired",
+    "PAST_DUE": "Past due", "SUSPENDED": "Suspended", "CANCELED": "Canceled",
+    "CANCELLED": "Canceled", "LEGACY": "Legacy", "UNPAID": "Unpaid",
+    "PENDING_APPROVAL": "Pending review", "DENIED": "Ended / declined",
+    "EXPIRED": "Expired", "UPGRADED": "Upgraded", "APPROVED": "Approved",
+}
+ACTION_LABELS = {
+    "approve": "Approve access", "revoke": "Revoke approval", "suspend": "Suspend access",
+    "reactivate": "Reactivate account", "cancel": "Cancel local subscription",
+    "subscription": "Save local subscription", "plan": "Change local plan",
+    "status": "Change local status", "note": "Add account note",
+}
+MESSAGES = {
+    "saved": "Changes saved. The account history has been updated.",
+    "note": "Account note added.", "demo": "Demo decision saved.",
+    "deleted": "The reviewed empty account records were deleted.",
+}
+
+
+def esc(value):
+    return escape(str(value if value is not None else ""), quote=True)
+
+
+def utcnow():
+    # The customer app compares naive UTC ISO timestamps.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def parse_date(value):
+    try:
+        result = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return result.replace(tzinfo=timezone.utc) if result.tzinfo is None else result.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def date_label(value):
+    value = parse_date(value)
+    return value.strftime("%b %d, %Y · %H:%M UTC") if value else "—"
+
+
+def label(value):
+    return LABELS.get(str(value or "").upper(), str(value or "Not recorded").replace("_", " ").title())
+
+
+def money(cents, currency="USD"):
+    amount = int(cents or 0) / 100
+    code = str(currency or "USD").upper()
+    return f"${amount:,.2f}" if code == "USD" else f"{code} {amount:,.2f}"
+
+
+def badge(text, kind="neutral"):
+    return f'<span class="badge {esc(kind)}">{esc(text)}</span>'
+
+
+def state_badge(value):
+    kind = "good" if value in {"ACTIVE", "LEGACY", "APPROVED"} else "bad" if value in {"SUSPENDED", "PAST_DUE", "UNPAID"} else "neutral"
+    if value in {"PENDING_APPROVAL", "PENDING", "TRIAL"}:
+        kind = "warn"
+    return badge(label(value), kind)
+
+
+class ConsoleProblem(Exception):
+    def __init__(self, message, status=400):
+        self.message, self.status = message, status
+
+
+class OwnerConsole:
+    def __init__(self, app, runtime, owner_email):
+        self.app, self.runtime = app, runtime
+        self.owner_email = str(owner_email or OWNER_EMAIL).strip().lower()
+        self.postgres = str(getattr(runtime, "DATABASE_KIND", "")).lower() == "postgres"
+        self.schema_ready = False
+        self.initialize()
+
+    @contextmanager
+    def connection(self, write=False):
+        connection = self.runtime.db()
+        try:
+            if write and not self.postgres:
+                connection.execute("BEGIN IMMEDIATE")
+            yield connection
+            if write:
+                connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def initialize(self):
+        try:
+            with self.connection(True) as c:
+                pk = "BIGSERIAL PRIMARY KEY" if self.postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
+                c.execute("""CREATE TABLE IF NOT EXISTS company_access_approvals(
+                    company_id BIGINT PRIMARY KEY, approved INTEGER DEFAULT 0,
+                    approved_by_user_id BIGINT, approved_at TEXT,
+                    revoked_by_user_id BIGINT, revoked_at TEXT, note TEXT,
+                    created TEXT, updated TEXT)""")
+                c.execute(f"""CREATE TABLE IF NOT EXISTS company_access_approval_events(
+                    id {pk}, company_id BIGINT NOT NULL, actor_user_id BIGINT,
+                    action TEXT NOT NULL, detail TEXT, created TEXT)""")
+                c.execute(f"""CREATE TABLE IF NOT EXISTS bc_owner_console_events(
+                    id {pk}, actor_user_id BIGINT NOT NULL, actor_email TEXT NOT NULL,
+                    company_id BIGINT, company_name TEXT NOT NULL, action TEXT NOT NULL,
+                    detail TEXT NOT NULL, created TEXT NOT NULL)""")
+                c.execute("CREATE INDEX IF NOT EXISTS idx_bc_owner_events_company ON bc_owner_console_events(company_id,id)")
+            self.schema_ready = True
+        except Exception:
+            LOG.exception("Owner Console schema initialization failed")
+
+    def owner_emails(self):
+        configured = os.environ.get("PLATFORM_OWNER_EMAILS", os.environ.get("PLATFORM_OWNER_EMAIL", ""))
+        emails = {x.strip().lower() for x in configured.split(",") if x.strip()}
+        return emails or {self.owner_email}
+
+    def actor(self, c):
+        session_user = self.runtime.current_user()
+        if not session_user:
+            raise ConsoleProblem("Sign in with your platform owner account to open this console.", 401)
+        uid = dict(session_user).get("id")
+        row = c.execute("SELECT id,email,display_name,role,company_id FROM users WHERE id=?", (uid,)).fetchone()
+        user = dict(row) if row else {}
+        if str(user.get("role") or "").upper() not in {"OWNER", "PLATFORM_OWNER"} or str(user.get("email") or "").strip().lower() not in self.owner_emails():
+            raise ConsoleProblem("This console is reserved for the BuildCommand platform owner.", 403)
+        return user
+
+    def current_actor(self):
+        with self.connection() as c:
+            return self.actor(c)
+
+    def protected_companies(self, c, user):
+        # Protect every configured owner, plus the original master identity.
+        emails = sorted(self.owner_emails() | {self.owner_email})
+        marks = ",".join("?" for _ in emails)
+        rows = c.execute(f"SELECT company_id FROM users WHERE LOWER(email) IN ({marks})", tuple(emails)).fetchall()
+        return {int(r["company_id"]) for r in rows if r["company_id"] is not None} | {int(user["company_id"])}
+
+    def table_exists(self, c, table):
+        if self.postgres:
+            return bool(c.execute("SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=?", (table,)).fetchone())
+        return bool(c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone())
+
+    def lock_account(self, c, cid):
+        suffix = " FOR UPDATE" if self.postgres else ""
+        row = c.execute("SELECT id,name FROM companies WHERE id=?" + suffix, (cid,)).fetchone()
+        if not row:
+            raise ConsoleProblem("This customer account could not be found.", 404)
+        if self.postgres:
+            for table in ("company_subscriptions", "company_access_approvals", "company_demo_access"):
+                if self.table_exists(c, table):
+                    c.execute(f"SELECT company_id FROM {table} WHERE company_id=? FOR UPDATE", (cid,)).fetchall()
+
+    def dataset(self, c, user):
+        protected = self.protected_companies(c, user)
+        companies = c.execute("""SELECT co.id,co.name,co.created,
+            (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) AS user_count,
+            (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) AS project_count,
+            (SELECT u.email FROM users u WHERE u.company_id=co.id ORDER BY u.id LIMIT 1) AS contact
+            FROM companies co ORDER BY LOWER(co.name),co.id""").fetchall()
+        subs = {int(r["company_id"]): dict(r) for r in c.execute("""SELECT s.* FROM company_subscriptions s
+            WHERE s.id=(SELECT MAX(s2.id) FROM company_subscriptions s2 WHERE s2.company_id=s.company_id)""").fetchall()}
+        approvals = {int(r["company_id"]): dict(r) for r in c.execute("SELECT * FROM company_access_approvals").fetchall()}
+        demos = {int(r["company_id"]): dict(r) for r in c.execute("SELECT * FROM company_demo_access").fetchall()} if self.table_exists(c, "company_demo_access") else {}
+        plans = [dict(r) for r in c.execute("SELECT * FROM platform_plans ORDER BY monthly_price_cents,code").fetchall()]
+        rows = []
+        for source in companies:
+            row = dict(source)
+            cid = int(row["id"])
+            if cid in protected:
+                continue
+            sub, approval, demo = subs.get(cid, {}), approvals.get(cid, {}), demos.get(cid, {})
+            status = str(sub.get("status") or "NO_SUBSCRIPTION").upper()
+            if status == "CANCELLED":
+                status = "CANCELED"
+            end = parse_date(sub.get("trial_ends_at"))
+            if status == "TRIAL" and end and end <= datetime.now(timezone.utc):
+                status = "TRIAL_EXPIRED"
+            demo_state = str(demo.get("status") or "").upper()
+            expiry = parse_date(demo.get("expires_at"))
+            if demo_state == "ACTIVE" and (not expiry or expiry <= datetime.now(timezone.utc)):
+                demo_state = "EXPIRED"
+            approved = bool(int(approval.get("approved") or 0))
+            eligible = status == "ACTIVE"
+            # Display the same separate paid/demo paths as the 8.5 customer gate.
+            access = "Demo access" if demo_state == "ACTIVE" else "Enabled" if eligible and approved else "Awaiting approval" if eligible else "Restricted"
+            row.update(sub=sub, approval=approval, demo=demo, status=status,
+                       demo_status=demo_state, approved=approved, access=access,
+                       eligible=eligible, plan_code=sub.get("plan_code") or "",
+                       stripe_payment_status=sub.get("stripe_payment_status") or "Not recorded")
+            rows.append(row)
+        return rows, plans
+
+    def account(self, c, user, cid):
+        if cid in self.protected_companies(c, user):
+            raise ConsoleProblem("The platform owner's company is protected from customer account controls.", 409)
+        rows, plans = self.dataset(c, user)
+        row = next((r for r in rows if int(r["id"]) == cid), None)
+        if not row:
+            raise ConsoleProblem("This customer account could not be found.", 404)
+        return row, plans
+
+    def digest(self, row):
+        selected = {key: row.get(key) for key in ("id", "name", "user_count", "project_count", "sub", "approval", "demo")}
+        return hashlib.sha256(json.dumps(selected, sort_keys=True, default=str).encode()).hexdigest()
+
+    def token(self, request, purpose, value):
+        session = request.cookies.get("bc_session", "")
+        payload = json.dumps({"purpose": purpose, "value": value, "time": int(time.time())}, sort_keys=True, separators=(",", ":"))
+        # A signed session-bound value, independent of worker-local memory.
+        import base64
+        body = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+        signature = hmac.new(session.encode(), body.encode(), hashlib.sha256).hexdigest()
+        return body + "." + signature
+
+    def verify_token(self, request, token, purpose, max_age=900):
+        import base64
+        session = request.cookies.get("bc_session", "")
+        try:
+            if not session or len(token) > 16000:
+                raise ValueError()
+            body, signature = token.split(".", 1)
+            expected = hmac.new(session.encode(), body.encode(), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected, signature):
+                raise ValueError()
+            payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+            age = time.time() - int(payload["time"])
+            if payload["purpose"] != purpose or not -30 <= age <= max_age:
+                raise ValueError()
+            return payload["value"]
+        except (ValueError, TypeError, KeyError, UnicodeError):
+            raise ConsoleProblem("This form has expired or changed. Refresh the page and try again.", 409)
+
+    def form_security(self, request, form):
+        origin = request.headers.get("origin")
+        if origin:
+            try:
+                parsed = urlsplit(origin)
+                same = (parsed.scheme.lower(), parsed.netloc.lower()) == (request.url.scheme.lower(), request.url.netloc.lower())
+            except ValueError:
+                same = False
+            if not same:
+                raise ConsoleProblem("Submit this form from the Owner Console.", 403)
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            raise ConsoleProblem("Submit this form from the Owner Console.", 403)
+        cookie, submitted = request.cookies.get(CSRF_COOKIE, ""), str(form.get("csrf_token") or "")
+        if not cookie or not submitted or not hmac.compare_digest(cookie.encode(), submitted.encode()):
+            raise ConsoleProblem("Refresh this page before submitting the form.", 403)
+        self.verify_token(request, cookie, "csrf", 43200)
+
+    def hidden(self, request, csrf, row=None):
+        fields = f'<input type="hidden" name="csrf_token" value="{esc(csrf)}">'
+        if row:
+            snapshot = self.token(request, "account", {"id": row["id"], "digest": self.digest(row)})
+            fields += f'<input type="hidden" name="snapshot" value="{esc(snapshot)}">'
+        return fields
+
+    def check_snapshot(self, request, form, row):
+        value = self.verify_token(request, str(form.get("snapshot") or ""), "account")
+        if value != {"id": row["id"], "digest": self.digest(row)}:
+            raise ConsoleProblem("This account changed after you opened the form. Refresh it to review the latest information.", 409)
+
+    def insert(self, c, table, columns, values, pk="id"):
+        # Explicit RETURNING prevents PgCompatConnection's rollback-and-retry
+        # behavior on tables keyed by company_id rather than id.
+        marks = ",".join("?" for _ in values)
+        return c.execute(f"INSERT INTO {table}({columns}) VALUES({marks}) RETURNING {pk}", tuple(values)).fetchone()
+
+    def audit(self, c, user, row, action, detail):
+        self.insert(c, "bc_owner_console_events", "actor_user_id,actor_email,company_id,company_name,action,detail,created",
+                    (int(user["id"]), user["email"], int(row["id"]), row["name"], action, detail, utcnow().isoformat()))
+
+    def set_approval(self, c, user, row, enabled, note):
+        ts = utcnow().isoformat()
+        if not row["approval"]:
+            self.insert(c, "company_access_approvals", "company_id,approved,created,updated", (row["id"], 0, ts, ts), "company_id")
+        if enabled:
+            c.execute("""UPDATE company_access_approvals SET approved=1,approved_by_user_id=?,approved_at=?,
+                revoked_by_user_id=NULL,revoked_at=NULL,note=?,updated=? WHERE company_id=?""",
+                      (user["id"], ts, note, ts, row["id"]))
+        else:
+            c.execute("""UPDATE company_access_approvals SET approved=0,revoked_by_user_id=?,revoked_at=?,
+                note=?,updated=? WHERE company_id=?""", (user["id"], ts, note, ts, row["id"]))
+
+    def set_subscription(self, c, row, plan, state):
+        ts = utcnow().isoformat()
+        if row["sub"]:
+            c.execute("UPDATE company_subscriptions SET plan_code=?,status=?,updated=? WHERE id=?",
+                      (plan, state, ts, row["sub"]["id"]))
+        else:
+            self.insert(c, "company_subscriptions", "company_id,plan_code,status,created,updated", (row["id"], plan, state, ts, ts))
+
+    def mutate(self, request, form, cid, action):
+        with self.connection(True) as c:
+            user = self.actor(c)
+            self.lock_account(c, cid)
+            row, plans = self.account(c, user, cid)
+            self.check_snapshot(request, form, row)
+            note = str(form.get("note") or "").strip()
+            if len(note) > 2000:
+                raise ConsoleProblem("Keep the account note under 2,000 characters.")
+            if action in {"suspend", "reactivate", "cancel", "revoke"} and form.get("confirmed") != "yes":
+                raise ConsoleProblem("Review and confirm this account change first.", 409)
+            if action == "note":
+                if not note:
+                    raise ConsoleProblem("Enter an account note.")
+            elif action == "approve":
+                self.set_approval(c, user, row, True, note or "Approved by platform owner")
+            elif action in {"revoke", "suspend", "cancel"}:
+                self.set_approval(c, user, row, False, note or ACTION_LABELS[action])
+                if action != "revoke" and row["sub"]:
+                    self.set_subscription(c, row, row["plan_code"], "SUSPENDED" if action == "suspend" else "CANCELED")
+                # A running demo independently permits entry in 8.5.
+                if row["demo"]:
+                    c.execute("UPDATE company_demo_access SET status='DENIED' WHERE company_id=?", (cid,))
+            elif action == "reactivate":
+                if not row["sub"]:
+                    raise ConsoleProblem("Save a local subscription before reactivating this account.", 409)
+                self.set_subscription(c, row, row["plan_code"], "ACTIVE")
+                self.set_approval(c, user, row, True, note or "Manually reactivated by platform owner")
+            elif action in {"subscription", "plan", "status"}:
+                active_plans = {str(p["code"]): p for p in plans if int(p.get("active") if p.get("active") is not None else 1)}
+                plan = str(form.get("plan_code") or "").strip() if action != "status" else row["plan_code"]
+                state = str(form.get("status") or "").upper().strip() if action != "plan" else str(row["sub"].get("status") or "PENDING").upper()
+                if plan not in active_plans and not (row["sub"] and plan == row["plan_code"]):
+                    raise ConsoleProblem("Choose a plan from the current plan catalog.")
+                if not plan or state not in STATES:
+                    raise ConsoleProblem("Choose a valid plan and subscription status.")
+                if not note:
+                    raise ConsoleProblem("Add a brief reason for this local subscription change.")
+                self.set_subscription(c, row, plan, state)
+                if state in {"SUSPENDED", "CANCELED"}:
+                    self.set_approval(c, user, row, False, note)
+                    if row["demo"]:
+                        c.execute("UPDATE company_demo_access SET status='DENIED' WHERE company_id=?", (cid,))
+                note = f"Plan: {row['plan_code'] or 'none'} → {plan}; local status: {row['sub'].get('status') or 'none'} → {state}. {note}"
+            else:
+                raise ConsoleProblem("That account action is not available.", 404)
+            self.audit(c, user, row, action.upper(), note or ACTION_LABELS[action])
+        return RedirectResponse(f"/owner/customers/{cid}?notice={'note' if action == 'note' else 'saved'}", status_code=303)
+
+    def decide_demo(self, request, form, cid, action):
+        with self.connection(True) as c:
+            user = self.actor(c)
+            self.lock_account(c, cid)
+            row, plans = self.account(c, user, cid)
+            self.check_snapshot(request, form, row)
+            if not row["demo"]:
+                raise ConsoleProblem("No demo request exists for this account.", 404)
+            if action == "approve":
+                if row["demo_status"] != "PENDING_APPROVAL":
+                    raise ConsoleProblem("Only a pending demo can be approved. Refresh the account to see its current state.", 409)
+                if row['status'] not in DEMO_ENROLLMENT_STATES | {'ACTIVE', 'LEGACY'}:
+                    raise ConsoleProblem('Resolve this account’s local subscription status before approving a demo. Its billing or suspension status will not be overwritten by demo approval.', 409)
+                start = utcnow()
+                expires = (start + timedelta(days=7)).isoformat()
+                if row['status'] in DEMO_ENROLLMENT_STATES:
+                    plan = row['plan_code'] or next((str(p['code']) for p in plans if int(p.get('active') if p.get('active') is not None else 1)), '')
+                    if not plan:
+                        raise ConsoleProblem('Configure an active plan before approving this new account’s demo.', 409)
+                    self.set_subscription(c, row, plan, 'TRIAL')
+                    # 8.5 still has a legacy subscription gate in addition to
+                    # company_demo_access. Both clocks must start at approval.
+                    c.execute('''UPDATE company_subscriptions SET trial_ends_at=?
+                        WHERE id=(SELECT id FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1)''', (expires, cid))
+                c.execute("UPDATE company_demo_access SET status='ACTIVE',started_at=?,expires_at=?,upgraded_at=NULL WHERE company_id=?",
+                          (start.isoformat(), expires, cid))
+                detail = "Approved a seven-day demo. The clock starts at approval."
+            elif action == "deny":
+                if form.get("confirmed") != "yes":
+                    raise ConsoleProblem("Review the demo decision before confirming.", 409)
+                if row["demo_status"] not in {"PENDING_APPROVAL", "ACTIVE"}:
+                    raise ConsoleProblem("This demo is no longer awaiting a decision or running.", 409)
+                c.execute("UPDATE company_demo_access SET status='DENIED' WHERE company_id=?", (cid,))
+                detail = "Declined or ended the demo. Paid account approval was not changed."
+            else:
+                raise ConsoleProblem("That demo action is not available.", 404)
+            note = str(form.get('note') or '').strip()
+            if len(note) > 2000:
+                raise ConsoleProblem('Keep the decision note under 2,000 characters.')
+            if note:
+                detail += ' ' + note
+            self.audit(c, user, row, "DEMO_" + action.upper(), detail)
+        return RedirectResponse("/owner/demos?notice=demo", status_code=303)
+
+    def history(self, c, cid=None):
+        clause, params = (" WHERE company_id=?", (cid,)) if cid is not None else ("", ())
+        events = [dict(r) for r in c.execute("SELECT * FROM bc_owner_console_events" + clause + " ORDER BY id DESC LIMIT 30", params).fetchall()]
+        for table in ("owner_subscription_events", "company_access_approval_events", "owner_cleanup_events"):
+            if not self.table_exists(c, table) or (cid is not None and table == "owner_cleanup_events"):
+                continue
+            old = c.execute(f"SELECT * FROM {table}" + (clause if table != "owner_cleanup_events" else "") + " ORDER BY created DESC LIMIT 15", params if table != "owner_cleanup_events" else ()).fetchall()
+            for source in old:
+                row = dict(source)
+                row.setdefault("actor_email", "Earlier console")
+                row.setdefault("company_name", "Company #" + str(row.get("company_id") or "—"))
+                events.append(row)
+        return sorted(events, key=lambda row: parse_date(row.get("created")) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)[:30]
+
+    def readiness(self):
+        mode = (os.environ.get("STRIPE_MODE") or "LIVE").strip().upper()
+        if mode not in {"LIVE", "TEST"}:
+            mode = "LIVE"
+        prefix = "STRIPE_TEST_" if mode == "TEST" else "STRIPE_"
+        base = (os.environ.get("APP_BASE_URL") or "").strip().rstrip("/")
+        try:
+            parsed = urlsplit(base)
+            valid_base = bool(parsed.scheme in {"https", "http"} and parsed.netloc and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment)
+        except ValueError:
+            valid_base = False
+        return {"mode": mode, "secret_key_configured": bool(os.environ.get(prefix + "SECRET_KEY", "").strip()),
+                "webhook_secret_configured": bool(os.environ.get(prefix + "WEBHOOK_SECRET", "").strip()),
+                "app_base_url_configured": valid_base,
+                "webhook_url": base + "/billing/stripe-webhook" if valid_base else None,
+                "scope": "Configuration presence only; no live payment connection was tested."}
+
+    def summary(self, rows, plans):
+        customers = [r for r in rows if r["user_count"]]
+        prices = {str(p["code"]): int(p.get("monthly_price_cents") or 0) for p in plans}
+        estimated = sum(prices.get(r["plan_code"], 0) for r in customers if r["status"] == "ACTIVE" and not int(r["sub"].get("grandfathered") or 0) and r["demo_status"] != "ACTIVE")
+        return {"customers": len(customers), "mrr_cents": estimated, "arr_cents": estimated * 12,
+                "active": sum(r["status"] in {"ACTIVE", "LEGACY"} for r in customers),
+                "trials": sum(r["status"] == "TRIAL" for r in customers),
+                "past_due": sum(r["status"] in {"PAST_DUE", "UNPAID"} for r in customers),
+                "canceled": sum(r["status"] == "CANCELED" for r in customers),
+                "awaiting_approval": sum(r["eligible"] and not r["approved"] and r["demo_status"] != "ACTIVE" for r in customers),
+                "pending_demos": sum(r["demo_status"] == "PENDING_APPROVAL" for r in customers),
+                "active_demos": sum(r["demo_status"] == "ACTIVE" for r in customers),
+                "revenue_basis": "Estimate from local active plan prices; not collected revenue."}
+
+    def shell(self, request, user, title, description, body, active="overview", action=""):
+        tabs = [("overview", "Overview", "/owner", "grid"),
+                ("customers", "Customers", "/owner/customers", "building"),
+                ("demos", "Demo requests", "/owner/demos", "clock"),
+                ("billing", "Billing", "/owner/billing", "card"),
+                ("activity", "Activity", "/owner/activity", "activity"),
+                ("maintenance", "Maintenance", "/owner/cleanup", "settings")]
+        nav = "".join(f'<a href="{href}" class="nav-link {"active" if key == active else ""}" {"aria-current=page" if key == active else ""}>{icon(symbol)}<span>{text}</span></a>' for key, text, href, symbol in tabs)
+        name = str(user.get("display_name") or "Platform owner")
+        initials = "".join(word[0] for word in name.split()[:2]).upper()
+        notice = MESSAGES.get(request.query_params.get("notice", ""), "")
+        notice_html = f'<div class="notice success" role="status">{icon("check")}<span>{esc(notice)}</span></div>' if notice else ""
+        return f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light"><title>{esc(title)} · BuildCommand Owner</title>
+<style>{STYLES}</style></head><body class="oc">
+<a class="skip" href="#main">Skip to content</a>
+<aside class="sidebar" aria-label="Owner console navigation">
+  <a class="brand" href="/owner"><span class="brand-mark">{icon("building")}</span><span>BuildCommand <b>AI</b><small>OWNER CONSOLE</small></span></a>
+  <div class="nav-label">BUSINESS</div><nav>{nav}</nav>
+  <div class="sidebar-bottom"><a class="nav-link" href="/workspace">{icon("arrow")}<span>Open construction app</span></a>
+  <div class="owner-profile"><span class="avatar">{esc(initials)}</span><span>{esc(name)}<small>Platform owner</small></span></div></div>
+</aside>
+<div class="main-wrap"><header class="topbar"><span>Business workspace <span class="divider">/</span> <b>{esc(title)}</b></span><span class="top-date">{utcnow().strftime('%b %d, %Y')}</span></header>
+<main id="main" tabindex="-1"><div class="page-heading"><div><div class="eyebrow">OWNER CONSOLE</div><h1>{esc(title)}</h1><p>{esc(description)}</p></div>{action}</div>
+{notice_html}{body}</main>
+<footer>BuildCommand AI <span>Owner Console {OWNER_CONSOLE_VERSION} · Built by Willy LaHood © 2026</span></footer></div>
+</body></html>'''
+
+    def metric(self, title, value, description, href=None):
+        content = f'<span class="metric-label">{esc(title)}</span><strong>{esc(value)}</strong><span class="metric-note">{esc(description)}</span>'
+        return f'<a class="metric" href="{esc(href)}">{content}{icon("arrow")}</a>' if href else f'<div class="metric">{content}</div>'
+
+    def empty(self, title, detail):
+        return f'<div class="empty">{icon("inbox")}<h3>{esc(title)}</h3><p>{esc(detail)}</p></div>'
+
+    def table(self, headings, rows, caption):
+        return f'<div class="table-scroll" role="region" aria-label="{esc(caption)}" tabindex="0"><table><caption class="sr-only">{esc(caption)}</caption><thead><tr>' + "".join(f'<th scope="col">{esc(h)}</th>' for h in headings) + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+
+    def customer_table(self, rows, billing=False):
+        if not rows:
+            return self.empty("No matching accounts", "Try another search or clear the filters.")
+        lines = []
+        for row in rows:
+            cid = int(row["id"])
+            account = f'<a class="account-link" href="/owner/customers/{cid}">{esc(row["name"])}</a><small>{esc(row.get("contact") or "No users yet")}</small>'
+            access = badge(row["access"], "good" if row["access"] == "Enabled" else "info" if row["access"] == "Demo access" else "warn" if row["access"] == "Awaiting approval" else "neutral")
+            fields = [account, esc(row["plan_code"] or "—"), state_badge(row["status"])]
+            if billing:
+                fields += [esc(label(row["stripe_payment_status"])), badge("Approved", "good") if row["approved"] else badge("Pending"), access]
+            else:
+                fields += [access, f'<span class="counts">{int(row["user_count"])} people <span>·</span> {int(row["project_count"])} projects</span>']
+            fields += [f'<a class="text-link" href="/owner/customers/{cid}" aria-label="Review {esc(row["name"])}">Review {icon("arrow")}</a>']
+            lines.append('<tr>' + ''.join(f'<td>{field}</td>' for field in fields) + '</tr>')
+        headers = ["Customer", "Plan", "Local status"] + (["Recorded Stripe status", "Owner approval", "App access"] if billing else ["App access", "Team & projects"]) + ["Action"]
+        return self.table(headers, ''.join(lines), "Customer accounts")
+
+    def filtered(self, request, rows, demo=False):
+        q = str(request.query_params.get("q") or "").strip()[:200]
+        status = str(request.query_params.get("status") or "all").upper()
+        access = str(request.query_params.get("access") or "all").lower()
+        selected = []
+        for row in rows:
+            if q and q.casefold() not in f"{row['name']} {row.get('contact') or ''} {row['id']}".casefold():
+                continue
+            if status != "ALL" and (row["demo_status"] if demo else row["status"]) != status:
+                continue
+            if access == "pending" and (row["approved"] or not row["eligible"] or row["demo_status"] == "ACTIVE"):
+                continue
+            if access == "enabled" and row["access"] not in {"Enabled", "Demo access"}:
+                continue
+            if access == "restricted" and row["access"] in {"Enabled", "Demo access"}:
+                continue
+            selected.append(row)
+        try:
+            page = max(1, min(int(request.query_params.get("page", 1)), 1000000))
+        except ValueError:
+            page = 1
+        page = min(page, max(1, (len(selected) + 24) // 25))
+        return selected[(page - 1) * 25: page * 25], len(selected), page
+
+    def filters(self, request, total, demo=False):
+        q = request.query_params.get("q", "")[:200]
+        states = ("PENDING_APPROVAL", "ACTIVE", "EXPIRED", "DENIED", "UPGRADED") if demo else STATES + ("TRIAL_EXPIRED", "NO_SUBSCRIPTION", "UNPAID")
+        selected_state = str(request.query_params.get("status", "all")).upper()
+        options = '<option value="all">All statuses</option>' + ''.join(f'<option value="{state}" {"selected" if selected_state == state else ""}>{esc(label(state))}</option>' for state in states)
+        access_value = request.query_params.get("access", "all")
+        access = '' if demo else '<label><span>App access</span><select name="access">' + ''.join(f'<option value="{key}" {"selected" if access_value == key else ""}>{text}</option>' for key, text in (("all", "All access"), ("pending", "Awaiting approval"), ("enabled", "Enabled or demo"), ("restricted", "Restricted"))) + '</select></label>'
+        return f'''<form class="filters" method="get" action="{esc(request.url.path)}" role="search">
+<label class="search-label"><span>Search accounts</span><input type="search" name="q" value="{esc(q)}" maxlength="200" placeholder="Company, contact email, or ID"></label>
+<label><span>Status</span><select name="status">{options}</select></label>{access}
+<button class="btn secondary" type="submit">Apply filters</button><a class="clear-link" href="{esc(request.url.path)}">Clear</a></form>
+<div class="result-count">{total} matching {'demo requests' if demo else 'accounts'}</div>'''
+
+    def pager(self, request, total, page):
+        pages = max(1, (total + 24) // 25)
+        if pages == 1:
+            return ''
+        def link(number, text):
+            query = dict(request.query_params)
+            query["page"] = number
+            return f'<a class="btn secondary" href="{esc(request.url.path + "?" + urlencode(query))}">{text}</a>'
+        return f'<nav class="pager" aria-label="Results pages"><span>Page {page} of {pages}</span><div class="actions">{link(page - 1, "Previous") if page > 1 else ""}{link(page + 1, "Next") if page < pages else ""}</div></nav>'
+
+    def timeline(self, events, account=False):
+        if not events:
+            return self.empty("No account activity yet", "Owner decisions and notes will appear here as they happen.")
+        items = []
+        for row in events:
+            action = ACTION_LABELS.get(str(row.get("action") or "").lower(), label(row.get("action")))
+            company = '' if account else f'<span class="event-company">{esc(row.get("company_name") or "Earlier account event")}</span>'
+            items.append(f'''<li><span class="event-dot"></span><div><div class="event-title"><b>{esc(action)}</b>{company}<time>{esc(date_label(row.get("created")))}</time></div>
+<p class="prewrap">{esc(row.get("detail") or "No additional note.")}</p><small>{esc(row.get("actor_email") or "Earlier console")}</small></div></li>''')
+        return '<ol class="timeline">' + ''.join(items) + '</ol>'
+
+    def dashboard(self, c, request, user, rows, plans):
+        metrics = self.summary(rows, plans)
+        cards = ''.join([
+            self.metric("Customer accounts", metrics["customers"], "Companies with registered users", "/owner/customers"),
+            self.metric("Awaiting approval", metrics["awaiting_approval"], "Active accounts ready for review", "/owner/customers?access=pending"),
+            self.metric("Demo requests", metrics["pending_demos"], "Waiting for your decision", "/owner/demos?status=PENDING_APPROVAL"),
+            self.metric("Estimated monthly recurring", money(metrics["mrr_cents"]), "Local plan estimate · not collections"),
+        ])
+        queue = []
+        for row in rows:
+            if not row["user_count"]:
+                continue
+            if row["demo_status"] == "PENDING_APPROVAL":
+                reason, style, destination = "Demo request", "info", "/owner/demos?status=PENDING_APPROVAL"
+            elif row["access"] == "Awaiting approval":
+                reason, style, destination = "Access approval", "warn", f'/owner/customers/{row["id"]}'
+            elif row["status"] in {"PAST_DUE", "UNPAID"}:
+                reason, style, destination = "Billing attention", "bad", f'/owner/customers/{row["id"]}'
+            else:
+                continue
+            queue.append(f'<a class="queue-item" href="{destination}"><span><strong>{esc(row["name"])}</strong><small>{esc(row.get("contact") or "No contact recorded")}</small></span>{badge(reason, style)}{icon("arrow")}</a>')
+        queue_html = ''.join(queue[:6]) if queue else self.empty("You're up to date", "No pending demos, access approvals, or past-due accounts.")
+        events = self.history(c)[:4]
+        body = f'''<section class="metrics" aria-label="Business overview">{cards}</section>
+<div class="split"><section class="panel"><div class="panel-heading"><div><h2>Needs your attention</h2><p>Decisions that keep customer accounts moving.</p></div>{badge(str(len(queue)) + " items")}</div>{queue_html}</section>
+<section class="panel quick-panel"><div class="eyebrow">ACCOUNT ACCESS</div><h2>A clear view of every customer.</h2><p>Review the local subscription, your approval, and any active demo together.</p><a class="btn primary" href="/owner/customers">Review customers {icon("arrow")}</a>
+<div class="quick-stats"><span><b>{metrics['active']}</b>Active / legacy accounts</span><span><b>{metrics['active_demos']}</b>Running demos</span><span><b>{metrics['past_due']}</b>Billing issues</span></div></section></div>
+<section class="panel"><div class="panel-heading"><div><h2>Customer accounts</h2><p>Your first ten customer accounts, listed alphabetically.</p></div><a class="text-link" href="/owner/customers">View all {icon('arrow')}</a></div>{self.customer_table([r for r in rows if r['user_count']][:10])}</section>
+<section class="panel"><div class="panel-heading"><div><h2>Recent owner activity</h2><p>Decisions and notes across the business.</p></div><a class="text-link" href="/owner/activity">View activity {icon('arrow')}</a></div>{self.timeline(events)}</section>'''
+        return self.shell(request, user, "Overview", "Your customers, account decisions, and business activity in one place.", body)
+
+    def customers(self, request, user, rows):
+        selected, total, page = self.filtered(request, rows)
+        body = '<section class="panel">' + self.filters(request, total) + self.customer_table(selected) + self.pager(request, total, page) + '</section>'
+        return self.shell(request, user, "Customers", "Find an account and review its subscription, people, projects, and access.", body, "customers")
+
+    def customer_detail(self, c, request, user, csrf, row, plans):
+        cid = int(row["id"])
+        tab = request.query_params.get("tab", "account")
+        if tab not in {"account", "people", "projects", "activity"}:
+            tab = "account"
+        tabs = '<nav class="tabs" aria-label="Customer sections">' + ''.join(f'<a href="/owner/customers/{cid}?tab={key}" class="{"active" if key == tab else ""}" {"aria-current=page" if key == tab else ""}>{text}</a>' for key, text in (("account", "Account"), ("people", "People"), ("projects", "Projects"), ("activity", "Activity"))) + '</nav>'
+        summary = f'''<a class="back-link" href="/owner/customers">← All customers</a><section class="account-summary"><div class="company-monogram">{esc(str(row['name'])[:2].upper())}</div>
+<div><h2>{esc(row['name'])}</h2><p>Company #{cid} <span>·</span> {esc(row.get('contact') or 'No users yet')}</p></div><div class="summary-badges">{state_badge(row['status'])}{badge(row['access'], 'good' if row['access'] == 'Enabled' else 'info' if row['access'] == 'Demo access' else 'neutral')}</div></section>'''
+        hidden = self.hidden(request, csrf, row)
+        if tab == "people":
+            offset, _ = self.offset(request, row['user_count'])
+            people = c.execute("SELECT id,email,display_name,role,created FROM users WHERE company_id=? ORDER BY id LIMIT 25 OFFSET ?", (cid, offset)).fetchall()
+            lines = ''.join(f'<tr><td><b>{esc(p["display_name"] or "—")}</b><small>{esc(p["email"])}</small></td><td>{esc(label(p["role"]))}</td><td>{esc(date_label(p["created"]))}</td></tr>' for p in people)
+            content = '<section class="panel"><div class="panel-heading"><div><h2>People</h2><p>Company administrators manage roles and project assignments in their company workspace.</p></div></div>' + (self.table(["Person", "Company role", "Joined"], lines, "Company people") if lines else self.empty("No people on this account", "Registered users will appear here.")) + self.pager(request, row['user_count'], offset // 25 + 1) + '</section>'
+        elif tab == "projects":
+            offset, _ = self.offset(request, row['project_count'])
+            projects = c.execute("SELECT id,name FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 25 OFFSET ?", (cid, offset)).fetchall()
+            lines = ''.join(f'<tr><td><b>{esc(p["name"])}</b></td><td>#{int(p["id"])}</td></tr>' for p in projects)
+            content = '<section class="panel"><div class="panel-heading"><div><h2>Projects</h2><p>Project records remain managed by the customer’s appointed team.</p></div></div>' + (self.table(["Project", "ID"], lines, "Customer projects") if lines else self.empty("No projects yet", "Projects created by this customer will appear here.")) + self.pager(request, row['project_count'], offset // 25 + 1) + '</section>'
+        elif tab == "activity":
+            content = '<section class="panel"><div class="panel-heading"><div><h2>Account history</h2><p>Most recent 30 owner events, including available history from the earlier console.</p></div></div>' + self.timeline(self.history(c, cid), True) + '</section>'
+        else:
+            plan_choices = []
+            codes = set()
+            for plan in plans:
+                code = str(plan["code"])
+                if not int(plan.get("active") if plan.get("active") is not None else 1) and code != row["plan_code"]:
+                    continue
+                codes.add(code)
+                plan_choices.append(f'<option value="{esc(code)}" {"selected" if code == row["plan_code"] else ""}>{esc(plan.get("name") or code)} · {esc(money(plan.get("monthly_price_cents")))}/month</option>')
+            if row["plan_code"] and row["plan_code"] not in codes:
+                plan_choices.insert(0, f'<option value="{esc(row["plan_code"])}" selected>{esc(row["plan_code"])} · retained plan</option>')
+            if not row["sub"]:
+                plan_choices.insert(0, '<option value="" selected disabled>Choose a plan</option>')
+            raw_status = str(row["sub"].get("status") or "PENDING").upper()
+            state_choices = ''.join(f'<option value="{state}" {"selected" if state == raw_status else ""}>{label(state)}</option>' for state in STATES)
+            if raw_status not in STATES:
+                state_choices = f'<option value="" selected disabled>{esc(label(raw_status))} · choose a new status to change</option>' + state_choices
+            approve = '' if row['approved'] else f'<form method="post" action="/owner/customers/{cid}/approve">{hidden}<button class="btn primary" type="submit">Approve access</button></form>'
+            revoke = f'<a class="btn secondary" href="/owner/customers/{cid}/review?action=revoke">Revoke approval</a>' if row['approved'] else ''
+            demo_note = f'<div class="notice info">{icon("clock")}<span>Demo: {esc(label(row["demo_status"]))}. {"Ends " + esc(date_label(row["demo"].get("expires_at"))) if row["demo_status"] == "ACTIVE" else "Manage demo decisions on Demo requests."}</span></div>' if row['demo'] else ''
+            billing = self.billing_activity(c, cid)
+            content = f'''<div class="split account-split"><section class="panel padded"><div class="section-label">ACCESS</div><h2>Customer access</h2>
+<dl class="facts"><div><dt>Local subscription</dt><dd>{state_badge(row['status'])}</dd></div><div><dt>Owner approval</dt><dd>{badge('Approved', 'good') if row['approved'] else badge('Pending', 'warn')}</dd></div><div><dt>App access</dt><dd>{esc(row['access'])}</dd></div></dl>
+<p class="helper">Paid account access requires an active subscription and your approval. A running, approved demo provides temporary access.</p>{demo_note}<div class="actions">{approve}{revoke}</div>
+<div class="section-divider"></div><h3>Account actions</h3><p class="helper">Review the effect of each action before confirming.</p><div class="actions"><a class="btn secondary" href="/owner/customers/{cid}/review?action=suspend">Suspend access</a><a class="btn secondary" href="/owner/customers/{cid}/review?action=reactivate">Reactivate account</a></div>
+</section><section class="panel padded"><div class="section-label">SUBSCRIPTION</div><h2>Local plan & status</h2><p class="helper">These controls update BuildCommand access. They do not charge a card or change a Stripe subscription.</p>
+<form class="stack-form" method="post" action="/owner/customers/{cid}/subscription">{hidden}<label>Plan<select name="plan_code" required>{''.join(plan_choices)}</select></label><label>Local subscription status<select name="status" required>{state_choices}</select></label>
+<label>Reason for change<textarea name="note" maxlength="2000" rows="2" required placeholder="Briefly explain this account adjustment"></textarea></label><button class="btn primary" type="submit">Save local subscription</button></form>
+<a class="danger-link" href="/owner/customers/{cid}/review?action=cancel">Review local cancellation</a></section></div>
+<div class="split"><section class="panel padded"><div class="section-label">ACCOUNT SNAPSHOT</div><h2>Team & billing</h2><dl class="facts"><div><dt>People</dt><dd><a href="/owner/customers/{cid}?tab=people">{int(row['user_count'])} people</a></dd></div><div><dt>Projects</dt><dd><a href="/owner/customers/{cid}?tab=projects">{int(row['project_count'])} projects</a></dd></div><div><dt>Recorded Stripe status</dt><dd>{esc(label(row['stripe_payment_status']))}</dd></div><div><dt>Last Stripe update</dt><dd>{esc(date_label(row['sub'].get('stripe_updated_at')))}</dd></div></dl></section>
+<section class="panel padded"><div class="section-label">INTERNAL NOTE</div><h2>Add account context</h2><p class="helper">Visible to platform owners in this account’s history.</p><form class="stack-form" method="post" action="/owner/customers/{cid}/note">{hidden}<label>Account note<textarea name="note" rows="3" maxlength="2000" required placeholder="Capture the decision or follow-up"></textarea></label><button class="btn secondary" type="submit">Add note</button></form></section></div>
+<section class="panel"><div class="panel-heading"><div><h2>Recent billing events</h2><p>Recorded events from the existing billing system.</p></div></div>{billing}</section>'''
+        return self.shell(request, user, "Customer account", "Review account access and keep a clear record of your decisions.", summary + tabs + content, "customers")
+
+    def offset(self, request, total):
+        try:
+            page = max(1, min(int(request.query_params.get("page", 1)), 1000000))
+        except ValueError:
+            page = 1
+        page = min(page, max(1, (int(total) + 24) // 25))
+        return (page - 1) * 25, page
+
+    def billing_activity(self, c, cid):
+        if not self.table_exists(c, "billing_events"):
+            return self.empty("Billing history unavailable", "The billing history table is not available in this installation.")
+        bills = c.execute("SELECT * FROM billing_events WHERE company_id=? ORDER BY id DESC LIMIT 20", (cid,)).fetchall()
+        if not bills:
+            return self.empty("No billing events recorded", "Payment events will appear here when the billing system records them.")
+        rows = ''
+        for bill in bills:
+            b = dict(bill)
+            rows += f'<tr><td>{esc(label(b.get("event_type")))}</td><td>{esc(label(b.get("status")))}</td><td class="numeric">{esc(money(b.get("amount_cents"), b.get("currency")))}</td><td>{esc(date_label(b.get("created")))}</td></tr>'
+        return self.table(["Event", "Status", "Recorded amount", "Date"], rows, "Recent billing events")
+
+    def review(self, request, user, csrf, row):
+        action = request.query_params.get("action", "")
+        explanations = {
+            "suspend": ("Suspend customer access", "This revokes owner approval, suspends the local subscription if one exists, and ends any demo. People, projects, and files remain saved. Stripe billing continues until changed in Stripe."),
+            "revoke": ("Revoke owner approval", "This removes owner approval and ends any demo. The local subscription and Stripe billing remain as recorded."),
+            "reactivate": ("Reactivate customer account", "This sets the local subscription to Active and grants owner approval. It allows BuildCommand access without verifying a new payment. Stripe billing is not changed."),
+            "cancel": ("Cancel local subscription", "This cancels the local subscription, revokes access, and ends any demo. Customer data remains saved. You must manage any Stripe billing cancellation separately."),
+            "demo_deny": ("Decline or end demo", "This ends demo access. An account that also has an active subscription and owner approval can still use its paid access."),
+        }
+        if action not in explanations:
+            raise ConsoleProblem("Choose an account action from the customer page.")
+        title, explanation = explanations[action]
+        cid = int(row['id'])
+        destination = f"/owner/demos/{cid}/deny" if action == "demo_deny" else f"/owner/customers/{cid}/{action}"
+        primary = "Confirm reactivation" if action == "reactivate" else "Confirm decision"
+        body = f'''<section class="panel padded review-panel"><div class="section-label">REVIEW ACCOUNT CHANGE</div><h2>{esc(row['name'])}</h2><p class="helper">Company #{cid}</p><p class="review-description">{esc(explanation)}</p><dl class="facts"><div><dt>Current status</dt><dd>{state_badge(row['status'])}</dd></div><div><dt>Current app access</dt><dd>{esc(row['access'])}</dd></div></dl>
+<form class="stack-form" method="post" action="{destination}">{self.hidden(request, csrf, row)}<label>Decision note <span class="optional">(optional)</span><textarea name="note" rows="3" maxlength="2000" placeholder="Add context for the account history"></textarea></label>
+<label class="check-label"><input type="checkbox" name="confirmed" value="yes" required><span>I have reviewed the effect on this customer account.</span></label><div class="actions"><button class="btn {'primary' if action == 'reactivate' else 'danger'}" type="submit">{primary}</button><a class="btn secondary" href="/owner/customers/{cid}">Go back</a></div></form></section>'''
+        return self.shell(request, user, title, "Confirm the intended change before applying it.", body, "customers")
+
+    def demos(self, request, user, csrf, rows):
+        demos = [row for row in rows if row['demo']]
+        selected, total, page = self.filtered(request, demos, True)
+        metrics = ''.join([self.metric("Pending review", sum(r['demo_status'] == 'PENDING_APPROVAL' for r in demos), "Waiting for your decision"), self.metric("Running demos", sum(r['demo_status'] == 'ACTIVE' for r in demos), "Approved and within seven days"), self.metric("Demo duration", "7 days", "Starts when you approve the request")])
+        lines = ''
+        for row in selected:
+            cid, state = int(row['id']), row['demo_status']
+            actions = f'<a class="text-link" href="/owner/customers/{cid}">Review account</a>'
+            if state == 'PENDING_APPROVAL' and row['status'] in DEMO_ENROLLMENT_STATES | {'ACTIVE', 'LEGACY'}:
+                actions += f'<form method="post" action="/owner/demos/{cid}/approve">{self.hidden(request, csrf, row)}<button class="btn primary small-btn" type="submit">Approve 7-day demo</button></form>'
+            elif state == 'PENDING_APPROVAL':
+                actions += '<span class="helper">Review subscription first.</span>'
+            if state in {'PENDING_APPROVAL', 'ACTIVE'}:
+                actions += f'<a class="text-link danger-link" href="/owner/customers/{cid}/review?action=demo_deny">{"Decline" if state == "PENDING_APPROVAL" else "End demo"}</a>'
+            start_label = "Requested" if state == 'PENDING_APPROVAL' else "Started"
+            expiry = "Starts after approval" if state == 'PENDING_APPROVAL' else date_label(row['demo'].get('expires_at'))
+            lines += f'<tr><td><a class="account-link" href="/owner/customers/{cid}">{esc(row["name"])}</a><small>{esc(row.get("contact") or "No users")}</small></td><td>{state_badge(state)}</td><td><small>{start_label}</small>{esc(date_label(row["demo"].get("started_at")))}</td><td>{esc(expiry)}</td><td><div class="actions">{actions}</div></td></tr>'
+        table = self.table(["Customer", "Demo status", "Request / start", "Expires", "Decision"], lines, "Demo requests") if lines else self.empty("No matching demo requests", "New demo requests appear here for your approval.")
+        body = '<section class="metrics three">' + metrics + '</section><section class="panel">' + self.filters(request, total, True) + table + self.pager(request, total, page) + '</section>'
+        return self.shell(request, user, "Demo requests", "Approve seven days of temporary access. No card or Stripe payment is required.", body, "demos")
+
+    def billing(self, request, user, rows, plans):
+        metrics, ready = self.summary(rows, plans), self.readiness()
+        cards = ''.join([self.metric("Estimated monthly recurring", money(metrics['mrr_cents']), "Local active plan prices · not collections"), self.metric("Billing attention", metrics['past_due'], "Past-due or unpaid local accounts"), self.metric("Awaiting approval", metrics['awaiting_approval'], "Active accounts needing an owner decision")])
+        checks = [('Payment credentials', ready['secret_key_configured']), ('Webhook credentials', ready['webhook_secret_configured']), ('Application address', ready['app_base_url_configured'])]
+        connection = ''.join(f'<div><dt>{text}</dt><dd>{badge("Configured", "good") if present else badge("Missing", "warn")}</dd></div>' for text, present in checks)
+        webhook = f'<p class="helper wrap-text">Webhook address: <code>{esc(ready["webhook_url"])}</code></p>' if ready['webhook_url'] else ''
+        selected, total, page = self.filtered(request, rows)
+        body = f'''<section class="metrics three">{cards}</section><section class="panel padded"><div class="panel-heading flush"><div><h2>Payment configuration</h2><p>Settings for the selected Stripe mode.</p></div>{badge(ready['mode'] + ' mode', 'warn' if ready['mode'] == 'TEST' else 'info')}</div><dl class="facts horizontal">{connection}</dl><p class="helper">Configured means credentials are present. It does not confirm a successful payment or a working connection.</p>{webhook}</section>
+<section class="panel"><div class="panel-heading"><div><h2>Billing & account access</h2><p>Recorded payment state, local subscription status, and owner approval are shown separately.</p></div></div>{self.filters(request, total)}{self.customer_table(selected, True)}{self.pager(request, total, page)}</section>'''
+        return self.shell(request, user, "Billing", "Understand account billing state without confusing access approval with payment received.", body, "billing")
+
+    def company_tables(self, c):
+        if self.postgres:
+            rows = c.execute("""SELECT table_name FROM information_schema.columns
+                WHERE table_schema='public' AND column_name='company_id' ORDER BY table_name""").fetchall()
+            tables = [str(row['table_name']) for row in rows]
+        else:
+            tables = []
+            for row in c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall():
+                name = str(row['name'])
+                if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
+                    columns = c.execute(f'PRAGMA table_info("{name}")').fetchall()
+                    if any(column['name'] == 'company_id' for column in columns):
+                        tables.append(name)
+        if any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', table) for table in tables):
+            raise ConsoleProblem("This database needs a manual account-cleanup review.", 409)
+        return tables
+
+    def cleanup_eligible(self, row):
+        return not row['user_count'] and not row['project_count'] and row['status'] not in {'ACTIVE', 'LEGACY'} and row['demo_status'] != 'ACTIVE'
+
+    def cleanup_inventory(self, c, row, tables):
+        if not self.cleanup_eligible(row):
+            raise ConsoleProblem("Maintenance deletion is limited to empty, inactive accounts. Suspend an account with people or projects instead.", 409)
+        removable = {'company_subscriptions', 'company_access_approvals', 'company_demo_access'}
+        retained_audits = {'bc_owner_console_events', 'company_access_approval_events', 'owner_subscription_events', 'owner_subscription_control_events', 'platform_admin_audit'}
+        for table in tables:
+            if table in removable | retained_audits:
+                continue
+            count = c.execute(f'SELECT COUNT(*) AS n FROM "{table}" WHERE company_id=?', (row['id'],)).fetchone()['n']
+            if int(count or 0):
+                raise ConsoleProblem(f"{row['name']} still has related records. Keep the account or suspend it from Customers.", 409)
+
+    def selection(self, form):
+        raw = form.getlist('company_ids')
+        try:
+            values = sorted({int(value) for value in raw})
+            if not values or len(values) > 10 or min(values) < 1:
+                raise ValueError()
+            return values
+        except (ValueError, TypeError):
+            raise ConsoleProblem("Select between one and ten empty accounts to review.")
+
+    def cleanup_page(self, request, user, csrf, rows):
+        selected, total, page = self.filtered(request, rows)
+        lines = ''
+        for row in selected:
+            cid = int(row['id'])
+            eligible = self.cleanup_eligible(row)
+            control = f'<input type="checkbox" name="company_ids" value="{cid}" aria-label="Select {esc(row["name"])}" form="cleanup-review">' if eligible else '<span class="muted">—</span>'
+            note = badge('Review available', 'info') if eligible else badge('Keep / suspend')
+            lines += f'<tr><td>{control}</td><td><a class="account-link" href="/owner/customers/{cid}">{esc(row["name"])}</a><small>Company #{cid}</small></td><td>{state_badge(row["status"])}</td><td>{int(row["user_count"])}</td><td>{int(row["project_count"])}</td><td>{note}</td></tr>'
+        table = self.table(['Select', 'Account', 'Status', 'People', 'Projects', 'Maintenance'], lines, 'Account maintenance') if lines else self.empty('No matching accounts', 'Try another search or clear the filters.')
+        body = f'''<section class="panel padded"><div class="section-label">ACCOUNT MAINTENANCE</div><h2>Keep useful records. Review empty accounts.</h2><p class="helper">Only inactive accounts with no people, projects, billing history, or other related records can be deleted here. Use Suspend access to close a populated account while keeping its records.</p><p class="helper">Platform owner companies are protected. Deletion requires a separate review and confirmation.</p></section>
+<section class="panel">{self.filters(request, total)}{table}{self.pager(request, total, page)}<form id="cleanup-review" class="panel-actions" method="post" action="/owner/cleanup/review">{self.hidden(request, csrf)}<span>Select up to 10 empty accounts.</span><button class="btn secondary" type="submit">Review selected accounts {icon('arrow')}</button></form></section>'''
+        return self.shell(request, user, "Maintenance", "Review unused account records with customer data protection built into the workflow.", body, "maintenance")
+
+    def cleanup_review(self, request, form, csrf):
+        selected = self.selection(form)
+        with self.connection() as c:
+            user = self.actor(c)
+            tables = self.company_tables(c)
+            rows = []
+            for cid in selected:
+                row, _ = self.account(c, user, cid)
+                self.cleanup_inventory(c, row, tables)
+                rows.append(row)
+        token = self.token(request, 'cleanup', [{'id': r['id'], 'digest': self.digest(r)} for r in rows])
+        fields = ''.join(f'<input type="hidden" name="company_ids" value="{cid}">' for cid in selected)
+        list_html = ''.join(f'<li><b>{esc(row["name"])}</b><span>Company #{int(row["id"])} · 0 people · 0 projects</span></li>' for row in rows)
+        body = f'''<section class="panel padded review-panel"><div class="section-label">REVIEW PERMANENT DELETION</div><h2>{len(rows)} empty account{'s' if len(rows) != 1 else ''}</h2><p class="review-description">The listed company records and their local subscription, approval, and demo records will be permanently removed. Historical owner audit entries are retained.</p><ul class="review-list">{list_html}</ul>
+<form class="stack-form" method="post" action="/owner/cleanup/delete-selected">{self.hidden(request, csrf)}{fields}<input type="hidden" name="review_token" value="{esc(token)}"><label>Type DELETE SELECTED COMPANIES to confirm<input name="confirmation" autocomplete="off" required></label><div class="actions"><button class="btn danger" type="submit">Delete these empty accounts</button><a class="btn secondary" href="/owner/cleanup">Keep accounts</a></div></form></section>'''
+        return self.shell(request, user, "Review empty accounts", "Check the exact accounts below before confirming permanent removal.", body, "maintenance")
+
+    def cleanup_delete(self, request, form):
+        selected = self.selection(form)
+        if str(form.get('confirmation') or '').strip() != 'DELETE SELECTED COMPANIES':
+            raise ConsoleProblem("The confirmation text did not match. No accounts were deleted.")
+        expected = self.verify_token(request, str(form.get('review_token') or ''), 'cleanup')
+        with self.connection(True) as c:
+            user = self.actor(c)
+            tables = self.company_tables(c)
+            if self.postgres:
+                # Older app tables lack foreign keys. Prevent concurrent writes
+                # from turning an empty account into a populated one mid-delete.
+                # Only this rare, explicit maintenance transaction takes these
+                # short, bounded locks; ordinary console work uses row locks.
+                c.execute("SET LOCAL lock_timeout = '1500ms'")
+                c.execute("SET LOCAL statement_timeout = '8000ms'")
+                names = ','.join('"' + name + '"' for name in sorted(set(tables) | {'companies', 'users', 'projects'}))
+                c.execute(f'LOCK TABLE {names} IN SHARE ROW EXCLUSIVE MODE')
+            rows = []
+            for cid in selected:
+                self.lock_account(c, cid)
+                row, _ = self.account(c, user, cid)
+                self.cleanup_inventory(c, row, tables)
+                rows.append(row)
+            if expected != [{'id': r['id'], 'digest': self.digest(r)} for r in rows]:
+                raise ConsoleProblem("The selected accounts changed. Review the selection again. No accounts were deleted.", 409)
+            for row in rows:
+                for table in ('company_demo_access', 'company_access_approvals', 'company_subscriptions'):
+                    if self.table_exists(c, table):
+                        c.execute(f'DELETE FROM {table} WHERE company_id=?', (row['id'],))
+                c.execute('DELETE FROM companies WHERE id=?', (row['id'],))
+                self.audit(c, user, row, 'DELETE_EMPTY_ACCOUNT', 'Deleted an explicitly reviewed empty account. No people, projects, or billing history were present.')
+        return RedirectResponse('/owner/cleanup?notice=deleted', status_code=303)
+
+    def public_customer(self, row):
+        return {'company_id': int(row['id']), 'company_name': row['name'], 'plan': row['plan_code'],
+                'subscription_status': row['status'], 'payment_active': row['eligible'],
+                'payment_active_basis': 'Local subscription eligibility, not proof of payment.',
+                'stripe_payment_status': row['stripe_payment_status'], 'owner_approved': row['approved'],
+                'app_access': row['access'], 'demo_status': row['demo_status'],
+                'users': int(row['user_count']), 'projects': int(row['project_count'])}
+
+    def handle(self, request, form, csrf, user):
+        path = request.url.path.rstrip('/') or '/'
+        if not self.schema_ready:
+            raise ConsoleProblem("The Owner Console is temporarily unavailable. Check the server log for the database setup error.", 503)
+        if request.method == 'POST':
+            self.form_security(request, form)
+            if path == '/owner/cleanup/review':
+                return HTMLResponse(self.cleanup_review(request, form, csrf))
+            if path == '/owner/cleanup/delete-selected':
+                return self.cleanup_delete(request, form)
+            cid = self.company_id(request)
+            action = path.rsplit('/', 1)[-1]
+            if path.startswith('/owner/demos/'):
+                return self.decide_demo(request, form, cid, action)
+            return self.mutate(request, form, cid, action)
+        aliases = {'/owner/subscriptions': '/owner/customers', '/owner/access-approvals': '/owner/customers?access=pending', '/owner/cleanup/preview': '/owner/cleanup', '/owner/financial': '/owner/billing'}
+        if path in aliases:
+            return RedirectResponse(aliases[path], status_code=303)
+        with self.connection() as c:
+            rows, plans = self.dataset(c, user)
+            if path == '/owner/api/summary':
+                return JSONResponse({'status': 'ok', 'version': OWNER_CONSOLE_VERSION, **self.summary(rows, plans)})
+            if path == '/owner/api/customers':
+                selected, total, page = self.filtered(request, rows)
+                return JSONResponse({'status': 'ok', 'version': OWNER_CONSOLE_VERSION, 'total': total, 'page': page, 'page_size': 25, 'customers': [self.public_customer(row) for row in selected]})
+            if path == '/owner/api/billing-readiness':
+                return JSONResponse({'status': 'ok', 'version': OWNER_CONSOLE_VERSION, 'stripe': self.readiness(), **self.summary(rows, plans)})
+            if path == '/owner/api/cleanup-preview':
+                selected, total, page = self.filtered(request, rows)
+                return JSONResponse({'status': 'ok', 'version': OWNER_CONSOLE_VERSION, 'total': total, 'page': page,
+                                     'automatic_delete': False, 'scope': 'Empty inactive accounts only; related records checked during review.',
+                                     'companies': [{**self.public_customer(row), 'can_review_cleanup': self.cleanup_eligible(row)} for row in selected]})
+            if path == '/owner':
+                html = self.dashboard(c, request, user, rows, plans)
+            elif path == '/owner/customers':
+                html = self.customers(request, user, rows)
+            elif path == '/owner/demos':
+                html = self.demos(request, user, csrf, rows)
+            elif path == '/owner/billing':
+                html = self.billing(request, user, rows, plans)
+            elif path == '/owner/activity':
+                body = '<section class="panel"><div class="panel-heading"><div><h2>Owner decisions & notes</h2><p>Most recent 30 events. Each customer also has an individual account history.</p></div></div>' + self.timeline(self.history(c)) + '</section>'
+                html = self.shell(request, user, 'Activity', 'A clear record of decisions across customer accounts.', body, 'activity')
+            elif path == '/owner/cleanup':
+                html = self.cleanup_page(request, user, csrf, rows)
+            elif path.startswith('/owner/customers/'):
+                row, plans = self.account(c, user, self.company_id(request))
+                html = self.review(request, user, csrf, row) if path.endswith('/review') else self.customer_detail(c, request, user, csrf, row, plans)
+            else:
+                raise ConsoleProblem('This console page could not be found.', 404)
+        return HTMLResponse(html)
+
+    def company_id(self, request):
+        try:
+            cid = int(request.path_params.get('company_id'))
+            if cid < 1:
+                raise ValueError()
+            return cid
+        except (TypeError, ValueError):
+            raise ConsoleProblem('Choose a valid customer account.', 404)
+
+    def health(self):
+        routes = {(r.path, method) for r in self.app.routes if hasattr(r, 'path') for method in (getattr(r, 'methods', None) or ())}
+        checks = {'schema_initialized': self.schema_ready}
+        try:
+            with self.connection() as c:
+                c.execute('SELECT actor_user_id,company_id,company_name,action,detail,created FROM bc_owner_console_events LIMIT 0')
+                c.execute('SELECT company_id,approved,approved_by_user_id,revoked_by_user_id,note,updated FROM company_access_approvals LIMIT 0')
+            checks['schema_readable'] = True
+        except Exception:
+            checks['schema_readable'] = False
+        for path, method in (('/owner', 'GET'), ('/owner/customers', 'GET'), ('/owner/demos', 'GET'), ('/owner/billing', 'GET'), ('/owner/activity', 'GET'), ('/owner/customers/{company_id}/subscription', 'POST'), ('/owner/cleanup/review', 'POST'), ('/owner/cleanup/delete-selected', 'POST')):
+            checks[method + ' ' + path] = (path, method) in routes
+        return {'app': 'BuildCommand AI', 'version': OWNER_CONSOLE_VERSION, 'release': RELEASE_NAME,
+                'status': 'ok' if all(checks.values()) else 'degraded', 'checks': checks,
+                'passed': sum(checks.values()), 'total': len(checks), 'data_reset': False,
+                'scope': 'Schema and route checks only; verify account actions and owner access on staging.'}
+
+
+def icon(name):
+    paths = {
+        'grid': '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+        'building': '<path d="M4 21V6l8-3v18M12 9h8v12M2 21h20M7 8v1m0 3v1m0 3v1m9-4h1m-1 4h1"/>',
+        'clock': '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+        'card': '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 10h20M6 15h4"/>',
+        'activity': '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+        'settings': '<path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3" fill="currentColor"/><circle cx="15" cy="17" r="3" fill="currentColor"/>',
+        'arrow': '<path d="M5 12h14m-6-6 6 6-6 6"/>',
+        'check': '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+        'inbox': '<path d="m4 5-2 10v5h20v-5L20 5ZM2 15h6l2 3h4l2-3h6"/>',
+    }
+    return f'<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{paths.get(name, paths["grid"])}</svg>'
+
+
+STYLES = r'''
+:root{--navy:#112032;--navy-soft:#203146;--ink:#172b3e;--muted:#596a7c;--line:#e1e6ec;--canvas:#f5f7f9;--amber:#edb44b;--blue:#225a86;--red:#a32c39;--green:#247150}
+*{box-sizing:border-box}body.oc{margin:0;background:var(--canvas);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}button,input,select,textarea{font:inherit}button,a,input,select,textarea{touch-action:manipulation}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.55}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:3px solid #a77813;outline-offset:3px}.icon{width:19px;height:19px;flex-shrink:0;vertical-align:middle}.skip{position:fixed;top:-100px;left:16px;background:white;padding:12px;z-index:100}.skip:focus{top:12px}.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.sidebar{position:fixed;inset:0 auto 0 0;width:238px;background:var(--navy);color:#d6e0ea;padding:29px 17px 17px;display:flex;flex-direction:column;z-index:20;overflow-y:auto}.brand{display:flex;align-items:center;gap:11px;color:#fff;font-weight:650;letter-spacing:-.35px;font-size:16px;margin:0 7px 37px;line-height:1.5}.brand:hover{text-decoration:none}.brand b{color:var(--amber);font-weight:650}.brand small{font-size:9px;letter-spacing:2.1px;color:#a8b8c8;font-weight:500;margin-top:3px}.brand-mark{display:flex;align-items:center;justify-content:center;background:var(--amber);color:var(--navy);width:34px;height:39px;border-radius:8px}.brand-mark .icon{width:24px;height:24px}.nav-label{font-size:10px;letter-spacing:1.7px;margin:0 15px 11px;color:#93a7bc}.nav-link{display:flex;align-items:center;gap:12px;color:#bfccda;border-radius:8px;min-height:46px;padding:11px 14px;margin-bottom:5px;font-size:13px;font-weight:550}.nav-link:hover{background:#1a2e43;color:white;text-decoration:none}.nav-link.active{background:#2c3945;color:#f6c667;box-shadow:inset 3px 0 var(--amber)}.sidebar-bottom{margin-top:auto;padding-top:40px}.sidebar-bottom .nav-link{font-size:12px;gap:9px}.owner-profile{display:flex;align-items:center;gap:10px;border-top:1px solid #2c3b4b;padding:18px 8px 2px;margin-top:14px;color:#eef3f8;font-size:12px}.owner-profile small{font-size:11px;color:#9dadbe}.avatar{display:inline-flex;align-items:center;justify-content:center;width:33px;height:33px;border-radius:50%;background:#31465b;color:#eed29a;font-size:10px;font-weight:700;flex-shrink:0}.main-wrap{margin-left:238px;min-width:0}.topbar{height:66px;display:flex;align-items:center;justify-content:space-between;background:white;border-bottom:1px solid var(--line);padding:0 36px;font-size:12px;color:var(--muted);gap:20px}.topbar b{font-weight:550;color:var(--ink)}.divider{padding:0 13px;color:#a9b4be}.top-date{white-space:nowrap;color:var(--muted)}main{max-width:1510px;margin:auto;padding:32px 36px 20px;outline:none}.page-heading{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:26px}.eyebrow,.section-label{font-size:10px;font-weight:700;letter-spacing:1.5px;color:#876017;margin-bottom:8px}h1{font-size:30px;line-height:1.25;font-weight:650;letter-spacing:-.8px;margin:0 0 9px}h2{font-size:17px;letter-spacing:-.25px;font-weight:650;margin:0 0 6px;line-height:1.4}h3{font-size:14px;margin:0 0 6px}.page-heading p,.panel-heading p{color:var(--muted);margin:0;font-size:13px}.panel-heading p{font-size:12px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px;margin-bottom:24px}.metrics.three{grid-template-columns:repeat(3,minmax(0,1fr))}.metric{background:white;border:1px solid var(--line);border-radius:11px;padding:20px;position:relative;display:flex;flex-direction:column;min-height:136px;color:var(--ink)}a.metric:hover{border-color:#afbdcb;box-shadow:0 3px 12px #20324908;text-decoration:none}.metric-label{font-size:11px;color:var(--muted);font-weight:600;padding-right:15px}.metric strong{font-size:29px;letter-spacing:-.9px;font-weight:650;line-height:1.25;margin:10px 0 7px;font-variant-numeric:tabular-nums}.metric-note{font-size:10px;color:var(--muted)}.metric>.icon{position:absolute;right:15px;top:18px;width:14px;color:#718194}.panel{background:white;border:1px solid var(--line);border-radius:11px;margin-bottom:23px;min-width:0;overflow:hidden}.padded{padding:24px}.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:22px 24px 18px}.panel-heading.flush{padding:0 0 12px}.split{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:23px}.account-split{grid-template-columns:1fr 1fr}.split>.panel{margin-bottom:23px}.quick-panel{padding:26px;background:#f9fafb}.quick-panel h2{font-size:22px;max-width:290px;letter-spacing:-.55px;margin-top:16px}.quick-panel>p{font-size:12px;color:var(--muted);max-width:360px;margin:10px 0 18px}.quick-stats{display:flex;border-top:1px solid var(--line);gap:20px;justify-content:space-between;margin-top:24px;padding-top:18px}.quick-stats span{display:flex;flex-direction:column;font-size:10px;color:var(--muted)}.quick-stats b{font-size:20px;color:var(--ink);font-weight:650;margin-bottom:4px}.queue-item{display:flex;align-items:center;gap:14px;padding:16px 24px;border-top:1px solid #edf0f3;color:var(--ink)}.queue-item:hover{background:#f9fafc;text-decoration:none}.queue-item>span:first-child{flex:1;min-width:0}.queue-item strong{font-size:12px;display:block;overflow-wrap:anywhere}.queue-item small{color:var(--muted);font-size:10px;overflow-wrap:anywhere}.queue-item>.icon{width:15px;color:#728298}small{display:block}.badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:5px;background:#f0f2f5;color:#566478;font-size:10px;line-height:1.45;font-weight:600;white-space:nowrap}.badge.good{background:#e9f4ed;color:#216044}.badge.warn{background:#fbf2dd;color:#785514}.badge.bad{background:#faeaeb;color:#963340}.badge.info{background:#eaf1f8;color:#315f87}.btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;border:1px solid transparent;border-radius:7px;min-height:42px;padding:10px 15px;font-weight:600;font-size:12px;line-height:1.4;white-space:normal}.btn:hover{text-decoration:none;filter:brightness(.975)}.btn.primary{background:var(--navy);color:white;border-color:var(--navy)}.btn.secondary{background:white;color:var(--ink);border-color:#ccd5df}.btn.danger{background:#a3303d;color:white;border-color:#a3303d}.small-btn{font-size:10px;padding:8px 11px;min-height:36px}.actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.actions form{margin:0}.text-link{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;min-height:34px}.text-link .icon{width:14px}.danger-link{color:var(--red);display:inline-block;font-size:12px;margin-top:14px}.actions .danger-link{margin-top:0}.clear-link{font-size:12px;padding:12px 0}.table-scroll{overflow-x:auto;overscroll-behavior-x:contain}table{width:100%;border-collapse:collapse;font-size:12px}th{background:#fafbfc;font-size:10px;letter-spacing:.35px;font-weight:600;color:var(--muted);border-top:1px solid var(--line);white-space:nowrap}th,td{padding:14px 22px;text-align:left;border-bottom:1px solid #edf0f3;vertical-align:middle}tbody tr:last-child td{border-bottom:0}tbody tr:hover{background:#fcfdfe}td{overflow-wrap:anywhere}td small{font-size:10px;color:var(--muted);margin-top:4px}.account-link{font-size:12px;color:var(--ink);font-weight:650;display:inline-block;min-width:120px;max-width:300px;overflow-wrap:anywhere}.counts{white-space:nowrap;color:var(--muted);font-size:11px}.counts span{color:#adb8c2;margin:0 5px}.numeric{font-variant-numeric:tabular-nums;white-space:nowrap}.empty{text-align:center;padding:35px 20px;color:var(--muted)}.empty>.icon{height:30px;width:30px;color:#8090a2;margin-bottom:12px}.empty h3{color:var(--ink);font-size:14px}.empty p{margin:5px auto 0;font-size:12px;max-width:380px}.filters{display:flex;align-items:flex-end;gap:12px;padding:22px 24px 15px;flex-wrap:wrap}.filters label{display:flex;flex-direction:column;gap:6px;font-size:11px;font-weight:600;color:var(--muted)}.search-label{flex:1;min-width:200px}.filters input,.filters select{height:42px}.filters select{min-width:144px}input,select,textarea{background:white;border:1px solid #cbd5df;border-radius:6px;padding:9px 11px;color:var(--ink);min-width:0;width:100%;font-size:12px}input::placeholder,textarea::placeholder{color:#758595}input[type=checkbox]{width:18px;height:18px;accent-color:var(--navy);flex-shrink:0}textarea{resize:vertical;min-height:70px}.result-count{padding:0 24px 15px;color:var(--muted);font-size:10px}.pager{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-top:1px solid var(--line);gap:14px;font-size:11px;color:var(--muted)}.timeline{list-style:none;margin:0;padding:0 24px 8px}.timeline li{display:grid;grid-template-columns:10px minmax(0,1fr);gap:12px;padding:16px 0;border-top:1px solid #edf0f3}.event-dot{width:6px;height:6px;background:#ab7d2b;border-radius:50%;margin-top:7px}.event-title{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:12px}.event-title time{margin-left:auto;font-size:10px;color:var(--muted)}.event-company{color:#4d657d;font-size:11px}.timeline p{font-size:12px;margin:7px 0 4px;color:#43576b;overflow-wrap:anywhere}.timeline small{font-size:10px;color:var(--muted)}.prewrap{white-space:pre-wrap}.notice{display:flex;gap:10px;align-items:flex-start;padding:13px 15px;border-radius:7px;font-size:12px;margin:0 0 22px;border:1px solid #dbe6ef}.notice.success{color:#235d43;background:#ecf6ef;border-color:#cde3d5}.notice.info{color:#345a7b;background:#f0f5fa;margin:15px 0}.notice>.icon{width:17px;height:17px;margin-top:1px}.back-link{display:inline-block;font-size:12px;margin:0 0 15px}.account-summary{display:flex;gap:16px;align-items:center;background:white;border:1px solid var(--line);border-radius:11px;padding:23px 24px}.company-monogram{width:46px;height:46px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:9px;background:#eef1f5;color:#536b83;font-size:15px;font-weight:650}.account-summary h2{font-size:21px;overflow-wrap:anywhere}.account-summary p{font-size:11px;color:var(--muted);margin:0;overflow-wrap:anywhere}.account-summary p span{margin:0 8px}.summary-badges{display:flex;gap:8px;margin-left:auto;flex-wrap:wrap}.tabs{display:flex;gap:26px;border-bottom:1px solid #d7dfe7;margin:20px 0 24px;overflow-x:auto}.tabs a{padding:11px 2px 14px;font-size:12px;color:var(--muted);font-weight:600;border-bottom:2px solid transparent;white-space:nowrap}.tabs .active{color:var(--ink);border-color:#a77923}.facts{margin:19px 0 15px}.facts>div{display:flex;justify-content:space-between;align-items:center;gap:15px;border-bottom:1px solid #edf0f3;padding:11px 0}.facts>div:last-child{border-bottom:0}.facts dt{font-size:12px;color:var(--muted)}.facts dd{margin:0;font-size:12px;text-align:right;overflow-wrap:anywhere}.facts.horizontal{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;margin-top:3px}.facts.horizontal>div{border:0;align-items:flex-start;flex-direction:column;gap:7px}.helper{font-size:12px;line-height:1.7;color:var(--muted);margin:9px 0 17px}.stack-form{display:flex;flex-direction:column;gap:15px}.stack-form>label{display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:600}.stack-form>.btn{align-self:flex-start}.stack-form .optional{font-weight:400;color:var(--muted)}.stack-form .check-label{flex-direction:row;gap:10px;align-items:flex-start;font-weight:400}.section-divider{height:1px;background:var(--line);margin:25px 0}.review-panel{max-width:740px}.review-description{font-size:14px;line-height:1.8;color:#40546a}.review-list{list-style:none;padding:0;margin:24px 0}.review-list li{display:flex;flex-direction:column;gap:3px;padding:14px 0;border-bottom:1px solid var(--line)}.review-list span{font-size:11px;color:var(--muted)}.panel-actions{padding:18px 24px;display:flex;align-items:center;justify-content:space-between;gap:15px;border-top:1px solid var(--line)}.panel-actions>span{font-size:12px;color:var(--muted)}.wrap-text{overflow-wrap:anywhere}code{font-size:11px}.muted{color:var(--muted)}footer{display:flex;justify-content:space-between;gap:15px;font-size:10px;color:#697b8d;max-width:1510px;margin:0 auto;padding:12px 36px 25px;border-top:1px solid var(--line)}
+@media(min-width:1600px){.metric strong{font-size:33px}main{padding-top:39px}.page-heading{margin-bottom:30px}}
+@media(max-width:1200px){.sidebar{width:214px;padding-left:12px;padding-right:12px}.main-wrap{margin-left:214px}.brand{font-size:14px;gap:8px}.topbar{padding:0 24px}main{padding:28px 24px 18px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.split{grid-template-columns:1fr}.quick-panel{display:none}.account-split{grid-template-columns:1fr 1fr}.metric{min-height:120px}.split>.panel{margin-bottom:0}.split{margin-bottom:23px}.metrics.three{grid-template-columns:repeat(3,minmax(0,1fr))}footer{padding-left:24px;padding-right:24px}}
+@media(max-width:900px){.sidebar{position:static;width:100%;padding:16px 20px 10px;overflow:visible}.brand{margin:0 0 14px;font-size:16px}.brand small{display:none}.brand-mark{height:31px;width:31px}.sidebar nav{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px}.nav-link{white-space:nowrap;min-height:42px;margin:0;font-size:12px;padding:9px 12px}.nav-label,.owner-profile{display:none}.sidebar-bottom{padding:0;margin:0;position:absolute;top:13px;right:14px}.sidebar-bottom .nav-link{font-size:11px;padding:8px}.main-wrap{margin:0}.topbar{height:48px}.account-split{grid-template-columns:1fr 1fr}.summary-badges{margin-left:0}.account-summary{flex-wrap:wrap}.metric strong{font-size:28px}}
+@media(max-width:650px){main{padding:24px 15px 16px}.topbar{padding:0 15px;font-size:10px}.top-date{display:none}.divider{padding:0 8px}h1{font-size:26px}.page-heading{margin-bottom:20px}.page-heading p{font-size:12px}.metrics,.metrics.three{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.metrics.three .metric:last-child{grid-column:1/-1}.metric{padding:15px;min-height:132px}.metric-label{font-size:10px}.metric-note{font-size:10px}.metric strong{font-size:26px;overflow-wrap:anywhere}.panel-heading,.padded{padding:18px}.panel-heading{align-items:flex-start}.panel-heading .text-link{white-space:nowrap}.queue-item{padding:15px 18px;gap:8px}.queue-item>.badge{font-size:9px}.queue-item>.icon{display:none}.account-split{grid-template-columns:1fr}.account-summary{padding:18px;gap:12px}.account-summary h2{font-size:18px}.account-summary>div:nth-child(2){max-width:calc(100% - 60px)}.summary-badges{width:100%;margin-top:2px}.filters{padding:18px;gap:11px}.filters label{flex:1 1 130px}.filters .search-label{flex-basis:100%}.filters .btn{flex:1 1 auto}.filters .clear-link{padding:10px 8px}.filters select{min-width:0}.result-count{padding-left:18px}.facts.horizontal{grid-template-columns:1fr;gap:0}.facts.horizontal>div{flex-direction:row;border-bottom:1px solid #edf0f3;align-items:center}.timeline{padding:0 18px 5px}.event-title time{width:100%;margin:0}.timeline li{padding:15px 0}.panel-actions{align-items:flex-start;flex-direction:column;padding:18px}.pager{padding:15px 18px}.sidebar{padding:14px 15px 9px}.sidebar-bottom .nav-link span{display:none}.sidebar-bottom .icon{width:21px}.brand{font-size:15px}.nav-link{font-size:11px;padding:9px 11px}.nav-link .icon{width:16px}.tabs{gap:23px}th,td{padding:13px 17px}.review-description{font-size:13px}footer{padding:16px 15px 24px;flex-direction:column;gap:4px}.actions .btn{min-height:44px}.review-panel .actions{align-items:stretch}.review-panel .actions .btn{flex:1 1 auto}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+'''
+
+
+OWNER_ROUTES = {
+    'GET': ('/owner', '/owner/customers', '/owner/customers/{company_id}', '/owner/customers/{company_id}/review',
+            '/owner/demos', '/owner/billing', '/owner/activity', '/owner/cleanup', '/owner/cleanup/preview',
+            '/owner/subscriptions', '/owner/access-approvals', '/owner/financial',
+            '/owner/api/summary', '/owner/api/customers', '/owner/api/billing-readiness', '/owner/api/cleanup-preview'),
+    'POST': tuple('/owner/customers/{company_id}/' + action for action in ACTION_LABELS)
+            + ('/owner/access-approvals/{company_id}/approve', '/owner/access-approvals/{company_id}/revoke',
+               '/owner/demos/{company_id}/approve', '/owner/demos/{company_id}/deny',
+               '/owner/cleanup/review', '/owner/cleanup/delete-selected'),
+}
+HEALTH_ROUTES = ('/health/owner-console-8-5-1', '/health/owner-console-1-8-18-97',
+                 '/health/owner-console-7-2-2', '/health/owner-console-7-2-3', '/health/owner-console-7-2-5',
+                 '/health/customer-subscription-control-7-3-0', '/health/owner-billing-access-7-4-0',
+                 '/health/owner-console-navigation-7-4-1', '/health/owner-navigation-runtime-fix-7-4-2',
+                 '/health/owner-stripe-mode-7-4-3', '/health/owner-manual-approval-7-4-6', '/health/owner-demo-control-7-4-11')
 
 
 def register_owner_console(app, runtime, owner_email=OWNER_EMAIL):
-    owner_email = (owner_email or OWNER_EMAIL).strip().lower()
+    console = OwnerConsole(app, runtime, owner_email)
+    app.state.owner_console = console
 
-    def db():
-        return runtime.db()
-
-    def now():
-        return datetime.utcnow().isoformat()
-
-    def owner_user():
-        u = runtime.current_user()
-        if not u:
-            return None
+    async def endpoint(request: Request):
+        from starlette.datastructures import FormData
+        from urllib.parse import parse_qsl
+        csrf = request.cookies.get(CSRF_COOKIE, '')
         try:
-            if runtime._bc174_is_platform_owner(u):
-                return u
-        except Exception:
-            pass
-        return u if str(u["email"] or "").strip().lower() == owner_email else None
-
-    def require_owner():
-        return owner_user()
-
-    def remove_route(path, methods=None):
-        methods = {m.upper() for m in (methods or [])}
-        kept = []
-        for r in app.router.routes:
-            if getattr(r, "path", None) != path:
-                kept.append(r)
-                continue
-            route_methods = {m.upper() for m in (getattr(r, "methods", None) or set())}
-            if methods and not (route_methods & methods):
-                kept.append(r)
-        app.router.routes[:] = kept
-
-    # Replace only the business-console surfaces. Customer construction routes stay untouched.
-    for p, methods in (
-        ("/owner", {"GET"}),
-        ("/owner/customers", {"GET"}),
-        ("/owner/customers/{company_id}", {"GET"}),
-        ("/owner/customers/{company_id}/plan", {"POST"}),
-        ("/owner/customers/{company_id}/status", {"POST"}),
-        ("/owner/access-approvals", {"GET"}),
-        ("/owner/access-approvals/{company_id}/approve", {"POST"}),
-        ("/owner/access-approvals/{company_id}/revoke", {"POST"}),
-        ("/owner/api/summary", {"GET"}),
-        ("/owner/api/customers", {"GET"}),
-    ):
-        remove_route(p, methods)
-
-    # PostgreSQL-safe schema protection. These may already exist from 1.8.18.94+.
-    c = db()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS company_access_approvals(
-            company_id BIGINT PRIMARY KEY,
-            approved INTEGER DEFAULT 0,
-            approved_by_user_id BIGINT,
-            approved_at TEXT,
-            revoked_by_user_id BIGINT,
-            revoked_at TEXT,
-            note TEXT,
-            created TEXT,
-            updated TEXT
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS company_access_approval_events(
-            id BIGSERIAL PRIMARY KEY,
-            company_id BIGINT NOT NULL,
-            actor_user_id BIGINT,
-            action TEXT NOT NULL,
-            detail TEXT,
-            created TEXT
-        )
-    """)
-    c.commit()
-    c.close()
-
-    def owner_company_id():
-        c = db()
-        row = c.execute(
-            "SELECT company_id FROM users WHERE LOWER(email)=LOWER(?) LIMIT 1",
-            (owner_email,)
-        ).fetchone()
-        c.close()
-        return int(row["company_id"]) if row else None
-
-    def plan_rows():
-        c = db()
-        rows = c.execute(
-            "SELECT * FROM platform_plans WHERE COALESCE(active,1)=1 ORDER BY monthly_price_cents,code"
-        ).fetchall()
-        c.close()
-        return rows
-
-    def subscription(company_id):
-        c = db()
-        r = c.execute(
-            "SELECT * FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-            (int(company_id),)
-        ).fetchone()
-        c.close()
-        return r
-
-    def effective_status(sub):
-        if not sub:
-            return "NO_SUBSCRIPTION"
+            console.verify_token(request, csrf, 'csrf', 43200)
+        except ConsoleProblem:
+            csrf = console.token(request, 'csrf', secrets.token_urlsafe(24))
         try:
-            return str(runtime._bc174_effective_status(sub) or "NO_SUBSCRIPTION").upper()
-        except Exception:
-            return str(sub["status"] or "NO_SUBSCRIPTION").upper()
-
-    def approval(company_id, create=True):
-        c = db()
-        r = c.execute(
-            "SELECT * FROM company_access_approvals WHERE company_id=?",
-            (int(company_id),)
-        ).fetchone()
-        if not r and create:
-            ts = now()
-            c.execute(
-                """INSERT INTO company_access_approvals
-                   (company_id,approved,note,created,updated)
-                   VALUES(?,?,?,?,?)""",
-                (int(company_id), 0, "Awaiting platform owner approval", ts, ts)
-            )
-            c.commit()
-            r = c.execute(
-                "SELECT * FROM company_access_approvals WHERE company_id=?",
-                (int(company_id),)
-            ).fetchone()
-        c.close()
-        return r
-
-    def approved(company_id):
-        r = approval(company_id, create=True)
-        try:
-            return int(r["approved"] or 0) == 1
-        except Exception:
-            return False
-
-    def paid(company_id):
-        # Matches the front-door payment gate in the main app.
-        return effective_status(subscription(company_id)) in {"ACTIVE", "LEGACY"}
-
-    def customer_rows():
-        oid = owner_company_id()
-        c = db()
-        rows = c.execute(
-            """SELECT co.id,co.name,
-                      cs.plan_code,cs.status,cs.grandfathered,
-                      ca.approved,ca.approved_at,
-                      (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) user_count,
-                      (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) project_count,
-                      (SELECT MAX(u.created) FROM users u WHERE u.company_id=co.id) newest_user
-               FROM companies co
-               LEFT JOIN company_subscriptions cs ON cs.company_id=co.id
-               LEFT JOIN company_access_approvals ca ON ca.company_id=co.id
-               WHERE EXISTS (SELECT 1 FROM users ux WHERE ux.company_id=co.id)
-               ORDER BY co.name"""
-        ).fetchall()
-        c.close()
-        return [r for r in rows if oid is None or int(r["id"]) != oid]
-
-    def billing_count(company_id, failed_only=False):
-        c = db()
-        if failed_only:
-            r = c.execute(
-                """SELECT COUNT(*) n FROM billing_events
-                   WHERE company_id=?
-                     AND (LOWER(COALESCE(status,'')) IN ('failed','past_due','unpaid')
-                          OR LOWER(COALESCE(event_type,''))='payment_failed')""",
-                (int(company_id),)
-            ).fetchone()
-        else:
-            r = c.execute(
-                "SELECT COUNT(*) n FROM billing_events WHERE company_id=?",
-                (int(company_id),)
-            ).fetchone()
-        c.close()
-        return int(r["n"] or 0)
-
-    def metrics():
-        plans = {str(r["code"]): r for r in plan_rows()}
-        rows = customer_rows()
-        mrr = active = trials = past_due = canceled = awaiting = 0
-        for r in rows:
-            cid = int(r["id"])
-            st = effective_status(subscription(cid))
-            if st in {"ACTIVE", "LEGACY"}:
-                active += 1
-                if st == "ACTIVE":
-                    p = plans.get(str(r["plan_code"] or ""))
-                    if p:
-                        mrr += int(p["monthly_price_cents"] or 0)
-                if not approved(cid):
-                    awaiting += 1
-            elif st == "TRIAL":
-                trials += 1
-            elif st == "PAST_DUE":
-                past_due += 1
-            elif st == "CANCELED":
-                canceled += 1
-        return {
-            "customers": len(rows),
-            "mrr_cents": mrr,
-            "arr_cents": mrr * 12,
-            "active": active,
-            "trials": trials,
-            "past_due": past_due,
-            "canceled": canceled,
-            "awaiting_approval": awaiting,
-        }
-
-    def fmt_money(cents):
-        return f"${(int(cents or 0)/100):,.2f}"
-
-    def badge(text, kind="neutral"):
-        return f'<span class="badge {kind}">{escape(str(text))}</span>'
-
-    def shell(title, body):
-        return f"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{escape(title)} · BuildCommand AI</title>
-<style>
-:root{{--bg:#081018;--panel:#0e1823;--panel2:#111f2d;--line:#203247;--text:#edf4fb;--muted:#8fa5bb;--gold:#f0b44d;--green:#55d68b;--red:#ff7070;--blue:#78b7ff}}
-*{{box-sizing:border-box}}
-body{{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}}
-.wrap{{max-width:1420px;margin:auto;padding:26px}}
-.top{{display:flex;justify-content:space-between;gap:18px;align-items:center;margin-bottom:22px}}
-.brand{{font-size:22px;font-weight:900}} .brand span{{color:var(--gold)}}
-.nav a{{color:#c9d6e3;text-decoration:none;margin-left:18px;font-weight:700}}
-.hero{{background:linear-gradient(135deg,#111f2d,#0b151f);border:1px solid var(--line);border-radius:18px;padding:24px;margin-bottom:18px}}
-.eyebrow{{color:var(--gold);font-size:12px;letter-spacing:.13em;font-weight:900;text-transform:uppercase}}
-h1{{margin:7px 0 8px;font-size:34px}} h2{{margin:0 0 13px}}
-.muted,.small{{color:var(--muted)}} .small{{font-size:12px}}
-.grid{{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin:16px 0}}
-.card{{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:17px}}
-.kpi{{font-size:27px;font-weight:900;margin-top:4px}} .label{{font-size:12px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.06em}}
-table{{width:100%;border-collapse:collapse}} th,td{{padding:13px 10px;text-align:left;border-bottom:1px solid #1c2d40;vertical-align:middle}}
-th{{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em}}
-tr:hover td{{background:#101c28}}
-.badge{{display:inline-block;padding:5px 9px;border-radius:999px;background:#1a2938;font-size:11px;font-weight:900}}
-.badge.good{{background:#123322;color:#7ae2a3}} .badge.warn{{background:#362a10;color:#f3ca6b}} .badge.bad{{background:#3b171b;color:#ff9696}} .badge.info{{background:#122b45;color:#93c9ff}}
-.btn,button{{display:inline-block;border:0;border-radius:9px;background:var(--gold);color:#071018;padding:9px 12px;font-weight:900;text-decoration:none;cursor:pointer}}
-.btn.secondary,button.secondary{{background:#1b2b3b;color:#dce7f1;border:1px solid #30465d}}
-.btn.danger,button.danger{{background:#432027;color:#ffb2b2}}
-.actions{{display:flex;gap:8px;flex-wrap:wrap}}
-.two{{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}}
-select,input{{background:#0a141e;color:#edf4fb;border:1px solid #2a4056;border-radius:9px;padding:9px}}
-form.inline{{display:flex;gap:8px;align-items:center;flex-wrap:wrap}}
-.notice{{padding:12px;border-radius:10px;border:1px solid #29415a;background:#0a1621;margin:10px 0}}
-.footer{{text-align:center;color:#667d92;font-size:12px;margin:28px 0}}
-@media(max-width:1050px){{.grid{{grid-template-columns:repeat(3,1fr)}}.two{{grid-template-columns:1fr}}}}
-@media(max-width:650px){{.grid{{grid-template-columns:repeat(2,1fr)}}.wrap{{padding:14px}}table{{font-size:12px}}}}
-</style>
-</head>
-<body>
-<div class="wrap">
-<div class="top">
-  <div class="brand">BuildCommand <span>AI</span> · Owner</div>
-  <div class="nav"><a href="/owner">Dashboard</a><a href="/owner/customers">Customers</a><a href="/app">Construction App</a></div>
-</div>
-{body}
-<div class="footer">Built By Willy LaHood © 2026 · Owner Console {OWNER_CONSOLE_VERSION}</div>
-</div>
-</body></html>"""
-
-    def log_access(company_id, actor_id, action, detail):
-        c = db()
-        c.execute(
-            """INSERT INTO company_access_approval_events
-               (company_id,actor_user_id,action,detail,created)
-               VALUES(?,?,?,?,?)""",
-            (int(company_id), actor_id, action, detail, now())
-        )
-        c.commit()
-        c.close()
-
-    def company_detail(company_id):
-        oid = owner_company_id()
-        if oid is not None and int(company_id) == oid:
-            return None
-        c = db()
-        co = c.execute("SELECT * FROM companies WHERE id=?", (int(company_id),)).fetchone()
-        if not co:
-            c.close()
-            return None
-        users = c.execute(
-            "SELECT id,email,role,created FROM users WHERE company_id=? ORDER BY created,email",
-            (int(company_id),)
-        ).fetchall()
-        projects = c.execute(
-            "SELECT id,name,project_number FROM projects WHERE company_id=? ORDER BY id DESC LIMIT 25",
-            (int(company_id),)
-        ).fetchall()
-        bills = c.execute(
-            """SELECT * FROM billing_events WHERE company_id=?
-               ORDER BY id DESC LIMIT 15""",
-            (int(company_id),)
-        ).fetchall()
-        c.close()
-        return co, users, projects, bills
-
-    @app.get("/owner", response_class=HTMLResponse)
-    def owner_dashboard():
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        m = metrics()
-        rows = customer_rows()
-        customer_html = ""
-        for r in rows[:20]:
-            cid = int(r["id"])
-            st = effective_status(subscription(cid))
-            is_paid = paid(cid)
-            is_approved = approved(cid)
-            if st in {"ACTIVE","LEGACY"}:
-                sb = badge(st, "good")
-            elif st in {"PAST_DUE","CANCELED","SUSPENDED"}:
-                sb = badge(st, "bad")
-            elif st == "TRIAL":
-                sb = badge(st, "info")
-            else:
-                sb = badge(st, "neutral")
-            ab = badge("APPROVED","good") if is_approved else badge("AWAITING","warn")
-            customer_html += f"""
-            <tr>
-              <td><b>{escape(str(r["name"]))}</b><div class="small">Company #{cid}</div></td>
-              <td>{escape(str(r["plan_code"] or "—"))}</td>
-              <td>{sb}</td>
-              <td>{badge("PAID","good") if is_paid else badge("NOT ACTIVE","warn")}</td>
-              <td>{ab}</td>
-              <td>{int(r["user_count"] or 0)}</td>
-              <td>{int(r["project_count"] or 0)}</td>
-              <td><a class="btn secondary" href="/owner/customers/{cid}">Manage</a></td>
-            </tr>"""
-        if not customer_html:
-            customer_html = '<tr><td colspan="8" class="muted">No outside customer accounts yet. New registrations will appear here automatically.</td></tr>'
-
-        body = f"""
-        <div class="hero">
-          <div class="eyebrow">BuildCommand Business</div>
-          <h1>Owner Business Console</h1>
-          <div class="muted">Live control over customers, subscriptions, payment state and BuildCommand access.</div>
-        </div>
-        <div class="grid">
-          <div class="card"><div class="label">MRR</div><div class="kpi">{fmt_money(m["mrr_cents"])}</div></div>
-          <div class="card"><div class="label">Active Customers</div><div class="kpi">{m["active"]}</div></div>
-          <div class="card"><div class="label">Awaiting Approval</div><div class="kpi">{m["awaiting_approval"]}</div></div>
-          <div class="card"><div class="label">Trials</div><div class="kpi">{m["trials"]}</div></div>
-          <div class="card"><div class="label">Past Due</div><div class="kpi">{m["past_due"]}</div></div>
-          <div class="card"><div class="label">Total Customers</div><div class="kpi">{m["customers"]}</div></div>
-        </div>
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:15px">
-            <div><h2>Customers</h2><div class="muted">Only real outside accounts with a current user are counted.</div></div>
-            <a class="btn" href="/owner/customers">View All Customers</a>
-          </div>
-          <div style="overflow:auto;margin-top:10px">
-          <table>
-            <tr><th>Company</th><th>Plan</th><th>Subscription</th><th>Payment</th><th>Access</th><th>Users</th><th>Projects</th><th></th></tr>
-            {customer_html}
-          </table>
-          </div>
-        </div>"""
-        return shell("Owner Business Console", body)
-
-    @app.get("/owner/customers", response_class=HTMLResponse)
-    def owner_customers():
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        rows = customer_rows()
-        tr = ""
-        for r in rows:
-            cid = int(r["id"])
-            st = effective_status(subscription(cid))
-            tr += f"""
-            <tr>
-              <td><b>{escape(str(r["name"]))}</b><div class="small">#{cid}</div></td>
-              <td>{escape(str(r["plan_code"] or "—"))}</td>
-              <td>{badge(st, "good" if st in {"ACTIVE","LEGACY"} else ("bad" if st in {"PAST_DUE","CANCELED","SUSPENDED"} else "info"))}</td>
-              <td>{badge("YES","good") if paid(cid) else badge("NO","warn")}</td>
-              <td>{badge("APPROVED","good") if approved(cid) else badge("LOCKED","warn")}</td>
-              <td>{int(r["user_count"] or 0)}</td>
-              <td>{int(r["project_count"] or 0)}</td>
-              <td><a class="btn secondary" href="/owner/customers/{cid}">Open Account</a></td>
-            </tr>"""
-        if not tr:
-            tr = '<tr><td colspan="8" class="muted">No customer accounts yet.</td></tr>'
-        body = f"""
-        <div class="hero"><div class="eyebrow">Customer Command</div><h1>Customer Accounts</h1>
-        <div class="muted">Manage every BuildCommand subscriber from one place.</div></div>
-        <div class="card"><div style="overflow:auto"><table>
-          <tr><th>Company</th><th>Plan</th><th>Status</th><th>Paid/Active</th><th>Access</th><th>Users</th><th>Projects</th><th></th></tr>
-          {tr}
-        </table></div></div>"""
-        return shell("Customers", body)
-
-    @app.get("/owner/customers/{company_id}", response_class=HTMLResponse)
-    def owner_customer(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        detail = company_detail(company_id)
-        if not detail:
-            return HTMLResponse("Customer company not found.", status_code=404)
-        co, users, projects, bills = detail
-        sub = subscription(company_id)
-        st = effective_status(sub)
-        apr = approved(company_id)
-        pay = paid(company_id)
-        plans = plan_rows()
-
-        plan_options = "".join(
-            f'<option value="{escape(str(p["code"]))}" {"selected" if sub and str(sub["plan_code"] or "")==str(p["code"]) else ""}>{escape(str(p["name"] or p["code"]))} · {fmt_money(p["monthly_price_cents"])}/mo</option>'
-            for p in plans
-        )
-        if not plan_options:
-            plan_options = '<option value="starter">starter</option>'
-
-        user_rows = "".join(
-            f'<tr><td>{escape(str(x["email"]))}</td><td>{escape(str(x["role"] or "user"))}</td><td>{escape(str(x["created"] or "—"))}</td></tr>'
-            for x in users
-        ) or '<tr><td colspan="3" class="muted">No users.</td></tr>'
-        project_rows = "".join(
-            f'<tr><td>{escape(str(x["name"]))}</td><td>{escape(str(x["project_number"] or "—"))}</td><td>#{int(x["id"])}</td></tr>'
-            for x in projects
-        ) or '<tr><td colspan="3" class="muted">No projects.</td></tr>'
-        bill_rows = "".join(
-            f'<tr><td>{escape(str(x["event_type"] or "event"))}</td><td>{escape(str(x["status"] or "—"))}</td><td>{escape(str(x["amount_cents"] if "amount_cents" in x.keys() else "—"))}</td><td>{escape(str(x["created"] or "—"))}</td></tr>'
-            for x in bills
-        ) or '<tr><td colspan="4" class="muted">No billing events recorded yet.</td></tr>'
-
-        approval_action = (
-            f'<form method="post" action="/owner/access-approvals/{company_id}/revoke"><button class="danger" type="submit">Revoke Access</button></form>'
-            if apr else
-            f'<form method="post" action="/owner/access-approvals/{company_id}/approve"><button type="submit">Approve Access</button></form>'
-        )
-
-        body = f"""
-        <div class="hero">
-          <div class="eyebrow">Customer Account #{company_id}</div>
-          <h1>{escape(str(co["name"]))}</h1>
-          <div class="actions">
-            {badge(st, "good" if st in {"ACTIVE","LEGACY"} else "warn")}
-            {badge("PAYMENT ACTIVE","good") if pay else badge("PAYMENT NOT ACTIVE","warn")}
-            {badge("ACCESS APPROVED","good") if apr else badge("ACCESS LOCKED","bad")}
-          </div>
-        </div>
-        <div class="two">
-          <div>
-            <div class="card">
-              <h2>Subscription Control</h2>
-              <form class="inline" method="post" action="/owner/customers/{company_id}/plan">
-                <select name="plan_code">{plan_options}</select>
-                <button type="submit">Change Plan</button>
-              </form>
-              <div style="height:12px"></div>
-              <form class="inline" method="post" action="/owner/customers/{company_id}/status">
-                <select name="status">
-                  {''.join(f'<option value="{s}" {"selected" if st==s else ""}>{s}</option>' for s in ["ACTIVE","TRIAL","PAST_DUE","SUSPENDED","CANCELED"])}
-                </select>
-                <button type="submit">Update Subscription</button>
-              </form>
-              <div class="notice small">ACTIVE is treated as payment-active by the front-door gate. Access still requires your separate approval.</div>
-            </div>
-            <div class="card" style="margin-top:14px">
-              <h2>Access Control</h2>
-              <div class="actions">{approval_action}<a class="btn secondary" href="/owner">Back to Dashboard</a></div>
-            </div>
-          </div>
-          <div class="card">
-            <h2>Account Snapshot</h2>
-            <p><b>Users:</b> {len(users)}</p>
-            <p><b>Projects:</b> {len(projects)}</p>
-            <p><b>Billing events:</b> {billing_count(company_id)}</p>
-            <p><b>Failed billing events:</b> {billing_count(company_id, True)}</p>
-            <p><b>Access rule:</b> PAYMENT ACTIVE + OWNER APPROVED</p>
-          </div>
-        </div>
-        <div class="two" style="margin-top:14px">
-          <div class="card"><h2>Users</h2><table><tr><th>Email</th><th>Role</th><th>Created</th></tr>{user_rows}</table></div>
-          <div class="card"><h2>Projects</h2><table><tr><th>Project</th><th>Number</th><th>ID</th></tr>{project_rows}</table></div>
-        </div>
-        <div class="card" style="margin-top:14px"><h2>Recent Billing Activity</h2>
-          <div style="overflow:auto"><table><tr><th>Event</th><th>Status</th><th>Amount (cents)</th><th>Created</th></tr>{bill_rows}</table></div>
-        </div>"""
-        return shell(str(co["name"]), body)
-
-    @app.post("/owner/customers/{company_id}/plan")
-    def owner_set_plan(company_id: int, plan_code: str = Form(...)):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        allowed = {str(r["code"]) for r in plan_rows()}
-        if plan_code not in allowed:
-            return HTMLResponse("Invalid plan.", status_code=400)
-        c = db()
-        sub = c.execute(
-            "SELECT id FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-            (company_id,)
-        ).fetchone()
-        ts = now()
-        if sub:
-            c.execute(
-                "UPDATE company_subscriptions SET plan_code=?,updated=? WHERE id=?",
-                (plan_code, ts, sub["id"])
-            )
-        else:
-            c.execute(
-                """INSERT INTO company_subscriptions(company_id,plan_code,status,created,updated)
-                   VALUES(?,?,?,?,?)""",
-                (company_id, plan_code, "TRIAL", ts, ts)
-            )
-        c.commit()
-        c.close()
-        return RedirectResponse(f"/owner/customers/{company_id}", status_code=303)
-
-    @app.post("/owner/customers/{company_id}/status")
-    def owner_set_status(company_id: int, status: str = Form(...)):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        status = str(status or "").strip().upper()
-        if status not in {"ACTIVE","TRIAL","PAST_DUE","SUSPENDED","CANCELED"}:
-            return HTMLResponse("Invalid subscription status.", status_code=400)
-        c = db()
-        sub = c.execute(
-            "SELECT id FROM company_subscriptions WHERE company_id=? ORDER BY id DESC LIMIT 1",
-            (company_id,)
-        ).fetchone()
-        ts = now()
-        if sub:
-            c.execute(
-                "UPDATE company_subscriptions SET status=?,updated=? WHERE id=?",
-                (status, ts, sub["id"])
-            )
-        else:
-            plans = plan_rows()
-            code = str(plans[0]["code"]) if plans else "starter"
-            c.execute(
-                """INSERT INTO company_subscriptions(company_id,plan_code,status,created,updated)
-                   VALUES(?,?,?,?,?)""",
-                (company_id, code, status, ts, ts)
-            )
-        c.commit()
-        c.close()
-        return RedirectResponse(f"/owner/customers/{company_id}", status_code=303)
-
-    @app.get("/owner/access-approvals", response_class=HTMLResponse)
-    def access_approvals():
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        return RedirectResponse("/owner/customers", status_code=303)
-
-    @app.post("/owner/access-approvals/{company_id}/approve")
-    def approve_access(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        if not paid(company_id):
-            return HTMLResponse(
-                "This customer does not have an ACTIVE subscription. Activate payment/subscription first, then approve access.",
-                status_code=409
-            )
-        approval(company_id, create=True)
-        c = db()
-        ts = now()
-        c.execute(
-            """UPDATE company_access_approvals
-               SET approved=1,approved_by_user_id=?,approved_at=?,
-                   revoked_by_user_id=NULL,revoked_at=NULL,
-                   note=?,updated=?
-               WHERE company_id=?""",
-            (u["id"], ts, "Approved by platform owner", ts, company_id)
-        )
-        c.commit()
-        c.close()
-        log_access(company_id, u["id"], "APPROVED", "Owner approved customer access")
-        return RedirectResponse(f"/owner/customers/{company_id}", status_code=303)
-
-    @app.post("/owner/access-approvals/{company_id}/revoke")
-    def revoke_access(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        approval(company_id, create=True)
-        c = db()
-        ts = now()
-        c.execute(
-            """UPDATE company_access_approvals
-               SET approved=0,revoked_by_user_id=?,revoked_at=?,
-                   note=?,updated=?
-               WHERE company_id=?""",
-            (u["id"], ts, "Access revoked by platform owner", ts, company_id)
-        )
-        c.commit()
-        c.close()
-        log_access(company_id, u["id"], "REVOKED", "Owner revoked customer access")
-        return RedirectResponse(f"/owner/customers/{company_id}", status_code=303)
-
-    @app.get("/owner/api/summary")
-    def owner_api_summary():
-        if not require_owner():
-            return JSONResponse({"detail": "Platform owner access required."}, status_code=403)
-        return {"status": "ok", "version": OWNER_CONSOLE_VERSION, **metrics()}
-
-    @app.get("/owner/api/customers")
-    def owner_api_customers():
-        if not require_owner():
-            return JSONResponse({"detail": "Platform owner access required."}, status_code=403)
-        out = []
-        for r in customer_rows():
-            cid = int(r["id"])
-            out.append({
-                "company_id": cid,
-                "company_name": r["name"],
-                "plan": r["plan_code"],
-                "subscription_status": effective_status(subscription(cid)),
-                "payment_active": paid(cid),
-                "owner_approved": approved(cid),
-                "users": int(r["user_count"] or 0),
-                "projects": int(r["project_count"] or 0),
-            })
-        return {"status": "ok", "customers": out}
-
-    @app.get("/health/owner-console-1-8-18-97")
-    def owner_console_health():
-        paths = {getattr(r, "path", "") for r in app.routes}
-        checks = {
-            "owner_dashboard": "/owner" in paths,
-            "customers": "/owner/customers" in paths,
-            "customer_detail": "/owner/customers/{company_id}" in paths,
-            "plan_control": "/owner/customers/{company_id}/plan" in paths,
-            "status_control": "/owner/customers/{company_id}/status" in paths,
-            "approval_control": "/owner/access-approvals/{company_id}/approve" in paths,
-            "revocation_control": "/owner/access-approvals/{company_id}/revoke" in paths,
-            "owner_api": "/owner/api/summary" in paths,
-            "customers_api": "/owner/api/customers" in paths,
-            "same_database": callable(getattr(runtime, "db", None)),
-            "owner_only": owner_email == OWNER_EMAIL,
-        }
-        passed = sum(1 for v in checks.values() if v)
-        return {
-            "status": "ok" if passed == len(checks) else "degraded",
-            "version": OWNER_CONSOLE_VERSION,
-            "release": "Separate Real Owner Business Console",
-            "passed": passed,
-            "total": len(checks),
-            "checks": checks,
-        }
-
-
-    # ========================================================
-    # BuildCommand AI 7.2.2 — Owner Subscription + Cleanup Hub
-    # ========================================================
-
-    # These business routes intentionally live here, not in full_app.py.
-    for p, methods in (
-        ("/owner/subscriptions", {"GET"}),
-        ("/owner/cleanup", {"GET"}),
-        ("/owner/cleanup/preview", {"GET"}),
-        ("/owner/cleanup/delete-trials", {"POST"}),
-        ("/owner/api/cleanup-preview", {"GET"}),
-    ):
-        remove_route(p, methods)
-
-    def master_company_id():
-        return owner_company_id()
-
-    def is_master_company(company_id):
-        oid = master_company_id()
-        return oid is not None and int(company_id) == int(oid)
-
-    def trial_cleanup_candidates():
-        """Only non-master companies whose latest subscription is TRIAL.
-        Companies with no subscription are not silently deleted."""
-        oid = master_company_id()
-        c = db()
-        try:
-            rows = c.execute(
-                """SELECT co.id,co.name,
-                          cs.status,cs.plan_code,
-                          (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) user_count,
-                          (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) project_count
-                   FROM companies co
-                   JOIN company_subscriptions cs
-                     ON cs.id=(
-                        SELECT s2.id FROM company_subscriptions s2
-                        WHERE s2.company_id=co.id
-                        ORDER BY s2.id DESC LIMIT 1
-                     )
-                   WHERE UPPER(COALESCE(cs.status,''))='TRIAL'
-                     AND (? IS NULL OR co.id<>?)
-                   ORDER BY co.name""",
-                (oid, oid)
-            ).fetchall()
-            return rows
-        finally:
-            c.close()
-
-    def _table_exists(c, table):
-        try:
-            c.execute("SELECT 1 FROM " + table + " LIMIT 1")
-            return True
-        except Exception:
-            try: c.rollback()
-            except Exception: pass
-            return False
-
-    def _delete_company_business_records(c, company_id):
-        """Delete known owner/business records first.
-        Project/customer domain data is handled separately and conservatively."""
-        for table in (
-            "owner_subscription_control_events",
-            "company_access_approval_events",
-            "billing_events",
-            "usage_events",
-            "company_notes",
-            "company_control_events",
-            "subscription_requests",
-            "company_access_approvals",
-            "company_subscriptions",
-        ):
-            try:
-                c.execute(f"DELETE FROM {table} WHERE company_id=?", (int(company_id),))
-            except Exception:
-                # A table may not exist in older installations.
-                try: c.rollback()
-                except Exception: pass
-
-    def _project_child_tables(c):
-        """PostgreSQL FK metadata for tables directly referencing projects(id)."""
-        try:
-            rows = c.execute("""
-                SELECT tc.table_name AS child_table,
-                       kcu.column_name AS child_column
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                  ON tc.constraint_name=kcu.constraint_name
-                 AND tc.table_schema=kcu.table_schema
-                JOIN information_schema.constraint_column_usage ccu
-                  ON ccu.constraint_name=tc.constraint_name
-                 AND ccu.table_schema=tc.table_schema
-                WHERE tc.constraint_type='FOREIGN KEY'
-                  AND ccu.table_name='projects'
-                  AND ccu.column_name='id'
-                  AND tc.table_schema='public'
-            """).fetchall()
-            return [(str(r["child_table"]), str(r["child_column"])) for r in rows]
-        except Exception:
-            try: c.rollback()
-            except Exception: pass
-            return []
-
-    def delete_trial_company(company_id, actor_user_id):
-        """Destructive action with hard master protection and transaction rollback."""
-        if is_master_company(company_id):
-            raise RuntimeError("The BuildCommand master company is permanently protected.")
-
-        # Re-check TRIAL status at execution time.
-        c = db()
-        try:
-            row = c.execute(
-                """SELECT co.id,co.name,cs.status
-                   FROM companies co
-                   JOIN company_subscriptions cs
-                     ON cs.id=(SELECT s2.id FROM company_subscriptions s2
-                               WHERE s2.company_id=co.id ORDER BY s2.id DESC LIMIT 1)
-                   WHERE co.id=?""",
-                (int(company_id),)
-            ).fetchone()
-            if not row or str(row["status"] or "").upper() != "TRIAL":
-                raise RuntimeError("Company is no longer a TRIAL account. Nothing was deleted.")
-
-            # Project-linked data: use actual PostgreSQL FK metadata instead of guessing table names.
-            project_rows = c.execute(
-                "SELECT id FROM projects WHERE company_id=?",
-                (int(company_id),)
-            ).fetchall()
-            project_ids = [int(r["id"]) for r in project_rows]
-
-            if project_ids:
-                for child_table, child_column in _project_child_tables(c):
-                    # Strict identifier validation before dynamic SQL.
-                    if not child_table.replace("_","").isalnum() or not child_column.replace("_","").isalnum():
-                        continue
-                    for pid in project_ids:
-                        c.execute(
-                            f'DELETE FROM "{child_table}" WHERE "{child_column}"=?',
-                            (pid,)
-                        )
-                c.execute("DELETE FROM projects WHERE company_id=?", (int(company_id),))
-
-            # Known business/account records.
-            # Execute individually but do not swallow FK failures during the destructive transaction.
-            for table in (
-                "owner_subscription_control_events",
-                "company_access_approval_events",
-                "billing_events",
-                "usage_events",
-                "company_notes",
-                "company_control_events",
-                "subscription_requests",
-                "company_access_approvals",
-                "company_subscriptions",
-            ):
+            user = await run_in_threadpool(console.current_actor)
+            form = FormData()
+            if request.method == 'POST':
+                if request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/x-www-form-urlencoded':
+                    raise ConsoleProblem('Submit the form on the Owner Console page.', 415)
+                parts, size = [], 0
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > 32768:
+                        raise ConsoleProblem('This form is too large. Shorten the account note.', 413)
+                    parts.append(chunk)
                 try:
-                    c.execute(f"DELETE FROM {table} WHERE company_id=?", (int(company_id),))
-                except Exception as exc:
-                    # Undefined table is acceptable; other SQL errors must abort.
-                    if "does not exist" not in str(exc).lower():
-                        raise
-
-            c.execute("DELETE FROM users WHERE company_id=?", (int(company_id),))
-            c.execute("DELETE FROM companies WHERE id=?", (int(company_id),))
-            c.commit()
-            return str(row["name"])
+                    form = FormData(parse_qsl(b''.join(parts).decode('utf-8'), keep_blank_values=True, max_num_fields=40))
+                except (ValueError, UnicodeError):
+                    raise ConsoleProblem('The form could not be read. Refresh the page and try again.')
+                for key in form:
+                    if key != 'company_ids' and len(form.getlist(key)) != 1:
+                        raise ConsoleProblem('The form contains a repeated field. Refresh it and try again.')
+            response = await run_in_threadpool(console.handle, request, form, csrf, user)
+        except ConsoleProblem as exc:
+            if exc.status == 401 and request.method == 'GET' and '/api/' not in request.url.path:
+                response = RedirectResponse('/login', status_code=303)
+            elif '/api/' in request.url.path:
+                response = JSONResponse({'detail': exc.message}, status_code=exc.status)
+            else:
+                response = error_page(exc.message, exc.status)
         except Exception:
-            try: c.rollback()
-            except Exception: pass
-            raise
-        finally:
-            c.close()
-
-    @app.get("/owner/subscriptions", response_class=HTMLResponse)
-    def owner_subscriptions_hub():
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        rows = customer_rows()
-        tr = ""
-        oid = master_company_id()
-        for r in rows:
-            cid = int(r["id"])
-            master = oid is not None and cid == int(oid)
-            status = effective_status(subscription(cid))
-            is_approved = True if master else approved(cid)
-            allowed = master or (status == "ACTIVE" and is_approved)
-            tr += f"""<tr>
-              <td><b>{escape(str(r["name"]))}</b>{" <span class='pill good'>MASTER</span>" if master else ""}</td>
-              <td>{escape(str(r["plan_code"] or "—"))}</td>
-              <td><span class="pill {'good' if status=='ACTIVE' else 'warn'}">{escape(status)}</span></td>
-              <td>{"YES" if is_approved else "NO"}</td>
-              <td><span class="pill {'good' if allowed else 'bad'}">{"ALLOWED" if allowed else "LOCKED"}</span></td>
-              <td><a class="btn secondary" href="/owner/customers/{cid}">Manage</a></td>
-            </tr>"""
-        body = f"""
-        <div class="card">
-          <div class="eyebrow">OWNER BUSINESS CONTROL</div>
-          <h1>Subscriptions & Access</h1>
-          <p class="muted">Customer rule: ACTIVE subscription + owner approval. The BuildCommand master company is always protected.</p>
-          <div style="overflow:auto"><table>
-            <tr><th>Company</th><th>Plan</th><th>Subscription</th><th>Approved</th><th>App Access</th><th></th></tr>
-            {tr or '<tr><td colspan="6">No customer companies.</td></tr>'}
-          </table></div>
-          <div style="margin-top:16px"><a class="btn secondary" href="/owner/cleanup">Test / Trial Cleanup</a></div>
-        </div>"""
-        return shell("Subscriptions & Access", body)
-
-    @app.get("/owner/cleanup", response_class=HTMLResponse)
-    @app.get("/owner/cleanup/preview", response_class=HTMLResponse)
-    def owner_cleanup_preview():
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        rows = trial_cleanup_candidates()
-        cards = ""
-        total_users = 0
-        total_projects = 0
-        for r in rows:
-            total_users += int(r["user_count"] or 0)
-            total_projects += int(r["project_count"] or 0)
-            cards += f"""<tr>
-              <td><b>{escape(str(r["name"]))}</b><br><span class="muted">Company #{int(r["id"])}</span></td>
-              <td>{escape(str(r["plan_code"] or "—"))}</td>
-              <td><span class="pill warn">TRIAL</span></td>
-              <td>{int(r["user_count"] or 0)}</td>
-              <td>{int(r["project_count"] or 0)}</td>
-            </tr>"""
-
-        body = f"""
-        <div class="card">
-          <div class="eyebrow">OWNER ONLY · DESTRUCTIVE CONTROL</div>
-          <h1>Delete Trial Companies</h1>
-          <p><b>Master protection:</b> the company containing {escape(owner_email)} is excluded in code and cannot be deleted by this tool.</p>
-          <p class="muted">This cleanup targets only companies whose latest subscription status is exactly TRIAL. ACTIVE, PAST_DUE, SUSPENDED, CANCELED, and companies with no subscription are not selected.</p>
-          <div class="grid">
-            <div class="stat"><span>Trial Companies</span><b>{len(rows)}</b></div>
-            <div class="stat"><span>Users Removed</span><b>{total_users}</b></div>
-            <div class="stat"><span>Test Projects Removed</span><b>{total_projects}</b></div>
-          </div>
-          <div style="overflow:auto;margin-top:16px"><table>
-            <tr><th>Company</th><th>Plan</th><th>Status</th><th>Users</th><th>Projects</th></tr>
-            {cards or '<tr><td colspan="5"><b>No non-master TRIAL companies found.</b></td></tr>'}
-          </table></div>
-        </div>
-        <div class="card">
-          <h2>Permanent deletion</h2>
-          <p>This cannot be undone. Type <b>DELETE TRIAL COMPANIES</b> exactly to continue.</p>
-          <form method="post" action="/owner/cleanup/delete-trials">
-            <input name="confirmation" autocomplete="off" placeholder="DELETE TRIAL COMPANIES" style="width:100%;max-width:420px;padding:12px;border-radius:8px">
-            <button class="btn" type="submit" style="margin-top:12px" {"disabled" if not rows else ""}>Delete Listed Trial Companies</button>
-          </form>
-        </div>"""
-        return shell("Trial Company Cleanup", body)
-
-    @app.post("/owner/cleanup/delete-trials")
-    def owner_cleanup_delete_trials(confirmation: str = Form(...)):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        if str(confirmation or "").strip() != "DELETE TRIAL COMPANIES":
-            return HTMLResponse("Confirmation text did not match. Nothing was deleted.", status_code=400)
-
-        candidates = list(trial_cleanup_candidates())
-        deleted = []
-        failed = []
-        for r in candidates:
-            cid = int(r["id"])
-            try:
-                name = delete_trial_company(cid, int(u["id"]))
-                deleted.append({"company_id": cid, "name": name})
-            except Exception as exc:
-                failed.append({"company_id": cid, "name": str(r["name"]), "error": str(exc)})
-
-        # Audit the cleanup in an owner-level table that is not company-owned.
-        c = db()
-        try:
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS owner_cleanup_events(
-                    id BIGSERIAL PRIMARY KEY,
-                    actor_user_id BIGINT,
-                    action TEXT NOT NULL,
-                    detail TEXT,
-                    created TEXT NOT NULL
-                )
-            """)
-            c.execute(
-                """INSERT INTO owner_cleanup_events(actor_user_id,action,detail,created)
-                   VALUES(?,?,?,?)""",
-                (int(u["id"]), "DELETE_TRIAL_COMPANIES",
-                 f"deleted={len(deleted)} failed={len(failed)}", now())
-            )
-            c.commit()
-        finally:
-            c.close()
-
-        status = 200 if not failed else 409
-        body = f"""
-        <div class="card">
-          <div class="eyebrow">CLEANUP RESULT</div>
-          <h1>{"Cleanup Complete" if not failed else "Cleanup Partially Completed"}</h1>
-          <p><b>{len(deleted)}</b> trial companies deleted. <b>{len(failed)}</b> failed safely and were rolled back individually.</p>
-          <p class="muted">The BuildCommand master company was never a deletion candidate.</p>
-          {"<pre>"+escape(str(failed))+"</pre>" if failed else ""}
-          <a class="btn secondary" href="/owner/customers">Return to Customers</a>
-        </div>"""
-        return HTMLResponse(shell("Cleanup Result", body).body, status_code=status)
-
-    @app.get("/owner/api/cleanup-preview")
-    def owner_cleanup_preview_api():
-        if not require_owner():
-            return JSONResponse({"detail":"Platform owner access required."},status_code=403)
-        oid = master_company_id()
-        rows = trial_cleanup_candidates()
-        return {
-            "status":"ok",
-            "version":"7.2.2",
-            "master_company_id":oid,
-            "master_email":owner_email,
-            "master_protected":True,
-            "delete_requires_exact_confirmation":"DELETE TRIAL COMPANIES",
-            "candidates":[
-                {
-                    "company_id":int(r["id"]),
-                    "company_name":r["name"],
-                    "status":r["status"],
-                    "plan":r["plan_code"],
-                    "users":int(r["user_count"] or 0),
-                    "projects":int(r["project_count"] or 0),
-                } for r in rows
-            ]
-        }
-
-    @app.get("/health/owner-console-7-2-2")
-    def owner_console_722_health():
-        paths = {getattr(r,"path","") for r in app.routes}
-        checks = {
-            "owner_dashboard":"/owner" in paths,
-            "customers":"/owner/customers" in paths,
-            "subscriptions":"/owner/subscriptions" in paths,
-            "cleanup_preview":"/owner/cleanup" in paths,
-            "cleanup_delete":"/owner/cleanup/delete-trials" in paths,
-            "cleanup_api":"/owner/api/cleanup-preview" in paths,
-            "master_owner_hard_protection":owner_email == "buildcommandai@gmail.com",
-            "same_database":callable(getattr(runtime,"db",None)),
-        }
-        passed=sum(1 for v in checks.values() if v)
-        return {
-            "status":"ok" if passed==len(checks) else "degraded",
-            "app":"BuildCommand AI",
-            "version":"7.2.2",
-            "release":"Owner Console Control Center + Trial Cleanup",
-            "passed":passed,
-            "total":len(checks),
-            "failed":len(checks)-passed,
-            "master_protected":True,
-            "automatic_deletion_on_deploy":False,
-            "checks":checks,
-        }
-
-
-    # ========================================================
-    # BuildCommand AI 7.2.3 — Company Cleanup Center
-    # Replaces trial-only cleanup with selectable non-master cleanup.
-    # ========================================================
-
-    # Remove the 7.2.2 cleanup routes before registering replacements.
-    for p, methods in (
-        ("/owner/cleanup", {"GET"}),
-        ("/owner/cleanup/preview", {"GET"}),
-        ("/owner/cleanup/delete-trials", {"POST"}),
-        ("/owner/api/cleanup-preview", {"GET"}),
-    ):
-        remove_route(p, methods)
-
-    def all_non_master_companies():
-        oid = owner_company_id()
-        c = db()
-        try:
-            rows = c.execute(
-                """SELECT co.id,co.name,
-                          COALESCE(
-                            (SELECT s.status FROM company_subscriptions s
-                             WHERE s.company_id=co.id ORDER BY s.id DESC LIMIT 1),
-                            'NO_SUBSCRIPTION'
-                          ) AS status,
-                          COALESCE(
-                            (SELECT s.plan_code FROM company_subscriptions s
-                             WHERE s.company_id=co.id ORDER BY s.id DESC LIMIT 1),
-                            ''
-                          ) AS plan_code,
-                          COALESCE(
-                            (SELECT a.approved FROM company_access_approvals a
-                             WHERE a.company_id=co.id LIMIT 1),
-                            0
-                          ) AS approved,
-                          (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) AS user_count,
-                          (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) AS project_count
-                   FROM companies co
-                   WHERE (? IS NULL OR co.id<>?)
-                   ORDER BY co.name""",
-                (oid, oid)
-            ).fetchall()
-            return rows
-        finally:
-            c.close()
-
-    def _safe_ident(name):
-        s = str(name or "")
-        return bool(s) and s.replace("_","").isalnum()
-
-    def _tables_with_column(c, column_name):
-        try:
-            rows = c.execute(
-                """SELECT table_name FROM information_schema.columns
-                   WHERE table_schema='public' AND column_name=?
-                   ORDER BY table_name""",
-                (str(column_name),)
-            ).fetchall()
-            return [str(r["table_name"]) for r in rows if _safe_ident(r["table_name"])]
-        except Exception:
-            try: c.rollback()
-            except Exception: pass
-            return []
-
-    def delete_non_master_company(company_id, actor_user_id):
-        """Delete one explicitly selected company.
-        Hard-protects the master company and uses one transaction."""
-        cid = int(company_id)
-        oid = owner_company_id()
-        if oid is not None and cid == int(oid):
-            raise RuntimeError("The BuildCommand master company cannot be deleted.")
-
-        c = db()
-        try:
-            row = c.execute(
-                "SELECT id,name FROM companies WHERE id=? LIMIT 1",
-                (cid,)
-            ).fetchone()
-            if not row:
-                raise RuntimeError("Company no longer exists.")
-
-            # Re-check master protection by actual master email as a second guard.
-            master_user = c.execute(
-                "SELECT id FROM users WHERE company_id=? AND LOWER(email)=LOWER(?) LIMIT 1",
-                (cid, owner_email)
-            ).fetchone()
-            if master_user:
-                raise RuntimeError("The company containing the BuildCommand master email cannot be deleted.")
-
-            project_rows = c.execute(
-                "SELECT id FROM projects WHERE company_id=?",
-                (cid,)
-            ).fetchall()
-            project_ids = [int(r["id"]) for r in project_rows]
-
-            user_rows = c.execute(
-                "SELECT id FROM users WHERE company_id=?",
-                (cid,)
-            ).fetchall()
-            user_ids = [int(r["id"]) for r in user_rows]
-
-            # 1) Delete rows explicitly scoped by company_id from all public tables.
-            # Skip parent tables until the end.
-            for table in _tables_with_column(c, "company_id"):
-                if table in {"companies","projects","users"}:
-                    continue
-                c.execute(f'DELETE FROM "{table}" WHERE company_id=?', (cid,))
-
-            # 2) Delete rows scoped by project_id for this company's projects.
-            if project_ids:
-                for table in _tables_with_column(c, "project_id"):
-                    if table == "projects":
-                        continue
-                    for pid in project_ids:
-                        c.execute(f'DELETE FROM "{table}" WHERE project_id=?', (pid,))
-
-            # 3) Delete rows scoped by user_id / actor_user_id where present.
-            # Never delete the audit record we create after successful cleanup.
-            if user_ids:
-                for col in ("user_id","actor_user_id","approved_by_user_id","revoked_by_user_id"):
-                    for table in _tables_with_column(c, col):
-                        if table in {"users","owner_cleanup_events"}:
-                            continue
-                        for uid in user_ids:
-                            c.execute(f'DELETE FROM "{table}" WHERE "{col}"=?', (uid,))
-
-            # 4) Parents last.
-            c.execute("DELETE FROM projects WHERE company_id=?", (cid,))
-            c.execute("DELETE FROM users WHERE company_id=?", (cid,))
-            c.execute("DELETE FROM companies WHERE id=?", (cid,))
-            c.commit()
-            return str(row["name"])
-        except Exception:
-            try: c.rollback()
-            except Exception: pass
-            raise
-        finally:
-            c.close()
-
-    @app.get("/owner/cleanup", response_class=HTMLResponse)
-    @app.get("/owner/cleanup/preview", response_class=HTMLResponse)
-    def owner_company_cleanup_center():
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-
-        rows = all_non_master_companies()
-        total_users = sum(int(r["user_count"] or 0) for r in rows)
-        total_projects = sum(int(r["project_count"] or 0) for r in rows)
-
-        table_rows = ""
-        for r in rows:
-            cid = int(r["id"])
-            status = str(r["status"] or "NO_SUBSCRIPTION").upper()
-            approved_value = bool(int(r["approved"] or 0))
-            table_rows += f"""<tr>
-              <td style="width:42px">
-                <input class="company-check" type="checkbox" name="company_ids" value="{cid}" form="cleanup-form">
-              </td>
-              <td>
-                <b>{escape(str(r["name"]))}</b><br>
-                <span class="muted">Company #{cid}</span>
-              </td>
-              <td>{escape(str(r["plan_code"] or "—"))}</td>
-              <td><span class="pill {'good' if status=='ACTIVE' else 'warn'}">{escape(status)}</span></td>
-              <td>{"YES" if approved_value else "NO"}</td>
-              <td>{int(r["user_count"] or 0)}</td>
-              <td>{int(r["project_count"] or 0)}</td>
-            </tr>"""
-
-        body = f"""
-        <div class="card">
-          <div class="eyebrow">OWNER ONLY · COMPANY CLEANUP CENTER</div>
-          <h1>Reset Customer Companies</h1>
-          <p><b>Master protection:</b> the company containing {escape(owner_email)} is excluded from this list and blocked again inside the delete function.</p>
-          <p class="muted">This page shows every non-master company, regardless of subscription status. Select only the companies you intend to permanently remove.</p>
-
-          <div class="grid">
-            <div class="stat"><span>Non-Master Companies</span><b>{len(rows)}</b></div>
-            <div class="stat"><span>Users Across Them</span><b>{total_users}</b></div>
-            <div class="stat"><span>Projects Across Them</span><b>{total_projects}</b></div>
-          </div>
-
-          <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0">
-            <button type="button" class="btn secondary" onclick="setAllCompanies(true)">Select All Non-Master</button>
-            <button type="button" class="btn secondary" onclick="setAllCompanies(false)">Clear Selection</button>
-          </div>
-
-          <div style="overflow:auto">
-            <table>
-              <tr>
-                <th>Select</th><th>Company</th><th>Plan</th><th>Status</th>
-                <th>Approved</th><th>Users</th><th>Projects</th>
-              </tr>
-              {table_rows or '<tr><td colspan="7"><b>No non-master companies found. Customer database is already clean.</b></td></tr>'}
-            </table>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="eyebrow">PERMANENT DELETION</div>
-          <h2>Delete Selected Companies</h2>
-          <p>This cannot be undone. Type <b>DELETE SELECTED COMPANIES</b> exactly.</p>
-          <form id="cleanup-form" method="post" action="/owner/cleanup/delete-selected">
-            <input name="confirmation" autocomplete="off"
-                   placeholder="DELETE SELECTED COMPANIES"
-                   style="width:100%;max-width:430px;padding:12px;border-radius:8px">
-            <div style="margin-top:12px">
-              <button class="btn" type="submit" {"disabled" if not rows else ""}>Delete Selected Companies</button>
-            </div>
-          </form>
-        </div>
-
-        <script>
-        function setAllCompanies(value) {{
-          document.querySelectorAll('.company-check').forEach(function(cb) {{
-            cb.checked = value;
-          }});
-        }}
-        </script>
-        """
-        return shell("Company Cleanup Center", body)
-
-    @app.post("/owner/cleanup/delete-selected")
-    def owner_cleanup_delete_selected(
-        confirmation: str = Form(...),
-        company_ids: list[int] = Form(default=[])
-    ):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-
-        if str(confirmation or "").strip() != "DELETE SELECTED COMPANIES":
-            return HTMLResponse(
-                "Confirmation text did not match. Nothing was deleted.",
-                status_code=400
-            )
-
-        selected = []
-        seen = set()
-        for raw in company_ids or []:
-            cid = int(raw)
-            if cid not in seen:
-                selected.append(cid)
-                seen.add(cid)
-
-        if not selected:
-            return HTMLResponse("No companies were selected. Nothing was deleted.", status_code=400)
-
-        oid = owner_company_id()
-        if oid is not None and int(oid) in selected:
-            return HTMLResponse(
-                "Master company protection blocked this request. Nothing was deleted.",
-                status_code=409
-            )
-
-        deleted = []
-        failed = []
-        for cid in selected:
-            try:
-                name = delete_non_master_company(cid, int(u["id"]))
-                deleted.append({"company_id":cid,"name":name})
-            except Exception as exc:
-                failed.append({"company_id":cid,"error":str(exc)})
-
-        # Audit after deletions, in a master-level table.
-        c = db()
-        try:
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS owner_cleanup_events(
-                    id BIGSERIAL PRIMARY KEY,
-                    actor_user_id BIGINT,
-                    action TEXT NOT NULL,
-                    detail TEXT,
-                    created TEXT NOT NULL
-                )
-            """)
-            c.execute(
-                """INSERT INTO owner_cleanup_events(actor_user_id,action,detail,created)
-                   VALUES(?,?,?,?)""",
-                (
-                    int(u["id"]),
-                    "DELETE_SELECTED_COMPANIES",
-                    f"selected={selected}; deleted={deleted}; failed={failed}",
-                    now()
-                )
-            )
-            c.commit()
-        finally:
-            c.close()
-
-        status_code = 200 if not failed else 409
-        fail_html = ""
-        if failed:
-            fail_html = "<h3>Not deleted</h3><pre>" + escape(str(failed)) + "</pre>"
-
-        body = f"""
-        <div class="card">
-          <div class="eyebrow">CLEANUP RESULT</div>
-          <h1>{"Customer Reset Complete" if not failed else "Customer Reset Partially Completed"}</h1>
-          <p><b>{len(deleted)}</b> companies deleted. <b>{len(failed)}</b> companies failed safely and remained in the database.</p>
-          <p class="muted">The BuildCommand master company was never eligible for deletion.</p>
-          {fail_html}
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <a class="btn secondary" href="/owner/cleanup">Back to Cleanup</a>
-            <a class="btn secondary" href="/owner/customers">Customer List</a>
-          </div>
-        </div>
-        """
-        rendered = shell("Cleanup Result", body)
-        # shell() returns HTMLResponse in this module.
-        if isinstance(rendered, HTMLResponse):
-            rendered.status_code = status_code
-            return rendered
-        return HTMLResponse(str(rendered), status_code=status_code)
-
-    @app.get("/owner/api/cleanup-preview")
-    def owner_company_cleanup_preview_api():
-        if not require_owner():
-            return JSONResponse({"detail":"Platform owner access required."},status_code=403)
-        rows = all_non_master_companies()
-        return {
-            "status":"ok",
-            "version":"7.2.3",
-            "master_company_id":owner_company_id(),
-            "master_email":owner_email,
-            "master_protected":True,
-            "automatic_delete":False,
-            "confirmation_required":"DELETE SELECTED COMPANIES",
-            "companies":[
-                {
-                    "company_id":int(r["id"]),
-                    "company_name":r["name"],
-                    "plan":r["plan_code"],
-                    "status":r["status"],
-                    "approved":bool(int(r["approved"] or 0)),
-                    "users":int(r["user_count"] or 0),
-                    "projects":int(r["project_count"] or 0),
-                }
-                for r in rows
-            ]
-        }
-
-    @app.get("/health/owner-console-7-2-3")
-    def owner_console_723_health():
-        paths = {getattr(r,"path","") for r in app.routes}
-        checks = {
-            "owner_dashboard":"/owner" in paths,
-            "customers":"/owner/customers" in paths,
-            "subscriptions":"/owner/subscriptions" in paths,
-            "cleanup_center":"/owner/cleanup" in paths,
-            "selective_delete":"/owner/cleanup/delete-selected" in paths,
-            "cleanup_preview_api":"/owner/api/cleanup-preview" in paths,
-            "master_email_protected":owner_email == "buildcommandai@gmail.com",
-            "same_database":callable(getattr(runtime,"db",None)),
-            "old_trial_delete_removed":"/owner/cleanup/delete-trials" not in paths,
-        }
-        passed = sum(1 for v in checks.values() if v)
-        return {
-            "status":"ok" if passed==len(checks) else "degraded",
-            "app":"BuildCommand AI",
-            "version":"7.2.3",
-            "release":"Company Cleanup Center",
-            "passed":passed,
-            "total":len(checks),
-            "failed":len(checks)-passed,
-            "master_protected":True,
-            "automatic_deletion_on_deploy":False,
-            "requires_selection":True,
-            "checks":checks,
-        }
-
-
-    @app.get("/health/owner-console-7-2-5")
-    def owner_console_725_health():
-        paths = {getattr(r, "path", "") for r in app.routes}
-        checks = {
-            "owner_dashboard": "/owner" in paths,
-            "customers": "/owner/customers" in paths,
-            "subscriptions": "/owner/subscriptions" in paths,
-            "cleanup_center_owned_here": "/owner/cleanup" in paths,
-            "selective_delete_owned_here": "/owner/cleanup/delete-selected" in paths,
-            "cleanup_preview_api_owned_here": "/owner/api/cleanup-preview" in paths,
-            "master_email_protected": owner_email == "buildcommandai@gmail.com",
-            "same_database": callable(getattr(runtime, "db", None)),
-            "automatic_deletion_disabled": True,
-        }
-        passed = sum(1 for v in checks.values() if v)
-        return {
-            "status": "ok" if passed == len(checks) else "degraded",
-            "app": "BuildCommand AI",
-            "version": "7.2.5",
-            "release": "Health Check Cleanup",
-            "passed": passed,
-            "total": len(checks),
-            "failed": len(checks) - passed,
-            "owner_business_ui": "owner_console.py",
-            "customer_app": "full_app.py",
-            "master_protected": True,
-            "automatic_deletion_on_deploy": False,
-            "checks": checks,
-        }
-
-
-    # ========================================================
-    # BuildCommand AI 7.3.0 — Customer Subscription Control
-    # Owner-side SaaS lifecycle controls. No automatic billing mutations.
-    # ========================================================
-
-    def _bc730_company_snapshot(company_id):
-        c = db()
-        try:
-            company = c.execute(
-                "SELECT id,name FROM companies WHERE id=? LIMIT 1",
-                (int(company_id),)
-            ).fetchone()
-            if not company:
-                return None
-
-            sub = c.execute(
-                """SELECT * FROM company_subscriptions
-                   WHERE company_id=? ORDER BY id DESC LIMIT 1""",
-                (int(company_id),)
-            ).fetchone()
-            approval = c.execute(
-                """SELECT * FROM company_access_approvals
-                   WHERE company_id=? LIMIT 1""",
-                (int(company_id),)
-            ).fetchone()
-            users = c.execute(
-                "SELECT COUNT(*) AS n FROM users WHERE company_id=?",
-                (int(company_id),)
-            ).fetchone()
-            projects = c.execute(
-                "SELECT COUNT(*) AS n FROM projects WHERE company_id=?",
-                (int(company_id),)
-            ).fetchone()
-
-            return {
-                "company": company,
-                "subscription": sub,
-                "approval": approval,
-                "users": int(users["n"] or 0),
-                "projects": int(projects["n"] or 0),
-            }
-        finally:
-            c.close()
-
-    def _bc730_write_audit(actor_user_id, company_id, action, detail=""):
-        c = db()
-        try:
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS owner_subscription_events(
-                    id BIGSERIAL PRIMARY KEY,
-                    actor_user_id BIGINT,
-                    company_id BIGINT,
-                    action TEXT NOT NULL,
-                    detail TEXT,
-                    created TEXT NOT NULL
-                )
-            """)
-            c.execute(
-                """INSERT INTO owner_subscription_events(
-                       actor_user_id,company_id,action,detail,created
-                   ) VALUES(?,?,?,?,?)""",
-                (int(actor_user_id), int(company_id), str(action), str(detail), now())
-            )
-            c.commit()
-        finally:
-            c.close()
-
-    def _bc730_assert_customer_company(company_id):
-        oid = owner_company_id()
-        cid = int(company_id)
-        if oid is not None and cid == int(oid):
-            raise RuntimeError("Master BuildCommand company is protected from customer subscription controls.")
-        return cid
-
-    # Remove prior customer-detail route if present so 7.3.0 owns the control page.
-    remove_route("/owner/customers/{company_id}", {"GET"})
-
-    @app.get("/owner/customers/{company_id}", response_class=HTMLResponse)
-    def owner_customer_control(company_id: int):
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-
-        snap = _bc730_company_snapshot(company_id)
-        if not snap:
-            return HTMLResponse("Customer company not found.", status_code=404)
-
-        co = snap["company"]
-        sub = snap["subscription"]
-        approval = snap["approval"]
-
-        status = str(sub["status"] if sub else "NO_SUBSCRIPTION").upper()
-        plan = str(sub["plan_code"] if sub else "—").upper()
-        approved = bool(int(approval["approved"] or 0)) if approval else False
-
-        # Payment state is intentionally derived from the subscription state until
-        # Stripe is connected; we never claim a payment was collected without Stripe.
-        if status in {"ACTIVE","TRIALING"}:
-            payment_state = "SUBSCRIPTION ACTIVE"
-        elif status in {"PAST_DUE","UNPAID"}:
-            payment_state = "PAYMENT ATTENTION"
-        elif status in {"CANCELED","CANCELLED"}:
-            payment_state = "CANCELED"
-        else:
-            payment_state = "NOT VERIFIED"
-
-        body = f"""
-        <div class="card">
-          <div class="eyebrow">OWNER ONLY · CUSTOMER CONTROL</div>
-          <h1>{escape(str(co["name"]))}</h1>
-          <p class="muted">Company #{int(co["id"])} · BuildCommand customer lifecycle control</p>
-
-          <div class="grid">
-            <div class="stat"><span>Plan</span><b>{escape(plan)}</b></div>
-            <div class="stat"><span>Subscription</span><b>{escape(status)}</b></div>
-            <div class="stat"><span>Payment</span><b>{escape(payment_state)}</b></div>
-            <div class="stat"><span>Owner Approval</span><b>{"APPROVED" if approved else "PENDING"}</b></div>
-            <div class="stat"><span>Users</span><b>{snap["users"]}</b></div>
-            <div class="stat"><span>Projects</span><b>{snap["projects"]}</b></div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="eyebrow">ACCESS CONTROL</div>
-          <h2>Customer Access</h2>
-          <p>Payment and owner approval are separate gates. Stripe payment never approves access automatically; only this Owner Console can approve a customer.</p>
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <form method="post" action="/owner/customers/{int(co["id"])}/approve">
-              <button class="btn" type="submit">Approve Access</button>
-            </form>
-            <form method="post" action="/owner/customers/{int(co["id"])}/suspend">
-              <button class="btn secondary" type="submit">Suspend Access</button>
-            </form>
-            <form method="post" action="/owner/customers/{int(co["id"])}/reactivate">
-              <button class="btn secondary" type="submit">Reactivate Access</button>
-            </form>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="eyebrow">SUBSCRIPTION</div>
-          <h2>Plan & Subscription Status</h2>
-          <form method="post" action="/owner/customers/{int(co["id"])}/subscription">
-            <label><b>Plan</b></label><br>
-            <select name="plan_code" style="padding:11px;margin:6px 0 14px;min-width:240px">
-              <option value="STARTER" {"selected" if plan=="STARTER" else ""}>Starter</option>
-              <option value="PROFESSIONAL" {"selected" if plan=="PROFESSIONAL" else ""}>Professional</option>
-              <option value="BUSINESS" {"selected" if plan=="BUSINESS" else ""}>Business</option>
-              <option value="ENTERPRISE" {"selected" if plan=="ENTERPRISE" else ""}>Enterprise</option>
-            </select><br>
-            <label><b>Status</b></label><br>
-            <select name="status" style="padding:11px;margin:6px 0 14px;min-width:240px">
-              <option value="PENDING" {"selected" if status=="PENDING" else ""}>Pending</option>
-              <option value="ACTIVE" {"selected" if status=="ACTIVE" else ""}>Active</option>
-              <option value="PAST_DUE" {"selected" if status=="PAST_DUE" else ""}>Past Due</option>
-              <option value="SUSPENDED" {"selected" if status=="SUSPENDED" else ""}>Suspended</option>
-              <option value="CANCELED" {"selected" if status in {"CANCELED","CANCELLED"} else ""}>Canceled</option>
-            </select><br>
-            <button class="btn" type="submit">Save Subscription</button>
-          </form>
-          <p class="muted" style="margin-top:12px">Until Stripe is connected, these are owner-side account controls only. They do not charge, refund, or cancel a card transaction.</p>
-        </div>
-
-        <div class="card">
-          <div class="eyebrow">DANGER ZONE</div>
-          <h2>Cancel Customer Subscription</h2>
-          <p>This changes BuildCommand access/subscription status to canceled. Stripe billing cancellation will be connected separately.</p>
-          <form method="post" action="/owner/customers/{int(co["id"])}/cancel">
-            <button class="btn secondary" type="submit">Cancel Subscription</button>
-          </form>
-        </div>
-        """
-        return shell("Customer Subscription Control", body)
-
-    @app.post("/owner/customers/{company_id}/approve")
-    def owner_customer_approve(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        cid = _bc730_assert_customer_company(company_id)
-        c = db()
-        try:
-            row = c.execute(
-                "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
-                (cid,)
-            ).fetchone()
-            if row:
-                c.execute(
-                    """UPDATE company_access_approvals
-                       SET approved=1, approved_by_user_id=?, approved_at=?
-                       WHERE company_id=?""",
-                    (int(u["id"]), now(), cid)
-                )
+            LOG.exception('Owner Console request failed method=%s path=%s', request.method, request.url.path)
+            response = JSONResponse({'detail': 'The console could not complete this request. Try again shortly.'}, status_code=503) if '/api/' in request.url.path else error_page('The console could not complete this request. Try again shortly. Account changes are saved only when the full operation succeeds.', 503)
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Referrer-Policy'] = 'same-origin'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        if isinstance(response, HTMLResponse) and response.status_code == 200:
+            response.set_cookie(CSRF_COOKIE, csrf, max_age=43200, path='/owner', secure=request.url.scheme == 'https', httponly=True, samesite='strict')
+        return response
+
+    def health():
+        return JSONResponse(console.health(), headers={'Cache-Control': 'no-store'})
+
+    replacements = {(path, method) for method, paths in OWNER_ROUTES.items() for path in paths}
+    replacements |= {(path, 'GET') for path in HEALTH_ROUTES}
+    # Retire the earlier unreviewed bulk trial deletion route.
+    replacements.add(('/owner/cleanup/delete-trials', 'POST'))
+    for route in list(app.router.routes):
+        methods = set(getattr(route, 'methods', None) or ())
+        retained = {method for method in methods if (getattr(route, 'path', ''), method) not in replacements}
+        if methods != retained:
+            if retained:
+                route.methods = retained
             else:
-                c.execute(
-                    """INSERT INTO company_access_approvals(
-                       company_id,approved,approved_by_user_id,approved_at
-                       ) VALUES(?,?,?,?)""",
-                    (cid, 1, int(u["id"]), now())
-                )
-            c.commit()
-        finally:
-            c.close()
-        _bc730_write_audit(int(u["id"]), cid, "APPROVE_ACCESS")
-        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
-
-    @app.post("/owner/customers/{company_id}/suspend")
-    def owner_customer_suspend(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        cid = _bc730_assert_customer_company(company_id)
-        c = db()
-        try:
-            row = c.execute(
-                "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
-                (cid,)
-            ).fetchone()
-            if row:
-                c.execute(
-                    "UPDATE company_access_approvals SET approved=0 WHERE company_id=?",
-                    (cid,)
-                )
-            else:
-                c.execute(
-                    "INSERT INTO company_access_approvals(company_id,approved) VALUES(?,?)",
-                    (cid, 0)
-                )
-            c.execute(
-                """UPDATE company_subscriptions SET status='SUSPENDED'
-                   WHERE id=(SELECT id FROM company_subscriptions
-                             WHERE company_id=? ORDER BY id DESC LIMIT 1)""",
-                (cid,)
-            )
-            c.commit()
-        finally:
-            c.close()
-        _bc730_write_audit(int(u["id"]), cid, "SUSPEND_ACCESS")
-        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
-
-    @app.post("/owner/customers/{company_id}/reactivate")
-    def owner_customer_reactivate(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        cid = _bc730_assert_customer_company(company_id)
-        c = db()
-        try:
-            row = c.execute(
-                "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
-                (cid,)
-            ).fetchone()
-            if row:
-                c.execute(
-                    "UPDATE company_access_approvals SET approved=1 WHERE company_id=?",
-                    (cid,)
-                )
-            else:
-                c.execute(
-                    "INSERT INTO company_access_approvals(company_id,approved) VALUES(?,?)",
-                    (cid, 1)
-                )
-            c.execute(
-                """UPDATE company_subscriptions SET status='ACTIVE'
-                   WHERE id=(SELECT id FROM company_subscriptions
-                             WHERE company_id=? ORDER BY id DESC LIMIT 1)""",
-                (cid,)
-            )
-            c.commit()
-        finally:
-            c.close()
-        _bc730_write_audit(int(u["id"]), cid, "REACTIVATE_ACCESS")
-        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
-
-    @app.post("/owner/customers/{company_id}/subscription")
-    def owner_customer_subscription_update(
-        company_id: int,
-        plan_code: str = Form(...),
-        status: str = Form(...)
-    ):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        cid = _bc730_assert_customer_company(company_id)
-        plan = str(plan_code or "").strip().upper()
-        state = str(status or "").strip().upper()
-        allowed_plans = {"STARTER","PROFESSIONAL","BUSINESS","ENTERPRISE"}
-        allowed_states = {"PENDING","ACTIVE","PAST_DUE","SUSPENDED","CANCELED"}
-        if plan not in allowed_plans or state not in allowed_states:
-            return HTMLResponse("Invalid plan or subscription status.", status_code=400)
-
-        c = db()
-        try:
-            sub = c.execute(
-                """SELECT id FROM company_subscriptions
-                   WHERE company_id=? ORDER BY id DESC LIMIT 1""",
-                (cid,)
-            ).fetchone()
-            if sub:
-                c.execute(
-                    "UPDATE company_subscriptions SET plan_code=?,status=? WHERE id=?",
-                    (plan, state, int(sub["id"]))
-                )
-            else:
-                # Use only core columns already established by BuildCommand.
-                c.execute(
-                    """INSERT INTO company_subscriptions(company_id,plan_code,status)
-                       VALUES(?,?,?)""",
-                    (cid, plan, state)
-                )
-            c.commit()
-        finally:
-            c.close()
-        _bc730_write_audit(
-            int(u["id"]), cid, "UPDATE_SUBSCRIPTION",
-            f"plan={plan}; status={state}"
-        )
-        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
-
-    @app.post("/owner/customers/{company_id}/cancel")
-    def owner_customer_cancel(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-        cid = _bc730_assert_customer_company(company_id)
-        c = db()
-        try:
-            c.execute(
-                """UPDATE company_subscriptions SET status='CANCELED'
-                   WHERE id=(SELECT id FROM company_subscriptions
-                             WHERE company_id=? ORDER BY id DESC LIMIT 1)""",
-                (cid,)
-            )
-            row = c.execute(
-                "SELECT company_id FROM company_access_approvals WHERE company_id=? LIMIT 1",
-                (cid,)
-            ).fetchone()
-            if row:
-                c.execute(
-                    "UPDATE company_access_approvals SET approved=0 WHERE company_id=?",
-                    (cid,)
-                )
-            else:
-                c.execute(
-                    "INSERT INTO company_access_approvals(company_id,approved) VALUES(?,?)",
-                    (cid, 0)
-                )
-            c.commit()
-        finally:
-            c.close()
-        _bc730_write_audit(int(u["id"]), cid, "CANCEL_SUBSCRIPTION")
-        return RedirectResponse(f"/owner/customers/{cid}", status_code=303)
-
-    @app.get("/health/customer-subscription-control-7-3-0")
-    def owner_customer_subscription_control_health():
-        paths = {getattr(r,"path","") for r in app.routes}
-        checks = {
-            "owner_dashboard": "/owner" in paths,
-            "customers": "/owner/customers" in paths,
-            "customer_control": "/owner/customers/{company_id}" in paths,
-            "approve_access": "/owner/customers/{company_id}/approve" in paths,
-            "suspend_access": "/owner/customers/{company_id}/suspend" in paths,
-            "reactivate_access": "/owner/customers/{company_id}/reactivate" in paths,
-            "subscription_update": "/owner/customers/{company_id}/subscription" in paths,
-            "cancel_subscription": "/owner/customers/{company_id}/cancel" in paths,
-            "cleanup_preserved": "/owner/cleanup" in paths,
-            "master_protection": owner_email == "buildcommandai@gmail.com",
-            "stripe_payment_not_faked": True,
-            "automatic_deletion_disabled": True,
-        }
-        passed = sum(1 for v in checks.values() if v)
-        return {
-            "status":"ok" if passed==len(checks) else "degraded",
-            "app":"BuildCommand AI",
-            "version":"7.3.0",
-            "release":"Customer Subscription Control",
-            "passed":passed,
-            "total":len(checks),
-            "failed":len(checks)-passed,
-            "owner_business_ui":"owner_console.py",
-            "customer_app":"full_app.py",
-            "master_protected":True,
-            "stripe_connected":False,
-            "data_reset":False,
-            "checks":checks,
-        }
-
-
-    # ========================================================
-    # BuildCommand AI 7.4.0 — Billing & Access Command Center
-    # ========================================================
-    import os as _bc740_owner_os
-
-    remove_route("/owner/billing", {"GET"})
-
-    def _bc740_owner_env(name):
-        return str(_bc740_owner_os.getenv(name) or "").strip()
-
-    def _bc740_owner_subscriptions():
-        oid = owner_company_id()
-        c = db()
-        try:
-            rows = c.execute(
-                """SELECT co.id,co.name,
-                          cs.plan_code,cs.status,
-                          cs.stripe_customer_id,
-                          cs.stripe_subscription_id,
-                          cs.stripe_payment_status,
-                          cs.stripe_last_event,
-                          cs.stripe_updated_at,
-                          COALESCE(ca.approved,0) AS approved,
-                          (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) user_count,
-                          (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) project_count
-                   FROM companies co
-                   LEFT JOIN company_subscriptions cs
-                     ON cs.id=(SELECT s2.id FROM company_subscriptions s2
-                               WHERE s2.company_id=co.id ORDER BY s2.id DESC LIMIT 1)
-                   LEFT JOIN company_access_approvals ca ON ca.company_id=co.id
-                   WHERE (? IS NULL OR co.id<>?)
-                   ORDER BY co.name""",
-                (oid, oid)
-            ).fetchall()
-            return rows
-        finally:
-            c.close()
-
-    @app.get("/owner/billing", response_class=HTMLResponse)
-    def owner_billing_command_center():
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-
-        rows = _bc740_owner_subscriptions()
-        paid_count = 0
-        awaiting_count = 0
-        past_due_count = 0
-        table_rows = ""
-
-        for r in rows:
-            status = str(r["status"] or "NO_SUBSCRIPTION").upper()
-            is_approved = bool(int(r["approved"] or 0))
-            if status == "ACTIVE":
-                paid_count += 1
-                if not is_approved:
-                    awaiting_count += 1
-            if status == "PAST_DUE":
-                past_due_count += 1
-
-            access = "ALLOWED" if status == "ACTIVE" and is_approved else "LOCKED"
-            table_rows += f"""<tr>
-              <td><b>{escape(str(r["name"]))}</b><br><span class="muted">Company #{int(r["id"])}</span></td>
-              <td>{escape(str(r["plan_code"] or "—"))}</td>
-              <td><span class="pill {'good' if status=='ACTIVE' else 'warn'}">{escape(status)}</span></td>
-              <td>{escape(str(r["stripe_payment_status"] or "NOT VERIFIED"))}</td>
-              <td>{"YES" if is_approved else "NO"}</td>
-              <td><span class="pill {'good' if access=='ALLOWED' else 'bad'}">{access}</span></td>
-              <td>{escape(str(r["stripe_last_event"] or "—"))}</td>
-              <td><a class="btn secondary" href="/owner/customers/{int(r["id"])}">Manage</a></td>
-            </tr>"""
-
-        stripe_mode = (_bc740_owner_env("STRIPE_MODE") or "LIVE").upper()
-        if stripe_mode not in {"TEST", "LIVE"}: stripe_mode = "LIVE"
-        secret_name = "STRIPE_TEST_SECRET_KEY" if stripe_mode == "TEST" else "STRIPE_SECRET_KEY"
-        webhook_name = "STRIPE_TEST_WEBHOOK_SECRET" if stripe_mode == "TEST" else "STRIPE_WEBHOOK_SECRET"
-        secret_ok = bool(_bc740_owner_env(secret_name))
-        webhook_ok = bool(_bc740_owner_env(webhook_name))
-        base_ok = bool(_bc740_owner_env("APP_BASE_URL"))
-
-        body = f"""
-        <div class="card">
-          <div class="eyebrow">BUILDCOMMAND BUSINESS · BILLING</div>
-          <h1>Billing & Access Command Center</h1>
-          <p class="muted">One view of customer payment state, subscription status, owner approval, and construction-app access.</p>
-
-          <div class="grid">
-            <div class="stat"><span>Customer Companies</span><b>{len(rows)}</b></div>
-            <div class="stat"><span>Active / Paid</span><b>{paid_count}</b></div>
-            <div class="stat"><span>Paid · Awaiting Approval</span><b>{awaiting_count}</b></div>
-            <div class="stat"><span>Past Due</span><b>{past_due_count}</b></div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="eyebrow">STRIPE READINESS</div>
-          <h2>Payment Connection</h2>
-          <p><b>STRIPE MODE:</b> <span class="pill {'warn' if stripe_mode == 'TEST' else 'good'}">{stripe_mode}</span></p>
-          <table>
-            <tr><th>Setting</th><th>Status</th></tr>
-            <tr><td>{secret_name}</td><td><span class="pill {'good' if secret_ok else 'warn'}">{"READY" if secret_ok else "NOT CONFIGURED"}</span></td></tr>
-            <tr><td>{webhook_name}</td><td><span class="pill {'good' if webhook_ok else 'warn'}">{"READY" if webhook_ok else "NOT CONFIGURED"}</span></td></tr>
-            <tr><td>APP_BASE_URL</td><td><span class="pill {'good' if base_ok else 'warn'}">{"READY" if base_ok else "NOT CONFIGURED"}</span></td></tr>
-          </table>
-          <p><b>Webhook URL:</b> https://buildcommandai.com/billing/stripe-webhook</p>
-          <p class="muted">No card payment is marked successful unless Stripe Checkout or a verified Stripe webhook confirms it.</p>
-        </div>
-
-        <div class="card">
-          <div class="eyebrow">CUSTOMER PIPELINE</div>
-          <h2>Subscriptions & Access</h2>
-          <div style="overflow:auto">
-            <table>
-              <tr>
-                <th>Company</th><th>Plan</th><th>Subscription</th>
-                <th>Stripe Payment</th><th>Approved</th><th>Access</th>
-                <th>Last Stripe Event</th><th></th>
-              </tr>
-              {table_rows or '<tr><td colspan="8"><b>No customer companies yet.</b></td></tr>'}
-            </table>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="eyebrow">END-TO-END TEST</div>
-          <h2>Fresh Customer Test</h2>
-          <p>Use a new email address and run the exact customer journey:</p>
-          <p><b>Create Account → Choose Plan → Stripe Checkout → Paid / Awaiting Approval → Approve → App Access</b></p>
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <a class="btn secondary" href="/register">Open Customer Registration</a>
-            <a class="btn secondary" href="/owner/customers">Open Customers</a>
-          </div>
-        </div>
-        """
-        return shell("Billing & Access", body)
-
-    @app.get("/owner/api/billing-readiness")
-    def owner_billing_readiness_api():
-        if not require_owner():
-            return JSONResponse({"detail":"Platform owner access required."},status_code=403)
-        rows = _bc740_owner_subscriptions()
-        return {
-            "status":"ok",
-            "version":"7.4.0",
-            "stripe":{
-                "secret_key_configured":bool(_bc740_owner_env("STRIPE_SECRET_KEY")),
-                "webhook_secret_configured":bool(_bc740_owner_env("STRIPE_WEBHOOK_SECRET")),
-                "app_base_url_configured":bool(_bc740_owner_env("APP_BASE_URL")),
-                "webhook_url":"https://buildcommandai.com/billing/stripe-webhook",
-            },
-            "customer_companies":len(rows),
-            "active":sum(1 for r in rows if str(r["status"] or "").upper()=="ACTIVE"),
-            "awaiting_owner_approval":sum(
-                1 for r in rows
-                if str(r["status"] or "").upper()=="ACTIVE" and not bool(int(r["approved"] or 0))
-            ),
-            "past_due":sum(1 for r in rows if str(r["status"] or "").upper()=="PAST_DUE"),
-        }
-
-    @app.get("/health/owner-billing-access-7-4-0")
-    def owner_billing_access_health():
-        paths = {getattr(r,"path","") for r in app.routes}
-        checks = {
-            "owner_dashboard":"/owner" in paths,
-            "customers":"/owner/customers" in paths,
-            "customer_control":"/owner/customers/{company_id}" in paths,
-            "billing_command_center":"/owner/billing" in paths,
-            "billing_readiness_api":"/owner/api/billing-readiness" in paths,
-            "cleanup_preserved":"/owner/cleanup" in paths,
-            "webhook_registered":"/billing/stripe-webhook" in paths,
-            "stripe_checkout_registered":"/billing/checkout/{plan_code}" in paths,
-            "master_owner_protected":owner_email=="buildcommandai@gmail.com",
-            "owner_approval_remains_manual":True,
-            "automatic_deletion_disabled":True,
-            "same_database":callable(getattr(runtime,"db",None)),
-        }
-        passed=sum(1 for v in checks.values() if v)
-        return {
-            "status":"ok" if passed==len(checks) else "degraded",
-            "app":"BuildCommand AI",
-            "version":"7.4.0",
-            "release":"End-to-End Billing & Access",
-            "passed":passed,
-            "total":len(checks),
-            "failed":len(checks)-passed,
-            "stripe_connected":bool(
-                _bc740_owner_env("STRIPE_SECRET_KEY")
-                and _bc740_owner_env("STRIPE_WEBHOOK_SECRET")
-            ),
-            "master_protected":True,
-            "data_reset":False,
-            "checks":checks,
-        }
-
-
-    # ========================================================
-    # BuildCommand AI 7.4.1 — Owner Console Navigation
-    # Permanent owner tabs across all owner business pages.
-    # ========================================================
-
-    def _bc741_owner_nav(active=""):
-        tabs = [
-            ("dashboard", "Dashboard", "/owner"),
-            ("customers", "Customers", "/owner/customers"),
-            ("demos", "Demo Requests", "/owner/demos"),
-            ("billing", "Billing & Access", "/owner/billing"),
-            ("subscriptions", "Subscriptions", "/owner/subscriptions"),
-            ("cleanup", "Company Cleanup", "/owner/cleanup"),
-        ]
-        links = ""
-        for key, label, href in tabs:
-            cls = "bc741-tab active" if key == active else "bc741-tab"
-            links += f'<a class="{cls}" href="{href}">{escape(label)}</a>'
-        return f"""
-        <style>
-          .bc741-nav-wrap {{
-            max-width:1180px;
-            margin:0 auto 16px;
-            position:sticky;
-            top:0;
-            z-index:50;
-            padding-top:8px;
-          }}
-          .bc741-nav {{
-            display:flex;
-            gap:8px;
-            flex-wrap:wrap;
-            align-items:center;
-            padding:10px;
-            border:1px solid #26384a;
-            border-radius:14px;
-            background:rgba(7,16,29,.96);
-            box-shadow:0 12px 30px rgba(0,0,0,.24);
-            backdrop-filter:blur(8px);
-          }}
-          .bc741-brand {{
-            font-weight:900;
-            letter-spacing:.04em;
-            color:#f0b44d;
-            padding:0 8px 0 4px;
-            white-space:nowrap;
-          }}
-          .bc741-tab {{
-            display:inline-flex;
-            align-items:center;
-            justify-content:center;
-            text-decoration:none;
-            color:#d9e4ef;
-            border:1px solid #31485d;
-            background:#0c1722;
-            padding:9px 12px;
-            border-radius:10px;
-            font-weight:800;
-            font-size:13px;
-          }}
-          .bc741-tab:hover {{
-            border-color:#f0b44d;
-            color:#fff;
-          }}
-          .bc741-tab.active {{
-            background:#f0b44d;
-            color:#071018;
-            border-color:#f0b44d;
-          }}
-          @media(max-width:720px) {{
-            .bc741-nav-wrap {{
-              position:static;
-            }}
-            .bc741-brand {{
-              width:100%;
-              padding-bottom:2px;
-            }}
-            .bc741-tab {{
-              flex:1 1 calc(50% - 8px);
-            }}
-          }}
-        </style>
-        <div class="bc741-nav-wrap">
-          <nav class="bc741-nav">
-            <div class="bc741-brand">BUILDCOMMAND OWNER</div>
-            {links}
-          </nav>
-        </div>
-        """
-
-    def _bc741_with_nav(html_text, active=""):
-        page = str(html_text or "")
-        nav = _bc741_owner_nav(active)
-        # Insert immediately after <body...> when possible.
-        m = re.search(r"<body[^>]*>", page, re.I)
-        if m:
-            pos = m.end()
-            return page[:pos] + nav + page[pos:]
-        return nav + page
-
-    # Wrap specific owner GET routes so every page gets the same persistent nav.
-    # We keep their existing business logic untouched.
-    _bc741_route_active = {
-        "/owner": "dashboard",
-        "/owner/customers": "customers",
-        "/owner/customers/{company_id}": "customers",
-        "/owner/billing": "billing",
-        "/owner/subscriptions": "subscriptions",
-        "/owner/cleanup": "cleanup",
-        "/owner/cleanup/preview": "cleanup",
-    }
-
-    def _bc741_wrap_owner_get_routes():
-        for route in app.routes:
-            path = getattr(route, "path", "")
-            methods = {str(m).upper() for m in (getattr(route, "methods", set()) or set())}
-            if path not in _bc741_route_active or "GET" not in methods:
-                continue
-            endpoint = getattr(route, "endpoint", None)
-            if not endpoint or getattr(endpoint, "_bc741_wrapped", False):
-                continue
-            active = _bc741_route_active[path]
-
-            def make_wrapper(original, active_tab):
-                def wrapper(*args, **kwargs):
-                    result = original(*args, **kwargs)
-
-                    # Most owner pages return HTMLResponse via shell().
-                    if isinstance(result, HTMLResponse):
-                        try:
-                            body = result.body.decode("utf-8")
-                        except Exception:
-                            body = str(result.body)
-                        wrapped = _bc741_with_nav(body, active_tab)
-                        return HTMLResponse(
-                            wrapped,
-                            status_code=result.status_code,
-                            headers=dict(result.headers),
-                        )
-
-                    # If a handler returned raw HTML text, wrap it too.
-                    if isinstance(result, str):
-                        return HTMLResponse(_bc741_with_nav(result, active_tab))
-
-                    return result
-
-                wrapper._bc741_wrapped = True
-                wrapper.__name__ = getattr(original, "__name__", "owner_page") + "_bc741"
-                return wrapper
-
-            wrapped_endpoint = make_wrapper(endpoint, active)
-            route.endpoint = wrapped_endpoint
-            try:
-                route.dependant.call = wrapped_endpoint
-            except Exception:
-                pass
-
-    _bc741_wrap_owner_get_routes()
-
-    @app.get("/health/owner-console-navigation-7-4-1")
-    def owner_console_navigation_health():
-        paths = {getattr(r, "path", "") for r in app.routes}
-        checks = {
-            "dashboard_tab": "/owner" in paths,
-            "customers_tab": "/owner/customers" in paths,
-            "billing_tab": "/owner/billing" in paths,
-            "subscriptions_tab": "/owner/subscriptions" in paths,
-            "cleanup_tab": "/owner/cleanup" in paths,
-            "customer_detail_navigation": "/owner/customers/{company_id}" in paths,
-            "billing_center_preserved": "/health/owner-billing-access-7-4-0" in paths,
-            "cleanup_preserved": "/owner/cleanup/delete-selected" in paths,
-            "master_protection": owner_email == "buildcommandai@gmail.com",
-            "owner_console_file": True,
-            "automatic_deletion_disabled": True,
-        }
-        passed = sum(1 for v in checks.values() if v)
-        return {
-            "status": "ok" if passed == len(checks) else "degraded",
-            "app": "BuildCommand AI",
-            "version": "7.4.1",
-            "release": "Owner Console Navigation",
-            "passed": passed,
-            "total": len(checks),
-            "failed": len(checks) - passed,
-            "tabs": [
-                "Dashboard",
-                "Customers",
-                "Billing & Access",
-                "Subscriptions",
-                "Company Cleanup",
-            ],
-            "owner_business_ui": "owner_console.py",
-            "customer_app": "full_app.py",
-            "data_reset": False,
-            "checks": checks,
-        }
-
-
-    # ========================================================
-    # BuildCommand AI 7.4.2 — Owner Navigation Runtime Fix
-    # Fixes missing `re` import used by 7.4.1 navigation wrapper.
-    # ========================================================
-    @app.get("/health/owner-navigation-runtime-fix-7-4-2")
-    def owner_navigation_runtime_fix_health():
-        paths = {getattr(r, "path", "") for r in app.routes}
-        # Exercise the exact helper that crashed in production.
-        probe = _bc741_with_nav("<html><body><main>probe</main></body></html>", "dashboard")
-        checks = {
-            "regex_module_available": callable(getattr(re, "search", None)),
-            "navigation_helper_executes": "BUILDCOMMAND OWNER" in probe,
-            "dashboard_tab": "/owner" in paths,
-            "customers_tab": "/owner/customers" in paths,
-            "billing_tab": "/owner/billing" in paths,
-            "subscriptions_tab": "/owner/subscriptions" in paths,
-            "cleanup_tab": "/owner/cleanup" in paths,
-            "billing_center_preserved": "/owner/billing" in paths,
-            "stripe_webhook_preserved": "/billing/stripe-webhook" in paths,
-            "master_owner_protected": owner_email == "buildcommandai@gmail.com",
-            "automatic_deletion_disabled": True,
-            "data_reset_disabled": True,
-        }
-        passed = sum(1 for v in checks.values() if v)
-        return {
-            "status": "ok" if passed == len(checks) else "degraded",
-            "app": "BuildCommand AI",
-            "version": "7.4.2",
-            "release": "Owner Navigation Runtime Fix",
-            "passed": passed,
-            "total": len(checks),
-            "failed": len(checks) - passed,
-            "fix": "import re for owner navigation wrapper",
-            "data_reset": False,
-            "checks": checks,
-        }
-
-    # BuildCommand AI 7.4.3 — Safe Stripe Test / Live Mode
-    @app.get("/health/owner-stripe-mode-7-4-3")
-    def owner_stripe_mode_743_health():
-        mode = (_bc740_owner_env("STRIPE_MODE") or "LIVE").upper()
-        if mode not in {"TEST", "LIVE"}: mode = "LIVE"
-        selected_key = "STRIPE_TEST_SECRET_KEY" if mode == "TEST" else "STRIPE_SECRET_KEY"
-        selected_webhook = "STRIPE_TEST_WEBHOOK_SECRET" if mode == "TEST" else "STRIPE_WEBHOOK_SECRET"
-        checks = {
-            "mode_valid": mode in {"TEST", "LIVE"},
-            "selected_secret_configured": bool(_bc740_owner_env(selected_key)),
-            "selected_webhook_configured": bool(_bc740_owner_env(selected_webhook)),
-            "live_credentials_preserved": bool(_bc740_owner_env("STRIPE_SECRET_KEY")) and bool(_bc740_owner_env("STRIPE_WEBHOOK_SECRET")),
-            "billing_center_preserved": "/owner/billing" in {getattr(r,"path","") for r in app.routes},
-            "data_reset_disabled": True,
-        }
-        passed=sum(bool(v) for v in checks.values())
-        return {"status":"ok" if passed==len(checks) else "degraded","app":"BuildCommand AI","version":"7.4.3","release":"Safe Stripe Test / Live Mode","stripe_mode":mode,"passed":passed,"total":len(checks),"failed":len(checks)-passed,"data_reset":False,"checks":checks}
-
-
-    @app.get("/health/owner-manual-approval-7-4-6")
-    def owner_manual_approval_health():
-        paths = {getattr(r,"path","") for r in app.routes}
-        checks = {
-            "customer_control":"/owner/customers/{company_id}" in paths,
-            "approve_access":"/owner/customers/{company_id}/approve" in paths,
-            "suspend_access":"/owner/customers/{company_id}/suspend" in paths,
-            "reactivate_access":"/owner/customers/{company_id}/reactivate" in paths,
-            "billing_center":"/owner/billing" in paths,
-            "subscriptions":"/owner/subscriptions" in paths,
-            "master_owner_protected":owner_email=="buildcommandai@gmail.com",
-            "manual_approval_required":True,
-            "automatic_deletion_disabled":True,
-            "data_reset_disabled":True,
-        }
-        passed=sum(1 for v in checks.values() if v)
-        return {
-            "status":"ok" if passed==len(checks) else "degraded",
-            "app":"BuildCommand AI",
-            "version":"7.4.6",
-            "release":"Manual Owner Approval Enforcement",
-            "passed":passed,
-            "total":len(checks),
-            "failed":len(checks)-passed,
-            "manual_owner_approval":True,
-            "data_reset":False,
-            "checks":checks,
-        }
-
-
-    # ========================================================
-    # BuildCommand AI 7.4.11 — Demo Request Control
-    # ========================================================
-
-    def _bc7411_demo_rows():
-        c = db()
-        try:
-            rows = c.execute("""
-                SELECT d.company_id,d.status,d.started_at,d.expires_at,
-                       co.name AS company_name,
-                       (SELECT COUNT(*) FROM users u WHERE u.company_id=d.company_id) user_count
-                FROM company_demo_access d
-                JOIN companies co ON co.id=d.company_id
-                ORDER BY
-                    CASE WHEN UPPER(d.status)='PENDING_APPROVAL' THEN 0
-                         WHEN UPPER(d.status)='ACTIVE' THEN 1
-                         ELSE 2 END,
-                    d.started_at DESC
-            """).fetchall()
-            return rows
-        finally:
-            c.close()
-
-    @app.get("/owner/demos", response_class=HTMLResponse)
-    def owner_demo_requests():
-        if not require_owner():
-            return HTMLResponse("Platform owner access required.", status_code=403)
-
-        rows = _bc7411_demo_rows()
-        pending = sum(1 for r in rows if str(r["status"] or "").upper()=="PENDING_APPROVAL")
-        active = sum(1 for r in rows if str(r["status"] or "").upper()=="ACTIVE")
-
-        trs = ""
-        for r in rows:
-            cid = int(r["company_id"])
-            status = str(r["status"] or "").upper()
-            actions = ""
-            if status == "PENDING_APPROVAL":
-                actions = f"""
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
-                  <form method="post" action="/owner/demos/{cid}/approve">
-                    <button class="btn" type="submit">Approve Demo</button>
-                  </form>
-                  <form method="post" action="/owner/demos/{cid}/deny">
-                    <button class="btn secondary" type="submit">Deny</button>
-                  </form>
-                </div>"""
-            elif status == "ACTIVE":
-                actions = f"""
-                <form method="post" action="/owner/demos/{cid}/deny">
-                  <button class="btn secondary" type="submit">End Demo</button>
-                </form>"""
-            else:
-                actions = "—"
-
-            trs += f"""<tr>
-              <td><b>{escape(str(r["company_name"]))}</b><br><span class="muted">Company #{cid}</span></td>
-              <td><span class="pill {'good' if status=='ACTIVE' else 'warn'}">{escape(status)}</span></td>
-              <td>{int(r["user_count"] or 0)}</td>
-              <td>{escape(str(r["started_at"] or "—"))}</td>
-              <td>{escape(str(r["expires_at"] or "—"))}</td>
-              <td>{actions}</td>
-            </tr>"""
-
-        body = f"""
-        <div class="card">
-          <div class="eyebrow">OWNER ONLY · DEMO CONTROL</div>
-          <h1>Demo Requests</h1>
-          <p class="muted">Free demos never use Stripe. You decide who gets a demo, and the 7-day clock starts only when you approve it.</p>
-          <div class="grid">
-            <div class="stat"><span>Pending Approval</span><b>{pending}</b></div>
-            <div class="stat"><span>Active Demos</span><b>{active}</b></div>
-            <div class="stat"><span>Total Demo Records</span><b>{len(rows)}</b></div>
-          </div>
-          <div style="overflow:auto;margin-top:16px">
-            <table>
-              <tr><th>Company</th><th>Status</th><th>Users</th><th>Requested/Started</th><th>Expires</th><th>Control</th></tr>
-              {trs or '<tr><td colspan="6"><b>No demo requests yet.</b></td></tr>'}
-            </table>
-          </div>
-        </div>"""
-        return shell("Demo Requests", body)
-
-    @app.post("/owner/demos/{company_id}/approve")
-    def owner_demo_approve(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-
-        cid = int(company_id)
-        if is_master_company(cid):
-            return HTMLResponse("Master company does not need a demo.", status_code=409)
-
-        from datetime import datetime as _dtdemo, timedelta as _tddemo
-        start = _dtdemo.utcnow()
-        expires = start + _tddemo(days=7)
-
-        c = db()
-        try:
-            row = c.execute(
-                "SELECT company_id FROM company_demo_access WHERE company_id=? LIMIT 1",
-                (cid,)
-            ).fetchone()
-            if not row:
-                return HTMLResponse("Demo request not found.", status_code=404)
-
-            c.execute(
-                """UPDATE company_demo_access
-                   SET status='ACTIVE', started_at=?, expires_at=?, upgraded_at=NULL
-                   WHERE company_id=?""",
-                (start.isoformat(), expires.isoformat(), cid)
-            )
-            c.commit()
-        finally:
-            c.close()
-
-        return RedirectResponse("/owner/demos", status_code=303)
-
-    @app.post("/owner/demos/{company_id}/deny")
-    def owner_demo_deny(company_id: int):
-        u = require_owner()
-        if not u:
-            return HTMLResponse("Platform owner access required.", status_code=403)
-
-        cid = int(company_id)
-        if is_master_company(cid):
-            return HTMLResponse("Master company demo status cannot be changed.", status_code=409)
-
-        c = db()
-        try:
-            row = c.execute(
-                "SELECT company_id FROM company_demo_access WHERE company_id=? LIMIT 1",
-                (cid,)
-            ).fetchone()
-            if not row:
-                return HTMLResponse("Demo request not found.", status_code=404)
-            c.execute(
-                "UPDATE company_demo_access SET status='DENIED' WHERE company_id=?",
-                (cid,)
-            )
-            c.commit()
-        finally:
-            c.close()
-
-        return RedirectResponse("/owner/demos", status_code=303)
-
-    @app.get("/health/owner-demo-control-7-4-11")
-    def owner_demo_control_health():
-        paths = {getattr(r,"path","") for r in app.routes}
-        checks = {
-            "owner_demo_page": "/owner/demos" in paths,
-            "approve_demo": "/owner/demos/{company_id}/approve" in paths,
-            "deny_demo": "/owner/demos/{company_id}/deny" in paths,
-            "owner_dashboard": "/owner" in paths,
-            "customers": "/owner/customers" in paths,
-            "billing": "/owner/billing" in paths,
-            "subscriptions": "/owner/subscriptions" in paths,
-            "cleanup": "/owner/cleanup" in paths,
-            "master_protection": owner_email=="buildcommandai@gmail.com",
-            "manual_demo_approval": True,
-            "demo_no_stripe": True,
-            "data_reset_disabled": True,
-        }
-        p = sum(1 for v in checks.values() if v)
-        return {
-            "status":"ok" if p==len(checks) else "degraded",
-            "app":"BuildCommand AI",
-            "version":"7.4.11",
-            "release":"Owner-Approved Demo Control",
-            "passed":p,
-            "total":len(checks),
-            "failed":len(checks)-p,
-            "data_reset":False,
-            "checks":checks,
-        }
-
+                app.router.routes.remove(route)
+    for method, paths in OWNER_ROUTES.items():
+        for path in paths:
+            name = 'owner_851_' + method.lower() + '_' + re.sub(r'[^a-z0-9]+', '_', path.lower()).strip('_')
+            app.add_api_route(path, endpoint, methods=[method], name=name)
+    for path in HEALTH_ROUTES:
+        app.add_api_route(path, health, methods=['GET'], name='owner_health_' + path.rsplit('/', 1)[-1])
+        public = getattr(runtime, 'PUBLIC_PATHS', None)
+        if isinstance(public, set):
+            public.add(path)
+    app.openapi_schema = None
     return app
+
+
+def error_page(message, status):
+    return HTMLResponse(f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Owner Console · Check your request</title><style>{STYLES}</style></head><body class="oc"><main style="max-width:700px;margin:8vh auto"><section class="panel padded"><div class="eyebrow">OWNER CONSOLE</div><h1>We couldn't complete that request</h1><p class="review-description" role="alert">{esc(message)}</p><div class="actions"><a class="btn primary" href="/owner">Open Owner Console</a><a class="btn secondary" href="/login">Sign in</a></div></section></main></body></html>''', status_code=status)
