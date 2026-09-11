@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 8.5.0 — Trade Sharing, based on the working 8.4.0 app.
+"""BuildCommand AI 8.6.0 — Superintendent Command, based on the working 8.5.0 app.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -60005,6 +60005,7 @@ def _bc840_shell(title, body, *args, **kwargs):
     selector = ('<form class="bc840-select" method="post" action="/workspace/select-project">'
                 '<label for="bc840-project" class="small">Project</label><select id="bc840-project" name="project_id" required>' +
                 '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
+    if title == 'Superintendent Command': selector = ''  # The command view has its own appointed-project selector.
     company_titles = {"Company","Users & Access","Manage User Access","Company Invitations","Access Matrix","Company Settings","Invitation Created"}
     tabs = _bc840_company_tabs() if title in company_titles and tier in {'owner','admin'} else ''
     # Replace only the private shell, eliminating the stacked header/regex
@@ -60051,7 +60052,10 @@ def bc840_workspace():
     if tier in {'owner','admin'}:
         body += '<p>Manage your team and keep your company projects moving.</p><a class="bc840-button" href="/company/users">Manage people & access</a> <a href="/company/invitations">Invite someone</a>'
     elif tier in {'lead','staff'}:
-        body += '<p>Choose a project, then open the field tools you need for today.</p><a class="bc840-button" href="/workspace/tools">Open field tools</a>'
+        if callable(globals().get('_bc850_manager')) and _bc850_manager(user):
+            body += '<p>Review subcontractor updates, clear blockers, and direct today’s work.</p><a class="bc840-button" href="/workspace/command">Open Superintendent Command</a> <a href="/workspace/tools">Field tools</a>'
+        else:
+            body += '<p>Choose a project, then open the field tools you need for today.</p><a class="bc840-button" href="/workspace/tools">Open field tools</a>'
     else:
         body += '<p>Only projects assigned to your account appear here. Company administration and internal GC tools are not available in this workspace.</p>'
         if tier == 'trade': body += '<p><a class="bc840-button" href="/workspace/shared">Open my shared work</a></p>'
@@ -60115,7 +60119,7 @@ def bc840_tools():
     paths = {getattr(r,'path','') for r in app.routes}
     command = f'/superintendent-command/{selected}'
     body = '<div class="hero"><div class="eyebrow">CURRENT PROJECT</div><h1>' + _bc830b_escape(str(project['name'])) + '</h1>'
-    if '/superintendent-command/{project_id}' in paths:
+    if '/superintendent-command/{project_id}' in paths and callable(globals().get('_bc850_manager')) and _bc850_manager(user):
         body += '<p><a class="bc840-button" href="' + command + '">Open Superintendent Command</a></p>'
     body += '</div><div class="grid3">'
     for group, items in _BC840_TOOLS:
@@ -60616,7 +60620,7 @@ def _bc850_manager(user):
     return _bc840_tier(user) in {'owner','admin'} or _bc840_role(user) in {'SUPERINTENDENT','PROJECT_MANAGER'}
 
 def _bc850_nav(user):
-    if _bc850_manager(user): return [('Trade sharing','/workspace/sharing')]
+    if _bc850_manager(user): return [('Command','/workspace/command'),('Trade sharing','/workspace/sharing')]
     if _bc840_tier(user)=='trade': return [('My shared work','/workspace/shared')]
     return []
 
@@ -60862,7 +60866,7 @@ def _bc850_detail(share_id,manager):
     prefix='/workspace/sharing/' if manager else '/workspace/shared/'
     body='<div class="hero"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p>'+_bc830b_escape(str(project['name'] if project else ''))+'</p><h1>'+_bc830b_escape(share['title'])+'</h1><p>'+('Revoked' if share['revoked_at'] else share['state'].capitalize())+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></div><div class="card"><h2>Shared instructions</h2>'+_bc850_text(share['message'])
     if manager:
-        body+='<p>Shared with '+_bc830b_escape(str(recipient['email'] if recipient else 'Removed account'))+'</p>'
+        body+='<p>Shared with '+_bc830b_escape(str(recipient['email'] if recipient else 'Removed account'))+f'</p><p><a href="/workspace/command?project_id={share["project_id"]}">Back to Superintendent Command</a></p>'
     if share['snapshot_file'] and not share['revoked_at']:
         body+='<p><a class="bc840-button" href="'+prefix+str(share_id)+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
     body+='</div>'
@@ -60999,3 +61003,408 @@ _BC840_ROLES['SUBCONTRACTOR']=('Subcontractor','trade','See assigned projects an
 BUILD_COMMAND_RELEASE=BC850_RELEASE
 BUILD_COMMAND_RELEASE_NAME=BC850_RELEASE_NAME
 app.version=BC850_RELEASE
+
+
+# ============================================================
+# BuildCommand AI 8.6.0 — Superintendent Command
+# Daily review of explicitly shared work; source records stay authoritative.
+# ============================================================
+BC860_RELEASE = '8.6.0'
+BC860_RELEASE_NAME = 'Superintendent Command'
+_BC860_LEGACY_RENDER = globals().get('_bc200_render')
+_BC860_PAGE_SIZE = 30
+_BC860_VIEWS = {
+    'attention': 'Needs attention', 'review': 'Awaiting review',
+    'blocked': 'Blocked', 'overdue': 'Overdue', 'ready': 'Ready for review',
+    'open': 'All open work', 'closed': 'Closed responses', 'all': 'All shared work',
+}
+
+
+def _bc860_init():
+    try:
+        if not _BC850_SCHEMA_READY:
+            return False
+        with _bc850_db(True) as c:
+            c.execute('CREATE INDEX IF NOT EXISTS idx_bc_shared_updates_version ON bc_shared_work_updates(share_id,share_version,id)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_bc_shared_updates_review ON bc_shared_work_updates(share_id,share_version,reviewed_at,id)')
+        return True
+    except Exception:
+        _bc830b_logger.exception('Superintendent Command setup failed')
+        return False
+
+
+_BC860_SCHEMA_READY = _bc860_init()
+
+
+def _bc860_endpoint(fn):
+    @_bc850_wraps(fn)
+    def handled(*args, **kwargs):
+        if not _bc840_user():
+            return _BC187_RedirectResponse('/login', status_code=303)
+        try:
+            _bc850_require(_BC850_SCHEMA_READY and _BC860_SCHEMA_READY,
+                           'Superintendent Command is unavailable. Ask your administrator to check the release health report.', 503)
+            return fn(*args, **kwargs)
+        except _BC850_Problem as exc:
+            return _bc830b_error(exc.message, exc.status)
+        except Exception:
+            _bc830b_logger.exception('Superintendent Command failed handler=%s', fn.__name__)
+            return _bc830b_error('Superintendent Command could not complete this request. Please reload and try again.', 503)
+    return handled
+
+
+def _bc860_filters(view, q, page):
+    _bc850_require(view in _BC860_VIEWS, 'Choose a command view.', 400)
+    _bc850_require(1 <= page <= 100000 and len(q) <= 120, 'Check the page number or shorten your search.', 400)
+    return q.strip()
+
+
+def _bc860_url(pid, view='attention', q='', page=1, notice=''):
+    values = {'project_id': pid, 'view': view}
+    if q:
+        values['q'] = q
+    if page > 1:
+        values['page'] = page
+    if notice:
+        values['notice'] = notice
+    return '/workspace/command?' + _bc850_urlencode(values)
+
+
+def _bc860_rows(c, user, pid, view, q, page):
+    """Scope before aggregation/pagination; use only the current publication.
+
+    Latest status describes progress even after it is reviewed. Pending reviews
+    include older updates and closed shares so no unread reply disappears.
+    Counts are per shared item, never a fabricated project completion score.
+    """
+    sql = '''WITH scoped AS (
+        SELECT s.*, COALESCE(NULLIF(r.display_name,''),r.email,'Removed account') AS recipient_name,
+          COALESCE(r.email,'') AS recipient_email,
+          (SELECT MAX(u.id) FROM bc_shared_work_updates u
+           WHERE u.share_id=s.id AND u.share_version=s.version) AS latest_id,
+          (SELECT MAX(u.id) FROM bc_shared_work_updates u
+           WHERE u.share_id=s.id AND u.share_version=s.version AND u.reviewed_at IS NULL) AS pending_id,
+          (SELECT COUNT(*) FROM bc_shared_work_updates u
+           WHERE u.share_id=s.id AND u.share_version=s.version AND u.reviewed_at IS NULL) AS pending_count
+        FROM bc_shared_work s
+        LEFT JOIN users r ON r.id=s.recipient_user_id AND r.company_id=s.company_id
+        WHERE s.company_id=? AND s.project_id=? AND s.revoked_at IS NULL
+      ), progress AS (
+        SELECT s.*, COALESCE(u.status,'') AS latest_status, u.message AS latest_message,
+          u.created_at AS latest_time, n.status AS pending_status, n.message AS pending_message,
+          n.created_at AS pending_time,
+          CASE WHEN s.pending_count>0 THEN 1 ELSE 0 END AS needs_review,
+          CASE WHEN s.state='OPEN' AND u.status='BLOCKED' THEN 1 ELSE 0 END AS blocked,
+          CASE WHEN s.state='OPEN' AND length(s.due_date)=10 AND s.due_date<? THEN 1 ELSE 0 END AS overdue,
+          CASE WHEN s.state='OPEN' AND u.status='READY_FOR_REVIEW' THEN 1 ELSE 0 END AS ready
+        FROM scoped s
+        LEFT JOIN bc_shared_work_updates u ON u.id=s.latest_id
+        LEFT JOIN bc_shared_work_updates n ON n.id=s.pending_id
+      ) '''
+    params = (_bc810_company_id(user), pid, _bc830b_now().date().isoformat())
+    totals = dict(c.execute(sql + '''SELECT COUNT(*) AS total,
+        COALESCE(SUM(needs_review),0) AS review, COALESCE(SUM(pending_count),0) AS updates,
+        COALESCE(SUM(blocked),0) AS blocked, COALESCE(SUM(overdue),0) AS overdue,
+        COALESCE(SUM(ready),0) AS ready,
+        COALESCE(SUM(CASE WHEN state='OPEN' THEN 1 ELSE 0 END),0) AS open,
+        COALESCE(SUM(CASE WHEN state='CLOSED' THEN 1 ELSE 0 END),0) AS closed,
+        COALESCE(SUM(CASE WHEN needs_review+blocked+overdue+ready>0 THEN 1 ELSE 0 END),0) AS attention
+        FROM progress''', params).fetchone())
+    where = {
+        'attention': '(needs_review+blocked+overdue+ready)>0', 'review': 'needs_review=1',
+        'blocked': 'blocked=1', 'overdue': 'overdue=1', 'ready': 'ready=1',
+        'open': "state='OPEN'", 'closed': "state='CLOSED'", 'all': '1=1',
+    }[view]
+    args = params
+    if q:
+        where += " AND LOWER(title || ' ' || recipient_name || ' ' || recipient_email) LIKE LOWER(?) ESCAPE '!'"
+        args += ('%' + q.replace('!', '!!').replace('%', '!%').replace('_', '!_') + '%',)
+    matched = int(c.execute(sql + 'SELECT COUNT(*) AS n FROM progress WHERE ' + where, args).fetchone()['n'])
+    rows = [dict(r) for r in c.execute(sql + 'SELECT * FROM progress WHERE ' + where + '''
+        ORDER BY blocked DESC, needs_review DESC, overdue DESC, ready DESC,
+          CASE WHEN due_date='' THEN 1 ELSE 0 END, due_date, id DESC LIMIT ? OFFSET ?''',
+        args + (_BC860_PAGE_SIZE, (page - 1) * _BC860_PAGE_SIZE)).fetchall()]
+    return totals, matched, rows
+
+
+_BC860_CSS = '''
+.bc860{--ink:#132438;--quiet:#576b80;--line:#dce4ed;color:var(--ink)}
+.bc860 h1{font-size:clamp(28px,3vw,40px);letter-spacing:-.03em;margin:8px 0}
+.bc860 h2{font-size:22px;margin:0 0 8px}.bc860 h3{font-size:20px;margin:10px 0;overflow-wrap:anywhere}
+.bc860 p{color:var(--quiet);line-height:1.6}.bc860-kicker{font-size:12px;letter-spacing:.13em;font-weight:800;color:#946308}
+.bc860-head,.bc860-heading,.bc860-actions,.bc860-filters{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.bc860-head{margin-bottom:24px;align-items:flex-end}.bc860-head form{min-width:240px}
+.bc860 label{display:block;font-size:13px;font-weight:700;margin-bottom:6px}
+.bc860 input,.bc860 select,.bc860 textarea{box-sizing:border-box;border:1px solid #acbacb;border-radius:8px;background:#fff;color:var(--ink);padding:11px;font:inherit;max-width:100%}
+.bc860 textarea{width:100%;resize:vertical}.bc860 button,.bc860-button{display:inline-block;border:1px solid var(--ink);border-radius:8px;background:var(--ink);color:#fff!important;padding:11px 15px;font:inherit;font-weight:700;text-decoration:none;cursor:pointer}
+.bc860 button.secondary,.bc860-button.secondary{background:#fff;color:var(--ink)!important;border-color:#bac8d7}
+.bc860 button.danger{background:#fff;color:#9b2731!important;border-color:#cf8f95}.bc860 button:disabled{opacity:.5;cursor:not-allowed}
+.bc860-tools{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 24px}.bc860-tools form{margin:0}
+.bc860-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.bc860-metric{padding:20px;border:1px solid var(--line);border-radius:12px;background:#fff;text-decoration:none;color:var(--ink)!important;box-shadow:0 3px 12px #13243804}
+.bc860-metric span{display:block;font-size:13px;font-weight:700;color:var(--quiet)}.bc860-metric strong{display:block;font-size:34px;margin:8px 0}.bc860-metric small{font-size:12px;color:var(--quiet)}
+.bc860-metric[aria-current=page]{border-color:#a77715;box-shadow:inset 0 3px #edb642}
+.bc860-note{font-size:13px;margin:12px 0 24px}.bc860-panel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px;margin-bottom:20px}
+.bc860-filters{align-items:flex-end;justify-content:flex-start;padding:18px;background:#f3f6fa;border-radius:10px;margin-top:18px}
+.bc860-filters .bc860-search{flex:1;min-width:180px}.bc860-search input{width:100%}
+.bc860-item{border:1px solid var(--line);border-left:4px solid #b4c3d2;border-radius:10px;padding:22px;margin-top:16px;overflow-wrap:anywhere}
+.bc860-item.is-blocked{border-left-color:#b74239}.bc860-item.is-ready{border-left-color:#298066}
+.bc860-meta,.bc860-tags{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.bc860-meta{font-size:13px;color:var(--quiet);margin:8px 0 14px}
+.bc860-tag{font-size:12px;font-weight:700;padding:5px 9px;border-radius:6px;background:#edf2f7;color:#41556d}
+.bc860-tag.warn{background:#fff0d6;color:#835306}.bc860-tag.bad{background:#fff0ee;color:#a13a32}.bc860-tag.good{background:#e9f5ef;color:#206951}
+.bc860-update{padding:16px;background:#f5f7fa;border-radius:8px;margin:16px 0}.bc860-update p{margin:8px 0}
+.bc860-update blockquote{margin:10px 0;white-space:pre-wrap;color:var(--ink);border:0;padding:0}
+.bc860-actions{justify-content:flex-start;gap:10px;margin-top:12px}.bc860-item summary{color:var(--quiet);font-size:13px}
+.bc860-empty{text-align:center;padding:38px 14px}.bc860-empty h3{font-size:22px}
+.bc860-notice{border:1px solid #8fc9a9;background:#eef8f2;border-radius:10px;padding:14px 18px;margin-bottom:18px}
+.bc860-pagination{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-top:24px}
+.bc860-choices{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+@media(max-width:850px){.bc860-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.bc860-panel{padding:18px}.bc860-item{padding:16px}}
+@media(max-width:480px){.bc860-metrics{gap:8px}.bc860-metric{padding:14px}.bc860-metric strong{font-size:28px}.bc860-head form{width:100%;min-width:0}.bc860-filters>div{width:100%}.bc860-filters select{width:100%}.bc860-actions button{width:100%}.bc860-panel{padding:14px}.bc860-meta{align-items:flex-start}}
+@media print{.bc840-header,.bc840-footer,.bc860-tools,.bc860-filters,.bc860-item form,.bc860-item details{display:none}.bc860-item{break-inside:avoid}}
+'''
+
+
+def _bc860_page(body):
+    return _bc840_page('Superintendent Command', '<style>' + _BC860_CSS + '</style><div class="bc860">' + body + '</div>')
+
+
+def _bc860_hidden(row, view, q, page):
+    values = {'version': row['version'], 'expected_state': row['state'],
+              'revision': row['updated_at'], 'latest_update_id': row['latest_id'] or 0,
+              'view': view, 'q': q, 'page': page}
+    return ''.join('<input type="hidden" name="' + k + '" value="' + _bc830b_escape(str(v), quote=True) + '">' for k, v in values.items())
+
+
+def _bc860_card(row, view, q, page):
+    esc = _bc830b_escape
+    sid = int(row['id'])
+    status = _BC850_STATUSES.get(row['latest_status'], 'Awaiting first update' if row['allow_response'] else 'Shared for reference')
+    tags = '<span class="bc860-tag">' + esc(_BC850_SOURCES.get(row['kind'], ('Shared item',))[0]) + '</span>'
+    if row['state'] == 'CLOSED':
+        tags += '<span class="bc860-tag">Responses closed</span>'
+    else:
+        tags += '<span class="bc860-tag' + (' bad' if row['blocked'] else ' good' if row['ready'] else '') + '">' + esc(status) + '</span>'
+    if row['needs_review']:
+        tags += '<span class="bc860-tag warn">' + str(row['pending_count']) + ' unread update' + ('s' if row['pending_count'] != 1 else '') + '</span>'
+    if row['overdue']:
+        tags += '<span class="bc860-tag bad">Overdue</span>'
+    body = '<article class="bc860-item' + (' is-blocked' if row['blocked'] else ' is-ready' if row['ready'] else '') + f'" id="share-{sid}"><div class="bc860-tags">' + tags + '</div>'
+    body += f'<h3><a href="/workspace/sharing/{sid}">' + esc(row['title']) + '</a></h3>'
+    body += '<div class="bc860-meta"><span>Shared with <strong>' + esc(row['recipient_name']) + '</strong></span><span>· ' + ('Due ' + esc(row['due_date']) if row['due_date'] else 'No due date') + '</span></div>'
+    action = f'/workspace/command/items/{sid}/action'
+    hidden = _bc860_hidden(row, view, q, page)
+    if row['pending_id']:
+        body += '<div class="bc860-update"><strong>Update awaiting review · ' + esc(_BC850_STATUSES.get(row['pending_status'], 'Update')) + '</strong>'
+        body += '<blockquote>' + esc(row['pending_message'] or '') + '</blockquote><small>' + esc((row['pending_time'] or '')[:16].replace('T', ' ')) + ' UTC</small></div>'
+        if row['pending_id'] != row['latest_id']:
+            body += '<p class="bc860-note">This is an earlier unread update. Latest reported progress: ' + esc(status) + '.</p>'
+        body += f'<form method="post" action="{action}">' + hidden + f'<input type="hidden" name="update_id" value="{row["pending_id"]}"><label for="reply-{sid}">Reply to subcontractor (optional)</label><textarea id="reply-{sid}" name="reply" rows="2" maxlength="2000" placeholder="Next steps, inspection time, or a question"></textarea><div class="bc860-actions"><button name="action" value="review">Mark reviewed &amp; send reply</button>'
+        if row['state'] == 'OPEN' and row['pending_count'] == 1 and row['pending_id'] == row['latest_id']:
+            body += '<button class="secondary" name="action" value="review_close">Review &amp; close responses</button>'
+        body += '</div></form>'
+    elif row['latest_message']:
+        body += '<div class="bc860-update"><strong>Latest update · Reviewed</strong><blockquote>' + esc(row['latest_message']) + '</blockquote><small>' + esc((row['latest_time'] or '')[:16].replace('T', ' ')) + ' UTC</small></div>'
+    body += f'<div class="bc860-actions"><a href="/workspace/sharing/{sid}">Open instructions &amp; full conversation →</a></div>'
+    body += '<details><summary>Sharing controls</summary><p class="bc860-note">Closing stops replies and keeps this share visible. Revoking removes the subcontractor’s access. Neither action completes the original project record.</p>'
+    body += f'<form method="post" action="{action}">' + hidden + '<div class="bc860-actions">'
+    if row['state'] == 'CLOSED':
+        body += '<button class="secondary" name="action" value="reopen">Reopen responses</button>'
+    elif not row['pending_count']:
+        body += '<button class="secondary" name="action" value="close">Close responses</button>'
+    else:
+        body += '<span class="bc860-note">Review unread updates before closing.</span>'
+    body += '<button class="danger" name="action" value="revoke">Revoke access</button></div></form></details></article>'
+    return body
+
+
+@_bc860_endpoint
+def bc860_command(project_id: int = 0, view: str = 'attention', q: str = '', page: int = 1, notice: str = ''):
+    q = _bc860_filters(view, q, page)
+    _bc850_require(project_id >= 0, 'Choose a project.', 400)
+    with _bc850_db() as c:
+        user = _bc850_actor(c)
+        projects = _bc850_projects(c, user)
+        if project_id:
+            project = _bc850_project(c, user, project_id)
+        else:
+            selected = c.execute('SELECT selected_project_id FROM user_state WHERE user_id=?', (user['id'],)).fetchone()
+            selected_id = selected['selected_project_id'] if selected else None
+            project = next((p for p in projects if p['id'] == selected_id), projects[0] if len(projects) == 1 else None)
+        if project is None:
+            body = '<div class="bc860-head"><div><span class="bc860-kicker">DAILY FIELD WORK</span><h1>Superintendent Command</h1><p>Choose a project to review shared work and direct your subcontractors.</p></div></div>'
+            if projects:
+                body += '<div class="bc860-choices">' + ''.join('<a class="bc860-metric" href="' + _bc860_url(p['id']) + '"><span>' + _bc830b_escape(str(p.get('number') or 'Project')) + '</span><h2>' + _bc830b_escape(p['name']) + '</h2>Open daily command →</a>' for p in projects) + '</div>'
+            else:
+                body += '<div class="bc860-panel"><h2>No projects assigned</h2><p>Your company administrator can appoint you to a project in People &amp; access.</p>'
+                if _bc840_tier(user) in {'owner', 'admin'}:
+                    body += '<a href="/workspace/projects">Open company projects</a>'
+                body += '</div>'
+            return _bc860_page(body)
+        pid = int(project['id'])
+        totals, matched, rows = _bc860_rows(c, user, pid, view, q, page)
+    esc = _bc830b_escape
+    notices = {'review': 'Update reviewed. Any reply is now visible to the subcontractor.',
+               'review_close': 'Update reviewed and responses closed. The share remains visible.',
+               'close': 'Responses closed. The share remains visible.', 'reopen': 'Share reopened. Its original reply setting still applies.',
+               'revoke': 'Access revoked. This share is no longer visible to the subcontractor.'}
+    body = ('<div class="bc860-notice" role="status">' + notices[notice] + '</div>') if notice in notices else ''
+    body += '<div class="bc860-head"><div><span class="bc860-kicker">DAILY FIELD WORK</span><h1>Superintendent Command</h1><p>' + esc(project['name']) + ' · ' + _bc830b_now().date().isoformat() + '</p></div>'
+    options = ''.join(f'<option value="{p["id"]}"' + (' selected' if p['id'] == pid else '') + '>' + esc(p['name']) + '</option>' for p in projects)
+    body += '<form method="get" action="/workspace/command"><label for="command-project">Project</label><select id="command-project" name="project_id">' + options + '</select> <button class="secondary">Open</button></form></div>'
+    body += '<div class="bc860-metrics">'
+    for key, hint in [('review', 'Shared items with unread updates'), ('blocked', 'Latest progress reports a blocker'), ('overdue', 'Open shares past their due date'), ('ready', 'Ready for your inspection or review')]:
+        body += '<a class="bc860-metric" href="' + esc(_bc860_url(pid, key), quote=True) + '"' + (' aria-current="page"' if view == key else '') + '><span>' + _BC860_VIEWS[key] + '</span><strong>' + str(totals[key]) + '</strong><small>' + hint + '</small></a>'
+    body += '</div><p class="bc860-note">Counts cover all shared work on this project and can overlap. Due dates use the UTC calendar. ' + str(totals['updates']) + ' unread updates across ' + str(totals['review']) + ' shared items.</p>'
+    body += f'<div class="bc860-tools"><a class="bc860-button" href="/workspace/sharing?project_id={pid}">Share work</a><a class="bc860-button secondary" href="/workspace/sharing/projects/{pid}/team">Project subcontractors</a>'
+    for key, label in [('analysis', 'Project analysis'), ('tools', 'Field tools')]:
+        body += f'<form method="post" action="/workspace/command/projects/{pid}/open-tool"><button class="secondary" name="tool" value="{key}">{label}</button></form>'
+    body += '</div><section class="bc860-panel"><div class="bc860-heading"><div><h2>' + _BC860_VIEWS[view] + '</h2><p>Review updates, give direction, and keep work moving.</p></div><span class="bc860-tag">' + str(matched) + ' shared item' + ('s' if matched != 1 else '') + '</span></div>'
+    views = ''.join('<option value="' + k + '"' + (' selected' if view == k else '') + '>' + label + '</option>' for k, label in _BC860_VIEWS.items())
+    body += f'<form class="bc860-filters" method="get" action="/workspace/command"><input type="hidden" name="project_id" value="{pid}"><div><label for="command-view">Show</label><select id="command-view" name="view">' + views + '</select></div><div class="bc860-search"><label for="command-search">Find work or subcontractor</label><input type="search" id="command-search" name="q" maxlength="120" value="' + esc(q, quote=True) + '"></div><button>Apply</button><a href="' + esc(_bc860_url(pid), quote=True) + '">Reset</a></form>'
+    if rows:
+        body += ''.join(_bc860_card(row, view, q, page) for row in rows)
+    else:
+        headline = 'No shared work yet' if totals['total'] == 0 else 'Nothing needs attention' if view == 'attention' and not q and page == 1 else 'No matching work'
+        description = 'Share a schedule item, RFI, submittal, punch item, or document to start coordinating here.' if totals['total'] == 0 else 'Try another view or search. New subcontractor updates will appear here.'
+        body += '<div class="bc860-empty"><h3>' + headline + '</h3><p>' + description + '</p><a href="' + esc(_bc860_url(pid, 'open'), quote=True) + '">View all open work</a></div>'
+    pages = max(1, (matched + _BC860_PAGE_SIZE - 1) // _BC860_PAGE_SIZE)
+    if page > 1 or page < pages:
+        body += '<nav class="bc860-pagination" aria-label="Command pages">'
+        body += ('<a href="' + esc(_bc860_url(pid, view, q, page - 1), quote=True) + '">← Previous</a>') if page > 1 else '<span></span>'
+        body += '<span>Page ' + str(page) + ' of ' + str(pages) + '</span>'
+        body += ('<a href="' + esc(_bc860_url(pid, view, q, page + 1), quote=True) + '">Next →</a>') if page < pages else '<span></span>'
+        body += '</nav>'
+    body += '</section><p class="bc860-note">Shared instructions and replies stay separate from the original schedule, RFI, submittal, punch item, and document. Revoked shares remain in Trade sharing for reference.</p>'
+    return _bc860_page(body)
+
+
+@_bc860_endpoint
+def bc860_action(share_id: int, action: str = _BC189_Form(...), version: int = _BC189_Form(...),
+                 expected_state: str = _BC189_Form(...), revision: str = _BC189_Form(...),
+                 latest_update_id: int = _BC189_Form(...), update_id: int = _BC189_Form(0),
+                 reply: str = _BC189_Form(''), view: str = _BC189_Form('attention'),
+                 q: str = _BC189_Form(''), page: int = _BC189_Form(1)):
+    q = _bc860_filters(view, q, page)
+    reply = reply.strip()
+    _bc850_require(action in {'review', 'review_close', 'close', 'reopen', 'revoke'}, 'Choose a command action.', 400)
+    _bc850_require(len(reply) <= 2000, 'Keep your reply within 2,000 characters.', 400)
+    with _bc850_db(True) as c:
+        user = _bc850_actor(c)
+        share = _bc850_share(c, user, share_id, True, True)
+        _bc850_require(not share['revoked_at'] and share['version'] == version and
+                       share['state'] == expected_state and share['updated_at'] == revision,
+                       'This share changed. Reload Superintendent Command before acting.', 409)
+        current = c.execute('SELECT MAX(id) AS latest_id, COUNT(CASE WHEN reviewed_at IS NULL THEN 1 END) AS pending_count FROM bc_shared_work_updates WHERE share_id=? AND share_version=?', (share_id, version)).fetchone()
+        _bc850_require((current['latest_id'] or 0) == latest_update_id,
+                       'A new update arrived. Reload Superintendent Command before acting.', 409)
+        now = _bc830b_now().isoformat()
+        if action in {'review', 'review_close'}:
+            row = c.execute('SELECT id FROM bc_shared_work_updates WHERE id=? AND share_id=? AND share_version=? AND reviewed_at IS NULL', (update_id, share_id, version)).fetchone()
+            _bc850_require(row is not None, 'This update was already reviewed or is unavailable. Reload the page.', 409)
+            if action == 'review_close':
+                _bc850_require(share['state'] == 'OPEN' and current['pending_count'] == 1 and update_id == latest_update_id,
+                               'Review every unread update before closing responses.', 409)
+            c.execute('UPDATE bc_shared_work_updates SET reviewed_by=?,reviewed_at=?,review_message=? WHERE id=?', (user['id'], now, reply, update_id))
+            _bc850_event(c, user, share['project_id'], share_id, 'REVIEWED')
+        if action in {'close', 'review_close'}:
+            _bc850_require(share['state'] == 'OPEN' and (action == 'review_close' or current['pending_count'] == 0),
+                           'Review unread updates before closing responses.', 409)
+            c.execute("UPDATE bc_shared_work SET state='CLOSED',updated_at=? WHERE id=?", (now, share_id))
+            _bc850_event(c, user, share['project_id'], share_id, 'CLOSE')
+        elif action == 'reopen':
+            _bc850_require(share['state'] == 'CLOSED', 'This share is already open. Reload the page.', 409)
+            # Revalidate the external account and source before reopening.
+            _bc850_recipient(c, user, share['project_id'], share['recipient_user_id'])
+            _bc850_source(c, user, share['project_id'], share['kind'], share['source_id'])
+            c.execute("UPDATE bc_shared_work SET state='OPEN',updated_at=? WHERE id=?", (now, share_id))
+            _bc850_event(c, user, share['project_id'], share_id, 'REOPEN')
+        elif action == 'revoke':
+            c.execute('UPDATE bc_shared_work SET revoked_at=?,updated_at=? WHERE id=?', (now, now, share_id))
+            _bc850_event(c, user, share['project_id'], share_id, 'REVOKE')
+        pid = int(share['project_id'])
+    return _BC187_RedirectResponse(_bc860_url(pid, view, q, page, action), status_code=303)
+
+
+@_bc860_endpoint
+def bc860_open_tool(project_id: int, tool: str = _BC189_Form(...)):
+    destinations = {'tools': '/workspace/tools', 'analysis': f'/workspace/command/projects/{project_id}/analysis'}
+    _bc850_require(tool in destinations, 'Choose a project tool.', 400)
+    with _bc850_db(True) as c:
+        user = _bc850_actor(c)
+        _bc850_project(c, user, project_id, True)
+        sql = 'INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id'
+        # Explicit PK avoids the legacy PgCompat automatic RETURNING id retry.
+        if getattr(_runtime, 'DATABASE_KIND', 'sqlite') == 'postgres':
+            sql += ' RETURNING user_id'
+        c.execute(sql, (user['id'], project_id))
+    return _BC187_RedirectResponse(destinations[tool], status_code=303)
+
+
+@_bc860_endpoint
+def bc860_analysis(project_id: int):
+    with _bc850_db() as c:
+        user = _bc850_actor(c)
+        project = _bc850_project(c, user, project_id)
+        selected = c.execute('SELECT selected_project_id FROM user_state WHERE user_id=?', (user['id'],)).fetchone()
+    if not selected or selected['selected_project_id'] != project_id:
+        return _bc860_page('<div class="bc860-panel"><h1>Open project analysis</h1><p>Set ' + _bc830b_escape(project['name']) + f' as your current project so connected field tools open the same job.</p><form method="post" action="/workspace/command/projects/{project_id}/open-tool"><button name="tool" value="analysis">Open analysis for this project</button></form></div>')
+    _bc850_require(callable(_BC860_LEGACY_RENDER), 'Project analysis is unavailable in this installation.', 503)
+    response = _BC860_LEGACY_RENDER(project_id)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def bc860_project_command(project_id: int):
+    return bc860_command(project_id=project_id)
+
+
+def bc860_current_command():
+    return bc860_command()
+
+
+_bc840_replace('/workspace/command', 'GET', bc860_command)
+_bc840_replace('/workspace/command/items/{share_id}/action', 'POST', bc860_action)
+_bc840_replace('/workspace/command/projects/{project_id}/open-tool', 'POST', bc860_open_tool)
+_bc840_replace('/workspace/command/projects/{project_id}/analysis', 'GET', bc860_analysis)
+_bc840_replace('/superintendent-command', 'GET', bc860_current_command)
+# The installed legacy page delegates to this renderer. Keeping that route
+# preserves historical route health checks and the original analysis API.
+_bc200_render = bc860_project_command
+if not any(getattr(r, 'path', '') == '/superintendent-command/{project_id}' and 'GET' in (getattr(r, 'methods', set()) or set()) for r in app.routes):
+    _bc840_replace('/superintendent-command/{project_id}', 'GET', bc860_project_command)
+
+
+@app.get('/health/superintendent-command-8-6-0')
+def bc860_health():
+    checks = {'sharing_schema_initialized': _BC850_SCHEMA_READY, 'command_setup_initialized': _BC860_SCHEMA_READY}
+    try:
+        with _bc850_db() as c:
+            c.execute('SELECT id,company_id,project_id,version,state,updated_at,revoked_at FROM bc_shared_work WHERE 1=0')
+            c.execute('SELECT id,share_id,share_version,status,reviewed_at,review_message FROM bc_shared_work_updates WHERE 1=0')
+            c.execute('SELECT user_id,selected_project_id FROM user_state WHERE 1=0')
+            c.execute(f'SELECT user_id,project_id FROM {_bc850_member_table()} WHERE 1=0')
+            checks['schema_readable'] = True
+    except Exception:
+        checks['schema_readable'] = False
+    for path, method, endpoint in [
+        ('/workspace/command', 'GET', bc860_command),
+        ('/workspace/command/items/{share_id}/action', 'POST', bc860_action),
+        ('/workspace/command/projects/{project_id}/analysis', 'GET', bc860_analysis),
+        ('/workspace/command/projects/{project_id}/open-tool', 'POST', bc860_open_tool),
+        ('/superintendent-command', 'GET', bc860_current_command),
+    ]:
+        routes = [r for r in app.routes if getattr(r, 'path', '') == path and method in (getattr(r, 'methods', set()) or set())]
+        checks[method + ' ' + path] = len(routes) == 1 and routes[0].endpoint is endpoint
+    checks['daily_command_renderer_active'] = _bc200_render is bc860_project_command
+    checks['project_analysis_preserved'] = callable(_BC860_LEGACY_RENDER)
+    return {'app': 'BuildCommand AI', 'version': BC860_RELEASE, 'release': BC860_RELEASE_NAME,
+            'status': 'ok' if all(checks.values()) else 'degraded', 'checks': checks,
+            'passed': sum(checks.values()), 'total': len(checks), 'data_reset': False,
+            'scope': 'Schema and active route checks only; verify real company roles and project access on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/superintendent-command-8-6-0')
+BUILD_COMMAND_RELEASE = BC860_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC860_RELEASE_NAME
+app.version = BC860_RELEASE
