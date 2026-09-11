@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 1.8.17.5 — Render-ready single-file app.
+"""BuildCommand AI 8.4.0 — staging candidate from uploaded 8.3.0B / 8.2.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -58696,7 +58696,8 @@ _BC810_CAPABILITIES = {
 
 def _bc810_user():
     try:
-        return _runtime.current_user()
+        user = _runtime.current_user()
+        return dict(user) if user is not None else None
     except Exception:
         return None
 
@@ -59375,10 +59376,47 @@ except Exception:
 import hashlib as _bc830b_hashlib
 import secrets as _bc830b_secrets
 import hmac as _bc830b_hmac
+import logging as _bc830b_logging
+import re as _bc830b_re
+from html import escape as _bc830b_escape
 from datetime import datetime as _BC830B_datetime, timezone as _BC830B_timezone, timedelta as _BC830B_timedelta
 
 BC830B_RELEASE = "8.3.0B"
 BC830B_RELEASE_NAME = "Clean Invitations & Onboarding"
+_bc830b_logger = _bc830b_logging.getLogger("buildcommand.invitations")
+
+def _bc830b_error(message, status=400):
+    # This response must work even when the database-backed shared shell fails.
+    return _BC189_HTMLResponse(
+        "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>BuildCommand AI · Invitation</title></head><body style='font:16px system-ui;max-width:700px;margin:40px auto;padding:20px'>"
+        "<h1>Unable to complete this action</h1><p>" + _bc830b_escape(message) +
+        "</p><p><a href='/workspace'>My workspace</a> · <a href='/login'>Sign in</a></p></body></html>",
+        status_code=status, headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer"})
+
+def _bc830b_rollback(c):
+    if c is not None:
+        try: c.rollback()
+        except Exception: _bc830b_logger.exception("Invitation rollback failed")
+
+def _bc830b_close(c):
+    if c is not None:
+        try: c.close()
+        except Exception: _bc830b_logger.exception("Invitation connection close failed")
+
+def _bc830b_audit(action, detail, user):
+    try: _bc810_audit(action, True, detail, user=user)
+    except Exception: _bc830b_logger.exception("Post-commit invitation audit failed action=%s", action)
+
+def _bc830b_link_insert(c, table, columns, values):
+    # PgCompat guesses RETURNING id and rolls back the WHOLE transaction if the
+    # column does not exist. These link tables intentionally have no id column.
+    if table not in {"bc_user_invitation_projects", "project_members", "project_users", "project_assignments"}:
+        raise ValueError("Unsupported membership table")
+    if columns not in {"invitation_id,project_id", "user_id,project_id"}:
+        raise ValueError("Unsupported membership columns")
+    returning = " RETURNING project_id" if getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres" else ""
+    c.execute(f"INSERT INTO {table}({columns}) VALUES(?,?)" + returning, values)
 
 def _bc830b_now():
     return _BC830B_datetime.now(_BC830B_timezone.utc)
@@ -59399,8 +59437,9 @@ def _bc830b_expired(row):
         return True
 
 def _bc830b_init():
-    c = _runtime.db()
+    c = None
     try:
+        c = _runtime.db()
         if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
             c.execute("CREATE TABLE IF NOT EXISTS bc_user_invitations("
                       "id BIGSERIAL PRIMARY KEY,"
@@ -59433,16 +59472,19 @@ def _bc830b_init():
             c.execute("CREATE TABLE IF NOT EXISTS bc_user_invitation_projects("
                       "invitation_id INTEGER NOT NULL,"
                       "project_id INTEGER NOT NULL)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_bc_user_invitations_company_email "
+                  "ON bc_user_invitations(company_id,email,status)")
+        c.execute("SELECT id,company_id,email,role,token_hash,status,invited_by_user_id,"
+                  "created_at,expires_at,accepted_at,accepted_user_id FROM bc_user_invitations WHERE 1=0")
+        c.execute("SELECT invitation_id,project_id FROM bc_user_invitation_projects WHERE 1=0")
         c.commit()
         return True
     except Exception:
-        try:
-            c.rollback()
-        except Exception:
-            pass
+        _bc830b_logger.exception("Invitation schema initialization failed")
+        _bc830b_rollback(c)
         return False
     finally:
-        c.close()
+        _bc830b_close(c)
 
 _BC830B_SCHEMA_READY = _bc830b_init()
 
@@ -59451,11 +59493,15 @@ def _bc830b_lookup(invitation_id, token):
         iid = int(invitation_id)
     except Exception:
         return None, "invalid_id"
-    c = _runtime.db()
+    c = None
     try:
+        c = _runtime.db()
         row = c.execute("SELECT * FROM bc_user_invitations WHERE id=? LIMIT 1",(iid,)).fetchone()
+    except Exception:
+        _bc830b_logger.exception("Invitation lookup failed invitation_id=%s", iid)
+        return None, "storage_unavailable"
     finally:
-        c.close()
+        _bc830b_close(c)
     if not row:
         return None, "not_found"
     if not _bc830b_hmac.compare_digest(str(row["token_hash"] or ""), _bc830b_hash_token(token)):
@@ -59472,15 +59518,19 @@ def bc830b_invitations_page():
     if denied:
         return denied
     cid = _bc810_company_id(admin)
-    projects = _bc820_company_projects(cid)
-    c = _runtime.db()
+    c = None
     try:
+        projects = _bc820_company_projects(cid)
+        c = _runtime.db()
         rows = c.execute(
             "SELECT id,email,role,status,created_at,expires_at FROM bc_user_invitations "
             "WHERE company_id=? ORDER BY id DESC LIMIT 50",(cid,)
         ).fetchall()
+    except Exception:
+        _bc830b_logger.exception('Company invitation list unavailable company=%s',cid)
+        return _bc830b_error('Invitations are temporarily unavailable. Please try again.',503)
     finally:
-        c.close()
+        _bc830b_close(c)
     project_options = "".join(
         f'<label style="display:block;margin:6px 0"><input type="checkbox" name="project_ids" value="{p["id"]}"> '
         f'{_runtime.esc(str(p["number"] or ""))} · {_runtime.esc(str(p["name"] or ""))}</label>'
@@ -59489,22 +59539,26 @@ def bc830b_invitations_page():
     role_options = "".join(
         f'<option value="{r}">{r.replace("_"," ").title()}</option>' for r in _BC820_ASSIGNABLE_ROLES
     )
+    if callable(globals().get("_bc840_role_options")):
+        role_options = _bc840_role_options()
     history = "".join(
         "<tr>"
-        f"<td>#{r['id']}</td><td>{_runtime.esc(r['email'])}</td><td>{_runtime.esc(r['role'])}</td>"
-        f"<td>{_runtime.esc(r['status'])}</td><td>{_runtime.esc(r['expires_at'])}</td></tr>"
+        f"<td>#{r['id']}</td><td>{_runtime.esc(r['email'])}</td><td>{_bc840_role_label(r['role'])}</td>"
+        f"<td>{'Expired' if str(r['status']).upper()=='PENDING' and _bc830b_expired(r) else _runtime.esc(str(r['status']).capitalize())}</td><td>{_runtime.esc(str(r['expires_at'])[:10])}</td>"
+        + (f'<td><form method="post" action="/company/invitations/{int(r["id"])}/revoke"><button>Revoke</button></form></td>' if str(r['status']).upper()=='PENDING' and not _bc830b_expired(r) else '<td>—</td>') + '</tr>'
         for r in rows
     )
     body = f"""
-    <div class="hero"><div class="eyebrow">8.3.0B · SECURE USER INVITATIONS</div>
-    <h1>Invite Your Team</h1><p>Create a one-time invitation with role and project access already assigned.</p></div>
+    <div class="hero"><div class="eyebrow">COMPANY · INVITATIONS</div>
+    <h1>Invite your team</h1><p>Choose their role and projects. Create the invitation, then copy the link to share it. Email is not sent automatically.</p><p>Creating another invitation for the same email replaces its earlier pending link.</p></div>
     <div class="grid2">
       <div class="card"><h2>Create Invitation</h2>
         <form method="post" action="/company/invitations/create">
-          <label>Email</label><input name="email" type="email" required placeholder="name@company.com">
-          <label style="display:block;margin-top:12px">Role</label>
-          <select name="role" required>{role_options}</select>
+          <label for="invite-email">Email</label><input id="invite-email" name="email" type="email" autocomplete="email" maxlength="254" required placeholder="name@company.com">
+          <label for="invite-role" style="display:block;margin-top:12px">Role</label>
+          <select id="invite-role" name="role" required>{role_options}</select>
           <h3>Project Access</h3>{project_options or '<p class="muted">No projects available.</p>'}
+          <p class="muted">Project selection limits subcontractors and observers. Internal staff keep existing company-project access.</p>
           <button type="submit" style="margin-top:14px">Create Secure Invitation</button>
         </form>
       </div>
@@ -59515,9 +59569,9 @@ def bc830b_invitations_page():
         <li>Project assignments are limited to this company.</li></ul>
       </div>
     </div>
-    <div class="card"><h2>Recent Invitations</h2><table>
-      <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Status</th><th>Expires</th></tr></thead>
-      <tbody>{history or '<tr><td colspan="5">No invitations yet.</td></tr>'}</tbody></table></div>
+    <div class="card bc840-table"><h2>Recent Invitations</h2><table>
+      <thead><tr><th>ID</th><th>Email</th><th>Role</th><th>Status</th><th>Expires</th><th>Action</th></tr></thead>
+      <tbody>{history or '<tr><td colspan="6">No invitations yet.</td></tr>'}</tbody></table></div>
     """
     return _BC189_HTMLResponse(_runtime.shell("Company Invitations", body))
 
@@ -59532,27 +59586,50 @@ def bc830b_create_invitation(request:_BC189_Request,
     cid = _bc810_company_id(admin)
     email = str(email or "").strip().lower()
     role = str(role or "").strip().upper()
-    if "@" not in email:
-        return _bc810_denied("Invitation Blocked","Enter a valid email address.")
+    try:
+        cid, inviter_id = int(cid), int(admin["id"])
+        if cid <= 0 or inviter_id <= 0: raise ValueError()
+    except (ValueError, TypeError, KeyError):
+        return _bc830b_error("Your account needs a valid company assignment before you can invite users.")
+    if len(email) > 254 or not _bc830b_re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", email):
+        return _bc830b_error("Enter a valid email address.")
     if role not in _BC820_ASSIGNABLE_ROLES:
         return _bc810_denied("Invitation Blocked","That role cannot be assigned.")
     token = _bc830b_secrets.token_urlsafe(32)
     token_hash = _bc830b_hash_token(token)
     now = _bc830b_now()
     expires = now + _BC830B_timedelta(days=7)
-    c = _runtime.db()
+    c = None
     try:
+        c = _runtime.db()
+        postgres = getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres"
+        if not postgres: c.execute("BEGIN IMMEDIATE")
+        # Serialize reissues in one company so concurrent requests cannot leave
+        # two pending invitations for the same address.
+        company = c.execute("SELECT id FROM companies WHERE id=?" + (" FOR UPDATE" if postgres else ""), (cid,)).fetchone()
+        if not company or not c.execute("SELECT id FROM users WHERE id=? AND company_id=?",(inviter_id,cid)).fetchone():
+            _bc830b_rollback(c)
+            return _bc830b_error("Your company or inviting account is unavailable.")
+        if c.execute("SELECT id FROM users WHERE lower(email)=lower(?) LIMIT 1",(email,)).fetchone():
+            _bc830b_rollback(c)
+            return _bc830b_error("An account already uses that email. Manage existing company members in People & access; an invitation cannot transfer accounts between companies.",409)
+        if callable(globals().get('_bc840_protected_account')) and _bc840_protected_account({'email':email,'role':role}):
+            _bc830b_rollback(c)
+            return _bc830b_error("Platform-owner accounts cannot be created through company invitations.",403)
         valid_projects = {str(r["id"]) for r in c.execute(
             "SELECT id FROM projects WHERE company_id=?",(cid,)).fetchall()}
-        requested = {str(x) for x in (project_ids or []) if str(x) in valid_projects}
+        requested = {str(x) for x in (project_ids or [])}
+        if not requested.issubset(valid_projects):
+            _bc830b_rollback(c)
+            return _bc830b_error("Select only projects that belong to your company.", 403)
         c.execute("UPDATE bc_user_invitations SET status='REVOKED' "
-                  "WHERE company_id=? AND email=? AND status='PENDING'",(cid,email))
+                  "WHERE company_id=? AND lower(email)=lower(?) AND status='PENDING'",(cid,email))
         if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
             row = c.execute(
                 "INSERT INTO bc_user_invitations "
                 "(company_id,email,role,token_hash,status,invited_by_user_id,created_at,expires_at) "
                 "VALUES(?,?,?,?,?,?,?,?) RETURNING id",
-                (cid,email,role,token_hash,"PENDING",admin.get("id"),now.isoformat(),expires.isoformat())
+                (cid,email,role,token_hash,"PENDING",inviter_id,now.isoformat(),expires.isoformat())
             ).fetchone()
             invitation_id = int(row["id"])
         else:
@@ -59560,33 +59637,25 @@ def bc830b_create_invitation(request:_BC189_Request,
                 "INSERT INTO bc_user_invitations "
                 "(company_id,email,role,token_hash,status,invited_by_user_id,created_at,expires_at) "
                 "VALUES(?,?,?,?,?,?,?,?)",
-                (cid,email,role,token_hash,"PENDING",admin.get("id"),now.isoformat(),expires.isoformat())
+                (cid,email,role,token_hash,"PENDING",inviter_id,now.isoformat(),expires.isoformat())
             )
             invitation_id = int(c.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
         for pid in requested:
-            c.execute("INSERT INTO bc_user_invitation_projects(invitation_id,project_id) VALUES(?,?)",
-                      (invitation_id,pid))
+            _bc830b_link_insert(c, "bc_user_invitation_projects", "invitation_id,project_id", (invitation_id,int(pid)))
         c.commit()
     except Exception:
-        try:
-            c.rollback()
-        except Exception:
-            pass
-        raise
+        _bc830b_rollback(c)
+        reference = _bc830b_secrets.token_hex(4)
+        _bc830b_logger.exception("Invitation create failed reference=%s company=%s inviter=%s", reference, cid, inviter_id)
+        return _bc830b_error("The invitation could not be saved. Please try again. Support reference: " + reference, 503)
     finally:
-        c.close()
+        _bc830b_close(c)
 
     stored, reason = _bc830b_lookup(invitation_id, token)
     if not stored:
-        return _BC189_HTMLResponse(
-            _runtime.shell("Invitation Error",
-                           "<div class='card'><h1>Invitation storage failed.</h1>"
-                           f"<p>Verification: {_runtime.esc(reason)}</p>"
-                           "<p>No invitation link was created.</p></div>"),
-            status_code=500
-        )
-    _bc810_audit("clean_invitation_create",True,
-                 f"invitation_id={invitation_id}; email={email}; role={role}",user=admin)
+        _bc830b_logger.error("Invitation post-commit verification failed invitation_id=%s reason=%s", invitation_id, reason)
+        return _bc830b_error("The saved invitation could not be verified. Return to invitations and create it again to replace the previous link.", 503)
+    _bc830b_audit("clean_invitation_create", f"invitation_id={invitation_id}; role={role}", admin)
     base = str(request.base_url).rstrip("/")
     link = f"{base}/join/{invitation_id}/{token}"
     body = (
@@ -59598,29 +59667,36 @@ def bc830b_create_invitation(request:_BC189_Request,
         f"<input style='width:100%;padding:12px' value='{_runtime.esc(link)}' readonly onclick='this.select()'>"
         f"<p class='muted'>Invitation #{invitation_id} · expires in 7 days · single use.</p></div>"
     )
-    return _BC189_HTMLResponse(_runtime.shell("Invitation Created",body))
+    try: rendered = _runtime.shell("Invitation Created",body)
+    except Exception:
+        _bc830b_logger.exception("Invitation saved but shared page rendering failed invitation_id=%s", invitation_id)
+        rendered = "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body>" + body + "</body></html>"
+    return _BC189_HTMLResponse(rendered, headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer"})
 
 @app.get("/join/{invitation_id}/{token}")
 def bc830b_join(invitation_id:int, token:str):
     row, reason = _bc830b_lookup(invitation_id, token)
     if not row:
-        return _BC189_HTMLResponse(
-            _runtime.shell("Invitation","<div class='card'><h1>Invitation unavailable</h1>"
-                           "<p>This invitation is invalid, expired, revoked, or already used.</p></div>"),
-            status_code=410
-        )
-    user = _bc810_user()
+        return _bc830b_error("Invitations are temporarily unavailable. Please try again." if reason == "storage_unavailable" else
+                              "This invitation is invalid, expired, revoked, or already used.",
+                              503 if reason == "storage_unavailable" else 410)
+    user = _bc840_user()
     if not user:
         body = (
             "<div class='hero'><div class='eyebrow'>BUILDCOMMAND AI INVITATION</div>"
             "<h1>You’ve Been Invited</h1>"
-            f"<p>Invitation for {_runtime.esc(row['email'])} as {_runtime.esc(row['role'])}.</p></div>"
+            f"<p>Invitation for {_runtime.esc(row['email'])} as {_bc840_role_label(row['role'])}.</p></div>"
             "<div class='card'>"
-            f"<p>Create or sign in to an account using <b>{_runtime.esc(row['email'])}</b>.</p>"
-            "<p>After signing in, reopen this same invitation link to accept access.</p>"
-            "<p><a href='/signup'>Create Account</a> &nbsp; <a href='/login'>Sign In</a></p></div>"
+            "<h2>New to BuildCommand AI?</h2><p>Join the inviting company. You do not need to create a separate company.</p>"
+            f"<form method='post' action='/join/{int(row['id'])}/{_bc830b_escape(token,quote=True)}/register'>"
+            "<p><label for='join-name'>Your name</label><br><input id='join-name' name='display_name' autocomplete='name' maxlength='120' required></p>"
+            "<p><label for='join-password'>Create a password</label><br><input id='join-password' name='password' type='password' autocomplete='new-password' minlength='12' maxlength='256' required></p>"
+            "<p class='muted'>Use at least 12 characters. This invitation fixes your email, company and assigned role.</p>"
+            "<button>Create account &amp; join</button></form></div>"
+            "<div class='card'><h2>Already have an account?</h2><p><a href='/login'>Sign in</a>, then reopen this invitation link.</p>"
+            "<p>Accounts already in another company need an administrator-assisted transfer; an invitation will not move them.</p></div>"
         )
-        return _BC189_HTMLResponse(_runtime.shell("BuildCommand Invitation",body))
+        return _bc840_join_page(body)
     if str(user.get("email") or "").strip().lower() != str(row["email"] or "").strip().lower():
         return _bc810_denied("Invitation Email Mismatch",
                              "Sign in with the exact email address that received this invitation.")
@@ -59632,16 +59708,16 @@ def bc830b_join(invitation_id:int, token:str):
         f"<form method='post' action='/join/{int(row['id'])}/{token}/accept'>"
         "<button type='submit'>Accept Invitation</button></form></div>"
     )
-    return _BC189_HTMLResponse(_runtime.shell("Accept Invitation",body))
+    return _bc840_join_page(body)
 
 @app.post("/join/{invitation_id}/{token}/accept")
 def bc830b_accept(invitation_id:int, token:str):
     row, reason = _bc830b_lookup(invitation_id, token)
-    user = _bc810_user()
+    user = _bc840_user()
     if not user:
         return _BC187_RedirectResponse("/login",status_code=303)
     if not row:
-        return _bc810_denied("Invitation Unavailable","This invitation is no longer valid.")
+        return _bc830b_error("Invitations are temporarily unavailable." if reason=='storage_unavailable' else "This invitation is no longer valid.",503 if reason=='storage_unavailable' else 410)
     if str(user.get("email") or "").strip().lower() != str(row["email"] or "").strip().lower():
         return _bc810_denied("Invitation Email Mismatch",
                              "This invitation belongs to a different email address.")
@@ -59650,13 +59726,32 @@ def bc830b_accept(invitation_id:int, token:str):
         return _bc810_denied("Invitation Blocked","The assigned role is no longer allowed.")
     uid = user.get("id")
     cid = row["company_id"]
-    c = _runtime.db()
+    c = None
     try:
+        c = _runtime.db()
+        postgres = getattr(_runtime,"DATABASE_KIND","sqlite") == "postgres"
+        if not postgres: c.execute("BEGIN IMMEDIATE")
+        locked = c.execute("SELECT * FROM bc_user_invitations WHERE id=?" + (" FOR UPDATE" if postgres else ""), (invitation_id,)).fetchone()
+        if not locked or locked["status"] != "PENDING" or _bc830b_expired(locked) or not _bc830b_hmac.compare_digest(str(locked["token_hash"]), _bc830b_hash_token(token)):
+            _bc830b_rollback(c)
+            return _bc830b_error("This invitation is no longer available.", 410)
         company = c.execute("SELECT id FROM companies WHERE id=?",(cid,)).fetchone()
         if not company:
-            return _bc810_denied("Invitation Blocked","The inviting company is unavailable.")
-        c.execute("UPDATE users SET company_id=?,role=? WHERE id=?",(cid,role,uid))
+            _bc830b_rollback(c)
+            return _bc830b_error("The inviting company is unavailable.",410)
+        account = c.execute("SELECT id,company_id,email,role FROM users WHERE id=?" + (" FOR UPDATE" if postgres else ""),(uid,)).fetchone()
+        if not account or _bc840_protected_account(dict(account)) or int(account["company_id"] or 0) != int(cid):
+            _bc830b_rollback(c)
+            return _bc830b_error("This invitation cannot transfer an existing company account or change a platform-owner account. Ask your administrator for help.",409)
+        if str(account['email']).strip().lower() != str(locked['email']).strip().lower():
+            _bc830b_rollback(c)
+            return _bc830b_error("This invitation belongs to a different email address.",403)
+        if str(account['role']).upper() in {'ADMIN','COMPANY_ADMIN'} and role != 'COMPANY_ADMIN':
+            _bc830b_rollback(c)
+            return _bc830b_error("Change an administrator's role in People & access, not through an invitation.",409)
+        c.execute("UPDATE users SET role=? WHERE id=? AND company_id=?",(role,uid,cid))
         membership_table = _bc820_membership_table()
+        if not membership_table: raise RuntimeError("Project membership storage unavailable")
         if membership_table:
             c.execute(f"DELETE FROM {membership_table} WHERE user_id=?",(uid,))
             pids = c.execute(
@@ -59665,19 +59760,18 @@ def bc830b_accept(invitation_id:int, token:str):
                 "WHERE ip.invitation_id=? AND p.company_id=?",(row["id"],cid)
             ).fetchall()
             for p in pids:
-                try:
-                    c.execute(f"INSERT INTO {membership_table}(user_id,project_id) VALUES(?,?)",
-                              (uid,p["project_id"]))
-                except Exception:
-                    pass
+                _bc830b_link_insert(c, membership_table, "user_id,project_id", (uid,p["project_id"]))
         c.execute("UPDATE bc_user_invitations SET status='ACCEPTED',accepted_at=?,accepted_user_id=? "
                   "WHERE id=? AND status='PENDING'",
                   (_bc830b_now().isoformat(),uid,row["id"]))
         c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception("Invitation acceptance failed invitation_id=%s", invitation_id)
+        return _bc830b_error("Your access could not be saved. The invitation remains available to retry.", 503)
     finally:
-        c.close()
-    _bc810_audit("clean_invitation_accept",True,
-                 f"invitation_id={row['id']}; role={role}",user=user)
+        _bc830b_close(c)
+    _bc830b_audit("clean_invitation_accept", f"invitation_id={row['id']}; role={role}", user)
     return _BC187_RedirectResponse("/",status_code=303)
 
 @app.get("/health/clean-invitations-8-3-0b")
@@ -59733,3 +59827,683 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 8.4.0 — Clear Workspaces & Company Administration
+# Source: uploaded 8.3.0B, retaining the 8.2 construction/access foundation.
+# Legacy engines remain available to authorized staff; no business data purge.
+# ============================================================
+from contextvars import ContextVar as _BC840_ContextVar
+from starlette.concurrency import run_in_threadpool as _bc840_in_threadpool
+from fastapi.responses import JSONResponse as _BC840_JSONResponse
+from urllib.parse import urlsplit as _bc840_urlsplit, parse_qs as _bc840_parse_qs
+
+BC840_RELEASE = "8.4.0"
+BC840_RELEASE_NAME = "Clear Workspaces & Company Administration"
+_BC840_NO_REQUEST = object()
+_bc840_request_user = _BC840_ContextVar("bc840_request_user", default=_BC840_NO_REQUEST)
+
+# One role directory for labels, navigation and the route boundary. Unknown
+# roles receive the restricted observer workspace, never implicit staff access.
+_BC840_ROLES = {
+    "COMPANY_ADMIN": ("Company administrator", "admin", "Manage your company's people, projects, settings and subscription."),
+    "PROJECT_EXECUTIVE": ("Project executive", "lead", "Review company projects and coordinate project leadership."),
+    "PROJECT_MANAGER": ("Project manager", "lead", "Coordinate project documents, schedules and field teams."),
+    "SUPERINTENDENT": ("Superintendent", "lead", "Run field operations, daily reports, schedules and job readiness."),
+    "PROJECT_ENGINEER": ("Project engineer", "staff", "Support project documentation and coordination."),
+    "ASSISTANT": ("Assistant", "staff", "Support the project team within assigned responsibilities."),
+    "FIELD_USER": ("Field team member", "staff", "Use project tools without company-account administration."),
+    "SUBCONTRACTOR": ("Subcontractor", "trade", "See only assigned projects in the trade-partner workspace."),
+    "READ_ONLY": ("Read-only observer", "observer", "View assigned project overviews without making changes."),
+    "GUEST": ("Guest", "observer", "View assigned project overviews only."),
+    "ARCHITECT": ("Architect", "observer", "Use assigned project overviews; document sharing is a separate permission."),
+    "INSPECTOR": ("Inspector", "observer", "Use assigned project overviews without company administration."),
+}
+_BC840_ALIASES = {"ADMIN":"COMPANY_ADMIN", "PM":"PROJECT_MANAGER", "PE":"PROJECT_ENGINEER",
+                  "EXECUTIVE":"PROJECT_EXECUTIVE", "SUB":"SUBCONTRACTOR", "MEMBER":"FIELD_USER"}
+
+def _bc840_user():
+    user = _bc840_request_user.get()
+    if user is not _BC840_NO_REQUEST: return user
+    return _bc810_user()
+
+def _bc840_platform_owner(user):
+    if str(user.get('role') or '').upper() not in {'OWNER','PLATFORM_OWNER'}: return False
+    configured = {x.strip().lower() for x in os.environ.get('PLATFORM_OWNER_EMAILS',os.environ.get('PLATFORM_OWNER_EMAIL','')).split(',') if x.strip()}
+    if configured: return str(user.get('email') or '').strip().lower() in configured
+    checker = getattr(_runtime,'_bc174_is_platform_owner',None)
+    # A historical OWNER role by itself must never grant platform authority.
+    try: return bool(callable(checker) and checker(user))
+    except Exception: return False
+
+def _bc840_role(user=None):
+    user = user or _bc840_user() or {}
+    value = str(user.get("role") or "GUEST").strip().upper()
+    if value == 'OWNER' and not _bc840_platform_owner(user): return 'COMPANY_ADMIN'
+    return _BC840_ALIASES.get(value, value)
+
+def _bc840_tier(user=None):
+    user = user or _bc840_user() or {}
+    if _bc840_platform_owner(user): return "owner"
+    return _BC840_ROLES.get(_bc840_role(user), ("Restricted account", "observer", ""))[1]
+
+def _bc840_role_label(role):
+    role = _BC840_ALIASES.get(str(role).upper(), str(role).upper())
+    if role in {"OWNER", "PLATFORM_OWNER"}: return "BuildCommand platform owner"
+    return _BC840_ROLES.get(role, ("Restricted account",))[0]
+
+def _bc840_role_options(current=None):
+    current = _BC840_ALIASES.get(str(current or "").upper(), str(current or "").upper())
+    out = '<option value="" disabled' + ('' if current else ' selected') + '>Choose a role</option>'
+    groups = [("Leadership", ("COMPANY_ADMIN","PROJECT_MANAGER","SUPERINTENDENT","PROJECT_EXECUTIVE")),
+              ("Project team", ("PROJECT_ENGINEER","ASSISTANT")),
+              ("External / limited", ("SUBCONTRACTOR","READ_ONLY","GUEST","ARCHITECT","INSPECTOR"))]
+    for label, roles in groups:
+        out += '<optgroup label="' + label + '">'
+        for role in roles:
+            if role in _BC820_ASSIGNABLE_ROLES:
+                out += f'<option value="{role}"' + (' selected' if role == current else '') + '>' + _bc840_role_label(role) + '</option>'
+        out += '</optgroup>'
+    return out
+
+def _bc840_membership_init():
+    c = None
+    try:
+        if _bc820_membership_table(): return True
+        c = _runtime.db()
+        c.execute("CREATE TABLE IF NOT EXISTS project_members("
+                  "user_id BIGINT NOT NULL,project_id BIGINT NOT NULL,PRIMARY KEY(user_id,project_id))")
+        c.commit()
+        return True
+    except Exception:
+        _bc830b_logger.exception("Project membership initialization failed")
+        _bc830b_rollback(c)
+        return False
+    finally: _bc830b_close(c)
+
+_BC840_MEMBERSHIP_READY = _bc840_membership_init()
+
+def _bc840_projects(user=None):
+    user = user or _bc840_user()
+    if not user: return []
+    cid, uid = _bc810_company_id(user), user.get("id")
+    c = _runtime.db()
+    try:
+        # Preserve the established 8.2 leadership policy: own-company projects.
+        # Trade partners/observers require an explicit project membership.
+        if _bc840_tier(user) in {"owner", "admin", "lead", "staff"}:
+            rows = c.execute("SELECT id,name,number,status FROM projects WHERE company_id=? ORDER BY name,id", (cid,)).fetchall()
+        else:
+            table = _bc820_membership_table()
+            if not table: return []
+            rows = c.execute(f"SELECT DISTINCT p.id,p.name,p.number,p.status FROM projects p "
+                             f"JOIN {table} m ON m.project_id=p.id WHERE p.company_id=? AND m.user_id=? ORDER BY p.name,p.id", (cid,uid)).fetchall()
+        return [dict(row) for row in rows]
+    finally: _bc830b_close(c)
+
+def _bc840_selected_project(user=None):
+    user = user or _bc840_user()
+    if not user: return None
+    c = _runtime.db()
+    try:
+        row = c.execute("SELECT selected_project_id FROM user_state WHERE user_id=?", (user["id"],)).fetchone()
+        return int(row["selected_project_id"]) if row and row["selected_project_id"] else None
+    finally: _bc830b_close(c)
+
+_BC840_CSS = """
+*{box-sizing:border-box} :root{--ink:#172033;--muted:#56667a;--line:#dce3ec;--bg:#f4f7fb}
+body{margin:0;background:#f4f7fb;color:#172033;font:16px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+a{color:#164b94;text-underline-offset:3px} button,input,select,textarea{font:inherit}button,a.bc840-button{cursor:pointer}
+input:not([type=checkbox]):not([type=radio]),select,textarea{max-width:100%;padding:11px;border:1px solid #aebdce;border-radius:8px;background:white;color:#172033}
+input[type=checkbox],input[type=radio]{width:20px;height:20px;margin-right:7px;vertical-align:middle}label{font-weight:600}
+button,.bc840-button{padding:10px 16px;min-height:44px;border:1px solid #173f77;border-radius:8px;background:#173f77;color:#fff;font-weight:700;text-decoration:none;display:inline-block}
+.bc840-header{background:#fff;border-bottom:1px solid var(--line)}.bc840-top,.bc840-nav{max-width:1360px;margin:auto;padding:12px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.bc840-logo{display:flex;align-items:center;gap:10px;text-decoration:none;color:#172033;font-weight:850;font-size:20px}.bc840-logo img{display:block;width:174px;height:82px;object-fit:contain}
+.bc840-identity{margin-left:auto}.bc840-identity strong,.bc840-identity small{display:block}.bc840-identity small{font-size:14px;color:var(--muted)}
+.bc840-nav{padding-top:0;padding-bottom:14px;gap:7px}.bc840-nav a{padding:9px 13px;border-radius:7px;text-decoration:none;color:#233c5d;font-weight:700;min-height:42px}
+.bc840-nav a:hover,.bc840-nav a:focus{background:#e9eff8}.bc840-select{display:flex;gap:7px;align-items:center;margin-left:auto;max-width:440px}.bc840-select select{min-width:0;width:100%}
+.bc840-main{max-width:1280px;margin:auto;padding:24px 22px 64px;min-height:65vh}.hero,.card,.v117r-card,.v117r-hero{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px;margin:0 0 18px;box-shadow:none}
+.hero h1,.v117r-hero h1{font-size:clamp(26px,3vw,36px);line-height:1.2;margin:6px 0 10px;letter-spacing:-.02em}.hero p{margin:7px 0;color:var(--muted);max-width:75ch}
+h2{font-size:22px;line-height:1.3}h3{font-size:18px}.eyebrow,.label,.v117r-eyebrow{font-size:13px;font-weight:750;letter-spacing:.06em;color:var(--muted)}
+.muted,.small,.v117r-small{color:var(--muted);font-size:14px}.grid2,.grid3,.grid4{display:grid;gap:18px}.grid2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid4{grid-template-columns:repeat(4,minmax(0,1fr))}.kpi{font-size:28px;font-weight:800}
+.bc840-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 18px}.bc840-tabs a{padding:9px 13px;border:1px solid var(--line);border-radius:7px;text-decoration:none;background:#fff;font-weight:650}
+.bc840-table{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{padding:12px;text-align:left;border-bottom:1px solid var(--line);font-size:15px;vertical-align:top}th{color:var(--muted);font-weight:700}
+.bc840-pill{display:inline-block;font-size:14px;font-weight:650;padding:4px 9px;border:1px solid #c5d7ef;border-radius:6px;background:#f0f5fd;color:#234b80}
+.bc840-list{display:grid;gap:10px}.bc840-list>a{padding:15px;border:1px solid var(--line);border-radius:8px;background:#fff;text-decoration:none;font-weight:700}.bc840-list small{display:block;font-size:14px;font-weight:400;color:var(--muted)}
+.bc840-footer{text-align:center;padding:18px;font-size:13px;color:var(--muted);border-top:1px solid var(--line)}.bc840-empty{padding:24px;border:1px dashed #b5c4d6;border-radius:10px;background:#fff}
+.bc840-role-note{padding:14px;border-left:4px solid #3768ab;background:#edf3fb;border-radius:5px;margin:14px 0}.bc840-skip{position:absolute;left:-10000px}.bc840-skip:focus{left:10px;top:10px;background:white;padding:12px;z-index:100}
+:focus-visible{outline:3px solid #2e70c5;outline-offset:3px}details>summary{cursor:pointer;font-weight:700;padding:10px 0}
+@media(max-width:820px){.grid2,.grid3,.grid4{grid-template-columns:1fr}.bc840-top,.bc840-nav{padding-left:14px;padding-right:14px}.bc840-main{padding:18px 14px 48px}.bc840-select{width:100%;max-width:none;margin-left:0}.bc840-logo img{width:140px;height:66px}.bc840-identity{font-size:14px}.bc840-nav{gap:4px}.bc840-nav a{padding:9px}.hero,.card{padding:18px}.bc840-top{gap:10px}th,td{min-width:100px}.bc840-logout button{padding:8px 11px}}
+"""
+
+def _bc840_company_tabs():
+    return '<nav class="bc840-tabs" aria-label="Company sections">' + ''.join(
+        f'<a href="{url}">{label}</a>' for label,url in [("Overview","/company"),("People & access","/company/users"),
+        ("Invitations","/company/invitations"),("Role guide","/company/access-matrix"),("Settings","/company-settings")]) + '</nav>'
+
+def _bc840_shell(title, body, *args, **kwargs):
+    user = _bc840_user()
+    if not user: return _BC840_PREVIOUS_SHELL(title, body, *args, **kwargs)
+    esc = _bc830b_escape
+    tier = _bc840_tier(user)
+    nav = [("My workspace","/workspace"),("Projects","/workspace/projects")]
+    if tier in {"owner","admin","lead","staff"}:
+        nav += [("Field tools","/workspace/tools"),("My access","/workspace/access")]
+    if tier in {"owner","admin"}: nav.append(("Company","/company"))
+    if tier == "owner": nav.append(("Owner console","/owner"))
+    if tier in {"trade","observer"}: nav.append(("My access","/workspace/access"))
+    logo = globals().get("_BC706_LOGO_DATA", "")
+    brand = f'<img src="{esc(logo,quote=True)}" alt="BuildCommand AI">' if logo else 'BuildCommand AI'
+    try:
+        projects, selected = _bc840_projects(user), _bc840_selected_project(user)
+    except Exception:
+        projects, selected = [], None
+    options = ''.join(f'<option value="{p["id"]}"' + (' selected' if p['id']==selected else '') + '>' +
+                      esc(str(p.get('number') or '') + ' · ' + str(p['name'])) + '</option>' for p in projects)
+    selector = ('<form class="bc840-select" method="post" action="/workspace/select-project">'
+                '<label for="bc840-project" class="small">Project</label><select id="bc840-project" name="project_id" required>' +
+                '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
+    company_titles = {"Company","Users & Access","Manage User Access","Company Invitations","Access Matrix","Company Settings","Invitation Created"}
+    tabs = _bc840_company_tabs() if title in company_titles and tier in {'owner','admin'} else ''
+    # Replace only the private shell, eliminating the stacked header/regex
+    # rewrites. Public login, branding assets and the legacy engines stay intact.
+    return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<meta name="referrer" content="no-referrer"><title>' + esc(str(title)) + ' · BuildCommand AI</title>'
+            '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '</style></head><body>'
+            '<a class="bc840-skip" href="#main-content">Skip to content</a><header class="bc840-header">'
+            '<div class="bc840-top"><a class="bc840-logo" href="/workspace">' + brand + '</a>'
+            '<div class="bc840-identity"><strong>' + esc(str(user.get('display_name') or user.get('email') or 'Account')) +
+            '</strong><small>' + esc(_bc840_role_label(_bc840_role(user))) + '</small></div>'
+            '<form class="bc840-logout" method="post" action="/logout"><button>Sign out</button></form></div>'
+            '<nav class="bc840-nav" aria-label="Main navigation">' + ''.join(f'<a href="{u}">{t}</a>' for t,u in nav) + selector +
+            '</nav></header><main id="main-content" class="bc840-main">' + tabs + body + '</main>'
+            '<footer class="bc840-footer">Built By Willy LaHood © 2026 · BuildCommand AI ' + BC840_RELEASE + '</footer></body></html>')
+
+_BC840_PREVIOUS_SHELL = _runtime.shell
+_runtime.shell = _bc840_shell
+
+def _bc840_page(title, body, status=200):
+    return _BC189_HTMLResponse(_bc840_shell(title, body), status_code=status, headers={"Cache-Control":"no-store"})
+
+def _bc840_require_user():
+    user = _bc840_user()
+    return user, None if user else _BC187_RedirectResponse('/login', status_code=303)
+
+def _bc840_project_cards(projects):
+    esc = _bc830b_escape
+    if not projects:
+        return '<div class="bc840-empty"><h2>No projects assigned yet</h2><p>Ask your company administrator to open People & access and assign your projects.</p></div>'
+    return '<div class="grid3">' + ''.join(
+        '<article class="card"><span class="small">' + esc(str(p.get('number') or 'Project')) + '</span><h2>' +
+        esc(str(p['name'])) + '</h2><p>' + esc(str(p.get('status') or '')) +
+        f'</p><a class="bc840-button" href="/workspace/projects/{p["id"]}">Open project</a></article>' for p in projects) + '</div>'
+
+@app.get('/workspace')
+def bc840_workspace():
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    tier, projects = _bc840_tier(user), _bc840_projects(user)
+    headings = {'owner':'Your BuildCommand workspace','admin':'Company workspace','lead':'Field command workspace',
+                'staff':'Project team workspace','trade':'Subcontractor workspace','observer':'Project overview workspace'}
+    body = '<div class="hero"><div class="eyebrow">' + _bc830b_escape(_bc840_role_label(_bc840_role(user))) + '</div><h1>' + headings[tier] + '</h1>'
+    if tier in {'owner','admin'}:
+        body += '<p>Manage your team and keep your company projects moving.</p><a class="bc840-button" href="/company/users">Manage people & access</a> <a href="/company/invitations">Invite someone</a>'
+    elif tier in {'lead','staff'}:
+        body += '<p>Choose a project, then open the field tools you need for today.</p><a class="bc840-button" href="/workspace/tools">Open field tools</a>'
+    else:
+        body += '<p>Only projects assigned to your account appear here. Company administration and internal GC tools are not available in this workspace.</p>'
+    body += '</div><h2>Your projects</h2>' + _bc840_project_cards(projects)
+    return _bc840_page('My workspace', body)
+
+@app.get('/workspace/projects')
+def bc840_projects():
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    return _bc840_page('Projects', '<div class="hero"><h1>Your projects</h1></div>' + _bc840_project_cards(_bc840_projects(user)))
+
+@app.get('/workspace/projects/{project_id}')
+def bc840_project(project_id:int):
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    project = next((p for p in _bc840_projects(user) if p['id']==project_id), None)
+    if project is None: return _bc830b_error('This project is not available to your account.', 403)
+    body = '<div class="hero"><div class="eyebrow">' + _bc830b_escape(str(project.get('number') or 'PROJECT')) + '</div><h1>' + _bc830b_escape(str(project['name'])) + '</h1>'
+    body += '<p>Status: ' + _bc830b_escape(str(project.get('status') or 'Not set')) + '</p></div>'
+    if _bc840_tier(user) in {'trade','observer'}:
+        body += '<div class="card"><h2>Your project access</h2><p>You have access to this project overview.</p>'
+        body += '<p>Trade-specific schedules, RFIs, submittals and shared documents are not exposed here yet. Those require separate record-level sharing rules before they can be enabled safely.</p></div>'
+    else:
+        body += f'<div class="card"><h2>Work on this project</h2><form method="post" action="/workspace/select-project"><input type="hidden" name="project_id" value="{project_id}"><button>Set as current project</button></form><p>After selecting the project, use Field tools to open schedules, reports, documents and command.</p></div>'
+    return _bc840_page('Project overview', body)
+
+@app.post('/workspace/select-project')
+def bc840_select_project(project_id:int=_BC189_Form(...)):
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    if not any(p['id']==project_id for p in _bc840_projects(user)):
+        return _bc830b_error('This project is not available to your account.',403)
+    c = _runtime.db()
+    try:
+        c.execute("INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id", (user['id'],project_id))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        return _bc830b_error('The current project could not be changed. Please try again.',503)
+    finally: _bc830b_close(c)
+    destination = '/workspace/tools' if _bc840_tier(user) in {'owner','admin','lead','staff'} else f'/workspace/projects/{project_id}'
+    return _BC187_RedirectResponse(destination,status_code=303)
+
+_BC840_TOOLS = (
+    ('Daily field work', (('Daily report','/daily-report'),('Schedule','/schedule'),('Look-ahead','/lookahead-intelligence'),('Punch list','/punch'),('Safety','/safety'),('Inspections','/inspections'))),
+    ('Documents & coordination', (('Documents','/documents'),('Blueprint Brain','/blueprint-brain'),('RFIs / issues','/issues'),('Submittals','/submittals'),('Subcontractor directory','/subcontractors'))),
+    ('Planning & readiness', (('Project startup','/project-startup'),('Procurement','/procurement'),('Project health','/project-health'),('Meetings','/meetings'))),
+)
+
+@app.get('/workspace/tools')
+def bc840_tools():
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    if _bc840_tier(user) in {'trade','observer'}:
+        return _bc830b_error('Internal GC tools are not part of your workspace.',403)
+    projects, selected = _bc840_projects(user), _bc840_selected_project(user)
+    project = next((p for p in projects if p['id']==selected), None)
+    if not project:
+        return _bc840_page('Field tools','<div class="hero"><h1>Choose a project first</h1><p>Select a project from the header to open its field tools.</p></div>' + _bc840_project_cards(projects))
+    paths = {getattr(r,'path','') for r in app.routes}
+    command = f'/superintendent-command/{selected}'
+    body = '<div class="hero"><div class="eyebrow">CURRENT PROJECT</div><h1>' + _bc830b_escape(str(project['name'])) + '</h1>'
+    if '/superintendent-command/{project_id}' in paths:
+        body += '<p><a class="bc840-button" href="' + command + '">Open Superintendent Command</a></p>'
+    body += '</div><div class="grid3">'
+    for group, items in _BC840_TOOLS:
+        links = ''.join(f'<a href="{url}">{label}</a>' for label,url in items if url in paths)
+        body += '<section class="card"><h2>' + group + '</h2><div class="bc840-list">' + links + '</div></section>'
+    body += '</div>'
+    # Keep specialized engines reachable without putting every version/test
+    # page back in the main menu. This is a curated menu, not code deletion.
+    advanced = [(label,url) for label,url in getattr(_runtime,'NAV',[]) if isinstance(url,str) and url in paths
+                and url != '/'
+                and url not in {u for _,items in _BC840_TOOLS for _,u in items}
+                and str(label).lower() not in {label.lower() for _,items in _BC840_TOOLS for label,_ in items}
+                and not _bc840_admin_path(url) and not _bc840_owner_path(url)
+                and not any(word in (str(label)+' '+url).lower() for word in ('health','system-check','beta','test','v4','v3','account','login','logout','setup'))
+                and not _bc830b_re.search(r'[-_]\d',url)]
+    if advanced:
+        body += '<details class="card"><summary>More construction tools</summary><div class="bc840-list">' + ''.join(
+            f'<a href="{_bc830b_escape(url,quote=True)}">{_bc830b_escape(str(label))}</a>' for label,url in dict((url,(label,url)) for label,url in advanced).values()) + '</div></details>'
+    return _bc840_page('Field tools',body)
+
+@app.get('/workspace/access')
+def bc840_my_access():
+    user, denied = _bc840_require_user()
+    if denied: return denied
+    role = _bc840_role(user)
+    description = _BC840_ROLES.get(role, ('','','BuildCommand platform ownership is managed separately.'))[2]
+    body = '<div class="hero"><h1>My access</h1><p><span class="bc840-pill">' + _bc830b_escape(_bc840_role_label(role)) + '</span></p><p>' + _bc830b_escape(description) + '</p></div>'
+    body += '<div class="card"><h2>Who changes my access?</h2><p>Your company administrator assigns your role and projects in People & access. You cannot change your own access level here.</p></div>'
+    return _bc840_page('My access',body)
+
+def bc840_company():
+    user, denied = _bc820_require_company_admin()
+    if denied: return denied
+    cid = _bc810_company_id(user)
+    users, projects = _bc820_company_users(cid), _bc820_company_projects(cid)
+    body = '<div class="hero"><div class="eyebrow">COMPANY ADMINISTRATION</div><h1>Your company</h1><p>One place to manage your people, invitations and settings.</p></div>'
+    body += f'<div class="grid3"><section class="card"><div class="label">People</div><div class="kpi">{len(users)}</div><p><a href="/company/users">Manage people & access</a></p></section>'
+    body += f'<section class="card"><div class="label">Projects</div><div class="kpi">{len(projects)}</div><p><a href="/workspace/projects">View projects</a></p></section>'
+    body += '<section class="card"><h2>Invite someone</h2><p>Set their role and projects before sharing their invitation.</p><a class="bc840-button" href="/company/invitations">Create invitation</a></section></div>'
+    body += '<div class="card"><h2>Company controls</h2><div class="bc840-list"><a href="/company-settings">Company settings</a><a href="/billing">Company subscription</a><a href="/projects/new">Create a project</a></div></div>'
+    return _bc840_page('Company',body)
+
+def bc840_company_users():
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    cid = _bc810_company_id(admin)
+    users, projects = _bc820_company_users(cid), _bc820_company_projects(cid)
+    names = {str(p['id']):str(p['name']) for p in projects}
+    memberships = {}
+    table = _bc820_membership_table()
+    c = _runtime.db()
+    try:
+        if table:
+            for r in c.execute(f"SELECT m.user_id,m.project_id FROM {table} m JOIN users u ON u.id=m.user_id JOIN projects p ON p.id=m.project_id WHERE u.company_id=? AND p.company_id=?",(cid,cid)).fetchall():
+                memberships.setdefault(r['user_id'],set()).add(str(r['project_id']))
+    finally: _bc830b_close(c)
+    rows = ''
+    for row in users:
+        user = dict(row)
+        labels = ', '.join(names[p] for p in sorted(memberships.get(user['id'],set())) if p in names)
+        scope = labels or ('Company projects (existing staff access)' if _bc840_tier(user) in {'owner','admin','lead','staff'} else 'No projects assigned')
+        rows += '<tr><td><strong>' + _bc830b_escape(str(user.get('display_name') or user['email'])) + '</strong><br><span class="small">' + _bc830b_escape(str(user['email'])) + '</span></td><td>' + _bc830b_escape(_bc840_role_label(_bc840_role(user))) + '</td><td>' + _bc830b_escape(scope) + f'</td><td><a href="/company/users/{user["id"]}">Edit access</a></td></tr>'
+    body = '<div class="hero"><h1>People & access</h1><p>Assign a role, then choose projects for subcontractors and observers. Existing internal staff retain their own-company project access.</p><a class="bc840-button" href="/company/invitations">Invite someone</a></div>'
+    body += '<div class="card bc840-table"><table><thead><tr><th>Person</th><th>Role</th><th>Projects</th><th>Access</th></tr></thead><tbody>' + (rows or '<tr><td colspan="4">No people found.</td></tr>') + '</tbody></table></div>'
+    return _bc840_page('Users & Access',body)
+
+def bc840_manage_user(user_id:int):
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    cid = _bc810_company_id(admin)
+    target = next((dict(u) for u in _bc820_company_users(cid) if u['id']==user_id), None)
+    if not target: return _bc830b_error('This person is not in your company.',403)
+    if _bc840_protected_account(target):
+        return _bc840_page('Manage User Access','<div class="hero"><h1>Protected owner account</h1><p>Owner accounts are managed separately from ordinary role assignments.</p></div>',403)
+    projects = _bc820_company_projects(cid)
+    assigned = _bc820_user_project_ids(user_id,cid)
+    boxes = ''.join(f'<label style="display:block;margin:12px 0"><input type="checkbox" name="project_ids" value="{p["id"]}"' + (' checked' if str(p['id']) in assigned else '') + '>' + _bc830b_escape(str(p['name'])) + '</label>' for p in projects)
+    body = '<div class="hero"><h1>' + _bc830b_escape(str(target.get('display_name') or target['email'])) + '</h1><p>' + _bc830b_escape(str(target['email'])) + '</p></div>'
+    body += f'<div class="grid2"><div class="card"><form method="post" action="/company/users/{user_id}/access"><label for="access-role">Role</label><select id="access-role" name="role" required>' + _bc840_role_options(target['role']) + '</select><h2>Assigned projects</h2>' + (boxes or '<p>No company projects yet.</p>') + '<button>Save access</button></form></div>'
+    body += '<div class="card"><h2>What these levels mean</h2><p><strong>Admin:</strong> company people, settings and subscription.</p><p><strong>Superintendent / project manager:</strong> internal project and field work, without company account controls.</p><p><strong>Subcontractor / observer:</strong> assigned project overviews only. Internal GC pages are blocked.</p><p class="bc840-role-note">Project selection restricts external roles. It does not narrow the established own-company access of internal staff in this release.</p></div></div>'
+    return _bc840_page('Manage User Access',body)
+
+def _bc840_protected_account(user):
+    configured = {x.strip().lower() for x in os.environ.get('PLATFORM_OWNER_EMAILS',os.environ.get('PLATFORM_OWNER_EMAIL','')).split(',') if x.strip()}
+    return str(user.get('role') or '').upper() in {'OWNER','PLATFORM_OWNER'} or str(user.get('email') or '').lower() in configured
+
+@app.post('/company/invitations/{invitation_id}/revoke')
+def bc840_revoke_invitation(invitation_id:int):
+    admin,denied = _bc820_require_company_admin()
+    if denied: return denied
+    c = None
+    try:
+        c = _runtime.db()
+        updated = c.execute("UPDATE bc_user_invitations SET status='REVOKED' WHERE id=? AND company_id=? AND status='PENDING'",(invitation_id,_bc810_company_id(admin)))
+        if updated.rowcount!=1:
+            _bc830b_rollback(c)
+            return _bc830b_error('This pending invitation is not available in your company.',409)
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception('Invitation revoke failed invitation_id=%s',invitation_id)
+        return _bc830b_error('The invitation could not be revoked. Please try again.',503)
+    finally: _bc830b_close(c)
+    _bc830b_audit('invitation_revoke',f'invitation_id={invitation_id}',admin)
+    return _BC187_RedirectResponse('/company/invitations',status_code=303)
+
+def _bc840_join_page(body, status=200):
+    # Token pages render without a company session or the legacy login gates.
+    return _BC189_HTMLResponse('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Join · BuildCommand AI</title>'
+        '<style>' + _BC840_CSS + '</style></head><body><main class="bc840-main" style="max-width:760px">' + body +
+        '</main></body></html>', status_code=status,
+        headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+
+@app.post('/join/{invitation_id}/{token}/register')
+def bc840_join_register(invitation_id:int, token:str, display_name:str=_BC189_Form(...), password:str=_BC189_Form(...)):
+    if _bc840_user():
+        return _bc830b_error('You are already signed in. Open this invitation again to accept it with your existing account.',409)
+    row, reason = _bc830b_lookup(invitation_id,token)
+    if not row:
+        return _bc830b_error('This invitation is unavailable.',503 if reason=='storage_unavailable' else 410)
+    name = str(display_name or '').strip()
+    if not name or len(name)>120 or not 12<=len(password)<=256:
+        return _bc830b_error('Enter your name (up to 120 characters) and a password of 12–256 characters.',400)
+    role, cid = str(row['role']).upper(), row['company_id']
+    email = str(row['email']).strip().lower()
+    if role not in _BC820_ASSIGNABLE_ROLES or _bc840_protected_account({'email':email,'role':role}):
+        return _bc830b_error('This invitation cannot assign that account or role.',403)
+    password_hash = _runtime.hash_password(password)
+    c = None
+    try:
+        c = _runtime.db()
+        pg = getattr(_runtime,'DATABASE_KIND','sqlite') == 'postgres'
+        if not pg: c.execute('BEGIN IMMEDIATE')
+        locked = c.execute('SELECT * FROM bc_user_invitations WHERE id=?' + (' FOR UPDATE' if pg else ''),(invitation_id,)).fetchone()
+        if not locked or locked['status']!='PENDING' or _bc830b_expired(locked) or not _bc830b_hmac.compare_digest(str(locked['token_hash']),_bc830b_hash_token(token)):
+            _bc830b_rollback(c)
+            return _bc830b_error('This invitation is no longer available.',410)
+        if not c.execute('SELECT id FROM companies WHERE id=?',(cid,)).fetchone():
+            _bc830b_rollback(c)
+            return _bc830b_error('The inviting company is unavailable.',410)
+        if c.execute('SELECT id FROM users WHERE lower(email)=lower(?)',(email,)).fetchone():
+            _bc830b_rollback(c)
+            return _bc830b_error('An account already uses this email. Sign in, then reopen your invitation.',409)
+        sql = 'INSERT INTO users(company_id,email,display_name,password_hash,role,created) VALUES(?,?,?,?,?,?)'
+        values = (cid,email,name,password_hash,role,_bc830b_now().isoformat())
+        if pg: uid = c.execute(sql+' RETURNING id',values).fetchone()['id']
+        else:
+            c.execute(sql,values)
+            uid = c.execute('SELECT last_insert_rowid() AS id').fetchone()['id']
+        table = _bc820_membership_table()
+        if not table: raise RuntimeError('Project membership storage unavailable')
+        projects = c.execute('SELECT ip.project_id FROM bc_user_invitation_projects ip JOIN projects p ON p.id=ip.project_id WHERE ip.invitation_id=? AND p.company_id=?',(invitation_id,cid)).fetchall()
+        for project in projects:
+            _bc830b_link_insert(c,table,'user_id,project_id',(uid,project['project_id']))
+        c.execute("UPDATE bc_user_invitations SET status='ACCEPTED',accepted_at=?,accepted_user_id=? WHERE id=? AND status='PENDING'",(_bc830b_now().isoformat(),uid,invitation_id))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception('Invitation registration failed invitation_id=%s',invitation_id)
+        return _bc830b_error('Your account could not be created. Try again, or sign in if an account already exists.',503)
+    finally: _bc830b_close(c)
+    _bc830b_audit('invitation_registration',f'invitation_id={invitation_id}',{'id':uid,'company_id':cid,'email':email,'role':role})
+    try: session = _runtime.create_session(uid)
+    except Exception:
+        _bc830b_logger.exception('Account saved but session creation failed user_id=%s',uid)
+        return _bc840_join_page('<div class="card"><h1>Your account is ready</h1><p>Your invitation was accepted. <a href="/login">Sign in</a> with your email and new password.</p></div>')
+    response = _BC187_RedirectResponse('/workspace',status_code=303,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+    response.set_cookie('bc_session',session,httponly=True,secure=os.environ.get('COOKIE_SECURE','1')=='1',samesite='lax',max_age=2592000)
+    return response
+
+def bc840_save_access(user_id:int, role:str=_BC189_Form(...), project_ids:list[str]=_BC189_Form(default=[])):
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    cid, role = _bc810_company_id(admin), str(role or '').strip().upper()
+    if role not in _BC820_ASSIGNABLE_ROLES: return _bc830b_error('Choose an assignable company role.',403)
+    c = None
+    try:
+        c = _runtime.db()
+        pg = getattr(_runtime,'DATABASE_KIND','sqlite') == 'postgres'
+        if not pg: c.execute('BEGIN IMMEDIATE')
+        c.execute('SELECT id FROM companies WHERE id=?' + (' FOR UPDATE' if pg else ''),(cid,)).fetchone()
+        row = c.execute('SELECT id,company_id,email,role FROM users WHERE id=? AND company_id=?',(user_id,cid)).fetchone()
+        if not row or _bc840_protected_account(dict(row)):
+            _bc830b_rollback(c)
+            return _bc830b_error('This account cannot be changed from your company.',403)
+        if user_id == admin.get('id') and role not in {'COMPANY_ADMIN'}:
+            _bc830b_rollback(c)
+            return _bc830b_error('Another company administrator must change your own admin role.',409)
+        if str(row['role']).upper() in {'ADMIN','COMPANY_ADMIN'} and role != 'COMPANY_ADMIN':
+            other = c.execute("SELECT id FROM users WHERE company_id=? AND id<>? AND upper(role) IN ('ADMIN','COMPANY_ADMIN','OWNER','PLATFORM_OWNER') LIMIT 1",(cid,user_id)).fetchone()
+            if not other:
+                _bc830b_rollback(c)
+                return _bc830b_error('Keep at least one company administrator.',409)
+        requested = {str(v) for v in project_ids}
+        valid = {str(r['id']) for r in c.execute('SELECT id FROM projects WHERE company_id=?',(cid,)).fetchall()}
+        if not requested.issubset(valid):
+            _bc830b_rollback(c)
+            return _bc830b_error('Select only projects in your company.',403)
+        table = _bc820_membership_table()
+        if not table: raise RuntimeError('Project membership storage unavailable')
+        c.execute('UPDATE users SET role=? WHERE id=? AND company_id=?',(role,user_id,cid))
+        c.execute(f'DELETE FROM {table} WHERE user_id=?',(user_id,))
+        for pid in sorted(requested): _bc830b_link_insert(c,table,'user_id,project_id',(user_id,int(pid)))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception('Company access save failed company=%s target_user=%s',cid,user_id)
+        return _bc830b_error('Access was not changed. Please try again.',503)
+    finally: _bc830b_close(c)
+    _bc830b_audit('role_project_assignment',f'user_id={user_id}; role={role}',admin)
+    return _BC187_RedirectResponse(f'/company/users/{user_id}',status_code=303)
+
+def bc840_access_matrix():
+    user, denied = _bc820_require_company_admin()
+    if denied: return denied
+    rows = ''.join('<tr><td>' + _bc830b_escape(label) + '</td><td>' + _bc830b_escape(description) + '</td></tr>' for role,(label,tier,description) in _BC840_ROLES.items() if role in _BC820_ASSIGNABLE_ROLES)
+    body = '<div class="hero"><h1>Role guide</h1><p>People get the workspace for their assigned role. Company and platform ownership remain separate.</p></div><div class="card bc840-table"><table><thead><tr><th>Role</th><th>Workspace</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+    body += '<div class="card"><h2>Current boundary</h2><p>Internal staff retain existing own-company project access. Subcontractors and observers require explicit project assignment and can view project overviews only. Trade-level sharing of documents, schedules, RFIs and submittals is a later step—not granted by this role guide.</p></div>'
+    return _bc840_page('Access Matrix',body)
+
+def bc840_company_settings():
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    c = _runtime.db()
+    try: row = c.execute('SELECT name,logo_url FROM companies WHERE id=?',(_bc810_company_id(admin),)).fetchone()
+    finally: _bc830b_close(c)
+    if not row: return _bc830b_error('Your company is unavailable.',404)
+    body = '<div class="hero"><h1>Company settings</h1><p>Update your company identity. People, invitations and subscriptions have their own sections.</p></div>'
+    body += '<div class="card" style="max-width:740px"><form method="post" action="/company-settings"><p><label for="company-name">Company name</label><br><input id="company-name" name="name" maxlength="160" required value="' + _bc830b_escape(str(row['name'] or ''),quote=True) + '"></p>'
+    body += '<p><label for="company-logo">Company logo URL (optional)</label><br><input id="company-logo" name="logo_url" type="url" maxlength="2048" value="' + _bc830b_escape(str(row['logo_url'] or ''),quote=True) + '"></p><p class="muted">Your company logo does not replace the BuildCommand AI app logo.</p><button>Save settings</button></form></div>'
+    return _bc840_page('Company Settings',body)
+
+def bc840_save_company_settings(name:str=_BC189_Form(...),logo_url:str=_BC189_Form('')):
+    admin, denied = _bc820_require_company_admin()
+    if denied: return denied
+    name,logo_url = str(name or '').strip(),str(logo_url or '').strip()
+    if not name or len(name)>160 or len(logo_url)>2048:
+        return _bc830b_error('Enter a company name up to 160 characters and a logo URL up to 2,048 characters.',400)
+    try: valid_logo = not logo_url or (_bc840_urlsplit(logo_url).scheme in {'http','https'} and bool(_bc840_urlsplit(logo_url).netloc))
+    except ValueError: valid_logo = False
+    if not valid_logo:
+        return _bc830b_error('Use a valid http or https logo URL, or leave it blank.',400)
+    c = None
+    try:
+        c = _runtime.db()
+        c.execute('UPDATE companies SET name=?,logo_url=? WHERE id=?',(name,logo_url,_bc810_company_id(admin)))
+        c.commit()
+    except Exception:
+        _bc830b_rollback(c)
+        _bc830b_logger.exception('Company settings save failed company=%s',_bc810_company_id(admin))
+        return _bc830b_error('Company settings were not saved. Please try again.',503)
+    finally: _bc830b_close(c)
+    return _BC187_RedirectResponse('/company-settings',status_code=303)
+
+def _bc840_owner_path(path):
+    return bool(_bc830b_re.match(r'^/(?:api/)?(?:owner|platform)(?:/|-|$)',path)) or path == '/pilot-readiness'
+
+def _bc840_admin_path(path):
+    return (path in {'/company','/api/company'} or path.startswith(('/company/','/api/company/','/company-settings','/team','/invitations',
+            '/production-settings','/account/subscription','/api/billing/','/billing','/choose-plan')))
+
+def _bc840_replace(path, method, endpoint):
+    for route in list(app.router.routes):
+        if getattr(route,'path',None)==path and method in (getattr(route,'methods',None) or set()):
+            route.methods.discard(method)
+            if not route.methods: app.router.routes.remove(route)
+    app.add_api_route(path,endpoint,methods=[method])
+    route = app.router.routes.pop()
+    app.router.routes.insert(0,route)
+    app.openapi_schema = None
+
+_bc840_replace('/company','GET',bc840_company)
+_bc840_replace('/company/users','GET',bc840_company_users)
+_bc840_replace('/company/users/{user_id}','GET',bc840_manage_user)
+_bc840_replace('/company/users/{user_id}/access','POST',bc840_save_access)
+_bc840_replace('/company/access-matrix','GET',bc840_access_matrix)
+_bc840_replace('/company-settings','GET',bc840_company_settings)
+_bc840_replace('/company-settings','POST',bc840_save_company_settings)
+
+# The original settings handlers use ADMIN's numeric rank. Keep the new role
+# name compatible without changing any lower role's existing privileges.
+if isinstance(getattr(_runtime,'ROLE_ORDER',None),dict):
+    _runtime.ROLE_ORDER['COMPANY_ADMIN'] = _runtime.ROLE_ORDER.get('ADMIN',4)
+
+def _bc840_same_origin(request):
+    origin = request.headers.get('origin')
+    if not origin: return True  # Existing non-browser/API clients have no Origin.
+    try:
+        parsed = _bc840_urlsplit(origin)
+        return (parsed.scheme.lower(),parsed.netloc.lower()) == (request.url.scheme.lower(),request.url.netloc.lower())
+    except ValueError: return False
+
+@app.middleware('http')
+async def bc840_role_boundary(request, call_next):
+    path = (request.url.path or '/').rstrip('/') or '/'
+    # Public billing callbacks are validated by the existing Stripe handlers.
+    if path in {'/billing/stripe-webhook','/billing/stripe/webhook'}:
+        return await call_next(request)
+    raw = request.cookies.get('bc_session')
+    try:
+        value = await _bc840_in_threadpool(_runtime.user_from_session,raw) if raw else None
+        user = dict(value) if value else None
+    except Exception:
+        return _bc830b_error('Sign-in could not be verified. Please try again.',503)
+    context = _bc840_request_user.set(user)
+    try:
+        join = _bc830b_re.fullmatch(r'/join/([0-9]+)/([A-Za-z0-9_-]{20,128})(?:/(accept|register))?',path)
+        if join:
+            # The legacy auth middleware compares PUBLIC_PATHS exactly. Handle
+            # only these token-validated endpoints here; all ordinary workspace
+            # traffic still passes through subscription/approval enforcement.
+            iid, token, action = int(join[1]),join[2],join[3]
+            if request.method=='GET' and action is None:
+                return await _bc840_in_threadpool(bc830b_join,iid,token)
+            if request.method=='POST' and action in {'accept','register'}:
+                if not _bc840_same_origin(request):
+                    return _bc830b_error('Please submit this form from BuildCommand AI.',403)
+                if action=='accept': return await _bc840_in_threadpool(bc830b_accept,iid,token)
+                if request.headers.get('content-type','').split(';')[0].lower() != 'application/x-www-form-urlencoded':
+                    return _bc830b_error('Submit the form on your invitation page.',415)
+                chunks, size = [],0
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size>8192: return _bc830b_error('This invitation form is too large.',413)
+                    chunks.append(chunk)
+                try:
+                    form = _bc840_parse_qs(b''.join(chunks).decode('utf-8'),max_num_fields=4)
+                    names,passwords = form.get('display_name',[]),form.get('password',[])
+                    if len(names)!=1 or len(passwords)!=1: raise ValueError()
+                except (ValueError,UnicodeDecodeError):
+                    return _bc830b_error('Enter your name and password.',400)
+                return await _bc840_in_threadpool(bc840_join_register,iid,token,names[0],passwords[0])
+            return _bc830b_error('This invitation action is not available.',405)
+        if user:
+            tier = _bc840_tier(user)
+            if _bc840_owner_path(path) and tier != 'owner':
+                return _bc830b_error('This area is reserved for the BuildCommand platform owner.',403)
+            if _bc840_admin_path(path) and tier not in {'owner','admin'}:
+                return _bc830b_error('Your company administrator manages people, settings and subscriptions.',403)
+            # Normalize old entry points without routing around payment checks:
+            # the workspace request still passes through all existing gates.
+            if request.method == 'GET' and path in {'/','/app','/access-command','/subcontractor-command'}:
+                return _BC187_RedirectResponse('/workspace',status_code=303)
+            aliases = {'/team':'/company/users','/invitations':'/company/invitations'}
+            if path in aliases:
+                if request.method=='GET': return _BC187_RedirectResponse(aliases[path],status_code=303)
+                return _bc830b_error('Use Company → Invitations or People & access. The old form is retired.',409)
+            if path == '/team/add':
+                return _bc830b_error('Use Company → Invitations to add a person safely.',409)
+            if tier in {'trade','observer'}:
+                # Deny legacy GC HTML/API/download/write endpoints by default.
+                allowed = (path == '/workspace' or path.startswith('/workspace/') or
+                           path.startswith('/join/') or path in {'/logout','/login','/payment-required','/awaiting-approval','/demo/pending'})
+                if not allowed:
+                    return _bc830b_error('This tool is not available in your workspace. Open My workspace to see your assigned projects.',403)
+            # Reject forged cross-origin changes on company/access forms.
+            if request.method not in {'GET','HEAD','OPTIONS'} and (path.startswith('/company/') or path=='/company-settings' or path.startswith('/workspace/')):
+                if not _bc840_same_origin(request):
+                    return _bc830b_error('Please submit this form from BuildCommand AI.',403)
+        return await call_next(request)
+    finally: _bc840_request_user.reset(context)
+
+@app.get('/health/workspaces-company-8-4-0')
+def bc840_health():
+    paths = {getattr(r,'path','') for r in app.routes}
+    c = None
+    checks = {}
+    try:
+        c = _runtime.db()
+        c.execute('SELECT id,company_id,email,role,token_hash,status,expires_at FROM bc_user_invitations WHERE 1=0')
+        c.execute('SELECT invitation_id,project_id FROM bc_user_invitation_projects WHERE 1=0')
+        table = _bc820_membership_table()
+        if not table: raise RuntimeError('Membership table unavailable')
+        c.execute(f'SELECT user_id,project_id FROM {table} WHERE 1=0')
+        checks['invitation_and_membership_schema_readable'] = True
+    except Exception:
+        checks['invitation_and_membership_schema_readable'] = False
+    finally: _bc830b_close(c)
+    for path in ('/workspace','/workspace/projects','/workspace/access','/company','/company/users','/company/invitations'):
+        checks['route:' + path] = path in paths
+    checks['8_2_permission_baseline_present'] = '/health/user-permission-administration-8-2-0' in paths
+    checks['private_shell_active'] = _runtime.shell is _bc840_shell
+    checks['single_invitation_create_handler'] = sum(getattr(r,'path','')=='/company/invitations/create' and 'POST' in (getattr(r,'methods',None) or set()) for r in app.routes)==1
+    return {'app':'BuildCommand AI','version':BC840_RELEASE,'release':BC840_RELEASE_NAME,
+            'status':'ok' if all(checks.values()) else 'degraded','checks':checks,
+            'passed':sum(checks.values()),'total':len(checks),
+            'scope':'Read-only schema and route configuration checks; not a security certification.',
+            'trade_workspace':'Assigned project overviews only; record-level sharing not enabled.', 'data_reset':False}
+
+_runtime.PUBLIC_PATHS.add('/health/workspaces-company-8-4-0')
+BUILD_COMMAND_RELEASE = BC840_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC840_RELEASE_NAME
+app.version = BC840_RELEASE
