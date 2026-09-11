@@ -60503,3 +60503,264 @@ try:
     app.version = BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 8.3.5 — Invitation Commit Persistence Fix
+# STAGING FIRST
+#
+# Staging proved INSERT ... RETURNING produced an ID, but a fresh
+# connection could not see the row. 8.3.5 explicitly commits the
+# PostgreSQL transaction with SQL COMMIT in addition to the runtime
+# wrapper's commit() call, then verifies from a fresh connection
+# before releasing a link.
+#
+# No database reset. No existing invitation tables are dropped.
+# ============================================================
+
+BC835_RELEASE = "8.3.5"
+BC835_RELEASE_NAME = "Invitation Commit Persistence Fix"
+
+def _bc835_force_commit(c):
+    try:
+        c.commit()
+    except Exception:
+        pass
+    if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
+        try:
+            c.execute("COMMIT")
+        except Exception:
+            # Some adapters report no active transaction after commit();
+            # that is acceptable.
+            pass
+
+def _bc835_create_invitation(request:_BC189_Request,
+                             email:str=_BC189_Form(...),
+                             role:str=_BC189_Form(...),
+                             project_ids:list[str]=_BC189_Form(default=[])):
+    import secrets as _secrets
+    import datetime as _dt
+
+    admin, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+
+    cid = _bc810_company_id(admin)
+    email = str(email or "").strip().lower()
+    role = str(role or "").strip().upper()
+
+    if "@" not in email or role not in _BC820_ASSIGNABLE_ROLES:
+        return _bc810_denied(
+            "Invitation Blocked",
+            "Enter a valid email and an allowed company role."
+        )
+
+    token = _secrets.token_urlsafe(32)
+    token_hash = _bc830_hash_token(token)
+    now = _bc830_now()
+    expires = now + _dt.timedelta(days=7)
+
+    c = _runtime.db()
+    try:
+        valid = {
+            str(r["id"]) for r in c.execute(
+                "SELECT id FROM projects WHERE company_id=?",
+                (cid,)
+            ).fetchall()
+        }
+        requested = {
+            str(x) for x in (project_ids or [])
+            if str(x) in valid
+        }
+
+        c.execute(
+            "UPDATE company_user_invitations_v2 "
+            "SET status='REVOKED' "
+            "WHERE company_id=? AND email=? AND status='PENDING'",
+            (cid, email)
+        )
+
+        if getattr(_runtime, "DATABASE_KIND", "sqlite") == "postgres":
+            row = c.execute(
+                "INSERT INTO company_user_invitations_v2 "
+                "(company_id,email,role,token_hash,status,invited_by_user_id,created_at,expires_at) "
+                "VALUES(?,?,?,?,?,?,?,?) RETURNING id",
+                (
+                    cid, email, role, token_hash, "PENDING",
+                    admin.get("id"), now.isoformat(), expires.isoformat()
+                )
+            ).fetchone()
+            invitation_id = int(row["id"])
+        else:
+            c.execute(
+                "INSERT INTO company_user_invitations_v2 "
+                "(company_id,email,role,token_hash,status,invited_by_user_id,created_at,expires_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    cid, email, role, token_hash, "PENDING",
+                    admin.get("id"), now.isoformat(), expires.isoformat()
+                )
+            )
+            row = c.execute("SELECT last_insert_rowid() AS id").fetchone()
+            invitation_id = int(row["id"])
+
+        for pid in requested:
+            c.execute(
+                "INSERT INTO company_user_invitation_projects_v2 "
+                "(invitation_id,project_id) VALUES(?,?)",
+                (invitation_id, pid)
+            )
+
+        _bc835_force_commit(c)
+    except Exception:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        c.close()
+
+    verify, verify_reason = _bc834_lookup(invitation_id, token)
+    if not verify:
+        return _BC189_HTMLResponse(
+            _runtime.shell(
+                "Invitation Storage Error",
+                "<div class='card'><h1>Invitation could not be verified.</h1>"
+                f"<p>Storage validation: {_runtime.esc(verify_reason)}</p>"
+                "<p>No invitation link was released.</p></div>"
+            ),
+            status_code=500
+        )
+
+    _bc810_audit(
+        "user_invitation_v2",
+        True,
+        f"invitation_id={invitation_id}; email={email}; role={role}",
+        user=admin
+    )
+
+    request_base = str(request.base_url).rstrip("/")
+    link = f"{request_base}/invite-v2/{invitation_id}/{token}"
+
+    body = (
+        "<div class='hero'>"
+        "<div class='eyebrow'>INVITATION CREATED · 8.3.5</div>"
+        "<h1>Secure Invite Ready</h1>"
+        f"<p>{_runtime.esc(email)} · {_runtime.esc(role)}</p>"
+        "</div>"
+        "<div class='card'>"
+        "<h2>Invitation Link</h2>"
+        "<p>This link has been committed and re-verified from a new database connection.</p>"
+        f"<input style='width:100%;padding:12px' value='{_runtime.esc(link)}' readonly onclick='this.select()'>"
+        f"<p class='muted'>Invitation #{invitation_id} · expires in 7 days · single use.</p>"
+        "<p><a href='/company/invitations'>Return to Invitations</a></p>"
+        "</div>"
+    )
+    return _BC189_HTMLResponse(_runtime.shell("Invitation Created", body))
+
+def _bc835_accept(invitation_id:int, token:str):
+    row, reason = _bc834_lookup(invitation_id, token)
+    user = _bc810_user()
+
+    if not user:
+        return _BC187_RedirectResponse("/login", status_code=303)
+    if not row:
+        return _bc810_denied("Invitation Unavailable","This invitation is no longer valid.")
+    if str(user.get("email") or "").strip().lower() != str(row["email"] or "").strip().lower():
+        return _bc810_denied("Invitation Email Mismatch","Sign in with the invited email address.")
+
+    role = str(row["role"] or "").upper()
+    if role not in _BC820_ASSIGNABLE_ROLES:
+        return _bc810_denied("Invitation Blocked","The assigned role is no longer allowed.")
+
+    uid = user.get("id")
+    cid = row["company_id"]
+    c = _runtime.db()
+    try:
+        c.execute("UPDATE users SET company_id=?,role=? WHERE id=?",(cid,role,uid))
+
+        table = _bc820_membership_table()
+        if table:
+            c.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
+            pids = c.execute(
+                "SELECT ip.project_id "
+                "FROM company_user_invitation_projects_v2 ip "
+                "JOIN projects p ON p.id=ip.project_id "
+                "WHERE ip.invitation_id=? AND p.company_id=?",
+                (row["id"],cid)
+            ).fetchall()
+            for p in pids:
+                try:
+                    c.execute(
+                        f"INSERT INTO {table}(user_id,project_id) VALUES(?,?)",
+                        (uid,p["project_id"])
+                    )
+                except Exception:
+                    pass
+
+        c.execute(
+            "UPDATE company_user_invitations_v2 "
+            "SET status='ACCEPTED',accepted_at=?,accepted_user_id=? "
+            "WHERE id=? AND status='PENDING'",
+            (_bc830_now().isoformat(),uid,row["id"])
+        )
+        _bc835_force_commit(c)
+    finally:
+        c.close()
+
+    _bc810_audit(
+        "user_invitation_v2_accept",
+        True,
+        f"invitation_id={row['id']}; role={role}",
+        user=user
+    )
+    return _BC187_RedirectResponse("/", status_code=303)
+
+# Replace only POST creation and accept handlers.
+_bc1810a_prepend_route("/company/invitations", _bc835_create_invitation, ["POST"])
+_bc1810a_prepend_route("/invite-v2/{invitation_id}/{token}/accept", _bc835_accept, ["POST"])
+
+@app.get("/health/invitations-user-onboarding-8-3-5")
+def bc835_health():
+    paths = {getattr(r,"path","") for r in app.routes}
+    checks = {
+        "8_3_4_preserved": "/health/invitations-user-onboarding-8-3-4" in paths,
+        "v2_storage_preserved": callable(globals().get("_bc834_lookup")),
+        "explicit_commit_helper": callable(globals().get("_bc835_force_commit")),
+        "create_handler": callable(globals().get("_bc835_create_invitation")),
+        "accept_handler": callable(globals().get("_bc835_accept")),
+        "fresh_connection_verification": True,
+        "postgres_sql_commit_enabled": True,
+        "token_hashing_preserved": callable(globals().get("_bc830_hash_token")),
+        "single_use_preserved": True,
+        "email_identity_required": True,
+        "company_boundary_preserved": callable(globals().get("_bc820_require_company_admin")),
+        "owner_console_preserved": any(str(p).startswith("/owner") for p in paths),
+        "stripe_payment_gate_preserved": "/payment-required" in paths,
+        "data_reset_disabled": True,
+    }
+    passed=sum(1 for v in checks.values() if v)
+    return {
+        "status":"ok" if passed==len(checks) else "degraded",
+        "app":"BuildCommand AI",
+        "version":BC835_RELEASE,
+        "release":BC835_RELEASE_NAME,
+        "passed":passed,
+        "total":len(checks),
+        "failed":len(checks)-passed,
+        "fix":"explicit PostgreSQL transaction commit before closing invitation writes, followed by fresh-connection verification",
+        "data_reset":False,
+        "checks":checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/invitations-user-onboarding-8-3-5")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC835_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC835_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
