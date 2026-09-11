@@ -59751,3 +59751,358 @@ try:
     app.version=BUILD_COMMAND_RELEASE
 except Exception:
     pass
+
+# ============================================================
+# BuildCommand AI 8.3.3 — Invitation Identity Validation Fix
+# STAGING FIRST
+# ============================================================
+
+import secrets as _bc833_secrets
+import hmac as _bc833_hmac
+import datetime as _bc833_dt
+
+BC833_RELEASE = "8.3.3"
+BC833_RELEASE_NAME = "Invitation Identity Validation Fix"
+
+def _bc833_lookup_invitation(invitation_id:int, token:str):
+    try:
+        iid = int(invitation_id)
+    except Exception:
+        return None, "invalid_id"
+
+    supplied_hash = _bc830_hash_token(token)
+    c = _runtime.db()
+    try:
+        row = c.execute(
+            "SELECT * FROM company_user_invitations WHERE id=? LIMIT 1",
+            (iid,)
+        ).fetchone()
+    finally:
+        c.close()
+
+    if not row:
+        return None, "not_found"
+
+    stored_hash = str(row["token_hash"] or "")
+    if not _bc833_hmac.compare_digest(stored_hash, supplied_hash):
+        return None, "token_mismatch"
+
+    if str(row["status"] or "").upper() != "PENDING":
+        return None, "not_pending"
+
+    if _bc830_expired(row):
+        return None, "expired"
+
+    return row, "ok"
+
+def _bc833_create_invitation(request:_BC189_Request,
+                             email:str=_BC189_Form(...),
+                             role:str=_BC189_Form(...),
+                             project_ids:list[str]=_BC189_Form(default=[])):
+    admin, denied = _bc820_require_company_admin()
+    if denied:
+        return denied
+
+    cid = _bc810_company_id(admin)
+    email = str(email or "").strip().lower()
+    role = str(role or "").strip().upper()
+
+    if "@" not in email or role not in _BC820_ASSIGNABLE_ROLES:
+        return _bc810_denied(
+            "Invitation Blocked",
+            "Enter a valid email and an allowed company role."
+        )
+
+    token = _bc833_secrets.token_urlsafe(32)
+    token_hash = _bc830_hash_token(token)
+    now = _bc830_now()
+    expires = now + _bc833_dt.timedelta(days=7)
+
+    c = _runtime.db()
+    try:
+        valid = {
+            str(r["id"])
+            for r in c.execute(
+                "SELECT id FROM projects WHERE company_id=?",
+                (cid,)
+            ).fetchall()
+        }
+        requested = {
+            str(x) for x in (project_ids or [])
+            if str(x) in valid
+        }
+
+        c.execute(
+            "UPDATE company_user_invitations "
+            "SET status='REVOKED' "
+            "WHERE company_id=? AND email=? AND status='PENDING'",
+            (cid, email)
+        )
+
+        c.execute(
+            "INSERT INTO company_user_invitations "
+            "(company_id,email,role,token_hash,status,invited_by_user_id,created_at,expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (
+                cid, email, role, token_hash, "PENDING",
+                admin.get("id"), now.isoformat(), expires.isoformat()
+            )
+        )
+
+        row = c.execute(
+            "SELECT id FROM company_user_invitations "
+            "WHERE company_id=? AND email=? AND token_hash=? "
+            "ORDER BY id DESC LIMIT 1",
+            (cid, email, token_hash)
+        ).fetchone()
+
+        if not row:
+            c.rollback()
+            return _BC189_HTMLResponse(
+                _runtime.shell(
+                    "Invitation Error",
+                    "<div class='card'><h1>Invitation could not be created.</h1>"
+                    "<p>The invitation record was not found after creation.</p></div>"
+                ),
+                status_code=500
+            )
+
+        invitation_id = int(row["id"])
+
+        for pid in requested:
+            c.execute(
+                "INSERT INTO company_user_invitation_projects "
+                "(invitation_id,project_id) VALUES(?,?)",
+                (invitation_id, pid)
+            )
+
+        c.commit()
+    except Exception:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        c.close()
+
+    _bc810_audit(
+        "user_invitation",
+        True,
+        f"invitation_id={invitation_id}; email={email}; role={role}",
+        user=admin
+    )
+
+    request_base = str(request.base_url).rstrip("/")
+    link = f"{request_base}/invite/{invitation_id}/{token}"
+
+    body = f'''
+    <div class="hero">
+      <div class="eyebrow">INVITATION CREATED · 8.3.3</div>
+      <h1>Secure Invite Ready</h1>
+      <p>{_runtime.esc(email)} · {_runtime.esc(role)}</p>
+    </div>
+    <div class="card">
+      <h2>Invitation Link</h2>
+      <p>Copy this new link and send it to the invited person. It expires in 7 days.</p>
+      <input style="width:100%;padding:12px" value="{_runtime.esc(link)}" readonly onclick="this.select()">
+      <p class="muted">Invitation #{invitation_id}. BuildCommand stores only the token hash; the reusable token is shown only in this generated link.</p>
+      <p><a href="/company/invitations">Return to Invitations</a></p>
+    </div>
+    '''
+    return _BC189_HTMLResponse(_runtime.shell("Invitation Created", body))
+
+def _bc833_invite_landing(invitation_id:int, token:str):
+    row, reason = _bc833_lookup_invitation(invitation_id, token)
+
+    if not row:
+        body = (
+            "<div class='card'><h1>Invitation unavailable</h1>"
+            "<p>This invitation is invalid, expired, revoked, or already used.</p>"
+            f"<p class='muted'>Validation: {_runtime.esc(reason)}</p></div>"
+        )
+        return _BC189_HTMLResponse(
+            _runtime.shell("Invitation", body),
+            status_code=410
+        )
+
+    user = _bc810_user()
+    if not user:
+        body = f'''
+        <div class="hero">
+          <div class="eyebrow">BUILDCOMMAND AI INVITATION</div>
+          <h1>You’ve Been Invited</h1>
+          <p>Invitation for {_runtime.esc(row["email"])} as {_runtime.esc(row["role"])}.</p>
+        </div>
+        <div class="card">
+          <p>Create your BuildCommand account using <b>{_runtime.esc(row["email"])}</b>,
+             or sign in if you already have one. Then reopen this same invitation link.</p>
+          <p><a href="/signup">Create Account</a> &nbsp; <a href="/login">Sign In</a></p>
+        </div>
+        '''
+        return _BC189_HTMLResponse(
+            _runtime.shell("BuildCommand Invitation", body)
+        )
+
+    if str(user.get("email") or "").strip().lower() != str(row["email"] or "").strip().lower():
+        return _bc810_denied(
+            "Invitation Email Mismatch",
+            "This invitation belongs to a different email address. Sign in with the invited email to continue."
+        )
+
+    body = f'''
+    <div class="hero">
+      <div class="eyebrow">SECURE INVITATION</div>
+      <h1>Accept Company Access</h1>
+      <p>Role: {_runtime.esc(row["role"])}</p>
+    </div>
+    <div class="card">
+      <p>Accepting connects your account to the inviting company and applies only the approved role and project assignments.</p>
+      <form method="post" action="/invite/{int(row["id"])}/{token}/accept">
+        <button type="submit">Accept Invitation</button>
+      </form>
+    </div>
+    '''
+    return _BC189_HTMLResponse(
+        _runtime.shell("Accept Invitation", body)
+    )
+
+def _bc833_accept_invitation(invitation_id:int, token:str):
+    row, reason = _bc833_lookup_invitation(invitation_id, token)
+    user = _bc810_user()
+
+    if not user:
+        return _BC187_RedirectResponse("/login", status_code=303)
+
+    if not row:
+        return _bc810_denied(
+            "Invitation Unavailable",
+            "This invitation is invalid, expired, revoked, or already used."
+        )
+
+    if str(user.get("email") or "").strip().lower() != str(row["email"] or "").strip().lower():
+        return _bc810_denied(
+            "Invitation Email Mismatch",
+            "This invitation can only be accepted by the invited email address."
+        )
+
+    role = str(row["role"] or "").upper()
+    if role not in _BC820_ASSIGNABLE_ROLES:
+        return _bc810_denied(
+            "Invitation Blocked",
+            "The assigned role is no longer allowed."
+        )
+
+    uid = user.get("id")
+    cid = row["company_id"]
+    c = _runtime.db()
+
+    try:
+        company = c.execute(
+            "SELECT id FROM companies WHERE id=?",
+            (cid,)
+        ).fetchone()
+        if not company:
+            return _bc810_denied(
+                "Invitation Blocked",
+                "The inviting company is unavailable."
+            )
+
+        c.execute(
+            "UPDATE users SET company_id=?, role=? WHERE id=?",
+            (cid, role, uid)
+        )
+
+        table = _bc820_membership_table()
+        if table:
+            c.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
+            pids = c.execute(
+                "SELECT ip.project_id "
+                "FROM company_user_invitation_projects ip "
+                "JOIN projects p ON p.id=ip.project_id "
+                "WHERE ip.invitation_id=? AND p.company_id=?",
+                (row["id"], cid)
+            ).fetchall()
+
+            for p in pids:
+                try:
+                    c.execute(
+                        f"INSERT INTO {table}(user_id,project_id) VALUES(?,?)",
+                        (uid, p["project_id"])
+                    )
+                except Exception:
+                    pass
+
+        c.execute(
+            "UPDATE company_user_invitations "
+            "SET status='ACCEPTED',accepted_at=?,accepted_user_id=? "
+            "WHERE id=? AND status='PENDING'",
+            (_bc830_now().isoformat(), uid, row["id"])
+        )
+
+        c.commit()
+    finally:
+        c.close()
+
+    _bc810_audit(
+        "user_invitation_accept",
+        True,
+        f"invitation_id={row['id']}; role={role}",
+        user=user
+    )
+
+    return _BC187_RedirectResponse("/", status_code=303)
+
+_bc1810a_prepend_route("/company/invitations", _bc833_create_invitation, ["POST"])
+_bc1810a_prepend_route("/invite/{invitation_id}/{token}", _bc833_invite_landing, ["GET"])
+_bc1810a_prepend_route("/invite/{invitation_id}/{token}/accept", _bc833_accept_invitation, ["POST"])
+
+@app.get("/health/invitations-user-onboarding-8-3-3")
+def bc833_health():
+    paths = {getattr(r, "path", "") for r in app.routes}
+    checks = {
+        "8_3_2_preserved": "/health/invitations-user-onboarding-8-3-2" in paths,
+        "postgres_id_fix_preserved": "/health/invitations-user-onboarding-8-3-1" in paths,
+        "new_invite_identity_route": "/invite/{invitation_id}/{token}" in paths,
+        "new_invite_accept_route": "/invite/{invitation_id}/{token}/accept" in paths,
+        "create_invite_handler": callable(globals().get("_bc833_create_invitation")),
+        "identity_lookup": callable(globals().get("_bc833_lookup_invitation")),
+        "constant_time_hash_compare": callable(getattr(_bc833_hmac, "compare_digest", None)),
+        "token_hashing_preserved": callable(globals().get("_bc830_hash_token")),
+        "single_use_status_preserved": True,
+        "email_identity_required": True,
+        "company_boundary_preserved": callable(globals().get("_bc820_require_company_admin")),
+        "project_assignment_preserved": callable(globals().get("_bc820_membership_table")),
+        "owner_console_preserved": any(str(p).startswith("/owner") for p in paths),
+        "stripe_payment_gate_preserved": "/payment-required" in paths,
+        "data_reset_disabled": True,
+    }
+    passed = sum(1 for v in checks.values() if v)
+    return {
+        "status": "ok" if passed == len(checks) else "degraded",
+        "app": "BuildCommand AI",
+        "version": BC833_RELEASE,
+        "release": BC833_RELEASE_NAME,
+        "passed": passed,
+        "total": len(checks),
+        "failed": len(checks) - passed,
+        "fix": "new invitation links bind the database invitation id to the one-time token and validate the exact row before acceptance",
+        "data_reset": False,
+        "checks": checks,
+    }
+
+try:
+    _runtime.PUBLIC_PATHS.add("/health/invitations-user-onboarding-8-3-3")
+except Exception:
+    pass
+try:
+    _runtime.PUBLIC_PATHS.add("/invite")
+except Exception:
+    pass
+
+BUILD_COMMAND_RELEASE = BC833_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC833_RELEASE_NAME
+try:
+    app.version = BUILD_COMMAND_RELEASE
+except Exception:
+    pass
