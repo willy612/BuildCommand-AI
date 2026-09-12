@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 8.6.1 — Form Submission Fix, based on the working 8.6.0 app.
+"""BuildCommand AI 8.6.2 — Browser Form Fix, based on the working 8.6.1 app.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -59383,6 +59383,10 @@ from datetime import datetime as _BC830B_datetime, timezone as _BC830B_timezone,
 
 BC830B_RELEASE = "8.3.0B"
 BC830B_RELEASE_NAME = "Clean Invitations & Onboarding"
+# HTML form navigation uses the document's referrer policy for Origin too.
+# no-referrer turns even a same-origin POST into Origin: null. Keep internal
+# form origins verifiable while withholding referrers from other origins.
+_BC862_FORM_REFERRER_POLICY = 'same-origin'
 _bc830b_logger = _bc830b_logging.getLogger("buildcommand.invitations")
 
 def _bc830b_error(message, status=400):
@@ -59672,7 +59676,7 @@ def bc830b_create_invitation(request:_BC189_Request,
     except Exception:
         _bc830b_logger.exception("Invitation saved but shared page rendering failed invitation_id=%s", invitation_id)
         rendered = "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'></head><body>" + body + "</body></html>"
-    return _BC189_HTMLResponse(rendered, headers={"Cache-Control":"no-store", "Referrer-Policy":"no-referrer"})
+    return _BC189_HTMLResponse(rendered, headers={"Cache-Control":"no-store", "Referrer-Policy":_BC862_FORM_REFERRER_POLICY})
 
 @app.get("/join/{invitation_id}/{token}")
 def bc830b_join(invitation_id:int, token:str):
@@ -60011,7 +60015,7 @@ def _bc840_shell(title, body, *args, **kwargs):
     # Replace only the private shell, eliminating the stacked header/regex
     # rewrites. Public login, branding assets and the legacy engines stay intact.
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            '<meta name="referrer" content="no-referrer"><title>' + esc(str(title)) + ' · BuildCommand AI</title>'
+            f'<meta name="referrer" content="{_BC862_FORM_REFERRER_POLICY}"><title>' + esc(str(title)) + ' · BuildCommand AI</title>'
             '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '</style></head><body>'
             '<a class="bc840-skip" href="#main-content">Skip to content</a><header class="bc840-header">'
             '<div class="bc840-top"><a class="bc840-logo" href="/workspace">' + brand + '</a>'
@@ -60026,7 +60030,8 @@ _BC840_PREVIOUS_SHELL = _runtime.shell
 _runtime.shell = _bc840_shell
 
 def _bc840_page(title, body, status=200):
-    return _BC189_HTMLResponse(_bc840_shell(title, body), status_code=status, headers={"Cache-Control":"no-store"})
+    return _BC189_HTMLResponse(_bc840_shell(title, body), status_code=status,
+        headers={"Cache-Control":"no-store", "Referrer-Policy":_BC862_FORM_REFERRER_POLICY})
 
 def _bc840_require_user():
     user = _bc840_user()
@@ -60232,7 +60237,7 @@ def _bc840_join_page(body, status=200):
         '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Join · BuildCommand AI</title>'
         '<style>' + _BC840_CSS + '</style></head><body><main class="bc840-main" style="max-width:760px">' + body +
         '</main></body></html>', status_code=status,
-        headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+        headers={'Cache-Control':'no-store','Referrer-Policy':_BC862_FORM_REFERRER_POLICY})
 
 @app.post('/join/{invitation_id}/{token}/register')
 def bc840_join_register(invitation_id:int, token:str, display_name:str=_BC189_Form(...), password:str=_BC189_Form(...)):
@@ -61516,7 +61521,15 @@ def _bc861_origin_denied(request):
     path = request.url.path
     if path.startswith('/join/'):
         path = '/join/{invitation}/{token}'
-    _bc830b_logger.warning('FORM_ORIGIN_MISMATCH method=%s path=%s', request.method, path)
+    origins = request.headers.getlist('origin')
+    origin_state = ('missing' if not origins else 'multiple' if len(origins) != 1
+                    else 'null' if origins[0] == 'null'
+                    else 'valid' if _bc861_origin(origins[0]) is not None else 'invalid')
+    fetch_site = request.headers.get('sec-fetch-site', '').lower()
+    if fetch_site not in {'same-origin', 'same-site', 'cross-site', 'none'}:
+        fetch_site = 'unspecified'
+    _bc830b_logger.warning('FORM_ORIGIN_MISMATCH method=%s path=%s origin_state=%s fetch_site=%s',
+                          request.method, path, origin_state, fetch_site)
     response = _bc830b_error('The form address could not be verified. Reload this page using the same BuildCommand AI address, then try again.', 403)
     response.headers['X-BuildCommand-Error'] = 'FORM_ORIGIN_MISMATCH'
     response.headers['Cache-Control'] = 'no-store'
@@ -61607,3 +61620,31 @@ _runtime.PUBLIC_PATHS.add('/health/form-submission-8-6-1')
 BUILD_COMMAND_RELEASE = BC861_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC861_RELEASE_NAME
 app.version = BC861_RELEASE
+
+# ============================================================
+# BuildCommand AI 8.6.2 — Browser Form Fix
+# Keep the 8.6.1 proxy/authorization safeguards; correct the page policy
+# that made normal browser navigation forms submit an opaque Origin.
+# ============================================================
+BC862_RELEASE = '8.6.2'
+BC862_RELEASE_NAME = 'Browser Form Fix'
+
+
+@app.get('/health/browser-forms-8-6-2')
+def bc862_health():
+    checks = dict(bc861_health()['checks'])
+    checks.update({
+        'same_origin_form_policy_configured': _BC862_FORM_REFERRER_POLICY == 'same-origin',
+        'invitation_form_policy_active': _bc840_join_page('').headers.get('referrer-policy') == 'same-origin',
+        'private_shell_renderer_active': _runtime.shell is _bc840_shell,
+    })
+    return {'app': 'BuildCommand AI', 'version': BC862_RELEASE, 'release': BC862_RELEASE_NAME,
+            'status': 'ok' if all(checks.values()) else 'degraded', 'checks': checks,
+            'passed': sum(checks.values()), 'total': len(checks), 'data_reset': False,
+            'scope': 'Schema, active handlers and form-policy configuration checks only; reload the workspace and verify real browser form submissions on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/browser-forms-8-6-2')
+BUILD_COMMAND_RELEASE = BC862_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC862_RELEASE_NAME
+app.version = BC862_RELEASE
