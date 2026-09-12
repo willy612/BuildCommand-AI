@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 8.6.0 — Superintendent Command, based on the working 8.5.0 app.
+"""BuildCommand AI 8.6.1 — Form Submission Fix, based on the working 8.6.0 app.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -60439,7 +60439,7 @@ async def bc840_role_boundary(request, call_next):
                 return await _bc840_in_threadpool(bc830b_join,iid,token)
             if request.method=='POST' and action in {'accept','register'}:
                 if not _bc840_same_origin(request):
-                    return _bc830b_error('Please submit this form from BuildCommand AI.',403)
+                    return _bc861_origin_denied(request)
                 if action=='accept': return await _bc840_in_threadpool(bc830b_accept,iid,token)
                 if request.headers.get('content-type','').split(';')[0].lower() != 'application/x-www-form-urlencoded':
                     return _bc830b_error('Submit the form on your invitation page.',415)
@@ -60481,7 +60481,7 @@ async def bc840_role_boundary(request, call_next):
             # Reject forged cross-origin changes on company/access forms.
             if request.method not in {'GET','HEAD','OPTIONS'} and (path.startswith('/company/') or path=='/company-settings' or path.startswith('/workspace/')):
                 if not _bc840_same_origin(request):
-                    return _bc830b_error('Please submit this form from BuildCommand AI.',403)
+                    return _bc861_origin_denied(request)
         return await call_next(request)
     finally: _bc840_request_user.reset(context)
 
@@ -61408,3 +61408,202 @@ _runtime.PUBLIC_PATHS.add('/health/superintendent-command-8-6-0')
 BUILD_COMMAND_RELEASE = BC860_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC860_RELEASE_NAME
 app.version = BC860_RELEASE
+
+
+# ============================================================
+# BuildCommand AI 8.6.1 — Form Submission Fix
+# Render terminates public HTTPS before forwarding to the app over HTTP.
+# Trust server deployment settings, never client-supplied proxy headers.
+# ============================================================
+BC861_RELEASE = '8.6.1'
+BC861_RELEASE_NAME = 'Form Submission Fix'
+
+
+def _bc861_origin(value):
+    """Canonical HTTP(S) origin, with strict syntax and default port handling."""
+    if not isinstance(value, str) or not value or len(value) > 2048:
+        return None
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        return None
+    if any(ch in value for ch in ('\\', ',', '?', '#')):
+        return None
+    try:
+        parsed = _bc840_urlsplit(value)
+        if (parsed.scheme.lower() not in {'http', 'https'} or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None
+                or parsed.path not in {'', '/'} or parsed.netloc.endswith(':')):
+            return None
+        host = parsed.hostname.lower().encode('idna').decode('ascii')
+        if '%' in host or not _bc830b_re.fullmatch(r'[a-z0-9.:[\]-]+', host):
+            return None
+        scheme = parsed.scheme.lower()
+        port = parsed.port if parsed.port is not None else (443 if scheme == 'https' else 80)
+        if port < 1 or port > 65535:
+            return None
+        return scheme, host, port
+    except (ValueError, UnicodeError):
+        return None
+
+
+def _bc861_origin_allowed(origin, target, render_tls=False, public_origins=()):
+    if origin is None or target is None:
+        return False
+    expected = target
+    if target[0] == 'http':
+        # Preserve the target hostname and non-default port. This does not
+        # allow sibling subdomains or turn a forwarded Host into authority.
+        https_target = ('https', target[1], 443 if target[2] == 80 else target[2])
+        if render_tls or https_target in public_origins:
+            expected = https_target
+    return origin == expected
+
+
+def _bc861_public_origins():
+    return tuple(_bc861_origin(os.environ.get(key, '').strip())
+                 for key in ('APP_BASE_URL', 'RENDER_EXTERNAL_URL'))
+
+
+class _BC861_ProxyScheme:
+    """Restore the public scheme before auth, form guards, and cookie creation.
+
+    Only server-owned Render/configured-origin settings enable the HTTP to
+    HTTPS correction. Forwarded and X-Forwarded-* are not read here.
+    """
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get('type') == 'http' and scope.get('scheme') == 'http':
+            request = _BC189_Request(scope)
+            try:
+                target = _bc861_origin('http://' + request.url.netloc)
+                if len(request.headers.getlist('host')) > 1:
+                    target = None
+            except (ValueError, UnicodeError):
+                target = None
+            if target is not None:
+                secure = ('https', target[1], 443 if target[2] == 80 else target[2])
+                if _bc861_origin_allowed(secure, target,
+                        os.environ.get('RENDER', '').strip().lower() == 'true', _bc861_public_origins()):
+                    scope = dict(scope, scheme='https')
+                    if scope.get('server') and scope['server'][1] == 80:
+                        scope['server'] = (scope['server'][0], 443)
+        await self.app(scope, receive, send)
+
+
+def _bc861_same_origin(request):
+    # A browser cross-site form stays blocked even if a proxy drops Origin.
+    if request.headers.get('sec-fetch-site', '').lower() == 'cross-site':
+        return False
+    origins = request.headers.getlist('origin')
+    if not origins:
+        return True  # Keep existing non-browser clients compatible.
+    if len(origins) != 1:
+        return False
+    origin = _bc861_origin(origins[0])
+    try:
+        if len(request.headers.getlist('host')) > 1:
+            return False
+        target = _bc861_origin(request.url.scheme + '://' + request.url.netloc)
+    except (ValueError, UnicodeError):
+        return False
+    return _bc861_origin_allowed(origin, target,
+        os.environ.get('RENDER', '').strip().lower() == 'true', _bc861_public_origins())
+
+
+def _bc861_origin_denied(request):
+    # Keep tokens, emails, cookies and raw request headers out of diagnostics.
+    path = request.url.path
+    if path.startswith('/join/'):
+        path = '/join/{invitation}/{token}'
+    _bc830b_logger.warning('FORM_ORIGIN_MISMATCH method=%s path=%s', request.method, path)
+    response = _bc830b_error('The form address could not be verified. Reload this page using the same BuildCommand AI address, then try again.', 403)
+    response.headers['X-BuildCommand-Error'] = 'FORM_ORIGIN_MISMATCH'
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def bc861_select_project(project_id: int = _BC189_Form(...)):
+    if not _bc840_user():
+        return _BC187_RedirectResponse('/login', status_code=303)
+    try:
+        with _bc850_db(True) as c:
+            user = _bc850_actor(c)
+            cid = _bc810_company_id(user)
+            pg = getattr(_runtime, 'DATABASE_KIND', 'sqlite') == 'postgres'
+            if pg:
+                c.execute('SELECT id FROM companies WHERE id=? FOR UPDATE', (cid,)).fetchone()
+                user = _bc850_actor(c)
+                _bc850_require(_bc810_company_id(user) == cid,
+                               'Your account changed. Reload the workspace before selecting a project.', 409)
+            project = c.execute('SELECT id FROM projects WHERE id=? AND company_id=?' + (' FOR UPDATE' if pg else ''),
+                                (project_id, cid)).fetchone()
+            allowed = project is not None
+            if allowed and _bc840_tier(user) not in {'owner', 'admin', 'lead', 'staff'}:
+                table = _bc850_member_table()
+                allowed = c.execute(f'SELECT project_id FROM {table} WHERE user_id=? AND project_id=? LIMIT 1',
+                                    (user['id'], project_id)).fetchone() is not None
+            _bc850_require(allowed, 'This project is not available to your account.', 403)
+            sql = ('INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) '
+                   'ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id')
+            if pg:
+                sql += ' RETURNING user_id'  # This table has no id column.
+            c.execute(sql, (user['id'], project_id))
+            destination = '/workspace/tools' if _bc840_tier(user) in {'owner', 'admin', 'lead', 'staff'} else f'/workspace/projects/{project_id}'
+        return _BC187_RedirectResponse(destination, status_code=303, headers={'Cache-Control': 'no-store'})
+    except _BC850_Problem as exc:
+        if exc.status == 403:
+            _bc830b_logger.warning('PROJECT_ACCESS_DENIED path=/workspace/select-project project_id=%s', project_id)
+        response = _bc830b_error(exc.message, exc.status)
+        response.headers['X-BuildCommand-Error'] = 'PROJECT_ACCESS_DENIED' if exc.status == 403 else 'PROJECT_SELECTION_ACCOUNT_CHANGED'
+        return response
+    except Exception:
+        _bc830b_logger.exception('PROJECT_SELECTION_SAVE_FAILED project_id=%s', project_id)
+        response = _bc830b_error('The current project could not be changed. Please try again.', 503)
+        response.headers['X-BuildCommand-Error'] = 'PROJECT_SELECTION_SAVE_FAILED'
+        return response
+
+
+_bc840_same_origin = _bc861_same_origin
+_bc840_replace('/workspace/select-project', 'POST', bc861_select_project)
+app.add_middleware(_BC861_ProxyScheme)
+
+
+@app.get('/health/form-submission-8-6-1')
+@app.get('/health/project-selection-8-6-1')
+def bc861_health():
+    routes = [r for r in app.routes if getattr(r, 'path', '') == '/workspace/select-project'
+              and 'POST' in (getattr(r, 'methods', set()) or set())]
+    http = ('http', 'origin-check.invalid', 80)
+    https = ('https', 'origin-check.invalid', 443)
+    checks = {
+        'proxy_origin_guard_active': _bc840_same_origin is _bc861_same_origin,
+        'proxy_scheme_middleware_active': any(m.cls is _BC861_ProxyScheme for m in app.user_middleware),
+        'single_project_selection_handler': len(routes) == 1 and routes[0].endpoint is bc861_select_project,
+        'https_proxy_origin_allowed': _bc861_origin_allowed(https, http, True),
+        'cross_host_origin_rejected': not _bc861_origin_allowed(('https', 'other.invalid', 443), http, True),
+        'wrong_port_origin_rejected': not _bc861_origin_allowed(('https', 'origin-check.invalid', 444), http, True),
+        'unconfigured_proxy_origin_rejected': not _bc861_origin_allowed(https, http),
+        'opaque_origin_rejected': _bc861_origin('null') is None,
+        'command_renderer_preserved': _bc200_render is bc860_project_command,
+        'owner_console_preserved': any(getattr(r, 'path', '') == '/owner' for r in app.routes),
+    }
+    try:
+        with _bc850_db() as c:
+            c.execute('SELECT user_id,selected_project_id FROM user_state WHERE 1=0')
+            c.execute('SELECT id,company_id FROM projects WHERE 1=0')
+            c.execute(f'SELECT user_id,project_id FROM {_bc850_member_table()} WHERE 1=0')
+        checks['project_selection_schema_readable'] = True
+    except Exception:
+        checks['project_selection_schema_readable'] = False
+    return {'app': 'BuildCommand AI', 'version': BC861_RELEASE, 'release': BC861_RELEASE_NAME,
+            'status': 'ok' if all(checks.values()) else 'degraded', 'checks': checks,
+            'passed': sum(checks.values()), 'total': len(checks), 'data_reset': False,
+            'scope': 'Schema, active handlers and isolated origin-policy checks; verify project selection with a signed-in browser on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/project-selection-8-6-1')
+_runtime.PUBLIC_PATHS.add('/health/form-submission-8-6-1')
+BUILD_COMMAND_RELEASE = BC861_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC861_RELEASE_NAME
+app.version = BC861_RELEASE
