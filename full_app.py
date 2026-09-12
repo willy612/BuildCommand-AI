@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 8.6.3 — Invited Team Access, based on the working 8.6.2 app.
+"""BuildCommand AI 8.6.4 — Owner Company Access, based on the working 8.6.3 app.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -61757,13 +61757,15 @@ def _bc863_access_page(context):
         detail = '<section class="details" aria-label="Company access details"><h2>Company access details</h2><dl>' + ''.join(
             '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>' for label,value in fields) + '</dl></section>'
         if tier == 'owner':
-            detail += '<p class="notice">Your platform-owner account can open the app independently of this company’s team access. Other users need the company access shown above. Owner Console protects platform-owner companies from customer account changes.</p>'
+            detail += '<p class="notice">Your platform-owner account can open the app independently of this company’s team access. Other users need the company access shown above. Use My company in Owner Console to review and activate your team’s access. Customer account controls still protect platform-owner companies.</p>'
         else:
             detail += '<p class="notice">You manage the company plan. The platform owner manages company approval and demo decisions.</p>'
     elif state != 'ready':
         detail = '<p class="notice">Your company administrator handles the plan and access for this team. Contact them to complete the company setup. Your account is already set up.</p>'
     actions = '<a class="primary" href="/workspace">Open my workspace</a>' if state == 'ready' else '<a class="primary" href="/workspace/company-access">Check access again</a>'
-    if manages and state == 'payment':
+    if tier == 'owner':
+        actions += '<a class="secondary" href="/owner/my-company">Manage my company access</a>'
+    elif manages and state == 'payment':
         actions += '<a class="secondary" href="/choose-plan">Manage company plan</a>'
     actions += '<form method="post" action="/logout"><button class="secondary" type="submit">Sign out</button></form>'
     html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -61783,7 +61785,7 @@ def _bc863_access_page(context):
             '<p class="company">' + esc(str(company['name'])) + '</p><p class="identity">Signed in as ' +
             esc(str(user.get('email') or user.get('display_name') or 'Team member')) + ' · ' + esc(_bc840_role_label(_bc840_role(user))) + '</p>'
             '<p>' + esc(descriptions[state]) + '</p>' + detail + '<div class="actions">' + actions + '</div></main>'
-            '<footer>BuildCommand AI ' + BC863_RELEASE + ' · Company access</footer></div></body></html>')
+            '<footer>BuildCommand AI ' + str(globals().get('BUILD_COMMAND_RELEASE', BC863_RELEASE)) + ' · Company access</footer></div></body></html>')
     return _BC189_HTMLResponse(html, headers={'Cache-Control':'no-store',
         'Referrer-Policy':_BC862_FORM_REFERRER_POLICY,'X-BuildCommand-Access-State':state})
 
@@ -61840,3 +61842,31 @@ _runtime.PUBLIC_PATHS.add('/health/invited-team-access-8-6-3')
 BUILD_COMMAND_RELEASE = BC863_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC863_RELEASE_NAME
 app.version = BC863_RELEASE
+
+
+# 8.6.4 — explicit, reviewed access management for the owner's own company.
+# OwnerConsole persists ordinary subscription/approval decisions only on POST.
+# No company gains access at import, login, registration, or a health check.
+BC864_RELEASE = '8.6.4'
+BC864_RELEASE_NAME = 'Owner Company Access'
+
+
+@app.get('/health/owner-company-access-8-6-4')
+def bc864_health():
+    checks = dict(bc863_health()['checks'])
+    console = getattr(app.state, 'owner_console', None)
+    checks['owner_companion_8_6_4_active'] = bool(console and getattr(console, 'version', None) == BC864_RELEASE and console.schema_ready)
+    for method, path in (('GET', '/owner/my-company'), ('POST', '/owner/my-company/review'), ('POST', '/owner/my-company/apply')):
+        routes = [route for route in app.routes if getattr(route, 'path', '') == path
+                  and method in (getattr(route, 'methods', set()) or set())]
+        checks[method + ' ' + path] = bool(console and len(routes) == 1 and routes[0].endpoint is getattr(console, 'endpoint', None))
+    return {'app': 'BuildCommand AI', 'version': BC864_RELEASE, 'release': BC864_RELEASE_NAME,
+            'status': 'ok' if all(checks.values()) else 'degraded', 'checks': checks,
+            'passed': sum(checks.values()), 'total': len(checks), 'data_reset': False,
+            'scope': 'Schema and active handler checks only. Company access changes only after an owner reviews and confirms them in My company. Verify the invited member on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/owner-company-access-8-6-4')
+BUILD_COMMAND_RELEASE = BC864_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC864_RELEASE_NAME
+app.version = BC864_RELEASE
