@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 8.6.2 — Browser Form Fix, based on the working 8.6.1 app.
+"""BuildCommand AI 8.6.3 — Invited Team Access, based on the working 8.6.2 app.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -59984,7 +59984,8 @@ h2{font-size:22px;line-height:1.3}h3{font-size:18px}.eyebrow,.label,.v117r-eyebr
 def _bc840_company_tabs():
     return '<nav class="bc840-tabs" aria-label="Company sections">' + ''.join(
         f'<a href="{url}">{label}</a>' for label,url in [("Overview","/company"),("People & access","/company/users"),
-        ("Invitations","/company/invitations"),("Role guide","/company/access-matrix"),("Settings","/company-settings")]) + '</nav>'
+        ("Invitations","/company/invitations"),("Access status","/workspace/company-access"),
+        ("Role guide","/company/access-matrix"),("Settings","/company-settings")]) + '</nav>'
 
 def _bc840_shell(title, body, *args, **kwargs):
     user = _bc840_user()
@@ -60461,8 +60462,18 @@ async def bc840_role_boundary(request, call_next):
                     return _bc830b_error('Enter your name and password.',400)
                 return await _bc840_in_threadpool(bc840_join_register,iid,token,names[0],passwords[0])
             return _bc830b_error('This invitation action is not available.',405)
+        # This read-only support page checks the session and company itself.
+        # It must remain reachable when the legacy payment gates block tools.
+        if path == '/workspace/company-access' and request.method in {'GET','HEAD'}:
+            return await _bc840_in_threadpool(bc863_company_access, request)
         if user:
             tier = _bc840_tier(user)
+            if request.method in {'GET','HEAD'}:
+                if path in {'/payment-required','/awaiting-approval','/demo/pending'}:
+                    return await _bc840_in_threadpool(bc863_company_access, request)
+                if tier not in {'owner','admin'} and path in {'/choose-plan','/billing','/account/subscription'}:
+                    return _BC187_RedirectResponse('/workspace/company-access',status_code=303,
+                        headers={'Cache-Control':'no-store'})
             if _bc840_owner_path(path) and tier != 'owner':
                 return _bc830b_error('This area is reserved for the BuildCommand platform owner.',403)
             if _bc840_admin_path(path) and tier not in {'owner','admin'}:
@@ -61648,3 +61659,184 @@ _runtime.PUBLIC_PATHS.add('/health/browser-forms-8-6-2')
 BUILD_COMMAND_RELEASE = BC862_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC862_RELEASE_NAME
 app.version = BC862_RELEASE
+
+# ============================================================
+# BuildCommand AI 8.6.3 — Invited Team Access
+# Invitations join a company; that company's access controls still apply.
+# Replace misleading personal checkout prompts with a useful recovery page.
+# ============================================================
+BC863_RELEASE = '8.6.3'
+BC863_RELEASE_NAME = 'Invited Team Access'
+_BC863_PAYMENT_GUARD = globals().get('_bc181893_payment_ok')
+_BC863_APPROVAL_GUARD = globals().get('_bc181893_is_approved')
+_BC863_LEGACY_GUARD = getattr(_runtime, '_bc174_access_allowed', None)
+
+
+def _bc863_demo_current(demo, now=None):
+    if str(demo.get('status') or '').upper() != 'ACTIVE':
+        return False
+    try:
+        expires = _BC830B_datetime.fromisoformat(str(demo.get('expires_at') or '').replace('Z', '+00:00'))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=_BC830B_timezone.utc)
+        return expires > (now or _bc830b_now())
+    except (ValueError, TypeError):
+        return False
+
+
+def _bc863_access_state(subscription, approved, demo, legacy_allowed, now=None):
+    """Read-only explanation of the existing paid, demo and legacy gates.
+
+    This helper does not authorize a workspace request or activate an account.
+    Ordinary requests always continue through the existing access middleware.
+    """
+    paid = str(subscription.get('status') or '').upper() == 'ACTIVE'
+    demo_active = _bc863_demo_current(demo, now)
+    if demo_active and not legacy_allowed:
+        return 'review'
+    if not (paid or demo_active):
+        return 'demo_pending' if str(demo.get('status') or '').upper() == 'PENDING_APPROVAL' else 'payment'
+    if not legacy_allowed:
+        return 'review'
+    if not (approved or demo_active):
+        return 'approval'
+    return 'ready'
+
+
+def _bc863_access_context():
+    with _bc850_db() as c:
+        user = _bc850_actor(c)
+        cid = _bc810_company_id(user)
+        company = c.execute('SELECT id,name FROM companies WHERE id=?', (cid,)).fetchone()
+        _bc850_require(company is not None, 'Your company could not be found. Contact your company administrator.', 409)
+        subscription = c.execute('SELECT id,company_id,plan_code,status,trial_ends_at FROM company_subscriptions '
+                                 'WHERE company_id=? ORDER BY id DESC LIMIT 1', (cid,)).fetchone()
+        approval = c.execute('SELECT approved FROM company_access_approvals WHERE company_id=?', (cid,)).fetchone()
+        demo = c.execute('SELECT status,expires_at FROM company_demo_access WHERE company_id=?', (cid,)).fetchone()
+    subscription, demo = dict(subscription) if subscription else {}, dict(demo) if demo else {}
+    approved = bool(approval and int(approval['approved'] or 0) == 1)
+    legacy = getattr(_runtime, '_bc174_access_allowed', None)
+    if not callable(legacy):
+        raise RuntimeError('Company access evaluator unavailable')
+    # The old evaluator is pure; unlike the historical demo/payment helpers,
+    # it does not create trial records or expire demos while rendering a page.
+    state = _bc863_access_state(subscription, approved, demo, bool(legacy(subscription or None)))
+    return {'user': user, 'company': dict(company), 'subscription': subscription,
+            'approved': approved, 'demo': demo, 'state': state}
+
+
+def _bc863_access_page(context):
+    esc = _bc830b_escape
+    user, company, state = context['user'], context['company'], context['state']
+    tier = _bc840_tier(user)
+    manages = tier in {'owner', 'admin'}
+    titles = {'payment': 'Your company needs to activate access',
+              'approval': 'Your company is awaiting approval',
+              'demo_pending': 'Your company demo is awaiting approval',
+              'review': 'Your company access needs a review',
+              'ready': 'Your company access is ready'}
+    descriptions = {
+        'payment': 'Your account is ready. Project access will open when your company’s subscription and approval are in place.',
+        'approval': 'Your company’s subscription is active. Platform-owner approval is still needed before the team can enter the workspace.',
+        'demo_pending': 'Your account is ready. The company’s demo request is waiting for platform-owner approval.',
+        'review': 'Your account is ready. Your company administrator needs to review the company’s access settings before the team can continue.',
+        'ready': 'Your company’s access checks are satisfied. Your assigned role and projects determine what you can open.',
+    }
+    badge = 'Ready' if state == 'ready' else 'Action needed' if manages else 'Waiting for company access'
+    detail = ''
+    if manages:
+        sub, demo = context['subscription'], context['demo']
+        demo_label = str(demo.get('status') or 'Not requested').replace('_',' ').title()
+        if str(demo.get('status') or '').upper() == 'ACTIVE' and not _bc863_demo_current(demo):
+            demo_label = 'Expired'
+        fields = [('Company reference', str(company['id'])),
+                  ('Company subscription', str(sub.get('status') or 'NO_SUBSCRIPTION').replace('_',' ').title()),
+                  ('Company plan', str(sub.get('plan_code') or 'Not selected')),
+                  ('Owner approval', 'Approved' if context['approved'] else 'Awaiting approval'),
+                  ('Company demo', demo_label)]
+        detail = '<section class="details" aria-label="Company access details"><h2>Company access details</h2><dl>' + ''.join(
+            '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>' for label,value in fields) + '</dl></section>'
+        if tier == 'owner':
+            detail += '<p class="notice">Your platform-owner account can open the app independently of this company’s team access. Other users need the company access shown above. Owner Console protects platform-owner companies from customer account changes.</p>'
+        else:
+            detail += '<p class="notice">You manage the company plan. The platform owner manages company approval and demo decisions.</p>'
+    elif state != 'ready':
+        detail = '<p class="notice">Your company administrator handles the plan and access for this team. Contact them to complete the company setup. Your account is already set up.</p>'
+    actions = '<a class="primary" href="/workspace">Open my workspace</a>' if state == 'ready' else '<a class="primary" href="/workspace/company-access">Check access again</a>'
+    if manages and state == 'payment':
+        actions += '<a class="secondary" href="/choose-plan">Manage company plan</a>'
+    actions += '<form method="post" action="/logout"><button class="secondary" type="submit">Sign out</button></form>'
+    html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<meta name="referrer" content="{_BC862_FORM_REFERRER_POLICY}">'
+            '<title>Company access · BuildCommand AI</title><style>'
+            '*{box-sizing:border-box}body{margin:0;background:#f3f6fa;color:#162638;font:16px/1.6 system-ui,sans-serif}'
+            '.wrap{max-width:780px;margin:auto;padding:40px 20px}.brand{font-weight:800;font-size:21px;margin-bottom:28px}.brand span{color:#986400}'
+            'main{background:white;border:1px solid #d9e2ed;border-radius:16px;padding:32px}.badge{display:inline-block;font-size:13px;font-weight:750;padding:5px 12px;border-radius:6px;background:#fff3da;color:#725012}'
+            'h1{font-size:clamp(27px,4vw,36px);line-height:1.2;letter-spacing:-.025em;margin:18px 0}h2{font-size:18px;margin:0 0 12px}p{margin:12px 0}.company{font-weight:750}.identity{color:#516378;font-size:14px;overflow-wrap:anywhere}'
+            '.notice{padding:16px;background:#f0f4f9;border-radius:8px}.details{margin-top:24px}dl{margin:0}dl div{display:flex;justify-content:space-between;gap:20px;padding:10px 0;border-bottom:1px solid #e3e9f0}dt{color:#52657c}dd{margin:0;text-align:right;overflow-wrap:anywhere}'
+            '.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:24px}form{margin:0}.primary,.secondary{font:inherit;font-weight:700;display:inline-block;padding:11px 17px;border-radius:8px;text-decoration:none;border:1px solid #cad5e2;cursor:pointer}'
+            '.primary{background:#183d68;color:white;border-color:#183d68}.secondary{background:white;color:#183d68}:focus-visible{outline:3px solid #bd7b00;outline-offset:3px}footer{padding-top:22px;color:#5b6d82;font-size:13px;text-align:center}'
+            '@media(max-width:540px){.wrap{padding:22px 14px}main{padding:22px}dl div{display:block}dd{text-align:left}.actions{align-items:stretch;flex-direction:column}.actions a,.actions button{width:100%;text-align:center}}'
+            '</style></head><body><div class="wrap"><div class="brand">BuildCommand <span>AI</span></div>'
+            '<main id="main-content"><span class="badge">' + esc(badge) + '</span><h1>' + esc(titles[state]) + '</h1>'
+            '<p class="company">' + esc(str(company['name'])) + '</p><p class="identity">Signed in as ' +
+            esc(str(user.get('email') or user.get('display_name') or 'Team member')) + ' · ' + esc(_bc840_role_label(_bc840_role(user))) + '</p>'
+            '<p>' + esc(descriptions[state]) + '</p>' + detail + '<div class="actions">' + actions + '</div></main>'
+            '<footer>BuildCommand AI ' + BC863_RELEASE + ' · Company access</footer></div></body></html>')
+    return _BC189_HTMLResponse(html, headers={'Cache-Control':'no-store',
+        'Referrer-Policy':_BC862_FORM_REFERRER_POLICY,'X-BuildCommand-Access-State':state})
+
+
+@app.get('/workspace/company-access')
+def bc863_company_access(request: _BC189_Request):
+    if not _bc840_user():
+        return _BC187_RedirectResponse('/login',status_code=303,headers={'Cache-Control':'no-store'})
+    try:
+        context = _bc863_access_context()
+        if context['state'] == 'ready' and request.url.path.rstrip('/') != '/workspace/company-access':
+            return _BC187_RedirectResponse('/workspace',status_code=303,headers={'Cache-Control':'no-store'})
+        if context['state'] != 'ready':
+            _bc830b_logger.info('COMPANY_ACCESS_WAIT user_id=%s company_id=%s reason=%s',
+                context['user']['id'],context['company']['id'],context['state'])
+        return _bc863_access_page(context)
+    except _BC850_Problem as exc:
+        return _bc830b_error(exc.message,exc.status)
+    except Exception:
+        _bc830b_logger.exception('Company access status could not be read')
+        return _bc830b_error('Company access could not be checked. Please try again.',503)
+
+
+@app.get('/health/invited-team-access-8-6-3')
+def bc863_health():
+    routes = [r for r in app.routes if getattr(r,'path','') == '/workspace/company-access'
+              and 'GET' in (getattr(r,'methods',set()) or set())]
+    checks = {
+        'company_access_handler_active': len(routes) == 1 and routes[0].endpoint is bc863_company_access,
+        'company_access_requires_session': '/workspace/company-access' not in _runtime.PUBLIC_PATHS,
+        'paid_access_guard_preserved': callable(_BC863_PAYMENT_GUARD) and _bc181893_payment_ok is _BC863_PAYMENT_GUARD,
+        'approval_guard_preserved': callable(_BC863_APPROVAL_GUARD) and _bc181893_is_approved is _BC863_APPROVAL_GUARD,
+        'legacy_access_guard_preserved': callable(_BC863_LEGACY_GUARD) and _runtime._bc174_access_allowed is _BC863_LEGACY_GUARD,
+        'form_origin_guard_preserved': _bc840_same_origin is _bc861_same_origin,
+        'same_origin_form_policy_preserved': _BC862_FORM_REFERRER_POLICY == 'same-origin',
+    }
+    try:
+        with _bc850_db() as c:
+            c.execute('SELECT id,company_id,email,role FROM users WHERE 1=0')
+            c.execute('SELECT id,name FROM companies WHERE 1=0')
+            c.execute('SELECT id,company_id,plan_code,status,trial_ends_at FROM company_subscriptions WHERE 1=0')
+            c.execute('SELECT company_id,approved FROM company_access_approvals WHERE 1=0')
+            c.execute('SELECT company_id,status,expires_at FROM company_demo_access WHERE 1=0')
+        checks['company_access_schema_readable'] = True
+    except Exception:
+        checks['company_access_schema_readable'] = False
+    return {'app':'BuildCommand AI','version':BC863_RELEASE,'release':BC863_RELEASE_NAME,
+            'status':'ok' if all(checks.values()) else 'degraded','checks':checks,
+            'passed':sum(checks.values()),'total':len(checks),'data_reset':False,
+            'scope':'Schema and handler checks only. This does not activate a company or verify a particular account; use Company → Access status and test the invited user on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/invited-team-access-8-6-3')
+BUILD_COMMAND_RELEASE = BC863_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC863_RELEASE_NAME
+app.version = BC863_RELEASE
