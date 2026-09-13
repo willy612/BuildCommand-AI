@@ -151,6 +151,7 @@ class CommandCenter:
         body+='</div><details><summary>More tools and saved work</summary><div class="bc860-tools">'
         for path,label in [(f'/workspace/sharing?project_id={pid}','Share work'),(f'/workspace/command/projects/{pid}/briefs','Saved briefs'),(f'/photo-ai?project_id={pid}','Photo findings & actions')]:body+=f'<a href="{path}">'+esc(label)+'</a>'
         for key,label in [('blueprint','Blueprint Brain'),('photo','Analyze a photo'),('brief','AI Morning Brief'),('daily','Daily report'),('analysis','Project analysis'),('tools','Field tools')]:body+=self.field.tool_form(pid,key,label)
+        if getattr(self.ns['app'].state,'daily_reports',None):body+=f'<p><a href="/workspace/daily?project_id={pid}">Daily reports by trade</a> · <a href="/workspace/directory?project_id={pid}">Subcontractor directory</a></p>'
         body+='</div></details>'
         if latest:body+=f'<p class="muted">Last saved field briefing · {esc(latest["brief_date"])} · <a href="/workspace/command/briefs/{latest["id"]}">Open saved copy</a></p>'
         body+='</section><section id="problems" class="bc860-panel"><h2>Problems / Risks</h2><p>Review crew updates, blockers and work waiting for your decision.</p><div class="bc860-metrics">'
@@ -172,6 +173,10 @@ class CommandCenter:
         except (TypeError,ValueError,OverflowError):
             self.fail_ask('project_data','Some project data could not be prepared for Ask. Your question is kept below. Ask your company administrator to review the project data.',503)
 
+    def report_evidence(self,c,user,project_id):
+        reports=getattr(self.ns['app'].state,'daily_reports',None)
+        return reports.evidence(c,user,project_id) if reports else []
+
     def context(self,c,user,project):
         pid=project['id'];data=self.daily.collect(c,user,project);evidence=[]
         def add(kind,identity,title,detail,path):
@@ -182,6 +187,8 @@ class CommandCenter:
         for row in c.execute('SELECT id,name,finish,pct FROM activities WHERE project_id=? ORDER BY id DESC LIMIT 15',(pid,)).fetchall():add('Schedule',row['id'],row['name'],f'Finish: {row["finish"]}; recorded progress: {row["pct"]}',f'/workspace/command/projects/{pid}/analysis')
         for row in c.execute("SELECT id,title,status,response FROM project_issues WHERE project_id=? AND UPPER(issue_type)='RFI' ORDER BY id DESC LIMIT 15",(pid,)).fetchall():add('RFI',row['id'],row['title'],str(row['status'] or '')+' · '+str(row['response'] or 'No answer recorded'),f'/workspace/rfi-answers/{row["id"]}/prepare?project_id={pid}')
         for row in c.execute('SELECT id,title,status,due_date FROM submittals WHERE project_id=? ORDER BY id DESC LIMIT 15',(pid,)).fetchall():add('Submittal',row['id'],row['title'],str(row['status'] or '')+' · Due '+str(row['due_date'] or 'not set'),f'/workspace/command/projects/{pid}/analysis')
+        for row in self.report_evidence(c,user,pid):
+            add('Daily report',row['id'],'Daily report · '+str(row['report_date']),self.context_json({k:row.get(k) for k in ('report_date','manpower','work_completed','delays','safety')}),f'/workspace/daily/reports/{row["id"]}')
         for row in data['scopes']:add('Issued trade scope',row['id'],row['title'],str(row['recipient_name'])+' · '+self.daily.status_label(row),f'/workspace/sharing/{row["id"]}')
         for row in data['photo_actions']['items']:add('Photo action',row['id'],row['title'],str(row['state']),f'/workspace/photo-actions/{row["id"]}')
         for row in data['rfi_directions']['items']:add('Issued RFI direction',row['id'],row['title'],'Source needs review' if row['needs_review'] else row['latest_status'] or 'Awaiting acknowledgment',f'/workspace/sharing/{row["id"]}')
