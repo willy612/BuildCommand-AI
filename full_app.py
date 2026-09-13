@@ -60110,6 +60110,7 @@ _BC840_TOOLS = (
     ('Daily field work', (('Daily report','/daily-report'),('Schedule','/schedule'),('Look-ahead','/lookahead-intelligence'),('Punch list','/punch'),('Safety','/safety'),('Inspections','/inspections'))),
     ('Documents & coordination', (('Documents','/documents'),('Blueprint Brain','/blueprint-brain'),('RFIs / issues','/issues'),('Submittals','/submittals'),('Subcontractor directory','/subcontractors'))),
     ('Planning & readiness', (('Project startup','/project-startup'),('Procurement','/procurement'),('Project health','/project-health'),('Meetings','/meetings'))),
+    ('AI field review', (('AI Photo Analysis','/photo-ai'),('Morning Brief','/morning-brief'),('RFI Drafting','/rfi-drafting'))),
 )
 
 @app.get('/workspace/tools')
@@ -60552,6 +60553,7 @@ _BC850_SOURCES = {
     'submittal': ('Submittal','submittals','title','due_date'),
     'punch': ('Punch item','punch_items','title','due'),
     'document': ('Document','attachments','title',None),
+    'scope': ('Trade scope','blueprint_trade_scopes','trade',None),
 }
 _BC850_STATUSES = {'ACKNOWLEDGED':'Acknowledged','IN_PROGRESS':'In progress','BLOCKED':'Blocked','READY_FOR_REVIEW':'Ready for review'}
 
@@ -60636,7 +60638,7 @@ def _bc850_manager(user):
     return _bc840_tier(user) in {'owner','admin'} or _bc840_role(user) in {'SUPERINTENDENT','PROJECT_MANAGER'}
 
 def _bc850_nav(user):
-    if _bc850_manager(user): return [('Command','/workspace/command'),('Trade sharing','/workspace/sharing')]
+    if _bc850_manager(user): return [('Command','/workspace/command'),('Trade scopes','/workspace/scopes'),('Trade sharing','/workspace/sharing')]
     if _bc840_tier(user)=='trade': return [('My shared work','/workspace/shared')]
     return []
 
@@ -60666,6 +60668,8 @@ def _bc850_recipient(c,user,pid,uid):
 
 def _bc850_source(c,user,pid,kind,source_id=None,query=''):
     _bc850_require(kind in _BC850_SOURCES,'Choose a supported work-item type.',400)
+    if kind == 'scope':
+        return app.state.blueprint_field.list_sources(c,user,pid,source_id,query)
     label,table,title,due=_BC850_SOURCES[kind]
     fields=f't.id,t.{title} AS title,'+(f't.{due} AS due_date' if due else "'' AS due_date")
     if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
@@ -60752,7 +60756,10 @@ def _bc850_share(c,user,share_id,manager=False,lock=False):
         locked=c.execute('SELECT * FROM bc_shared_work WHERE id=?'+(' FOR UPDATE' if getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres' else ''),(share_id,)).fetchone()
         share=dict(locked)
     if not manager: _bc850_require(share['revoked_at'] is None)
-    if not manager: _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
+    if share['kind'] == 'scope':
+        app.state.blueprint_field.publication(c,share)
+    elif not manager:
+        _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
     return share
 
 def _bc850_text(text):
@@ -60797,6 +60804,8 @@ def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0)
 @app.get('/workspace/sharing/new')
 @_bc850_endpoint
 def bc850_prepare_share(project_id:int,kind:str,source_id:int):
+    if kind == 'scope':
+        return app.state.blueprint_field.prepare(source_id,project_id)
     with _bc850_db() as c:
         user=_bc850_actor(c);project,source,recipients=_bc850_form_context(c,user,project_id,kind,source_id)
     body='<div class="hero"><h1>Prepare a share</h1><p>'+_bc830b_escape(project['name'])+' · '+_BC850_SOURCES[kind][0]+'</p></div>'
@@ -60817,6 +60826,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int):
 @app.post('/workspace/sharing/publish')
 @_bc850_endpoint
 def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
+    _bc850_require(kind != 'scope','Review the trade scope preview before publishing it.',400)
     title,message,due_date=title.strip(),message.strip(),due_date.strip()
     _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
     _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
@@ -60879,13 +60889,14 @@ def _bc850_detail(share_id,manager):
         updates=[dict(r) for r in c.execute('SELECT * FROM bc_shared_work_updates WHERE share_id=? AND share_version=? ORDER BY id DESC LIMIT 100',(share_id,share['version'])).fetchall()]
         recipient=c.execute('SELECT display_name,email FROM users WHERE id=?',(share['recipient_user_id'],)).fetchone()
         project=c.execute('SELECT name FROM projects WHERE id=? AND company_id=?',(share['project_id'],_bc810_company_id(user))).fetchone()
+        scope_html = app.state.blueprint_field.issued_html(c,share,manager) if share['kind']=='scope' else ''
     prefix='/workspace/sharing/' if manager else '/workspace/shared/'
     body='<div class="hero"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p>'+_bc830b_escape(str(project['name'] if project else ''))+'</p><h1>'+_bc830b_escape(share['title'])+'</h1><p>'+('Revoked' if share['revoked_at'] else share['state'].capitalize())+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></div><div class="card"><h2>Shared instructions</h2>'+_bc850_text(share['message'])
     if manager:
         body+='<p>Shared with '+_bc830b_escape(str(recipient['email'] if recipient else 'Removed account'))+f'</p><p><a href="/workspace/command?project_id={share["project_id"]}">Back to Superintendent Command</a></p>'
     if share['snapshot_file'] and not share['revoked_at']:
         body+='<p><a class="bc840-button" href="'+prefix+str(share_id)+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
-    body+='</div>'
+    body+='</div>' + scope_html
     if manager:
         if not share['revoked_at']:
             body+=f'<div class="card"><h2>Sharing controls</h2><form method="post" action="/workspace/sharing/{share_id}/control"><input type="hidden" name="version" value="{share["version"]}"><button name="action" value="'+('reopen' if share['state']=='CLOSED' else 'close')+'">'+('Reopen for responses' if share['state']=='CLOSED' else 'Close responses')+'</button> <button name="action" value="revoke">Revoke access</button></form><p>Closing keeps the item visible. Revoking removes access. Revoke and prepare a new share to change its instructions or file.</p></div>'
@@ -61275,14 +61286,15 @@ def bc860_command(project_id: int = 0, view: str = 'attention', q: str = '', pag
     body += f'<div class="bc860-tools"><a class="bc860-button" href="/workspace/sharing?project_id={pid}">Share work</a><a class="bc860-button secondary" href="/workspace/sharing/projects/{pid}/team">Project subcontractors</a>'
     for key, label in [('analysis', 'Project analysis'), ('tools', 'Field tools')]:
         body += f'<form method="post" action="/workspace/command/projects/{pid}/open-tool"><button class="secondary" name="tool" value="{key}">{label}</button></form>'
-    body += '</div><section class="bc860-panel"><div class="bc860-heading"><div><h2>' + _BC860_VIEWS[view] + '</h2><p>Review updates, give direction, and keep work moving.</p></div><span class="bc860-tag">' + str(matched) + ' shared item' + ('s' if matched != 1 else '') + '</span></div>'
+    body += '</div>' + app.state.daily_command.panel(user,pid)
+    body += '<section class="bc860-panel"><div class="bc860-heading"><div><h2>' + _BC860_VIEWS[view] + '</h2><p>Review updates, give direction, and keep work moving.</p></div><span class="bc860-tag">' + str(matched) + ' shared item' + ('s' if matched != 1 else '') + '</span></div>'
     views = ''.join('<option value="' + k + '"' + (' selected' if view == k else '') + '>' + label + '</option>' for k, label in _BC860_VIEWS.items())
     body += f'<form class="bc860-filters" method="get" action="/workspace/command"><input type="hidden" name="project_id" value="{pid}"><div><label for="command-view">Show</label><select id="command-view" name="view">' + views + '</select></div><div class="bc860-search"><label for="command-search">Find work or subcontractor</label><input type="search" id="command-search" name="q" maxlength="120" value="' + esc(q, quote=True) + '"></div><button>Apply</button><a href="' + esc(_bc860_url(pid), quote=True) + '">Reset</a></form>'
     if rows:
         body += ''.join(_bc860_card(row, view, q, page) for row in rows)
     else:
         headline = 'No shared work yet' if totals['total'] == 0 else 'Nothing needs attention' if view == 'attention' and not q and page == 1 else 'No matching work'
-        description = 'Share a schedule item, RFI, submittal, punch item, or document to start coordinating here.' if totals['total'] == 0 else 'Try another view or search. New subcontractor updates will appear here.'
+        description = 'Review and publish a trade scope, or share a schedule item, RFI, submittal, punch item, or document to start coordinating here.' if totals['total'] == 0 else 'Try another view or search. New subcontractor updates will appear here.'
         body += '<div class="bc860-empty"><h3>' + headline + '</h3><p>' + description + '</p><a href="' + esc(_bc860_url(pid, 'open'), quote=True) + '">View all open work</a></div>'
     pages = max(1, (matched + _BC860_PAGE_SIZE - 1) // _BC860_PAGE_SIZE)
     if page > 1 or page < pages:
@@ -61345,16 +61357,18 @@ def bc860_action(share_id: int, action: str = _BC189_Form(...), version: int = _
 @_bc860_endpoint
 def bc860_open_tool(project_id: int, tool: str = _BC189_Form(...)):
     destinations = {'tools': '/workspace/tools', 'analysis': f'/workspace/command/projects/{project_id}/analysis'}
-    _bc850_require(tool in destinations, 'Choose a project tool.', 400)
+    # Resolve every tool only after the manager/project check below.
     with _bc850_db(True) as c:
         user = _bc850_actor(c)
         _bc850_project(c, user, project_id, True)
+        destination = destinations.get(tool) or app.state.blueprint_field.tool_destination(project_id,tool)
+        _bc850_require(bool(destination), 'Choose a project tool.', 400)
         sql = 'INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id'
         # Explicit PK avoids the legacy PgCompat automatic RETURNING id retry.
         if getattr(_runtime, 'DATABASE_KIND', 'sqlite') == 'postgres':
             sql += ' RETURNING user_id'
         c.execute(sql, (user['id'], project_id))
-    return _BC187_RedirectResponse(destinations[tool], status_code=303)
+    return _BC187_RedirectResponse(destination, status_code=303)
 
 
 @_bc860_endpoint
@@ -61870,3 +61884,19 @@ _runtime.PUBLIC_PATHS.add('/health/owner-company-access-8-6-4')
 BUILD_COMMAND_RELEASE = BC864_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC864_RELEASE_NAME
 app.version = BC864_RELEASE
+
+
+# 8.7.0 — reviewed scope publications, with explicit integration hooks above.
+from blueprint_field import install as _bc870_install
+_BC870_FIELD = _bc870_install(globals())
+BUILD_COMMAND_RELEASE = '8.7.0'
+BUILD_COMMAND_RELEASE_NAME = 'Blueprint to Field'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.8.0 — daily Command briefings in a dedicated module.
+from daily_command import install as _bc880_install
+_BC880_COMMAND = _bc880_install(globals())
+BUILD_COMMAND_RELEASE = '8.8.0'
+BUILD_COMMAND_RELEASE_NAME = 'Daily Command Briefing'
+app.version = BUILD_COMMAND_RELEASE
