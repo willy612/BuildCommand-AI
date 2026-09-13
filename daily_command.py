@@ -127,6 +127,9 @@ class DailyCommand:
         if 'blueprint_runs' in self.ns['_bc800_table_names']():
             run = c.execute("SELECT id,created FROM blueprint_runs WHERE company_id=? AND project_id=? AND UPPER(status) IN ('COMPLETE','COMPLETED','SUCCESS') ORDER BY id DESC LIMIT 1",(cid,pid)).fetchone()
             result['latest_analysis'] = dict(run) if run else None
+        photos = getattr(self.ns['app'].state, 'photo_field', None)
+        if photos is not None:
+            result['photo_actions'] = photos.brief_data(c,user,project)
         # Lists are deliberately bounded. Counts always cover all current shares.
         return result
 
@@ -188,6 +191,8 @@ class DailyCommand:
             body += '</tbody></table></div>'
         else: body += '<p>No trade scopes have been issued on this project.</p>'
         body += '</section>'
+        if data.get('photo_actions') is not None:
+            body += self.ns['app'].state.photo_field.brief_html(data['photo_actions'],links)
         if data.get('leader_notes'):
             body += '<section class="card"><h2>Superintendent’s notes</h2><p style="white-space:pre-wrap">'+esc(data['leader_notes'])+'</p></section>'
         return body
@@ -197,13 +202,16 @@ class DailyCommand:
 
     def panel(self, user, pid):
         body = '<section class="bc860-panel"><h2>Daily field briefing</h2><p>Review project priorities, issued scopes and subcontractor blockers together.</p>'
-        body += f'<div class="bc860-tools"><a class="bc860-button" href="/workspace/command/projects/{pid}/brief">Review today’s brief</a><a class="bc860-button secondary" href="/workspace/command/projects/{pid}/briefs">Saved briefs</a><a class="bc860-button secondary" href="/workspace/scopes?project_id={pid}">Review &amp; publish trade scopes</a></div>'
+        body += f'<div class="bc860-tools"><a class="bc860-button" href="/workspace/command/projects/{pid}/brief">Review today’s brief</a><a class="bc860-button secondary" href="/workspace/command/projects/{pid}/briefs">Saved briefs</a><a class="bc860-button secondary" href="/workspace/scopes?project_id={pid}">Review &amp; publish trade scopes</a><a class="bc860-button secondary" href="/photo-ai?project_id={pid}">Photo findings &amp; actions</a></div>'
         for key,label in [('blueprint','Blueprint Brain'),('photo','Analyze a photo'),('brief','AI Morning Brief'),('daily','Daily report')]:
             body += self.field.tool_form(pid,key,label)
         body += '</section>'
         try:
             with self.db() as c:
                 user, project = self.actor(c,pid)
+                photos = getattr(self.ns['app'].state, 'photo_field', None)
+                if photos is not None:
+                    body += photos.brief_html(photos.brief_data(c,user,project),True)
                 # The interactive queue below already provides shared-item detail.
                 # Avoid calculating its totals again just to render the toolbar.
                 latest = c.execute('SELECT id,brief_date,created_at FROM bc_daily_command_briefs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1',(user['company_id'],pid)).fetchone()
@@ -317,6 +325,13 @@ class DailyCommand:
                 lines += [str(action.get('title') or ''),str(action.get('recommended_action') or action.get('reason') or ''),'Source: '+' · '.join(str(action.get(k)) for k in ('source_type','source_id','trade','due') if action.get(k))]
         lines += ['', 'ISSUED TRADE SCOPES',f'Showing {len(data["scopes"])} of {data["scope_total"]} current publications.']
         for item in data['scopes']: lines.append(str(item['title'])+' · '+str(item['recipient_name'])+' · '+self.status_label(item)+' · Due '+str(item['due_date'] or 'Not set'))
+        photos = data.get('photo_actions')
+        if photos is not None:
+            lines += ['', 'OPEN PHOTO ACTIONS', str(photos['total'])+' open correction(s) or RFI(s).']
+            if photos['total']>len(photos['items']):
+                lines.append('Showing newest '+str(len(photos['items']))+' of '+str(photos['total'])+'.')
+            for row in photos['items']:
+                lines.append(row['title']+' | '+row['mode']+' | '+row['state']+' | Due: '+(row['due_date'] or 'Not set')+' | Photo updates: '+str(row['evidence_count']))
         lines += ['', 'SUPERINTENDENT NOTES',data.get('leader_notes') or 'None recorded.', '', 'Fixed reviewed copy. Later project updates do not rewrite this briefing.']
         return Response('\n'.join(lines)+'\n',media_type='text/plain; charset=utf-8',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':f'attachment; filename="daily-command-{brief_id}-{data["brief_date"]}.txt"'})
 
