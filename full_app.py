@@ -61286,7 +61286,7 @@ def bc860_command(project_id: int = 0, view: str = 'attention', q: str = '', pag
     body += f'<div class="bc860-tools"><a class="bc860-button" href="/workspace/sharing?project_id={pid}">Share work</a><a class="bc860-button secondary" href="/workspace/sharing/projects/{pid}/team">Project subcontractors</a>'
     for key, label in [('analysis', 'Project analysis'), ('tools', 'Field tools')]:
         body += f'<form method="post" action="/workspace/command/projects/{pid}/open-tool"><button class="secondary" name="tool" value="{key}">{label}</button></form>'
-    body += '</div>' + app.state.blueprint_field.command_panel(user,pid)
+    body += '</div>' + app.state.daily_command.panel(user,pid)
     body += '<section class="bc860-panel"><div class="bc860-heading"><div><h2>' + _BC860_VIEWS[view] + '</h2><p>Review updates, give direction, and keep work moving.</p></div><span class="bc860-tag">' + str(matched) + ' shared item' + ('s' if matched != 1 else '') + '</span></div>'
     views = ''.join('<option value="' + k + '"' + (' selected' if view == k else '') + '>' + label + '</option>' for k, label in _BC860_VIEWS.items())
     body += f'<form class="bc860-filters" method="get" action="/workspace/command"><input type="hidden" name="project_id" value="{pid}"><div><label for="command-view">Show</label><select id="command-view" name="view">' + views + '</select></div><div class="bc860-search"><label for="command-search">Find work or subcontractor</label><input type="search" id="command-search" name="q" maxlength="120" value="' + esc(q, quote=True) + '"></div><button>Apply</button><a href="' + esc(_bc860_url(pid), quote=True) + '">Reset</a></form>'
@@ -61891,4 +61891,12 @@ from blueprint_field import install as _bc870_install
 _BC870_FIELD = _bc870_install(globals())
 BUILD_COMMAND_RELEASE = '8.7.0'
 BUILD_COMMAND_RELEASE_NAME = 'Blueprint to Field'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.8.0 — daily Command briefings in a dedicated module.
+from daily_command import install as _bc880_install
+_BC880_COMMAND = _bc880_install(globals())
+BUILD_COMMAND_RELEASE = '8.8.0'
+BUILD_COMMAND_RELEASE_NAME = 'Daily Command Briefing'
 app.version = BUILD_COMMAND_RELEASE
