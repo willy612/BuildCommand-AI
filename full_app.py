@@ -61263,6 +61263,9 @@ def _bc860_rows(c, user, pid, view, q, page):
         COALESCE(SUM(CASE WHEN state='CLOSED' THEN 1 ELSE 0 END),0) AS closed,
         COALESCE(SUM(CASE WHEN needs_review+blocked+overdue+ready>0 THEN 1 ELSE 0 END),0) AS attention
         FROM progress''', params).fetchone())
+    # PostgreSQL can return Decimal for sums of bigint counts. These fields
+    # represent counts on every database, including empty result sets.
+    totals = {key:int(value or 0) for key,value in totals.items()}
     where = {
         'attention': '(needs_review+blocked+overdue+ready)>0', 'review': 'needs_review=1',
         'blocked': 'blocked=1', 'overdue': 'overdue=1', 'ready': 'ready=1',
@@ -62081,7 +62084,7 @@ def bc8102_health():
 _runtime.PUBLIC_PATHS.add('/health/simple-workspace-8-10-2')
 
 
-# 8.10.3 — Ask uses the HTTPS API without depending on the installed SDK.
-BUILD_COMMAND_RELEASE = '8.10.3'
-BUILD_COMMAND_RELEASE_NAME = 'Ask API Compatibility Fix'
+# 8.10.4 — database-native values are encoded consistently throughout Ask.
+BUILD_COMMAND_RELEASE = '8.10.4'
+BUILD_COMMAND_RELEASE_NAME = 'Ask Project Data Fix'
 app.version = BUILD_COMMAND_RELEASE
