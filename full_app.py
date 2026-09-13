@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BuildCommand AI 8.6.2 — Browser Form Fix, based on the working 8.6.1 app.
+"""BuildCommand AI 8.6.4 — Owner Company Access, based on the working 8.6.3 app.
 Upload as full_app.py and run: uvicorn full_app:app --host 0.0.0.0 --port $PORT
 """
 from pathlib import Path
@@ -59984,7 +59984,8 @@ h2{font-size:22px;line-height:1.3}h3{font-size:18px}.eyebrow,.label,.v117r-eyebr
 def _bc840_company_tabs():
     return '<nav class="bc840-tabs" aria-label="Company sections">' + ''.join(
         f'<a href="{url}">{label}</a>' for label,url in [("Overview","/company"),("People & access","/company/users"),
-        ("Invitations","/company/invitations"),("Role guide","/company/access-matrix"),("Settings","/company-settings")]) + '</nav>'
+        ("Invitations","/company/invitations"),("Access status","/workspace/company-access"),
+        ("Role guide","/company/access-matrix"),("Settings","/company-settings")]) + '</nav>'
 
 def _bc840_shell(title, body, *args, **kwargs):
     user = _bc840_user()
@@ -60109,6 +60110,7 @@ _BC840_TOOLS = (
     ('Daily field work', (('Daily report','/daily-report'),('Schedule','/schedule'),('Look-ahead','/lookahead-intelligence'),('Punch list','/punch'),('Safety','/safety'),('Inspections','/inspections'))),
     ('Documents & coordination', (('Documents','/documents'),('Blueprint Brain','/blueprint-brain'),('RFIs / issues','/issues'),('Submittals','/submittals'),('Subcontractor directory','/subcontractors'))),
     ('Planning & readiness', (('Project startup','/project-startup'),('Procurement','/procurement'),('Project health','/project-health'),('Meetings','/meetings'))),
+    ('AI field review', (('AI Photo Analysis','/photo-ai'),('Morning Brief','/morning-brief'),('RFI Drafting','/rfi-drafting'))),
 )
 
 @app.get('/workspace/tools')
@@ -60461,8 +60463,18 @@ async def bc840_role_boundary(request, call_next):
                     return _bc830b_error('Enter your name and password.',400)
                 return await _bc840_in_threadpool(bc840_join_register,iid,token,names[0],passwords[0])
             return _bc830b_error('This invitation action is not available.',405)
+        # This read-only support page checks the session and company itself.
+        # It must remain reachable when the legacy payment gates block tools.
+        if path == '/workspace/company-access' and request.method in {'GET','HEAD'}:
+            return await _bc840_in_threadpool(bc863_company_access, request)
         if user:
             tier = _bc840_tier(user)
+            if request.method in {'GET','HEAD'}:
+                if path in {'/payment-required','/awaiting-approval','/demo/pending'}:
+                    return await _bc840_in_threadpool(bc863_company_access, request)
+                if tier not in {'owner','admin'} and path in {'/choose-plan','/billing','/account/subscription'}:
+                    return _BC187_RedirectResponse('/workspace/company-access',status_code=303,
+                        headers={'Cache-Control':'no-store'})
             if _bc840_owner_path(path) and tier != 'owner':
                 return _bc830b_error('This area is reserved for the BuildCommand platform owner.',403)
             if _bc840_admin_path(path) and tier not in {'owner','admin'}:
@@ -60541,6 +60553,7 @@ _BC850_SOURCES = {
     'submittal': ('Submittal','submittals','title','due_date'),
     'punch': ('Punch item','punch_items','title','due'),
     'document': ('Document','attachments','title',None),
+    'scope': ('Trade scope','blueprint_trade_scopes','trade',None),
 }
 _BC850_STATUSES = {'ACKNOWLEDGED':'Acknowledged','IN_PROGRESS':'In progress','BLOCKED':'Blocked','READY_FOR_REVIEW':'Ready for review'}
 
@@ -60625,7 +60638,7 @@ def _bc850_manager(user):
     return _bc840_tier(user) in {'owner','admin'} or _bc840_role(user) in {'SUPERINTENDENT','PROJECT_MANAGER'}
 
 def _bc850_nav(user):
-    if _bc850_manager(user): return [('Command','/workspace/command'),('Trade sharing','/workspace/sharing')]
+    if _bc850_manager(user): return [('Command','/workspace/command'),('Trade scopes','/workspace/scopes'),('Trade sharing','/workspace/sharing')]
     if _bc840_tier(user)=='trade': return [('My shared work','/workspace/shared')]
     return []
 
@@ -60655,6 +60668,8 @@ def _bc850_recipient(c,user,pid,uid):
 
 def _bc850_source(c,user,pid,kind,source_id=None,query=''):
     _bc850_require(kind in _BC850_SOURCES,'Choose a supported work-item type.',400)
+    if kind == 'scope':
+        return app.state.blueprint_field.list_sources(c,user,pid,source_id,query)
     label,table,title,due=_BC850_SOURCES[kind]
     fields=f't.id,t.{title} AS title,'+(f't.{due} AS due_date' if due else "'' AS due_date")
     if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
@@ -60741,7 +60756,10 @@ def _bc850_share(c,user,share_id,manager=False,lock=False):
         locked=c.execute('SELECT * FROM bc_shared_work WHERE id=?'+(' FOR UPDATE' if getattr(_runtime,'DATABASE_KIND','sqlite')=='postgres' else ''),(share_id,)).fetchone()
         share=dict(locked)
     if not manager: _bc850_require(share['revoked_at'] is None)
-    if not manager: _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
+    if share['kind'] == 'scope':
+        app.state.blueprint_field.publication(c,share)
+    elif not manager:
+        _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
     return share
 
 def _bc850_text(text):
@@ -60786,6 +60804,8 @@ def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0)
 @app.get('/workspace/sharing/new')
 @_bc850_endpoint
 def bc850_prepare_share(project_id:int,kind:str,source_id:int):
+    if kind == 'scope':
+        return app.state.blueprint_field.prepare(source_id,project_id)
     with _bc850_db() as c:
         user=_bc850_actor(c);project,source,recipients=_bc850_form_context(c,user,project_id,kind,source_id)
     body='<div class="hero"><h1>Prepare a share</h1><p>'+_bc830b_escape(project['name'])+' · '+_BC850_SOURCES[kind][0]+'</p></div>'
@@ -60806,6 +60826,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int):
 @app.post('/workspace/sharing/publish')
 @_bc850_endpoint
 def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
+    _bc850_require(kind != 'scope','Review the trade scope preview before publishing it.',400)
     title,message,due_date=title.strip(),message.strip(),due_date.strip()
     _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
     _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
@@ -60868,13 +60889,14 @@ def _bc850_detail(share_id,manager):
         updates=[dict(r) for r in c.execute('SELECT * FROM bc_shared_work_updates WHERE share_id=? AND share_version=? ORDER BY id DESC LIMIT 100',(share_id,share['version'])).fetchall()]
         recipient=c.execute('SELECT display_name,email FROM users WHERE id=?',(share['recipient_user_id'],)).fetchone()
         project=c.execute('SELECT name FROM projects WHERE id=? AND company_id=?',(share['project_id'],_bc810_company_id(user))).fetchone()
+        scope_html = app.state.blueprint_field.issued_html(c,share,manager) if share['kind']=='scope' else ''
     prefix='/workspace/sharing/' if manager else '/workspace/shared/'
     body='<div class="hero"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p>'+_bc830b_escape(str(project['name'] if project else ''))+'</p><h1>'+_bc830b_escape(share['title'])+'</h1><p>'+('Revoked' if share['revoked_at'] else share['state'].capitalize())+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></div><div class="card"><h2>Shared instructions</h2>'+_bc850_text(share['message'])
     if manager:
         body+='<p>Shared with '+_bc830b_escape(str(recipient['email'] if recipient else 'Removed account'))+f'</p><p><a href="/workspace/command?project_id={share["project_id"]}">Back to Superintendent Command</a></p>'
     if share['snapshot_file'] and not share['revoked_at']:
         body+='<p><a class="bc840-button" href="'+prefix+str(share_id)+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
-    body+='</div>'
+    body+='</div>' + scope_html
     if manager:
         if not share['revoked_at']:
             body+=f'<div class="card"><h2>Sharing controls</h2><form method="post" action="/workspace/sharing/{share_id}/control"><input type="hidden" name="version" value="{share["version"]}"><button name="action" value="'+('reopen' if share['state']=='CLOSED' else 'close')+'">'+('Reopen for responses' if share['state']=='CLOSED' else 'Close responses')+'</button> <button name="action" value="revoke">Revoke access</button></form><p>Closing keeps the item visible. Revoking removes access. Revoke and prepare a new share to change its instructions or file.</p></div>'
@@ -61264,14 +61286,15 @@ def bc860_command(project_id: int = 0, view: str = 'attention', q: str = '', pag
     body += f'<div class="bc860-tools"><a class="bc860-button" href="/workspace/sharing?project_id={pid}">Share work</a><a class="bc860-button secondary" href="/workspace/sharing/projects/{pid}/team">Project subcontractors</a>'
     for key, label in [('analysis', 'Project analysis'), ('tools', 'Field tools')]:
         body += f'<form method="post" action="/workspace/command/projects/{pid}/open-tool"><button class="secondary" name="tool" value="{key}">{label}</button></form>'
-    body += '</div><section class="bc860-panel"><div class="bc860-heading"><div><h2>' + _BC860_VIEWS[view] + '</h2><p>Review updates, give direction, and keep work moving.</p></div><span class="bc860-tag">' + str(matched) + ' shared item' + ('s' if matched != 1 else '') + '</span></div>'
+    body += '</div>' + app.state.blueprint_field.command_panel(user,pid)
+    body += '<section class="bc860-panel"><div class="bc860-heading"><div><h2>' + _BC860_VIEWS[view] + '</h2><p>Review updates, give direction, and keep work moving.</p></div><span class="bc860-tag">' + str(matched) + ' shared item' + ('s' if matched != 1 else '') + '</span></div>'
     views = ''.join('<option value="' + k + '"' + (' selected' if view == k else '') + '>' + label + '</option>' for k, label in _BC860_VIEWS.items())
     body += f'<form class="bc860-filters" method="get" action="/workspace/command"><input type="hidden" name="project_id" value="{pid}"><div><label for="command-view">Show</label><select id="command-view" name="view">' + views + '</select></div><div class="bc860-search"><label for="command-search">Find work or subcontractor</label><input type="search" id="command-search" name="q" maxlength="120" value="' + esc(q, quote=True) + '"></div><button>Apply</button><a href="' + esc(_bc860_url(pid), quote=True) + '">Reset</a></form>'
     if rows:
         body += ''.join(_bc860_card(row, view, q, page) for row in rows)
     else:
         headline = 'No shared work yet' if totals['total'] == 0 else 'Nothing needs attention' if view == 'attention' and not q and page == 1 else 'No matching work'
-        description = 'Share a schedule item, RFI, submittal, punch item, or document to start coordinating here.' if totals['total'] == 0 else 'Try another view or search. New subcontractor updates will appear here.'
+        description = 'Review and publish a trade scope, or share a schedule item, RFI, submittal, punch item, or document to start coordinating here.' if totals['total'] == 0 else 'Try another view or search. New subcontractor updates will appear here.'
         body += '<div class="bc860-empty"><h3>' + headline + '</h3><p>' + description + '</p><a href="' + esc(_bc860_url(pid, 'open'), quote=True) + '">View all open work</a></div>'
     pages = max(1, (matched + _BC860_PAGE_SIZE - 1) // _BC860_PAGE_SIZE)
     if page > 1 or page < pages:
@@ -61334,16 +61357,18 @@ def bc860_action(share_id: int, action: str = _BC189_Form(...), version: int = _
 @_bc860_endpoint
 def bc860_open_tool(project_id: int, tool: str = _BC189_Form(...)):
     destinations = {'tools': '/workspace/tools', 'analysis': f'/workspace/command/projects/{project_id}/analysis'}
-    _bc850_require(tool in destinations, 'Choose a project tool.', 400)
+    # Resolve every tool only after the manager/project check below.
     with _bc850_db(True) as c:
         user = _bc850_actor(c)
         _bc850_project(c, user, project_id, True)
+        destination = destinations.get(tool) or app.state.blueprint_field.tool_destination(project_id,tool)
+        _bc850_require(bool(destination), 'Choose a project tool.', 400)
         sql = 'INSERT INTO user_state(user_id,selected_project_id) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET selected_project_id=excluded.selected_project_id'
         # Explicit PK avoids the legacy PgCompat automatic RETURNING id retry.
         if getattr(_runtime, 'DATABASE_KIND', 'sqlite') == 'postgres':
             sql += ' RETURNING user_id'
         c.execute(sql, (user['id'], project_id))
-    return _BC187_RedirectResponse(destinations[tool], status_code=303)
+    return _BC187_RedirectResponse(destination, status_code=303)
 
 
 @_bc860_endpoint
@@ -61648,3 +61673,222 @@ _runtime.PUBLIC_PATHS.add('/health/browser-forms-8-6-2')
 BUILD_COMMAND_RELEASE = BC862_RELEASE
 BUILD_COMMAND_RELEASE_NAME = BC862_RELEASE_NAME
 app.version = BC862_RELEASE
+
+# ============================================================
+# BuildCommand AI 8.6.3 — Invited Team Access
+# Invitations join a company; that company's access controls still apply.
+# Replace misleading personal checkout prompts with a useful recovery page.
+# ============================================================
+BC863_RELEASE = '8.6.3'
+BC863_RELEASE_NAME = 'Invited Team Access'
+_BC863_PAYMENT_GUARD = globals().get('_bc181893_payment_ok')
+_BC863_APPROVAL_GUARD = globals().get('_bc181893_is_approved')
+_BC863_LEGACY_GUARD = getattr(_runtime, '_bc174_access_allowed', None)
+
+
+def _bc863_demo_current(demo, now=None):
+    if str(demo.get('status') or '').upper() != 'ACTIVE':
+        return False
+    try:
+        expires = _BC830B_datetime.fromisoformat(str(demo.get('expires_at') or '').replace('Z', '+00:00'))
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=_BC830B_timezone.utc)
+        return expires > (now or _bc830b_now())
+    except (ValueError, TypeError):
+        return False
+
+
+def _bc863_access_state(subscription, approved, demo, legacy_allowed, now=None):
+    """Read-only explanation of the existing paid, demo and legacy gates.
+
+    This helper does not authorize a workspace request or activate an account.
+    Ordinary requests always continue through the existing access middleware.
+    """
+    paid = str(subscription.get('status') or '').upper() == 'ACTIVE'
+    demo_active = _bc863_demo_current(demo, now)
+    if demo_active and not legacy_allowed:
+        return 'review'
+    if not (paid or demo_active):
+        return 'demo_pending' if str(demo.get('status') or '').upper() == 'PENDING_APPROVAL' else 'payment'
+    if not legacy_allowed:
+        return 'review'
+    if not (approved or demo_active):
+        return 'approval'
+    return 'ready'
+
+
+def _bc863_access_context():
+    with _bc850_db() as c:
+        user = _bc850_actor(c)
+        cid = _bc810_company_id(user)
+        company = c.execute('SELECT id,name FROM companies WHERE id=?', (cid,)).fetchone()
+        _bc850_require(company is not None, 'Your company could not be found. Contact your company administrator.', 409)
+        subscription = c.execute('SELECT id,company_id,plan_code,status,trial_ends_at FROM company_subscriptions '
+                                 'WHERE company_id=? ORDER BY id DESC LIMIT 1', (cid,)).fetchone()
+        approval = c.execute('SELECT approved FROM company_access_approvals WHERE company_id=?', (cid,)).fetchone()
+        demo = c.execute('SELECT status,expires_at FROM company_demo_access WHERE company_id=?', (cid,)).fetchone()
+    subscription, demo = dict(subscription) if subscription else {}, dict(demo) if demo else {}
+    approved = bool(approval and int(approval['approved'] or 0) == 1)
+    legacy = getattr(_runtime, '_bc174_access_allowed', None)
+    if not callable(legacy):
+        raise RuntimeError('Company access evaluator unavailable')
+    # The old evaluator is pure; unlike the historical demo/payment helpers,
+    # it does not create trial records or expire demos while rendering a page.
+    state = _bc863_access_state(subscription, approved, demo, bool(legacy(subscription or None)))
+    return {'user': user, 'company': dict(company), 'subscription': subscription,
+            'approved': approved, 'demo': demo, 'state': state}
+
+
+def _bc863_access_page(context):
+    esc = _bc830b_escape
+    user, company, state = context['user'], context['company'], context['state']
+    tier = _bc840_tier(user)
+    manages = tier in {'owner', 'admin'}
+    titles = {'payment': 'Your company needs to activate access',
+              'approval': 'Your company is awaiting approval',
+              'demo_pending': 'Your company demo is awaiting approval',
+              'review': 'Your company access needs a review',
+              'ready': 'Your company access is ready'}
+    descriptions = {
+        'payment': 'Your account is ready. Project access will open when your company’s subscription and approval are in place.',
+        'approval': 'Your company’s subscription is active. Platform-owner approval is still needed before the team can enter the workspace.',
+        'demo_pending': 'Your account is ready. The company’s demo request is waiting for platform-owner approval.',
+        'review': 'Your account is ready. Your company administrator needs to review the company’s access settings before the team can continue.',
+        'ready': 'Your company’s access checks are satisfied. Your assigned role and projects determine what you can open.',
+    }
+    badge = 'Ready' if state == 'ready' else 'Action needed' if manages else 'Waiting for company access'
+    detail = ''
+    if manages:
+        sub, demo = context['subscription'], context['demo']
+        demo_label = str(demo.get('status') or 'Not requested').replace('_',' ').title()
+        if str(demo.get('status') or '').upper() == 'ACTIVE' and not _bc863_demo_current(demo):
+            demo_label = 'Expired'
+        fields = [('Company reference', str(company['id'])),
+                  ('Company subscription', str(sub.get('status') or 'NO_SUBSCRIPTION').replace('_',' ').title()),
+                  ('Company plan', str(sub.get('plan_code') or 'Not selected')),
+                  ('Owner approval', 'Approved' if context['approved'] else 'Awaiting approval'),
+                  ('Company demo', demo_label)]
+        detail = '<section class="details" aria-label="Company access details"><h2>Company access details</h2><dl>' + ''.join(
+            '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>' for label,value in fields) + '</dl></section>'
+        if tier == 'owner':
+            detail += '<p class="notice">Your platform-owner account can open the app independently of this company’s team access. Other users need the company access shown above. Use My company in Owner Console to review and activate your team’s access. Customer account controls still protect platform-owner companies.</p>'
+        else:
+            detail += '<p class="notice">You manage the company plan. The platform owner manages company approval and demo decisions.</p>'
+    elif state != 'ready':
+        detail = '<p class="notice">Your company administrator handles the plan and access for this team. Contact them to complete the company setup. Your account is already set up.</p>'
+    actions = '<a class="primary" href="/workspace">Open my workspace</a>' if state == 'ready' else '<a class="primary" href="/workspace/company-access">Check access again</a>'
+    if tier == 'owner':
+        actions += '<a class="secondary" href="/owner/my-company">Manage my company access</a>'
+    elif manages and state == 'payment':
+        actions += '<a class="secondary" href="/choose-plan">Manage company plan</a>'
+    actions += '<form method="post" action="/logout"><button class="secondary" type="submit">Sign out</button></form>'
+    html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<meta name="referrer" content="{_BC862_FORM_REFERRER_POLICY}">'
+            '<title>Company access · BuildCommand AI</title><style>'
+            '*{box-sizing:border-box}body{margin:0;background:#f3f6fa;color:#162638;font:16px/1.6 system-ui,sans-serif}'
+            '.wrap{max-width:780px;margin:auto;padding:40px 20px}.brand{font-weight:800;font-size:21px;margin-bottom:28px}.brand span{color:#986400}'
+            'main{background:white;border:1px solid #d9e2ed;border-radius:16px;padding:32px}.badge{display:inline-block;font-size:13px;font-weight:750;padding:5px 12px;border-radius:6px;background:#fff3da;color:#725012}'
+            'h1{font-size:clamp(27px,4vw,36px);line-height:1.2;letter-spacing:-.025em;margin:18px 0}h2{font-size:18px;margin:0 0 12px}p{margin:12px 0}.company{font-weight:750}.identity{color:#516378;font-size:14px;overflow-wrap:anywhere}'
+            '.notice{padding:16px;background:#f0f4f9;border-radius:8px}.details{margin-top:24px}dl{margin:0}dl div{display:flex;justify-content:space-between;gap:20px;padding:10px 0;border-bottom:1px solid #e3e9f0}dt{color:#52657c}dd{margin:0;text-align:right;overflow-wrap:anywhere}'
+            '.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:24px}form{margin:0}.primary,.secondary{font:inherit;font-weight:700;display:inline-block;padding:11px 17px;border-radius:8px;text-decoration:none;border:1px solid #cad5e2;cursor:pointer}'
+            '.primary{background:#183d68;color:white;border-color:#183d68}.secondary{background:white;color:#183d68}:focus-visible{outline:3px solid #bd7b00;outline-offset:3px}footer{padding-top:22px;color:#5b6d82;font-size:13px;text-align:center}'
+            '@media(max-width:540px){.wrap{padding:22px 14px}main{padding:22px}dl div{display:block}dd{text-align:left}.actions{align-items:stretch;flex-direction:column}.actions a,.actions button{width:100%;text-align:center}}'
+            '</style></head><body><div class="wrap"><div class="brand">BuildCommand <span>AI</span></div>'
+            '<main id="main-content"><span class="badge">' + esc(badge) + '</span><h1>' + esc(titles[state]) + '</h1>'
+            '<p class="company">' + esc(str(company['name'])) + '</p><p class="identity">Signed in as ' +
+            esc(str(user.get('email') or user.get('display_name') or 'Team member')) + ' · ' + esc(_bc840_role_label(_bc840_role(user))) + '</p>'
+            '<p>' + esc(descriptions[state]) + '</p>' + detail + '<div class="actions">' + actions + '</div></main>'
+            '<footer>BuildCommand AI ' + str(globals().get('BUILD_COMMAND_RELEASE', BC863_RELEASE)) + ' · Company access</footer></div></body></html>')
+    return _BC189_HTMLResponse(html, headers={'Cache-Control':'no-store',
+        'Referrer-Policy':_BC862_FORM_REFERRER_POLICY,'X-BuildCommand-Access-State':state})
+
+
+@app.get('/workspace/company-access')
+def bc863_company_access(request: _BC189_Request):
+    if not _bc840_user():
+        return _BC187_RedirectResponse('/login',status_code=303,headers={'Cache-Control':'no-store'})
+    try:
+        context = _bc863_access_context()
+        if context['state'] == 'ready' and request.url.path.rstrip('/') != '/workspace/company-access':
+            return _BC187_RedirectResponse('/workspace',status_code=303,headers={'Cache-Control':'no-store'})
+        if context['state'] != 'ready':
+            _bc830b_logger.info('COMPANY_ACCESS_WAIT user_id=%s company_id=%s reason=%s',
+                context['user']['id'],context['company']['id'],context['state'])
+        return _bc863_access_page(context)
+    except _BC850_Problem as exc:
+        return _bc830b_error(exc.message,exc.status)
+    except Exception:
+        _bc830b_logger.exception('Company access status could not be read')
+        return _bc830b_error('Company access could not be checked. Please try again.',503)
+
+
+@app.get('/health/invited-team-access-8-6-3')
+def bc863_health():
+    routes = [r for r in app.routes if getattr(r,'path','') == '/workspace/company-access'
+              and 'GET' in (getattr(r,'methods',set()) or set())]
+    checks = {
+        'company_access_handler_active': len(routes) == 1 and routes[0].endpoint is bc863_company_access,
+        'company_access_requires_session': '/workspace/company-access' not in _runtime.PUBLIC_PATHS,
+        'paid_access_guard_preserved': callable(_BC863_PAYMENT_GUARD) and _bc181893_payment_ok is _BC863_PAYMENT_GUARD,
+        'approval_guard_preserved': callable(_BC863_APPROVAL_GUARD) and _bc181893_is_approved is _BC863_APPROVAL_GUARD,
+        'legacy_access_guard_preserved': callable(_BC863_LEGACY_GUARD) and _runtime._bc174_access_allowed is _BC863_LEGACY_GUARD,
+        'form_origin_guard_preserved': _bc840_same_origin is _bc861_same_origin,
+        'same_origin_form_policy_preserved': _BC862_FORM_REFERRER_POLICY == 'same-origin',
+    }
+    try:
+        with _bc850_db() as c:
+            c.execute('SELECT id,company_id,email,role FROM users WHERE 1=0')
+            c.execute('SELECT id,name FROM companies WHERE 1=0')
+            c.execute('SELECT id,company_id,plan_code,status,trial_ends_at FROM company_subscriptions WHERE 1=0')
+            c.execute('SELECT company_id,approved FROM company_access_approvals WHERE 1=0')
+            c.execute('SELECT company_id,status,expires_at FROM company_demo_access WHERE 1=0')
+        checks['company_access_schema_readable'] = True
+    except Exception:
+        checks['company_access_schema_readable'] = False
+    return {'app':'BuildCommand AI','version':BC863_RELEASE,'release':BC863_RELEASE_NAME,
+            'status':'ok' if all(checks.values()) else 'degraded','checks':checks,
+            'passed':sum(checks.values()),'total':len(checks),'data_reset':False,
+            'scope':'Schema and handler checks only. This does not activate a company or verify a particular account; use Company → Access status and test the invited user on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/invited-team-access-8-6-3')
+BUILD_COMMAND_RELEASE = BC863_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC863_RELEASE_NAME
+app.version = BC863_RELEASE
+
+
+# 8.6.4 — explicit, reviewed access management for the owner's own company.
+# OwnerConsole persists ordinary subscription/approval decisions only on POST.
+# No company gains access at import, login, registration, or a health check.
+BC864_RELEASE = '8.6.4'
+BC864_RELEASE_NAME = 'Owner Company Access'
+
+
+@app.get('/health/owner-company-access-8-6-4')
+def bc864_health():
+    checks = dict(bc863_health()['checks'])
+    console = getattr(app.state, 'owner_console', None)
+    checks['owner_companion_8_6_4_active'] = bool(console and getattr(console, 'version', None) == BC864_RELEASE and console.schema_ready)
+    for method, path in (('GET', '/owner/my-company'), ('POST', '/owner/my-company/review'), ('POST', '/owner/my-company/apply')):
+        routes = [route for route in app.routes if getattr(route, 'path', '') == path
+                  and method in (getattr(route, 'methods', set()) or set())]
+        checks[method + ' ' + path] = bool(console and len(routes) == 1 and routes[0].endpoint is getattr(console, 'endpoint', None))
+    return {'app': 'BuildCommand AI', 'version': BC864_RELEASE, 'release': BC864_RELEASE_NAME,
+            'status': 'ok' if all(checks.values()) else 'degraded', 'checks': checks,
+            'passed': sum(checks.values()), 'total': len(checks), 'data_reset': False,
+            'scope': 'Schema and active handler checks only. Company access changes only after an owner reviews and confirms them in My company. Verify the invited member on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/owner-company-access-8-6-4')
+BUILD_COMMAND_RELEASE = BC864_RELEASE
+BUILD_COMMAND_RELEASE_NAME = BC864_RELEASE_NAME
+app.version = BC864_RELEASE
+
+
+# 8.7.0 — reviewed scope publications, with explicit integration hooks above.
+from blueprint_field import install as _bc870_install
+_BC870_FIELD = _bc870_install(globals())
+BUILD_COMMAND_RELEASE = '8.7.0'
+BUILD_COMMAND_RELEASE_NAME = 'Blueprint to Field'
+app.version = BUILD_COMMAND_RELEASE
