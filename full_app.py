@@ -60672,6 +60672,8 @@ def _bc850_source(c,user,pid,kind,source_id=None,query=''):
         return app.state.blueprint_field.list_sources(c,user,pid,source_id,query)
     if kind == 'photo_action':
         return app.state.photo_field.list_sources(c,user,pid,source_id,query)
+    if kind == 'rfi_answer':
+        return app.state.rfi_field.list_sources(c,user,pid,source_id,query)
     label,table,title,due=_BC850_SOURCES[kind]
     fields=f't.id,t.{title} AS title,'+(f't.{due} AS due_date' if due else "'' AS due_date")
     if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
@@ -60762,6 +60764,8 @@ def _bc850_share(c,user,share_id,manager=False,lock=False):
         app.state.blueprint_field.publication(c,share)
     elif share['kind'] == 'photo_action':
         app.state.photo_field.source_for_share(c,share)
+    elif share['kind'] == 'rfi_answer':
+        app.state.rfi_field.publication(c,share)
     elif not manager:
         _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
     return share
@@ -60807,11 +60811,14 @@ def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0)
 
 @app.get('/workspace/sharing/new')
 @_bc850_endpoint
-def bc850_prepare_share(project_id:int,kind:str,source_id:int):
+def bc850_prepare_share(project_id:int,kind:str,source_id:int,draft_message:str=''):
+    _bc850_require(len(draft_message)<=6000, 'Keep draft instructions within 6,000 characters.',400)
     if kind == 'scope':
         return app.state.blueprint_field.prepare(source_id,project_id)
     if kind == 'photo_action':
         return app.state.photo_field.prepare_existing(source_id,project_id)
+    if kind == 'rfi_answer':
+        return app.state.rfi_field.prepare(source_id,project_id)
     with _bc850_db() as c:
         user=_bc850_actor(c);project,source,recipients=_bc850_form_context(c,user,project_id,kind,source_id)
     body='<div class="hero"><h1>Prepare a share</h1><p>'+_bc830b_escape(project['name'])+' · '+_BC850_SOURCES[kind][0]+'</p></div>'
@@ -60822,7 +60829,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int):
     if not _bc830b_re.fullmatch(r'\d{4}-\d{2}-\d{2}',due): due=''
     body+=f'<div class="card"><form method="post" action="/workspace/sharing/publish"><input type="hidden" name="project_id" value="{project_id}"><input type="hidden" name="kind" value="{kind}"><input type="hidden" name="source_id" value="{source_id}">'
     body+='<p><label for="recipient">Share with</label><br><select id="recipient" name="recipient_user_id" required><option value="">Choose a subcontractor</option>'+options+'</select></p>'
-    body+='<p><label for="public-title">Shared title</label><br><input id="public-title" name="title" maxlength="240" required style="width:100%" value="'+_bc830b_escape(str(source['title'] or ''),quote=True)+'"></p><p><label for="share-message">Instructions for this subcontractor</label><br><textarea id="share-message" name="message" rows="6" maxlength="6000" required style="width:100%"></textarea></p>'
+    body+='<p><label for="public-title">Shared title</label><br><input id="public-title" name="title" maxlength="240" required style="width:100%" value="'+_bc830b_escape(str(source['title'] or ''),quote=True)+'"></p><p><label for="share-message">Instructions for this subcontractor</label><br><textarea id="share-message" name="message" rows="6" maxlength="6000" required style="width:100%">'+_bc830b_escape(draft_message)+'</textarea></p>'
     body+='<p><label for="share-due">Due date (optional)</label><br><input id="share-due" name="due_date" type="date" value="'+due+'"></p><p><label><input type="checkbox" name="allow_response" value="1">Allow progress updates and replies</label></p>'
     if kind=='document':
         body+='<p class="bc840-role-note">File: '+_bc830b_escape(str(source['original_name']))+'</p><p><label><input type="checkbox" name="share_file" value="yes" required>Share this entire file, including every page.</label></p><p>A fixed copy is shared. Changes to the internal document will require a new share.</p>'
@@ -60832,7 +60839,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int):
 @app.post('/workspace/sharing/publish')
 @_bc850_endpoint
 def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
-    _bc850_require(kind not in {'scope','photo_action'},'Review the scope or photo action preview before publishing it.',400)
+    _bc850_require(kind not in {'scope','photo_action','rfi_answer'},'Review the scope, photo action or RFI answer preview before publishing it.',400)
     title,message,due_date=title.strip(),message.strip(),due_date.strip()
     _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
     _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
@@ -60898,6 +60905,8 @@ def _bc850_detail(share_id,manager):
         scope_html = app.state.blueprint_field.issued_html(c,share,manager) if share['kind']=='scope' else ''
         if share['kind']=='photo_action':
             scope_html = app.state.photo_field.issued_html(c,share,manager)
+        if share['kind']=='rfi_answer':
+            scope_html = app.state.rfi_field.issued_html(c,share,manager)
     prefix='/workspace/sharing/' if manager else '/workspace/shared/'
     body='<div class="hero"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p>'+_bc830b_escape(str(project['name'] if project else ''))+'</p><h1>'+_bc830b_escape(share['title'])+'</h1><p>'+('Revoked' if share['revoked_at'] else share['state'].capitalize())+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></div><div class="card"><h2>Shared instructions</h2>'+_bc850_text(share['message'])
     if manager:
@@ -60956,6 +60965,8 @@ def bc850_respond(share_id:int,version:int=_BC189_Form(...),status:str=_BC189_Fo
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,False,True)
         _bc850_require(share['version']==version,'This share changed. Reload it before replying.',409)
         _bc850_require(share['allow_response']==1 and share['state']=='OPEN','Replies are closed for this item.',409)
+        if share['kind']=='rfi_answer':
+            app.state.rfi_field.validate_response(c,share,status)
         _bc850_insert(c,'bc_shared_work_updates','share_id,actor_user_id,share_version,status,message,created_at',(share_id,user['id'],version,status,message,_bc830b_now().isoformat()))
         _bc850_event(c,user,share['project_id'],share_id,'RESPONSE')
     return _BC187_RedirectResponse(f'/workspace/shared/{share_id}',status_code=303)
@@ -61278,6 +61289,9 @@ def bc860_command(project_id: int = 0, view: str = 'attention', q: str = '', pag
             return _bc860_page(body)
         pid = int(project['id'])
         totals, matched, rows = _bc860_rows(c, user, pid, view, q, page)
+    center = getattr(app.state, 'command_center', None)
+    if center is not None:
+        return center.render(user, project, projects, totals, matched, rows, view, q, page, notice)
     esc = _bc830b_escape
     notices = {'review': 'Update reviewed. Any reply is now visible to the subcontractor.',
                'review_close': 'Update reviewed and responses closed. The share remains visible.',
@@ -61915,3 +61929,15 @@ _BC890_PHOTOS = _bc890_install(globals())
 BUILD_COMMAND_RELEASE = '8.9.0'
 BUILD_COMMAND_RELEASE_NAME = 'Photo Findings to Field Actions'
 app.version = BUILD_COMMAND_RELEASE
+
+# 8.10.0 — reviewed RFI answer handoff and source revision checks.
+from rfi_field import install as _bc8100_install
+_BC8100_RFIS = _bc8100_install(globals())
+BUILD_COMMAND_RELEASE = '8.10.0'
+BUILD_COMMAND_RELEASE_NAME = 'RFI Answers to Field Work'
+app.version = BUILD_COMMAND_RELEASE
+
+# 8.10.0: simple command surface; existing routes retain their handlers.
+from command_center import install as _bc8100_command_install
+_BC8100_COMMAND = _bc8100_command_install(globals())
+BUILD_COMMAND_RELEASE_NAME = 'Simple Command — RFI Answers to Field'
