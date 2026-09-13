@@ -343,6 +343,9 @@ class BlueprintField:
         return f'<form method="post" action="/workspace/command/projects/{pid}/open-tool" style="display:inline-block;margin:4px"><button class="secondary" name="tool" value="{esc(tool)}">{esc(label)}</button></form>'
 
     def tool_destination(self, project_id, tool):
+        rfis = getattr(self.ns['app'].state, 'rfi_field', None)
+        if rfis is not None and tool.startswith('rfi-source-'):
+            return rfis.tool_destination(project_id,tool)
         choices = {'blueprint': '/blueprint-brain', 'photo': '/photo-ai', 'brief': '/morning-brief', 'daily': '/daily-report', 'photo-rfis': '/issues'}
         if tool in choices:
             return choices[tool]
