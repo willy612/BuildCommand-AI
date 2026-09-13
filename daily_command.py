@@ -130,6 +130,9 @@ class DailyCommand:
         photos = getattr(self.ns['app'].state, 'photo_field', None)
         if photos is not None:
             result['photo_actions'] = photos.brief_data(c,user,project)
+        rfis = getattr(self.ns['app'].state, 'rfi_field', None)
+        if rfis is not None:
+            result['rfi_directions'] = rfis.brief_data(c,user,project)
         # Lists are deliberately bounded. Counts always cover all current shares.
         return result
 
@@ -193,6 +196,8 @@ class DailyCommand:
         body += '</section>'
         if data.get('photo_actions') is not None:
             body += self.ns['app'].state.photo_field.brief_html(data['photo_actions'],links)
+        if data.get('rfi_directions') is not None:
+            body += self.ns['app'].state.rfi_field.brief_html(data['rfi_directions'],links)
         if data.get('leader_notes'):
             body += '<section class="card"><h2>Superintendent’s notes</h2><p style="white-space:pre-wrap">'+esc(data['leader_notes'])+'</p></section>'
         return body
@@ -202,7 +207,7 @@ class DailyCommand:
 
     def panel(self, user, pid):
         body = '<section class="bc860-panel"><h2>Daily field briefing</h2><p>Review project priorities, issued scopes and subcontractor blockers together.</p>'
-        body += f'<div class="bc860-tools"><a class="bc860-button" href="/workspace/command/projects/{pid}/brief">Review today’s brief</a><a class="bc860-button secondary" href="/workspace/command/projects/{pid}/briefs">Saved briefs</a><a class="bc860-button secondary" href="/workspace/scopes?project_id={pid}">Review &amp; publish trade scopes</a><a class="bc860-button secondary" href="/photo-ai?project_id={pid}">Photo findings &amp; actions</a></div>'
+        body += f'<div class="bc860-tools"><a class="bc860-button" href="/workspace/command/projects/{pid}/brief">Review today’s brief</a><a class="bc860-button secondary" href="/workspace/command/projects/{pid}/briefs">Saved briefs</a><a class="bc860-button secondary" href="/workspace/scopes?project_id={pid}">Review &amp; publish trade scopes</a><a class="bc860-button secondary" href="/photo-ai?project_id={pid}">Photo findings &amp; actions</a><a class="bc860-button secondary" href="/workspace/rfi-answers?project_id={pid}">RFI answers to field</a></div>'
         for key,label in [('blueprint','Blueprint Brain'),('photo','Analyze a photo'),('brief','AI Morning Brief'),('daily','Daily report')]:
             body += self.field.tool_form(pid,key,label)
         body += '</section>'
@@ -212,6 +217,9 @@ class DailyCommand:
                 photos = getattr(self.ns['app'].state, 'photo_field', None)
                 if photos is not None:
                     body += photos.brief_html(photos.brief_data(c,user,project),True)
+                rfis = getattr(self.ns['app'].state, 'rfi_field', None)
+                if rfis is not None:
+                    body += rfis.brief_html(rfis.brief_data(c,user,project),True)
                 # The interactive queue below already provides shared-item detail.
                 # Avoid calculating its totals again just to render the toolbar.
                 latest = c.execute('SELECT id,brief_date,created_at FROM bc_daily_command_briefs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1',(user['company_id'],pid)).fetchone()
@@ -223,13 +231,14 @@ class DailyCommand:
             body += '<section class="bc860-panel"><p>The briefing summary is temporarily unavailable. You can still review shared-work updates below.</p></section>'
         return body
 
-    def compose(self, project_id:int):
+    def compose(self, project_id:int, draft_notes:str=''):
+        self.require(len(draft_notes)<=6000, 'Keep briefing notes within 6,000 characters.',400)
         with self.db() as c:
             user, project = self.actor(c,project_id)
             data = self.collect(c,user,project)
         body = '<h1>Review today’s brief</h1><p>'+esc(project['name'])+' · '+esc(data['brief_date'])+' UTC</p><p>Check the current records below and add the direction your team needs today.</p>'
         body += self.snapshot_html(data,True)
-        body += f'<form class="card" method="post" action="/workspace/command/projects/{project_id}/brief/review"><input type="hidden" name="source_hash" value="{self.material_hash(data)}"><label for="leader-notes"><strong>Superintendent’s notes</strong></label><p class="small">Add ownership, follow-up times, inspections or today’s field direction. These notes remain in the internal briefing.</p><textarea id="leader-notes" name="leader_notes" rows="5" maxlength="6000"></textarea><p><button>Preview daily briefing</button></p></form>'
+        body += f'<form class="card" method="post" action="/workspace/command/projects/{project_id}/brief/review"><input type="hidden" name="source_hash" value="{self.material_hash(data)}"><label for="leader-notes"><strong>Superintendent’s notes</strong></label><p class="small">Add ownership, follow-up times, inspections or today’s field direction. These notes remain in the internal briefing.</p><textarea id="leader-notes" name="leader_notes" rows="5" maxlength="6000">'+esc(draft_notes)+'</textarea><p><button>Preview daily briefing</button></p></form>'
         body += f'<p><a href="/workspace/command?project_id={project_id}">Back to Command</a></p>'
         return self.page('Review daily briefing',body)
 
@@ -332,6 +341,14 @@ class DailyCommand:
                 lines.append('Showing newest '+str(len(photos['items']))+' of '+str(photos['total'])+'.')
             for row in photos['items']:
                 lines.append(row['title']+' | '+row['mode']+' | '+row['state']+' | Due: '+(row['due_date'] or 'Not set')+' | Photo updates: '+str(row['evidence_count']))
+        rfis = data.get('rfi_directions')
+        if rfis is not None:
+            lines += ['', 'RFI FIELD DIRECTIONS', str(rfis['total'])+' current publication(s); '+str(rfis['needs_review'])+' source review(s) needed.']
+            if rfis['total']>len(rfis['items']):
+                lines.append('Showing '+str(len(rfis['items']))+' of '+str(rfis['total'])+'.')
+            for row in rfis['items']:
+                state = 'Source needs review' if row['needs_review'] else row['latest_status'] or row['state']
+                lines.append(row['title']+' | '+row['recipient_name']+' | '+state+' | Due: '+(row['due_date'] or 'Not set'))
         lines += ['', 'SUPERINTENDENT NOTES',data.get('leader_notes') or 'None recorded.', '', 'Fixed reviewed copy. Later project updates do not rewrite this briefing.']
         return Response('\n'.join(lines)+'\n',media_type='text/plain; charset=utf-8',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':f'attachment; filename="daily-command-{brief_id}-{data["brief_date"]}.txt"'})
 
