@@ -12,11 +12,14 @@ import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date, datetime, time
+from decimal import Decimal
+from uuid import UUID
 from fastapi import Form
-from blueprint_field import esc, packed, digest
+from blueprint_field import esc, digest
 
-VERSION='8.10.3'
-RELEASE='Ask API Compatibility Fix'
+VERSION='8.10.4'
+RELEASE='Ask Project Data Fix'
 RESPONSE_BYTE_LIMIT=1024*1024
 log=logging.getLogger('buildcommand.command_center')
 ANSWER_SCHEMA={
@@ -61,6 +64,25 @@ class NoAIRedirect(urllib.request.HTTPRedirectHandler):
 
 def response_value(obj,key,default=None):
     return obj.get(key,default) if isinstance(obj,dict) else getattr(obj,key,default)
+
+def _command_json_default(value):
+    if isinstance(value,Decimal):
+        if not value.is_finite():raise ValueError('Non-finite project number')
+        if value==value.to_integral_value():return int(value)
+        # Exact fractional values remain decimal strings. Trim insignificant
+        # zeroes without normalize(), which can round to the decimal context.
+        sign,digits,exponent=value.as_tuple()
+        while digits[-1]==0:
+            digits=digits[:-1];exponent+=1
+        return str(Decimal((sign,digits,exponent)))
+    if isinstance(value,(datetime,date,time)):return value.isoformat()
+    if isinstance(value,UUID):return str(value)
+    raise TypeError('Unsupported project data type')
+
+def command_json(value):
+    # Local to Command; do not change existing scope/RFI review-token encoding.
+    return json.dumps(value,sort_keys=True,separators=(',', ':'),ensure_ascii=False,
+                      allow_nan=False,default=_command_json_default)
 CSS='''<style>
 .bc8100-command{max-width:1200px;margin:auto}.bc8100-command h2{font-size:24px}
 .bc8100-command .command-top{display:grid;grid-template-columns:1fr 1fr;gap:20px}
@@ -143,13 +165,18 @@ class CommandCenter:
         body+='</section><details id="issued-directions" class="bc860-panel"'+(' open' if rfis['needs_review'] else '')+'><summary>Issued directions and photo actions</summary>'+self.ns['app'].state.rfi_field.brief_html(rfis,True)+self.ns['app'].state.photo_field.brief_html(photos,True)+'</details><details class="bc860-panel"><summary>Full daily plan</summary>'+self.daily.plan_html({'priorities':priorities})+'</details>'
         return self.page('Superintendent Command',body)
 
+    def context_json(self,value):
+        try:return command_json(value)
+        except (TypeError,ValueError,OverflowError):
+            self.fail_ask('project_data','Some project data could not be prepared for Ask. Your question is kept below. Ask your company administrator to review the project data.',503)
+
     def context(self,c,user,project):
         pid=project['id'];data=self.daily.collect(c,user,project);evidence=[]
         def add(kind,identity,title,detail,path):
             evidence.append({'key':'E'+str(len(evidence)+1),'kind':kind,'record_id':identity,'title':str(title or '')[:240],'detail':str(detail or '')[:1800],'path':path})
-        for row in data['attention']:add('Shared work',row['id'],row['title'],packed({k:row.get(k) for k in ('recipient_name','latest_status','latest_message','due_date')}),f'/workspace/sharing/{row["id"]}')
+        for row in data['attention']:add('Shared work',row['id'],row['title'],self.context_json({k:row.get(k) for k in ('recipient_name','latest_status','latest_message','due_date')}),f'/workspace/sharing/{row["id"]}')
         for phase in ('morning','midday','closeout'):
-            for row in data['priorities'][phase]:add('Project priority',row.get('source_id'),row.get('title'),packed(row),f'/workspace/command/projects/{pid}/analysis')
+            for row in data['priorities'][phase]:add('Project priority',row.get('source_id'),row.get('title'),self.context_json(row),f'/workspace/command/projects/{pid}/analysis')
         for row in c.execute('SELECT id,name,finish,pct FROM activities WHERE project_id=? ORDER BY id DESC LIMIT 15',(pid,)).fetchall():add('Schedule',row['id'],row['name'],f'Finish: {row["finish"]}; recorded progress: {row["pct"]}',f'/workspace/command/projects/{pid}/analysis')
         for row in c.execute("SELECT id,title,status,response FROM project_issues WHERE project_id=? AND UPPER(issue_type)='RFI' ORDER BY id DESC LIMIT 15",(pid,)).fetchall():add('RFI',row['id'],row['title'],str(row['status'] or '')+' · '+str(row['response'] or 'No answer recorded'),f'/workspace/rfi-answers/{row["id"]}/prepare?project_id={pid}')
         for row in c.execute('SELECT id,title,status,due_date FROM submittals WHERE project_id=? ORDER BY id DESC LIMIT 15',(pid,)).fetchall():add('Submittal',row['id'],row['title'],str(row['status'] or '')+' · Due '+str(row['due_date'] or 'not set'),f'/workspace/command/projects/{pid}/analysis')
@@ -263,7 +290,7 @@ class CommandCenter:
         if any(not all(32<=ord(char)<=126 for char in value) for value in headers.values()):
             self.fail_ask('credential_configuration','The AI connection settings contain an invalid character. Ask your administrator to check the API settings.',503)
         try:
-            request=urllib.request.Request(base+'/responses',data=packed(body).encode('utf-8'),headers=headers,method='POST')
+            request=urllib.request.Request(base+'/responses',data=command_json(body).encode('utf-8'),headers=headers,method='POST')
             opener=urllib.request.build_opener(NoAIRedirect())
             with opener.open(request,timeout=45) as response:
                 raw=response.read(RESPONSE_BYTE_LIMIT+1)
@@ -299,7 +326,7 @@ class CommandCenter:
         if not key:self.fail_ask('not_configured','Ask BuildCommand is not configured. Ask your administrator to connect the AI service.',503)
         model=(os.environ.get('OPENAI_COMMAND_MODEL') or '').strip() or (os.environ.get('OPENAI_MODEL') or '').strip() or 'gpt-5.6'
         payload={**context,'evidence':[{k:v for k,v in row.items() if k!='path'} for row in context['evidence']]}
-        kwargs={'model':model,'instructions':ASK_INSTRUCTIONS,'input':packed({'question':question,'project_context':payload}),
+        kwargs={'model':model,'instructions':ASK_INSTRUCTIONS,'input':self.context_json({'question':question,'project_context':payload}),
                 'text':{'format':{'type':'json_schema','name':'buildcommand_answer','strict':True,'schema':ANSWER_SCHEMA}},
                 'max_output_tokens':5000,'store':False}
         if model=='gpt-5.6' or model.startswith('gpt-5.6-'):kwargs['reasoning']={'effort':'low'}
@@ -322,22 +349,37 @@ class CommandCenter:
         checks.update(direct_https_transport=callable(self.request_response),redirects_blocked=issubclass(NoAIRedirect,urllib.request.HTTPRedirectHandler),bounded_provider_response=RESPONSE_BYTE_LIMIT==1024*1024)
         return {**base,'checks':checks,'passed':sum(checks.values()),'total':len(checks),'status':'ok' if all(checks.values()) else 'degraded'}
 
+    def data_health(self):
+        base=self.api_health();checks=dict(base['checks'])
+        try:
+            sample=json.loads(command_json({'count':Decimal('2.00'),'amount':Decimal('1.234567890123456789'),
+                                            'due':date(2026,9,13)}))
+            checks['database_values_serializable']=sample=={'count':2,'amount':'1.234567890123456789','due':'2026-09-13'}
+            checks['stable_decimal_source_comparison']=command_json({'n':Decimal('1.2300')})==command_json({'n':Decimal('1.23')})
+        except (TypeError,ValueError):
+            checks['database_values_serializable']=False
+            checks['stable_decimal_source_comparison']=False
+        return {**base,'checks':checks,'passed':sum(checks.values()),'total':len(checks),'status':'ok' if all(checks.values()) else 'degraded'}
+
     def ask(self,project_id:int,question:str=Form(...)):
         question=question.strip();self.require(0<len(question)<=1500,'Ask a question within 1,500 characters.',400)
-        with self.db() as c:
-            user,project=self.field.actor(c,project_id);identity=(user['id'],user['company_id']);context=self.context(c,user,project)
         try:
+            with self.db() as c:
+                user,project=self.field.actor(c,project_id);identity=(user['id'],user['company_id'])
+                context=self.context(c,user,project)
+                source_hash=digest(self.context_json(context))
             answer=self.run_answer(question,context)
+            with self.db() as c:
+                fresh,project=self.field.actor(c,project_id)
+                self.require((fresh['id'],fresh['company_id'])==identity,'Your access changed. Sign in again.',403)
+                current_hash=digest(self.context_json(self.context(c,fresh,project)))
+                self.require(source_hash==current_hash,'Project records changed while the answer was being prepared. Ask again for the current position.',409)
         except AskFailure as failure:
-            # Never render project data after access was removed during the request.
+            # Never render a retained question after access was removed.
             with self.db() as c:
                 fresh,project=self.field.actor(c,project_id)
                 self.require((fresh['id'],fresh['company_id'])==identity,'Your access changed. Sign in again.',403)
             return self.failure_page(project_id,question,failure)
-        with self.db() as c:
-            fresh,project=self.field.actor(c,project_id)
-            self.require((fresh['id'],fresh['company_id'])==identity,'Your access changed. Sign in again.',403)
-            self.require(digest(packed(context))==digest(packed(self.context(c,fresh,project))),'Project records changed while the answer was being prepared. Ask again for the current position.',409)
         body='<h1>Ask BuildCommand</h1><p>'+esc(project['name'])+'</p><section class="bc860-panel"><h2>'+esc(question)+'</h2><p class="answer">'+esc(answer['answer'])+'</p>'
         if answer.get('checks'):body+='<h3>Check before acting</h3><ul>'+''.join('<li>'+esc(x)+'</li>' for x in answer['checks'])+'</ul>'
         selected=[e for e in context['evidence'] if e['key'] in answer.get('evidence_ids',[])]
@@ -381,3 +423,6 @@ class CommandCenter:
         self.rt.PUBLIC_PATHS.add('/health/ask-reliability-8-10-1')
         self.ns['app'].add_api_route('/health/ask-api-compatibility-8-10-3',self.api_health,methods=['GET'])
         self.rt.PUBLIC_PATHS.add('/health/ask-api-compatibility-8-10-3')
+        self.ns['app'].add_api_route('/health/ask-project-data-8-10-4',self.data_health,methods=['GET'])
+        self.rt.PUBLIC_PATHS.add('/health/ask-project-data-8-10-4')
+
