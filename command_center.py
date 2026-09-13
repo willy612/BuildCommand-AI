@@ -8,11 +8,16 @@ import logging
 import os
 import re
 import secrets
+import http.client
+import urllib.error
+import urllib.parse
+import urllib.request
 from fastapi import Form
 from blueprint_field import esc, packed, digest
 
-VERSION='8.10.1'
-RELEASE='Ask BuildCommand Reliability Fix'
+VERSION='8.10.3'
+RELEASE='Ask API Compatibility Fix'
+RESPONSE_BYTE_LIMIT=1024*1024
 log=logging.getLogger('buildcommand.command_center')
 ANSWER_SCHEMA={
     'type':'object','additionalProperties':False,
@@ -43,6 +48,16 @@ class AskFailure(Exception):
     def __init__(self,category,message,status,reference):
         super().__init__(category)
         self.category,self.message,self.status,self.reference=category,message,status,reference
+
+class AskHTTPError(Exception):
+    def __init__(self,status,body,request_id):
+        super().__init__('AI HTTP request failed')
+        self.status_code,self.body,self.request_id=status,body,request_id
+
+class NoAIRedirect(urllib.request.HTTPRedirectHandler):
+    # Do not forward credentials or project context to a redirected address.
+    def redirect_request(self,req,fp,code,msg,headers,newurl):
+        return None
 
 def response_value(obj,key,default=None):
     return obj.get(key,default) if isinstance(obj,dict) else getattr(obj,key,default)
@@ -189,9 +204,15 @@ class CommandCenter:
     def parse_answer(self,response,context):
         status=response_value(response,'status','completed')
         parts=[];refused=False
-        for item in response_value(response,'output',[]) or []:
+        output=response_value(response,'output',[]) or []
+        if not isinstance(output,(list,tuple)):
+            self.fail_ask('invalid_response','The AI service returned an unreadable response. Please try again.',502,response=response)
+        for item in output:
             if response_value(item,'type')!='message':continue
-            for part in response_value(item,'content',[]) or []:
+            content=response_value(item,'content',[]) or []
+            if not isinstance(content,(list,tuple)):
+                self.fail_ask('invalid_response','The AI service returned an unreadable response. Please try again.',502,response=response)
+            for part in content:
                 kind=response_value(part,'type')
                 if kind=='refusal':refused=True
                 elif kind=='output_text' and isinstance(response_value(part,'text'),str):parts.append(response_value(part,'text'))
@@ -223,35 +244,66 @@ class CommandCenter:
         for key in ('briefing_note','notice_draft'):result[key]=(result.get(key) or '')[:2000]
         return result
 
+    def request_response(self,body,key):
+        # Only Ask uses this transport; other construction engines keep their clients.
+        base=(os.environ.get('OPENAI_BASE_URL') or 'https://api.openai.com/v1').strip().rstrip('/')
+        try:
+            parsed=urllib.parse.urlsplit(base)
+            valid=(parsed.scheme=='https' and parsed.hostname and not parsed.username and not parsed.password
+                   and not parsed.query and not parsed.fragment and (parsed.port is None or 1<=parsed.port<=65535)
+                   and all(33<=ord(char)<=126 for char in base))
+        except ValueError:valid=False
+        if not valid:
+            self.fail_ask('endpoint_configuration','The AI connection address needs attention. Ask your administrator to check its HTTPS API address.',503)
+        headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','Accept':'application/json',
+                 'User-Agent':'BuildCommand-AI/'+VERSION}
+        for setting,header in [('OPENAI_ORG_ID','OpenAI-Organization'),('OPENAI_PROJECT_ID','OpenAI-Project')]:
+            value=(os.environ.get(setting) or '').strip()
+            if value:headers[header]=value
+        if any(not all(32<=ord(char)<=126 for char in value) for value in headers.values()):
+            self.fail_ask('credential_configuration','The AI connection settings contain an invalid character. Ask your administrator to check the API settings.',503)
+        try:
+            request=urllib.request.Request(base+'/responses',data=packed(body).encode('utf-8'),headers=headers,method='POST')
+            opener=urllib.request.build_opener(NoAIRedirect())
+            with opener.open(request,timeout=45) as response:
+                raw=response.read(RESPONSE_BYTE_LIMIT+1)
+                request_id=response.headers.get('x-request-id')
+        except urllib.error.HTTPError as error:
+            status,request_id=error.code,error.headers.get('x-request-id') if error.headers else None
+            try:
+                raw=error.read(65537)
+                data=json.loads(raw) if len(raw)<=65536 else {}
+            except (ValueError,OSError,http.client.HTTPException):data={}
+            finally:error.close()
+            if 300<=status<400:
+                self.fail_ask('endpoint_redirect','The AI connection returned a different address. Ask your administrator to check the configured API address.',503)
+            self.provider_failure(AskHTTPError(status,data,request_id))
+        except (TimeoutError,urllib.error.URLError,OSError,http.client.HTTPException) as error:
+            if isinstance(error,TimeoutError) or isinstance(getattr(error,'reason',None),TimeoutError):
+                self.fail_ask('timeout','The AI took too long to answer. Your question is below so you can try again.',504)
+            self.fail_ask('connection','The app could not reach the AI service. Please try again in a moment.',502)
+        except (ValueError,TypeError):
+            self.fail_ask('request_configuration','The AI connection could not prepare this request. Ask your administrator to check the API settings.',503)
+        if len(raw)>RESPONSE_BYTE_LIMIT:
+            self.fail_ask('response_too_large','The AI response was too large. Try a more focused question.',502)
+        try:data=json.loads(raw)
+        except (ValueError,UnicodeError):
+            self.fail_ask('invalid_response','The AI service returned an unreadable response. Please try again.',502)
+        if not isinstance(data,dict):
+            self.fail_ask('invalid_response','The AI service returned an unreadable response. Please try again.',502)
+        data['_request_id']=request_id
+        return data
+
     def run_answer(self,question,context):
         key=os.environ.get('OPENAI_API_KEY','').strip()
         if not key:self.fail_ask('not_configured','Ask BuildCommand is not configured. Ask your administrator to connect the AI service.',503)
         model=(os.environ.get('OPENAI_COMMAND_MODEL') or '').strip() or (os.environ.get('OPENAI_MODEL') or '').strip() or 'gpt-5.6'
-        factory=getattr(self.rt,'OpenAI',None)
-        if not callable(factory):
-            try:
-                from openai import OpenAI
-                factory=OpenAI
-            except ImportError:self.fail_ask('sdk_unavailable','The AI connection package is missing. Ask your administrator to rebuild the app with its OpenAI dependency.',503)
         payload={**context,'evidence':[{k:v for k,v in row.items() if k!='path'} for row in context['evidence']]}
-        client=None
-        try:
-            client=factory(api_key=key,timeout=45,max_retries=0)
-            create=getattr(getattr(client,'responses',None),'create',None)
-            if not callable(create):self.fail_ask('sdk_compatibility','The installed AI connection needs an update. Ask your administrator to rebuild with a current OpenAI package.',503)
-            kwargs={'model':model,'instructions':ASK_INSTRUCTIONS,'input':packed({'question':question,'project_context':payload}),
-                    'text':{'format':{'type':'json_schema','name':'buildcommand_answer','strict':True,'schema':ANSWER_SCHEMA}},
-                    'max_output_tokens':5000,'store':False}
-            # This model family supports low reasoning; keep a short field answer responsive.
-            if model=='gpt-5.6' or model.startswith('gpt-5.6-'):kwargs['reasoning']={'effort':'low'}
-            response=create(**kwargs)
-        except AskFailure:raise
-        except Exception as exc:self.provider_failure(exc)
-        finally:
-            close=getattr(client,'close',None)
-            if callable(close):
-                try:close()
-                except Exception:pass
+        kwargs={'model':model,'instructions':ASK_INSTRUCTIONS,'input':packed({'question':question,'project_context':payload}),
+                'text':{'format':{'type':'json_schema','name':'buildcommand_answer','strict':True,'schema':ANSWER_SCHEMA}},
+                'max_output_tokens':5000,'store':False}
+        if model=='gpt-5.6' or model.startswith('gpt-5.6-'):kwargs['reasoning']={'effort':'low'}
+        response=self.request_response(kwargs,key)
         return self.parse_answer(response,context)
 
     def failure_page(self,pid,question,failure):
@@ -264,6 +316,11 @@ class CommandCenter:
         base=self.health();checks=dict(base['checks'])
         checks.update(structured_answer_format=ANSWER_SCHEMA.get('additionalProperties') is False,typed_provider_errors=callable(self.provider_failure),question_preserved_on_failure=callable(self.failure_page),completed_response_validation=callable(self.parse_answer))
         return {**base,'checks':checks,'passed':sum(checks.values()),'total':len(checks),'status':'ok' if all(checks.values()) else 'degraded','scope':'Installation and handler checks only. No provider request or credential/model access check is made. Test Ask on staging.'}
+
+    def api_health(self):
+        base=self.reliability_health();checks=dict(base['checks'])
+        checks.update(direct_https_transport=callable(self.request_response),redirects_blocked=issubclass(NoAIRedirect,urllib.request.HTTPRedirectHandler),bounded_provider_response=RESPONSE_BYTE_LIMIT==1024*1024)
+        return {**base,'checks':checks,'passed':sum(checks.values()),'total':len(checks),'status':'ok' if all(checks.values()) else 'degraded'}
 
     def ask(self,project_id:int,question:str=Form(...)):
         question=question.strip();self.require(0<len(question)<=1500,'Ask a question within 1,500 characters.',400)
@@ -322,3 +379,5 @@ class CommandCenter:
         self.rt.PUBLIC_PATHS.add('/health/simple-command-8-10-0')
         self.ns['app'].add_api_route('/health/ask-reliability-8-10-1',self.reliability_health,methods=['GET'])
         self.rt.PUBLIC_PATHS.add('/health/ask-reliability-8-10-1')
+        self.ns['app'].add_api_route('/health/ask-api-compatibility-8-10-3',self.api_health,methods=['GET'])
+        self.rt.PUBLIC_PATHS.add('/health/ask-api-compatibility-8-10-3')
