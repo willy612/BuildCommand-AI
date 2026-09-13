@@ -62079,3 +62079,9 @@ def bc8102_health():
 
 
 _runtime.PUBLIC_PATHS.add('/health/simple-workspace-8-10-2')
+
+
+# 8.10.3 — Ask uses the HTTPS API without depending on the installed SDK.
+BUILD_COMMAND_RELEASE = '8.10.3'
+BUILD_COMMAND_RELEASE_NAME = 'Ask API Compatibility Fix'
+app.version = BUILD_COMMAND_RELEASE
