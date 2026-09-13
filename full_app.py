@@ -60781,6 +60781,8 @@ def _bc850_source(c,user,pid,kind,source_id=None,query=''):
         return app.state.photo_field.list_sources(c,user,pid,source_id,query)
     if kind == 'rfi_answer':
         return app.state.rfi_field.list_sources(c,user,pid,source_id,query)
+    if kind == 'command_notice':
+        return app.state.command_actions.list_sources(c,user,pid,source_id,query)
     label,table,title,due=_BC850_SOURCES[kind]
     fields=f't.id,t.{title} AS title,'+(f't.{due} AS due_date' if due else "'' AS due_date")
     if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
@@ -60873,6 +60875,8 @@ def _bc850_share(c,user,share_id,manager=False,lock=False):
         app.state.photo_field.source_for_share(c,share)
     elif share['kind'] == 'rfi_answer':
         app.state.rfi_field.publication(c,share)
+    elif share['kind'] == 'command_notice':
+        app.state.command_actions.notice(c,share)
     elif not manager:
         _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
     return share
@@ -60920,6 +60924,11 @@ def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0)
 @_bc850_endpoint
 def bc850_prepare_share(project_id:int,kind:str,source_id:int,draft_message:str=''):
     _bc850_require(len(draft_message)<=6000, 'Keep draft instructions within 6,000 characters.',400)
+    if kind == 'command_notice':
+        with _bc850_db() as c:
+            user,project,plan=app.state.command_actions.plan(c,source_id)
+            _bc850_require(project['id']==project_id,'Choose the notice in this project.',404)
+        return _BC187_RedirectResponse(f'/workspace/command/actions/{source_id}',status_code=303)
     if kind == 'scope':
         return app.state.blueprint_field.prepare(source_id,project_id)
     if kind == 'photo_action':
@@ -60946,7 +60955,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int,draft_message:str=
 @app.post('/workspace/sharing/publish')
 @_bc850_endpoint
 def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
-    _bc850_require(kind not in {'scope','photo_action','rfi_answer'},'Review the scope, photo action or RFI answer preview before publishing it.',400)
+    _bc850_require(kind not in {'scope','photo_action','rfi_answer','command_notice'},'Review the scope, photo action, RFI answer or command action preview before publishing it.',400)
     title,message,due_date=title.strip(),message.strip(),due_date.strip()
     _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
     _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
@@ -62084,7 +62093,9 @@ def bc8102_health():
 _runtime.PUBLIC_PATHS.add('/health/simple-workspace-8-10-2')
 
 
-# 8.10.4 — database-native values are encoded consistently throughout Ask.
-BUILD_COMMAND_RELEASE = '8.10.4'
-BUILD_COMMAND_RELEASE_NAME = 'Ask Project Data Fix'
+# 8.11.0 — reviewed trade notices and dated internal briefing follow-ups.
+from command_actions import install as _bc8110_install
+_bc8110_actions = _bc8110_install(globals())
+BUILD_COMMAND_RELEASE = '8.11.0'
+BUILD_COMMAND_RELEASE_NAME = 'Reviewed Command Actions'
 app.version = BUILD_COMMAND_RELEASE
