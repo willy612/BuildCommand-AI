@@ -354,51 +354,6 @@ class BlueprintField:
             return '/blueprint-brain/trade/' + str(scope_id)
         return None
 
-    def command_panel(self, user, pid):
-        # Never generate AI, publish work, or mutate records during a page view.
-        body = '<section class="bc860-panel"><h2>From plans to today’s work</h2><p>Review trade scopes, issue the work, and follow the updates below.</p>'
-        body += f'<a class="bc860-button" href="/workspace/scopes?project_id={pid}">Review &amp; publish trade scopes</a>'
-        for key, label in [('blueprint', 'Blueprint Brain'), ('photo', 'Analyze a photo'), ('brief', 'Morning Brief'), ('daily', 'Daily report')]:
-            body += self.tool_form(pid, key, label)
-        body += '</section>'
-        try:
-            with self.db() as c:
-                self.actor(c, pid)
-                tables = self.ns['_bc800_table_names']()
-                if 'blueprint_runs' in tables:
-                    run = c.execute('SELECT id,created FROM blueprint_runs WHERE company_id=? AND project_id=? AND UPPER(status) IN (\'COMPLETE\',\'COMPLETED\',\'SUCCESS\') ORDER BY id DESC LIMIT 1', (user['company_id'], pid)).fetchone()
-                    if run:
-                        body += '<section class="bc860-panel"><h2>Latest Blueprint analysis</h2><p>Run #' + str(run['id']) + ' · ' + esc(run['created']) + '</p><p>Review the completed trade scopes and publish the requirements your subcontractors need.</p></section>'
-                if 'superintendent_daily_briefs' in tables:
-                    saved = c.execute('SELECT brief_date,created,brief_json FROM superintendent_daily_briefs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1', (user['company_id'], pid)).fetchone()
-                    if saved:
-                        data = json.loads(saved['brief_json'] or '{}')
-                        body += '<section class="bc860-panel"><h2>Last saved daily brief</h2><p>' + esc(saved['brief_date']) + ' · Saved ' + esc(saved['created']) + '</p><p>' + esc(data.get('headline') or 'Open Project analysis to review the saved plan and current project signals.') + '</p></section>'
-        except Exception:
-            log.exception('Command summary unavailable project_id=%s', pid)
-            body += '<section class="bc860-panel"><p>Part of the project summary is temporarily unavailable. Your shared-work updates are still listed below.</p></section>'
-        brain = self.ns.get('_bc200_brain')
-        if callable(brain):
-            try:
-                data = brain(pid)
-                # Require an explicit matching project identity from the legacy engine.
-                project = (data or {}).get('project') or {}
-                if data and int(project.get('id') or 0) == pid:
-                    body += '<section class="bc860-panel"><h2>Today’s project priorities</h2><p>' + esc(data.get('headline')) + '</p><div class="grid3">'
-                    for key, label in [('morning', 'Morning'), ('midday', 'Midday'), ('closeout', 'Closeout')]:
-                        body += '<div><h3>' + label + '</h3>'
-                        items = list(data.get(key) or [])[:3]
-                        for item in items:
-                            body += '<p><strong>' + esc(item.get('title')) + '</strong><br>' + esc(item.get('recommended_action') or item.get('reason')) + '</p>'
-                        if not items:
-                            body += '<p>No actions listed in this block.</p>'
-                        body += '</div>'
-                    body += '</div><p class="small">Based on connected project records. Open Project analysis for the full context.</p></section>'
-            except Exception:
-                log.exception('Project priorities unavailable project_id=%s', pid)
-                body += '<section class="bc860-panel"><p>Project priorities are temporarily unavailable. You can continue reviewing subcontractor updates.</p></section>'
-        return body
-
     def page(self, title, body):
         response = self.ns['_bc840_page'](title, body)
         response.headers['Cache-Control'] = 'no-store'
