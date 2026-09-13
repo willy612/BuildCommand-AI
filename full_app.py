@@ -12621,6 +12621,14 @@ async def _bc1810l_create_project(request:_BC189_Request):
         )
 
     form=await request.form()
+    setup_flow = str(form.get('setup_flow') or '') == '1'
+    if setup_flow:
+        if not _bc840_same_origin(request):
+            return _bc861_origin_denied(request)
+        admin, denied = _bc820_require_company_admin()
+        if denied: return denied
+        if len(str(form.get('name') or '').strip()) > 200 or len(str(form.get('number') or '').strip()) > 80:
+            return _bc830b_error('Use a project name under 201 characters and a number under 81 characters.', 400)
     name=str(form.get("name") or "").strip()
     number=str(form.get("number") or "").strip()
     status=str(form.get("status") or "ACTIVE").strip().upper()
@@ -12645,7 +12653,7 @@ async def _bc1810l_create_project(request:_BC189_Request):
             pid=int(existing["id"])
             _bc1810l_persist_selected_project(pid,user,c)
             c.commit()
-            return _BC187_RedirectResponse("/app",status_code=303)
+            return _BC187_RedirectResponse(f"/workspace/setup/projects/{pid}" if setup_flow else "/app",status_code=303)
 
         row=c.execute(
             "INSERT INTO projects(name,number,status,company_id) "
@@ -12680,7 +12688,7 @@ async def _bc1810l_create_project(request:_BC189_Request):
     finally:
         c.close()
 
-    return _BC187_RedirectResponse("/app",status_code=303)
+    return _BC187_RedirectResponse(f"/workspace/setup/projects/{pid}" if setup_flow else "/app",status_code=303)
 
 _BC1810L_SELECT_ROUTE=_bc1810a_prepend_route(
     "/projects/select",_bc1810l_select_project,["POST"]
@@ -59584,7 +59592,8 @@ def bc830b_invitations_page():
 def bc830b_create_invitation(request:_BC189_Request,
                              email:str=_BC189_Form(...),
                              role:str=_BC189_Form(...),
-                             project_ids:list[str]=_BC189_Form(default=[])):
+                             project_ids:list[str]=_BC189_Form(default=[]),
+                             setup_project_id:int=_BC189_Form(0)):
     admin, denied = _bc820_require_company_admin()
     if denied:
         return denied
@@ -59624,6 +59633,9 @@ def bc830b_create_invitation(request:_BC189_Request,
         valid_projects = {str(r["id"]) for r in c.execute(
             "SELECT id FROM projects WHERE company_id=?",(cid,)).fetchall()}
         requested = {str(x) for x in (project_ids or [])}
+        if setup_project_id and (setup_project_id <= 0 or str(setup_project_id) not in requested):
+            _bc830b_rollback(c)
+            return _bc830b_error('Return to job setup and choose the project for this invitation.', 400)
         if not requested.issubset(valid_projects):
             _bc830b_rollback(c)
             return _bc830b_error("Select only projects that belong to your company.", 403)
@@ -59672,6 +59684,8 @@ def bc830b_create_invitation(request:_BC189_Request,
         f"<input style='width:100%;padding:12px' value='{_runtime.esc(link)}' readonly onclick='this.select()'>"
         f"<p class='muted'>Invitation #{invitation_id} · expires in 7 days · single use.</p></div>"
     )
+    if setup_project_id:
+        body += f'<p><a class="bc840-button" href="/workspace/setup/projects/{setup_project_id}">Back to job setup</a> <a href="/workspace/setup/projects/{setup_project_id}/invite">Invite another person</a></p>'
     try: rendered = _runtime.shell("Invitation Created",body)
     except Exception:
         _bc830b_logger.exception("Invitation saved but shared page rendering failed invitation_id=%s", invitation_id)
@@ -60107,6 +60121,11 @@ def _bc840_shell(title, body, *args, **kwargs):
                 '<label for="bc840-project">Project</label><select id="bc840-project" name="project_id" aria-label="Current project" required>' +
                 '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
     if title == 'Superintendent Command': selector = ''  # Uses the appointed-project selector in Command.
+    if path == '/workspace/setup' or path.startswith('/workspace/setup/'):
+        selector = ''  # Setup identifies the viewed job; handoffs select it explicitly.
+    setup = getattr(app.state, 'project_setup', None)
+    if setup and selected and (path == '/blueprint-brain' or path.startswith('/blueprint-brain/run/')):
+        body = setup.return_link(user, selected, path) + body
     name = str(user.get('display_name') or user.get('email') or 'Account')
     initials = ''.join(word[0] for word in name.split()[:2]).upper()
     parent = 'Company' if in_company else 'My workspace'
@@ -60145,6 +60164,10 @@ def _bc840_require_user():
 def _bc840_project_cards(projects):
     esc = _bc830b_escape
     if not projects:
+        setup = getattr(app.state, 'project_setup', None)
+        user = _bc840_user()
+        if setup and user and setup.admin(user):
+            return '<div class="bc840-empty"><h2>Create your first project</h2><p>Start with its name and number. Then add plans and your team.</p>' + setup.link('/workspace/setup/new', 'Create a project') + '</div>'
         return '<div class="bc840-empty"><h2>No projects assigned yet</h2><p>Ask your company administrator to open People & access and assign your projects.</p></div>'
     return '<div class="grid3">' + ''.join(
         '<article class="card"><span class="small">' + esc(str(p.get('number') or 'Project')) + '</span><h2>' +
@@ -60169,7 +60192,9 @@ def bc840_workspace():
     else:
         body += '<p>Only projects assigned to your account appear here. Company administration and internal GC tools are not available in this workspace.</p>'
         if tier == 'trade': body += '<p><a class="bc840-button" href="/workspace/shared">Open my shared work</a></p>'
-    body += '</div><section id="my-projects" aria-labelledby="my-projects-heading"><h2 id="my-projects-heading">My projects</h2>' + _bc840_project_cards(projects) + '</section>'
+    setup = getattr(app.state, 'project_setup', None)
+    body += '</div>' + (setup.entry(user) if setup and projects else '')
+    body += '<section id="my-projects" aria-labelledby="my-projects-heading"><h2 id="my-projects-heading">My projects</h2>' + _bc840_project_cards(projects) + '</section>'
     return _bc840_page('My workspace', body)
 
 @app.get('/workspace/projects')
@@ -60191,6 +60216,8 @@ def bc840_project(project_id:int):
         body += (f'<p><a class="bc840-button" href="/workspace/shared?project_id={project_id}">Open shared work</a></p><p>Your project leader chooses which items and files to share with you.</p>' if _bc840_tier(user)=='trade' else '<p>This observer role has project-overview access only.</p>') + '</div>'
     else:
         body += f'<div class="card"><h2>Work on this project</h2><form method="post" action="/workspace/select-project"><input type="hidden" name="project_id" value="{project_id}"><button>Set as current project</button></form><p>After selecting the project, use Field tools to open schedules, reports, documents and command.</p></div>'
+    setup = getattr(app.state, 'project_setup', None)
+    if setup: body += setup.entry(user, project_id)
     return _bc840_page('Project overview', body)
 
 @app.post('/workspace/select-project')
@@ -62098,4 +62125,12 @@ from command_actions import install as _bc8110_install
 _bc8110_actions = _bc8110_install(globals())
 BUILD_COMMAND_RELEASE = '8.11.0'
 BUILD_COMMAND_RELEASE_NAME = 'Reviewed Command Actions'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.12.0 — guided first-job setup; existing workflows and gates remain active.
+from project_setup import install as _bc8120_install
+_bc8120_setup = _bc8120_install(globals())
+BUILD_COMMAND_RELEASE = '8.12.0'
+BUILD_COMMAND_RELEASE_NAME = 'First Job Setup'
 app.version = BUILD_COMMAND_RELEASE
