@@ -18,8 +18,8 @@ from uuid import UUID
 from fastapi import Form
 from blueprint_field import esc, digest
 
-VERSION='8.10.4'
-RELEASE='Ask Project Data Fix'
+VERSION='8.11.0'
+RELEASE='Reviewed Command Actions'
 RESPONSE_BYTE_LIMIT=1024*1024
 log=logging.getLogger('buildcommand.command_center')
 ANSWER_SCHEMA={
@@ -126,6 +126,8 @@ class CommandCenter:
             photos=self.ns['app'].state.photo_field.brief_data(c,user,project)
             latest=c.execute('SELECT id,brief_date FROM bc_daily_command_briefs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 1',(user['company_id'],pid)).fetchone()
             _,_,attention=self.ns['_bc860_rows'](c,user,pid,'attention','',1)
+            actions=getattr(self.ns['app'].state,'command_actions',None)
+            followup_panel=actions.panel(c,user,project) if actions else ''
         priorities=self.daily.priorities(pid)
         notices={'review':'Update reviewed. Your reply is available to the subcontractor.','review_close':'Update reviewed and responses closed.','close':'Responses closed.','reopen':'Responses reopened.','revoke':'Access revoked.'}
         body='<div role="status" class="bc860-notice">'+notices[notice]+'</div>' if notice in notices else ''
@@ -143,7 +145,7 @@ class CommandCenter:
         if not cards:
             body+='<p>No priorities are recorded yet. Start by analyzing your plans or sharing the first piece of work.</p>' if totals['total']==0 else '<p>No recorded work needs attention here. Check today’s plan with your crew.</p>'
         if not priorities['available']:body+='<p class="muted">Project analysis is temporarily unavailable. The shared-work queue remains available.</p>'
-        body+=f'<p><a class="bc860-button" href="/workspace/command/projects/{pid}/brief">Review today’s brief</a></p></section><section id="ask" class="bc860-panel"><h2>Ask BuildCommand</h2><p>Get a clear answer from the records on this job.</p>'+self.ask_form(pid)+'</section></div>'
+        body+=followup_panel+f'<p><a class="bc860-button" href="/workspace/command/projects/{pid}/brief">Review today’s brief</a></p></section><section id="ask" class="bc860-panel"><h2>Ask BuildCommand</h2><p>Get a clear answer from the records on this job.</p>'+self.ask_form(pid)+'</section></div>'
         body+='<section id="quick" class="bc860-panel"><h2>Quick Actions</h2><div class="quick-grid">'
         for path,label in [(f'/photo-ai?project_id={pid}','Review a site photo'),(f'/workspace/scopes?project_id={pid}','Review & publish trade scopes'),(f'/workspace/rfi-answers?project_id={pid}','RFI answers to field'),(f'/workspace/sharing/projects/{pid}/team','Project subcontractors')]:body+='<a class="bc860-button secondary" href="'+path+'">'+esc(label)+'</a>'
         body+='</div><details><summary>More tools and saved work</summary><div class="bc860-tools">'
@@ -183,6 +185,9 @@ class CommandCenter:
         for row in data['scopes']:add('Issued trade scope',row['id'],row['title'],str(row['recipient_name'])+' · '+self.daily.status_label(row),f'/workspace/sharing/{row["id"]}')
         for row in data['photo_actions']['items']:add('Photo action',row['id'],row['title'],str(row['state']),f'/workspace/photo-actions/{row["id"]}')
         for row in data['rfi_directions']['items']:add('Issued RFI direction',row['id'],row['title'],'Source needs review' if row['needs_review'] else row['latest_status'] or 'Awaiting acknowledgment',f'/workspace/sharing/{row["id"]}')
+        for row in data.get('command_followups',{}).get('items',[]):add('Planned follow-up',row['id'],row['title'],row['followup_date']+' · '+row['note'],f'/workspace/command/actions/{row["plan_id"]}')
+        if getattr(self.ns['app'].state,'command_actions',None) is not None:
+            for row in c.execute('SELECT id,plan_id,title,note,followup_date FROM bc_command_followups WHERE company_id=? AND project_id=? AND closed_at IS NULL AND followup_date>? ORDER BY followup_date,id LIMIT 30',(user['company_id'],pid,self.field.now().date().isoformat())).fetchall():add('Upcoming follow-up',row['id'],row['title'],row['followup_date']+' · '+row['note'],f'/workspace/command/actions/{row["plan_id"]}')
         for row in c.execute('SELECT id,original_name,result_text FROM bc_photo_analyses WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 8',(user['company_id'],pid)).fetchall():add('Photo observations',row['id'],row['original_name'],row['result_text'],f'/workspace/photos/{row["id"]}')
         for row in c.execute('SELECT id,title,original_name FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 8',(user['company_id'],pid)).fetchall():add('Document title only',row['id'],row['title'],row['original_name'],f'/workspace/command/projects/{pid}/analysis')
         if 'blueprint_scope_items' in self.ns['_bc800_table_names']():
@@ -386,6 +391,10 @@ class CommandCenter:
         body+='<details><summary>Project records behind this answer</summary><p class="muted">'+esc(context['source_coverage'])+'</p>'
         body+=''.join('<p><a href="'+e['path']+'">'+esc(e['kind']+' · '+e['title'])+'</a></p>' for e in selected) or '<p>No specific supporting record was identified. Verify the proposed next step on site.</p>'
         body+='</details></section><section class="bc860-panel"><h2>Review the next step</h2><p>These are drafts. Choose the next action and review it before saving or sharing.</p>'
+        actions=getattr(self.ns['app'].state,'command_actions',None)
+        if actions:
+            body+=actions.entry_form(project_id,question,answer,context,source_hash)
+            body+='<details><summary>Prepare a single item using the existing forms</summary>'
         if answer.get('briefing_note'):
             body+=f'<form method="post" action="/workspace/command/projects/{project_id}/brief/draft"><label for="draft-note">Proposed briefing note</label><textarea id="draft-note" name="draft_notes" maxlength="6000">'+esc(answer['briefing_note'])+'</textarea><button>Prepare today’s briefing</button></form><p class="muted">Opens a review. This does not move work, change a date or schedule tomorrow’s briefing.</p>'
         if answer.get('notice_draft'):
@@ -393,6 +402,7 @@ class CommandCenter:
             body+=f'<form method="post" action="/workspace/command/projects/{project_id}/notice/draft"><label for="draft-message">Proposed trade message</label><textarea id="draft-message" name="message" maxlength="6000">'+esc(answer['notice_draft'])+'</textarea><label for="draft-source">Which work is this about?</label><select id="draft-source" name="source" required><option value="">Choose the work</option>'
             kind_map={'Schedule':'schedule','RFI':'rfi','Submittal':'submittal'}
             body+=''.join('<option value="'+kind_map[e['kind']]+':'+str(e['record_id'])+'">'+esc(e['kind']+' · '+e['title'])+'</option>' for e in choices)+'</select><p><button>Prepare trade message</button></p></form><p class="muted">Your draft carries forward. Choose the recipient and review the message on the next screen.</p>'
+        if actions:body+='</details>'
         body+=f'<div class="bc860-tools"><a class="bc860-button secondary" href="/workspace/sharing?project_id={project_id}">Choose work to share</a><a class="bc860-button secondary" href="/workspace/rfi-answers?project_id={project_id}">Review an RFI answer</a></div></section><details class="bc860-panel"><summary>Ask another question</summary>'+self.ask_form(project_id,question)+'</details><p><a href="/workspace/command?project_id='+str(project_id)+'">Back to Command</a></p>'
         return self.page('Ask BuildCommand',body)
 
@@ -425,4 +435,3 @@ class CommandCenter:
         self.rt.PUBLIC_PATHS.add('/health/ask-api-compatibility-8-10-3')
         self.ns['app'].add_api_route('/health/ask-project-data-8-10-4',self.data_health,methods=['GET'])
         self.rt.PUBLIC_PATHS.add('/health/ask-project-data-8-10-4')
-
