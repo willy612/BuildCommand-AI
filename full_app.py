@@ -60670,6 +60670,8 @@ def _bc850_source(c,user,pid,kind,source_id=None,query=''):
     _bc850_require(kind in _BC850_SOURCES,'Choose a supported work-item type.',400)
     if kind == 'scope':
         return app.state.blueprint_field.list_sources(c,user,pid,source_id,query)
+    if kind == 'photo_action':
+        return app.state.photo_field.list_sources(c,user,pid,source_id,query)
     label,table,title,due=_BC850_SOURCES[kind]
     fields=f't.id,t.{title} AS title,'+(f't.{due} AS due_date' if due else "'' AS due_date")
     if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
@@ -60758,6 +60760,8 @@ def _bc850_share(c,user,share_id,manager=False,lock=False):
     if not manager: _bc850_require(share['revoked_at'] is None)
     if share['kind'] == 'scope':
         app.state.blueprint_field.publication(c,share)
+    elif share['kind'] == 'photo_action':
+        app.state.photo_field.source_for_share(c,share)
     elif not manager:
         _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
     return share
@@ -60806,6 +60810,8 @@ def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0)
 def bc850_prepare_share(project_id:int,kind:str,source_id:int):
     if kind == 'scope':
         return app.state.blueprint_field.prepare(source_id,project_id)
+    if kind == 'photo_action':
+        return app.state.photo_field.prepare_existing(source_id,project_id)
     with _bc850_db() as c:
         user=_bc850_actor(c);project,source,recipients=_bc850_form_context(c,user,project_id,kind,source_id)
     body='<div class="hero"><h1>Prepare a share</h1><p>'+_bc830b_escape(project['name'])+' · '+_BC850_SOURCES[kind][0]+'</p></div>'
@@ -60826,7 +60832,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int):
 @app.post('/workspace/sharing/publish')
 @_bc850_endpoint
 def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
-    _bc850_require(kind != 'scope','Review the trade scope preview before publishing it.',400)
+    _bc850_require(kind not in {'scope','photo_action'},'Review the scope or photo action preview before publishing it.',400)
     title,message,due_date=title.strip(),message.strip(),due_date.strip()
     _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
     _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
@@ -60890,6 +60896,8 @@ def _bc850_detail(share_id,manager):
         recipient=c.execute('SELECT display_name,email FROM users WHERE id=?',(share['recipient_user_id'],)).fetchone()
         project=c.execute('SELECT name FROM projects WHERE id=? AND company_id=?',(share['project_id'],_bc810_company_id(user))).fetchone()
         scope_html = app.state.blueprint_field.issued_html(c,share,manager) if share['kind']=='scope' else ''
+        if share['kind']=='photo_action':
+            scope_html = app.state.photo_field.issued_html(c,share,manager)
     prefix='/workspace/sharing/' if manager else '/workspace/shared/'
     body='<div class="hero"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p>'+_bc830b_escape(str(project['name'] if project else ''))+'</p><h1>'+_bc830b_escape(share['title'])+'</h1><p>'+('Revoked' if share['revoked_at'] else share['state'].capitalize())+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></div><div class="card"><h2>Shared instructions</h2>'+_bc850_text(share['message'])
     if manager:
@@ -61899,4 +61907,11 @@ from daily_command import install as _bc880_install
 _BC880_COMMAND = _bc880_install(globals())
 BUILD_COMMAND_RELEASE = '8.8.0'
 BUILD_COMMAND_RELEASE_NAME = 'Daily Command Briefing'
+app.version = BUILD_COMMAND_RELEASE
+
+# 8.9.0 — Photo Findings to Field Actions
+from photo_field import install as _bc890_install
+_BC890_PHOTOS = _bc890_install(globals())
+BUILD_COMMAND_RELEASE = '8.9.0'
+BUILD_COMMAND_RELEASE_NAME = 'Photo Findings to Field Actions'
 app.version = BUILD_COMMAND_RELEASE
