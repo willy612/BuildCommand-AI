@@ -59847,6 +59847,7 @@ BC840_RELEASE = "8.4.0"
 BC840_RELEASE_NAME = "Clear Workspaces & Company Administration"
 _BC840_NO_REQUEST = object()
 _bc840_request_user = _BC840_ContextVar("bc840_request_user", default=_BC840_NO_REQUEST)
+_bc840_request_path = _BC840_ContextVar("bc840_request_path", default="")
 
 # One role directory for labels, navigation and the route boundary. Unknown
 # roles receive the restricted observer workspace, never implicit staff access.
@@ -59981,51 +59982,154 @@ h2{font-size:22px;line-height:1.3}h3{font-size:18px}.eyebrow,.label,.v117r-eyebr
 @media(max-width:820px){.grid2,.grid3,.grid4{grid-template-columns:1fr}.bc840-top,.bc840-nav{padding-left:14px;padding-right:14px}.bc840-main{padding:18px 14px 48px}.bc840-select{width:100%;max-width:none;margin-left:0}.bc840-logo img{width:140px;height:66px}.bc840-identity{font-size:14px}.bc840-nav{gap:4px}.bc840-nav a{padding:9px}.hero,.card{padding:18px}.bc840-top{gap:10px}th,td{min-width:100px}.bc840-logout button{padding:8px 11px}}
 """
 
+def _bc8102_company_links(user):
+    links = []
+    if _bc840_tier(user) in {'owner', 'admin'}:
+        links += [('Overview', '/company'), ('People & access', '/company/users'),
+                  ('Invitations', '/company/invitations')]
+    links += [('My access', '/workspace/access'), ('Access status', '/workspace/company-access')]
+    if _bc840_tier(user) in {'owner', 'admin'}:
+        links += [('Role guide', '/company/access-matrix'), ('Settings', '/company-settings')]
+    return links
+
+
+def _bc8102_active(path, href):
+    if href == '/workspace':
+        return path == href or path.startswith('/workspace/projects')
+    if href == '/workspace/command':
+        return path.startswith(('/workspace/command', '/superintendent-command'))
+    if href in {'/workspace/access', '/company', '/company-settings'}:
+        return path == href
+    return path == href or path.startswith(href + '/')
+
+
+def _bc8102_icon(name):
+    shapes = {
+        'home': '<path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/>',
+        'command': '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+        'tools': '<path d="M14 6a5 5 0 0 0-6 6l-5 5a2 2 0 0 0 4 4l5-5a5 5 0 0 0 6-6l-3 3-4-4 3-3Z"/>',
+        'scope': '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/>',
+        'sharing': '<circle cx="8" cy="7" r="3"/><path d="M2 21v-4a6 6 0 0 1 12 0v4M16 4a3 3 0 0 1 0 6m2 4a5 5 0 0 1 4 5v2"/>',
+        'company': '<path d="M3 21V7l12-4v18M15 10h6v11M1 21h22M7 9v2m4-3v2m-4 4v2m4-3v2m-4 4v2m4-3v3m7-7v2m0 3v2"/>',
+        'arrow': '<path d="M4 12h16m-6-6 6 6-6 6"/>',
+        'menu': '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    }
+    return '<svg class="bc8102-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + shapes.get(name, shapes['scope']) + '</svg>'
+
+
+_BC8102_CSS = r'''
+body.bc8102{--ink:#172b3e;--muted:#596a7c;--line:#dfe6ee;--bg:#f5f7f9;background:var(--bg);color:var(--ink);font-size:16px}
+.bc8102 .bc8102-sidebar{position:fixed;inset:0 auto 0 0;width:246px;z-index:30;background:#112032;color:#d6e0ea;display:flex;flex-direction:column;padding:24px 16px 16px;overflow-y:auto}
+.bc8102 .bc840-logo{display:block;margin:0 8px 25px;text-align:center;color:#fff;font-size:19px;line-height:1.4;text-decoration:none}
+.bc8102 .bc840-logo img{width:198px;height:104px;max-width:100%;object-fit:contain;background:#fff;border-radius:9px;padding:7px;margin:0 auto 11px}
+.bc8102 .bc840-logo small{display:block;color:#adbed0;font-size:10px;font-weight:500;letter-spacing:2px;margin-top:8px;text-transform:uppercase}
+.bc8102 .bc8102-nav-label{font-size:10px;font-weight:600;letter-spacing:1.8px;color:#9cafc2;padding:0 13px;margin:7px 0 12px}
+.bc8102 .bc840-nav{display:block;max-width:none;margin:0;padding:0}
+.bc8102 .bc8102-link,.bc8102 .bc8102-company>summary{display:flex;align-items:center;gap:12px;min-height:46px;padding:11px 13px;margin:4px 0;border-radius:8px;color:#c5d2e0;text-decoration:none;font-size:14px;font-weight:600;line-height:1.4;border:0;background:transparent}
+.bc8102 .bc8102-link:hover,.bc8102 .bc8102-company>summary:hover{background:#203146;color:#fff;text-decoration:none}
+.bc8102 .bc8102-link[aria-current=page],.bc8102 .bc8102-company.is-current>summary{background:#2c3945;color:#f6c667;box-shadow:inset 3px 0 #edb44b}
+.bc8102-icon{width:21px;height:21px;flex-shrink:0;vertical-align:middle}
+.bc8102 .bc8102-company{margin-top:20px;border-top:1px solid #2c3b4b;padding-top:13px}
+.bc8102 .bc8102-company>summary{cursor:pointer;list-style:none}
+.bc8102-company>summary::-webkit-details-marker{display:none}
+.bc8102-company>summary::after{content:'›';font-size:22px;margin-left:auto;transform:rotate(0deg);line-height:1}
+.bc8102-company[open]>summary::after{transform:rotate(90deg)}
+.bc8102 .bc8102-company-links{margin:8px 0 8px 23px;padding-left:14px;border-left:1px solid #40546a}
+.bc8102 .bc8102-company-links a{font-size:13px;font-weight:500;min-height:44px;padding:10px 11px;margin:2px 0}
+.bc8102 #bc8102-navigation{display:flex;flex-direction:column;flex:1}.bc8102 .bc8102-sidebar-bottom{margin-top:auto;padding-top:32px}
+.bc8102 .bc840-identity{margin:18px 0 0;border-top:1px solid #2c3b4b;padding:19px 10px 8px;display:flex;gap:11px;align-items:center;color:#eef3f8;font-size:13px;overflow-wrap:anywhere}
+.bc8102 .bc840-identity small{font-size:12px;color:#aebed0;margin-top:3px;line-height:1.5}
+.bc8102-avatar{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:36px;height:36px;border-radius:50%;background:#31465b;color:#eed29a;font-size:12px;font-weight:700}
+.bc8102 .bc840-logout{margin:0;padding:2px 10px 0}.bc8102 .bc840-logout button{background:transparent;border-color:#4b6077;color:#dce6f0;min-height:44px;padding:7px 13px;font-size:13px;width:100%;margin-top:9px}
+.bc8102 .bc8102-content{margin-left:246px;min-width:0}
+.bc8102 .bc840-header{min-height:78px;display:flex;align-items:center;gap:24px;justify-content:space-between;padding:16px 32px;background:#fff;border-bottom:1px solid var(--line)}
+.bc8102-breadcrumb{display:flex;align-items:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:13px;min-width:0}.bc8102-breadcrumb b{font-weight:600;color:var(--ink)}.bc8102-breadcrumb a{color:var(--muted);text-decoration:none}.bc8102-breadcrumb a:hover{text-decoration:underline}.bc8102-breadcrumb span{color:#a8b5c4}
+.bc8102 .bc840-select{margin:0;max-width:460px;flex:0 1 460px;gap:9px}.bc8102 .bc840-select label{font-size:12px}.bc8102 .bc840-select select{font-size:14px;padding:10px;min-height:44px;width:100%}.bc8102 .bc840-select button{font-size:14px;padding:10px 15px;background:#112032;border-color:#112032}
+.bc8102 .bc840-main{max-width:1510px;margin:0 auto;padding:32px;min-height:calc(100vh - 145px);min-width:0;outline:none}
+.bc8102 .hero,.bc8102 .v117r-hero{border:0;background:transparent;padding:0;margin-bottom:27px}.bc8102 .hero h1,.bc8102 .v117r-hero h1{color:var(--ink);font-size:clamp(27px,3vw,36px);font-weight:700;letter-spacing:-.8px;margin:8px 0 12px}.bc8102 .hero p{font-size:16px;line-height:1.7}
+.bc8102 .eyebrow,.bc8102 .v117r-eyebrow{color:#876017;letter-spacing:1.5px;font-size:11px}
+.bc8102 .card,.bc8102 .v117r-card{border:1px solid var(--line);border-radius:12px;padding:24px;background:#fff;box-shadow:none;min-width:0}
+.bc8102 .card h2{margin-top:4px}.bc8102 .bc840-main h2{font-size:22px;letter-spacing:-.4px}.bc8102 .bc840-main h3{font-size:18px}
+.bc8102 .bc840-button{background:#173f64;border-color:#173f64;min-height:46px;border-radius:8px}
+.bc8102 .bc840-main .bc840-button:hover{background:#112c46;color:white;text-decoration:none}
+.bc8102 .grid3{grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr))}.bc8102 .bc840-main p,.bc8102 .bc840-main h1,.bc8102 .bc840-main h2{overflow-wrap:anywhere}
+.bc8102 .bc840-footer{max-width:1510px;margin:auto;padding:20px 32px;font-size:12px;text-align:left;background:transparent;color:var(--muted)}
+.bc8102 .bc8102-menu-button{display:none}.bc8102 [hidden]{display:none!important}
+.bc8102 .bc8102-sidebar :focus-visible{outline:3px solid #f6c667;outline-offset:2px}.bc8102 .bc840-skip:focus{position:fixed;left:12px;top:12px;z-index:100}
+@media(max-width:1100px){.bc8102 .bc840-header{padding:16px 24px;flex-wrap:wrap;gap:12px}.bc8102 .bc840-main{padding:28px 24px}.bc8102 .bc840-select{flex-basis:100%;max-width:none;width:100%}}
+@media(max-width:820px){.bc8102 .bc8102-sidebar{position:static;width:auto;padding:14px 16px;overflow:visible}.bc8102 .bc8102-brand-row{display:flex;align-items:center;justify-content:space-between;gap:14px}.bc8102 .bc840-logo{margin:0;text-align:left}.bc8102 .bc840-logo img{width:136px;height:70px;margin:0;padding:4px}.bc8102 .bc840-logo small{display:none}.bc8102 .bc8102-menu-button{display:flex;gap:9px;align-items:center;border:1px solid #60748b;background:transparent;color:#fff;padding:10px 13px;min-height:44px}.bc8102 .bc8102-content{margin-left:0}.bc8102 .bc8102-nav-label{margin-top:20px}.bc8102 .bc8102-sidebar-bottom{padding-top:12px}.bc8102 .bc840-identity{margin-top:12px}.bc8102 .bc840-logout{max-width:250px}.bc8102 .bc840-header{min-height:56px;padding:14px 18px}.bc8102 .bc840-main{padding:24px 18px;min-height:60vh}.bc8102 .card,.bc8102 .v117r-card{padding:20px}.bc8102 .bc840-footer{padding:18px}.bc8102 .bc840-select{max-width:none;flex-basis:100%;gap:7px}.bc8102 .bc840-select label{display:none}.bc8102 .bc840-select select{min-width:0}.bc8102 .bc8102-breadcrumb{font-size:12px}.bc8102 .hero{margin-bottom:23px}}
+@media print{.bc8102 .bc8102-sidebar,.bc8102 .bc840-header,.bc8102 .bc840-footer{display:none!important}.bc8102 .bc8102-content{margin:0}.bc8102 .bc840-main{max-width:none;margin:0;padding:0;min-height:0}body.bc8102{background:white}}
+'''
+
+_BC8102_MENU_SCRIPT = '''<script>
+(()=>{const button=document.getElementById('bc8102-menu-button');const panel=document.getElementById('bc8102-navigation');
+if(!button||!panel)return;const small=window.matchMedia('(max-width: 820px)');
+function setOpen(open){panel.hidden=!open;button.setAttribute('aria-expanded',String(open));}
+function resize(){if(small.matches&&panel.contains(document.activeElement))button.focus();setOpen(!small.matches);}
+button.addEventListener('click',()=>setOpen(panel.hidden));
+panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&small.matches){setOpen(false);button.focus();}});
+if(small.addEventListener)small.addEventListener('change',resize);else small.addListener(resize);resize();})();
+</script>'''
+
+
 def _bc840_company_tabs():
-    return '<nav class="bc840-tabs" aria-label="Company sections">' + ''.join(
-        f'<a href="{url}">{label}</a>' for label,url in [("Overview","/company"),("People & access","/company/users"),
-        ("Invitations","/company/invitations"),("Access status","/workspace/company-access"),
-        ("Role guide","/company/access-matrix"),("Settings","/company-settings")]) + '</nav>'
+    # Company sections now live together inside the shared sidebar.
+    return ''
+
 
 def _bc840_shell(title, body, *args, **kwargs):
     user = _bc840_user()
     if not user: return _BC840_PREVIOUS_SHELL(title, body, *args, **kwargs)
     esc = _bc830b_escape
     tier = _bc840_tier(user)
-    nav = [("My workspace","/workspace"),("Projects","/workspace/projects")]
-    if tier in {"owner","admin","lead","staff"}:
-        nav += [("Field tools","/workspace/tools"),("My access","/workspace/access")]
-    if tier in {"owner","admin"}: nav.append(("Company","/company"))
-    if tier == "owner": nav.append(("Owner console","/owner"))
-    if tier in {"trade","observer"}: nav.append(("My access","/workspace/access"))
+    path = _bc840_request_path.get()
+    nav = [('My workspace', '/workspace')]
     if callable(globals().get('_bc850_nav')): nav += _bc850_nav(user)
-    logo = globals().get("_BC706_LOGO_DATA", "")
+    if tier in {'owner', 'admin', 'lead', 'staff'}: nav.append(('Field tools', '/workspace/tools'))
+    company_links = _bc8102_company_links(user)
+    in_company = any(_bc8102_active(path, url) for _, url in company_links) or _bc840_admin_path(path)
+    symbols = {'/workspace':'home', '/workspace/command':'command', '/workspace/scopes':'scope',
+               '/workspace/sharing':'sharing', '/workspace/shared':'scope', '/workspace/tools':'tools'}
+    def link(label, href, symbol=None):
+        current = ' aria-current="page"' if _bc8102_active(path, href) else ''
+        return f'<a class="bc8102-link" href="{esc(href,quote=True)}"{current}>' + (_bc8102_icon(symbol) if symbol else '') + '<span>' + esc(label) + '</span></a>'
+    nav_html = ''.join(link(label, href, symbols.get(href, 'scope')) for label, href in nav)
+    company_html = '<details class="bc8102-company' + (' is-current' if in_company else '') + '"' + (' open' if in_company else '') + '><summary>' + _bc8102_icon('company') + '<span>Company</span></summary><nav class="bc8102-company-links" aria-label="Company sections">' + ''.join(link(label, href) for label, href in company_links) + '</nav></details>'
+    logo = globals().get('_BC706_LOGO_DATA', '')
     brand = f'<img src="{esc(logo,quote=True)}" alt="BuildCommand AI">' if logo else 'BuildCommand AI'
     try:
         projects, selected = _bc840_projects(user), _bc840_selected_project(user)
     except Exception:
         projects, selected = [], None
     options = ''.join(f'<option value="{p["id"]}"' + (' selected' if p['id']==selected else '') + '>' +
-                      esc(str(p.get('number') or '') + ' · ' + str(p['name'])) + '</option>' for p in projects)
+                      esc(' · '.join(str(v) for v in (p.get('number'), p['name']) if v)) + '</option>' for p in projects)
     selector = ('<form class="bc840-select" method="post" action="/workspace/select-project">'
-                '<label for="bc840-project" class="small">Project</label><select id="bc840-project" name="project_id" required>' +
+                '<label for="bc840-project">Project</label><select id="bc840-project" name="project_id" aria-label="Current project" required>' +
                 '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
-    if title == 'Superintendent Command': selector = ''  # The command view has its own appointed-project selector.
-    company_titles = {"Company","Users & Access","Manage User Access","Company Invitations","Access Matrix","Company Settings","Invitation Created"}
-    tabs = _bc840_company_tabs() if title in company_titles and tier in {'owner','admin'} else ''
-    # Replace only the private shell, eliminating the stacked header/regex
-    # rewrites. Public login, branding assets and the legacy engines stay intact.
+    if title == 'Superintendent Command': selector = ''  # Uses the appointed-project selector in Command.
+    name = str(user.get('display_name') or user.get('email') or 'Account')
+    initials = ''.join(word[0] for word in name.split()[:2]).upper()
+    parent = 'Company' if in_company else 'My workspace'
+    parent_url = '/company' if in_company and tier in {'owner','admin'} else '/workspace'
+    breadcrumb = (f'<a href="{parent_url}">{parent}</a><span aria-hidden="true">/</span><b>{esc(str(title))}</b>') if str(title) != parent else f'<b>{esc(str(title))}</b>'
+    # Limited roles get Company > My access; company administration remains server restricted.
+    if in_company and tier not in {'owner','admin'}:
+        breadcrumb = '<span class="bc8102-parent">Company</span><span aria-hidden="true">/</span><b>' + esc(str(title)) + '</b>'
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<meta name="referrer" content="{_BC862_FORM_REFERRER_POLICY}"><title>' + esc(str(title)) + ' · BuildCommand AI</title>'
-            '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '</style></head><body>'
-            '<a class="bc840-skip" href="#main-content">Skip to content</a><header class="bc840-header">'
-            '<div class="bc840-top"><a class="bc840-logo" href="/workspace">' + brand + '</a>'
-            '<div class="bc840-identity"><strong>' + esc(str(user.get('display_name') or user.get('email') or 'Account')) +
-            '</strong><small>' + esc(_bc840_role_label(_bc840_role(user))) + '</small></div>'
-            '<form class="bc840-logout" method="post" action="/logout"><button>Sign out</button></form></div>'
-            '<nav class="bc840-nav" aria-label="Main navigation">' + ''.join(f'<a href="{u}">{t}</a>' for t,u in nav) + selector +
-            '</nav></header><main id="main-content" class="bc840-main">' + tabs + body + '</main>'
-            '<footer class="bc840-footer">Built By Willy LaHood © 2026 · BuildCommand AI ' + str(globals().get('BUILD_COMMAND_RELEASE',BC840_RELEASE)) + '</footer></body></html>')
+            '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '\n' + _BC8102_CSS + '</style></head><body class="bc8102">'
+            '<a class="bc840-skip" href="#main-content">Skip to content</a><aside class="bc8102-sidebar" aria-label="Workspace navigation">'
+            '<div class="bc8102-brand-row"><a class="bc840-logo" href="/workspace">' + brand + '<small>Construction workspace</small></a>'
+            '<button id="bc8102-menu-button" class="bc8102-menu-button" type="button" aria-controls="bc8102-navigation" aria-expanded="true">' + _bc8102_icon('menu') + 'Menu</button></div>'
+            '<div id="bc8102-navigation"><div class="bc8102-nav-label">YOUR WORK</div><nav class="bc840-nav" aria-label="Main navigation">' + nav_html + '</nav>' + company_html +
+            '<div class="bc8102-sidebar-bottom">' + (link('Owner console','/owner','arrow') if tier=='owner' else '') +
+            '<div class="bc840-identity"><span class="bc8102-avatar" aria-hidden="true">' + esc(initials) + '</span><div><strong>' + esc(name) +
+            '</strong><small>' + esc(_bc840_role_label(_bc840_role(user))) + '</small></div></div>'
+            '<form class="bc840-logout" method="post" action="/logout"><button>Sign out</button></form></div></div></aside>'
+            '<div class="bc8102-content"><header class="bc840-header"><div class="bc8102-breadcrumb" aria-label="Current section">' + breadcrumb + '</div>' + selector +
+            '</header><main id="main-content" class="bc840-main" tabindex="-1">' + body + '</main>'
+            '<footer class="bc840-footer">Built By Willy LaHood © 2026 · BuildCommand AI ' + str(globals().get('BUILD_COMMAND_RELEASE',BC840_RELEASE)) + '</footer></div>' + _BC8102_MENU_SCRIPT + '</body></html>')
+
 
 _BC840_PREVIOUS_SHELL = _runtime.shell
 _runtime.shell = _bc840_shell
@@ -60065,7 +60169,7 @@ def bc840_workspace():
     else:
         body += '<p>Only projects assigned to your account appear here. Company administration and internal GC tools are not available in this workspace.</p>'
         if tier == 'trade': body += '<p><a class="bc840-button" href="/workspace/shared">Open my shared work</a></p>'
-    body += '</div><h2>Your projects</h2>' + _bc840_project_cards(projects)
+    body += '</div><section id="my-projects" aria-labelledby="my-projects-heading"><h2 id="my-projects-heading">My projects</h2>' + _bc840_project_cards(projects) + '</section>'
     return _bc840_page('My workspace', body)
 
 @app.get('/workspace/projects')
@@ -60166,7 +60270,7 @@ def bc840_company():
     body += f'<div class="grid3"><section class="card"><div class="label">People</div><div class="kpi">{len(users)}</div><p><a href="/company/users">Manage people & access</a></p></section>'
     body += f'<section class="card"><div class="label">Projects</div><div class="kpi">{len(projects)}</div><p><a href="/workspace/projects">View projects</a></p></section>'
     body += '<section class="card"><h2>Invite someone</h2><p>Set their role and projects before sharing their invitation.</p><a class="bc840-button" href="/company/invitations">Create invitation</a></section></div>'
-    body += '<div class="card"><h2>Company controls</h2><div class="bc840-list"><a href="/company-settings">Company settings</a><a href="/billing">Company subscription</a><a href="/projects/new">Create a project</a></div></div>'
+    body += '<div class="card"><h2>Company controls</h2><div class="bc840-list"><a href="/workspace/access">My access<small>See your role and who can change it.</small></a><a href="/company-settings">Company settings</a><a href="/billing">Company subscription</a><a href="/projects/new">Create a project</a></div></div>'
     return _bc840_page('Company',body)
 
 def bc840_company_users():
@@ -60435,6 +60539,7 @@ async def bc840_role_boundary(request, call_next):
     except Exception:
         return _bc830b_error('Sign-in could not be verified. Please try again.',503)
     context = _bc840_request_user.set(user)
+    path_context = _bc840_request_path.set(path)
     try:
         join = _bc830b_re.fullmatch(r'/join/([0-9]+)/([A-Za-z0-9_-]{20,128})(?:/(accept|register))?',path)
         if join:
@@ -60500,7 +60605,9 @@ async def bc840_role_boundary(request, call_next):
                 if not _bc840_same_origin(request):
                     return _bc861_origin_denied(request)
         return await call_next(request)
-    finally: _bc840_request_user.reset(context)
+    finally:
+        _bc840_request_path.reset(path_context)
+        _bc840_request_user.reset(context)
 
 @app.get('/health/workspaces-company-8-4-0')
 def bc840_health():
@@ -61941,3 +62048,34 @@ app.version = BUILD_COMMAND_RELEASE
 from command_center import install as _bc8100_command_install
 _BC8100_COMMAND = _bc8100_command_install(globals())
 BUILD_COMMAND_RELEASE_NAME = 'Simple Command — RFI Answers to Field'
+
+
+# 8.10.2 — owner-console style navigation, with existing role boundaries.
+BC8102_RELEASE = '8.10.2'
+BUILD_COMMAND_RELEASE = BC8102_RELEASE
+BUILD_COMMAND_RELEASE_NAME = 'Simple Workspace Navigation'
+app.version = BUILD_COMMAND_RELEASE
+
+
+@app.get('/health/simple-workspace-8-10-2')
+def bc8102_health():
+    paths = {getattr(route, 'path', '') for route in app.routes if 'GET' in (getattr(route, 'methods', set()) or set())}
+    checks = {
+        'workspace_shell_active': _runtime.shell is _bc840_shell,
+        'company_navigation_installed': callable(_bc8102_company_links),
+        'workspace_and_project_routes_preserved': {'/workspace','/workspace/projects','/workspace/projects/{project_id}'}.issubset(paths),
+        'personal_access_route_preserved': '/workspace/access' in paths,
+        'company_admin_boundary_preserved': _bc840_admin_path('/company') and _bc840_admin_path('/company/users'),
+        'command_center_preserved': getattr(app.state, 'command_center', None) is not None,
+        'ask_reliability_preserved': '/health/ask-reliability-8-10-1' in paths,
+        'rfi_briefing_photo_routes_preserved': {'/workspace/rfi-answers','/workspace/command/briefs/{brief_id}','/workspace/photos/{analysis_id}'}.issubset(paths),
+        'owner_console_preserved': getattr(app.state, 'owner_console', None) is not None,
+        'form_origin_guard_preserved': _bc840_same_origin is _bc861_same_origin and _BC862_FORM_REFERRER_POLICY == 'same-origin',
+    }
+    return {'app':'BuildCommand AI','version':BC8102_RELEASE,'release':'Simple Workspace Navigation',
+            'status':'ok' if all(checks.values()) else 'degraded','checks':checks,
+            'passed':sum(checks.values()),'total':len(checks),'data_reset':False,
+            'scope':'Installation checks only. Verify desktop and phone navigation, Company > My access, project selection and real role access on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/simple-workspace-8-10-2')
