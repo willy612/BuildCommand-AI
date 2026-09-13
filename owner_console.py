@@ -1,6 +1,6 @@
-"""BuildCommand AI — Professional Owner Console 8.5.1.
+"""BuildCommand AI — Owner Company Access 8.6.4.
 
-Drop-in companion for full_app.py 8.5.0. Uses the existing database and
+Companion for full_app.py 8.6.4. Uses the existing database and
 session. Account changes are local controls; this module never calls Stripe.
 """
 import hashlib
@@ -20,9 +20,9 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
-OWNER_CONSOLE_VERSION = "8.5.1"
+OWNER_CONSOLE_VERSION = "8.6.4"
 OWNER_EMAIL = "buildcommandai@gmail.com"
-RELEASE_NAME = "Professional Owner Console"
+RELEASE_NAME = "Owner Company Access"
 LOG = logging.getLogger("buildcommand.owner")
 CSRF_COOKIE = "bc_owner_csrf"
 STATES = ("PENDING", "ACTIVE", "TRIAL", "PAST_DUE", "SUSPENDED", "CANCELED", "LEGACY")
@@ -45,6 +45,8 @@ MESSAGES = {
     "saved": "Changes saved. The account history has been updated.",
     "note": "Account note added.", "demo": "Demo decision saved.",
     "deleted": "The reviewed empty account records were deleted.",
+    "team_active": "Company team access activated. Members can check access again in their existing session.",
+    "team_paused": "Company team access paused. Your platform-owner access remains available.",
 }
 
 
@@ -99,6 +101,7 @@ class ConsoleProblem(Exception):
 class OwnerConsole:
     def __init__(self, app, runtime, owner_email):
         self.app, self.runtime = app, runtime
+        self.version = OWNER_CONSOLE_VERSION
         self.owner_email = str(owner_email or OWNER_EMAIL).strip().lower()
         self.postgres = str(getattr(runtime, "DATABASE_KIND", "")).lower() == "postgres"
         self.schema_ready = False
@@ -145,12 +148,13 @@ class OwnerConsole:
         emails = {x.strip().lower() for x in configured.split(",") if x.strip()}
         return emails or {self.owner_email}
 
-    def actor(self, c):
+    def actor(self, c, lock=False):
         session_user = self.runtime.current_user()
         if not session_user:
             raise ConsoleProblem("Sign in with your platform owner account to open this console.", 401)
         uid = dict(session_user).get("id")
-        row = c.execute("SELECT id,email,display_name,role,company_id FROM users WHERE id=?", (uid,)).fetchone()
+        suffix = " FOR UPDATE" if lock and self.postgres else ""
+        row = c.execute("SELECT id,email,display_name,role,company_id FROM users WHERE id=?" + suffix, (uid,)).fetchone()
         user = dict(row) if row else {}
         if str(user.get("role") or "").upper() not in {"OWNER", "PLATFORM_OWNER"} or str(user.get("email") or "").strip().lower() not in self.owner_emails():
             raise ConsoleProblem("This console is reserved for the BuildCommand platform owner.", 403)
@@ -230,6 +234,126 @@ class OwnerConsole:
         if not row:
             raise ConsoleProblem("This customer account could not be found.", 404)
         return row, plans
+
+    def own_company(self, c, user):
+        # The target always comes from the freshly authorized owner's record.
+        # Customer controls continue to reject protected owner companies.
+        try:
+            cid = int(user.get("company_id") or 0)
+        except (ValueError, TypeError):
+            cid = 0
+        if cid < 1:
+            raise ConsoleProblem("Your owner account needs a company assignment before you can manage team access.", 409)
+        company = c.execute("""SELECT co.id,co.name,
+            (SELECT COUNT(*) FROM users u WHERE u.company_id=co.id) AS user_count,
+            (SELECT COUNT(*) FROM projects p WHERE p.company_id=co.id) AS project_count
+            FROM companies co WHERE co.id=?""", (cid,)).fetchone()
+        if not company:
+            raise ConsoleProblem("Your owner account's company could not be found.", 409)
+        row = dict(company)
+        for key, table, order in (("sub", "company_subscriptions", " ORDER BY id DESC LIMIT 1"),
+                                  ("approval", "company_access_approvals", ""),
+                                  ("demo", "company_demo_access", "")):
+            source = c.execute(f"SELECT * FROM {table} WHERE company_id=?" + order, (cid,)).fetchone() if self.table_exists(c, table) else None
+            row[key] = dict(source) if source else {}
+        row["plan_code"] = str(row["sub"].get("plan_code") or "")
+        row["status"] = str(row["sub"].get("status") or "NO_SUBSCRIPTION").upper()
+        row["approved"] = int(row["approval"].get("approved") or 0) == 1
+        plans = [dict(p) for p in c.execute("SELECT * FROM platform_plans ORDER BY monthly_price_cents,code").fetchall()]
+        return row, plans
+
+    def own_plan(self, row, plans, code):
+        if row["plan_code"]:
+            if code != row["plan_code"]:
+                raise ConsoleProblem("This action keeps your company's current plan. Reload the page to review it.", 409)
+        elif not code or not any(str(p["code"]) == code and int(p.get("active") if p.get("active") is not None else 1) for p in plans):
+            raise ConsoleProblem("Choose an active plan from the catalog before activating team access.")
+        plan = next((p for p in plans if str(p["code"]) == code), {"code": code})
+        return hashlib.sha256(json.dumps(plan, sort_keys=True, default=str).encode()).hexdigest()
+
+    def own_company_page(self, c, request, user, csrf, row, plans):
+        ready = row["status"] == "ACTIVE" and row["approved"]
+        current = next((p for p in plans if str(p["code"]) == row["plan_code"]), {})
+        plan_label = str(current.get("name") or row["plan_code"] or "Not selected")
+        if row["plan_code"]:
+            plan_field = f'<p>Keep current plan: <strong>{esc(plan_label)}</strong></p><input type="hidden" name="plan_code" value="{esc(row["plan_code"])}">'
+        else:
+            options = ''.join(f'<option value="{esc(p["code"])}">{esc(p.get("name") or p["code"])}</option>' for p in plans if int(p.get("active") if p.get("active") is not None else 1))
+            plan_field = '<label>Company plan<select name="plan_code" required><option value="">Select a plan</option>' + options + '</select></label>'
+        activation = f'''<h2>Activate team access</h2><p>Allow your company’s members to enter the workspace with their assigned roles and projects.</p>
+<form class="stack-form" method="post" action="/owner/my-company/review">{self.hidden(request, csrf, row)}<input type="hidden" name="action" value="activate">{plan_field}<button class="btn primary" type="submit">Review activation {icon('arrow')}</button></form>'''
+        if ready:
+            activation = '<h2>Team access is active</h2><p>Members can select <strong>Check access again</strong>, then open their workspace. Their existing accounts and project assignments are ready to use.</p><a class="btn primary" href="/workspace/company-access">View company access</a>'
+        pause = f'''<details class="padded"><summary>Pause team access</summary><p>Pause access for ordinary company members and end any running company demo. Your platform-owner account can still sign in.</p>
+<form method="post" action="/owner/my-company/review">{self.hidden(request, csrf, row)}<input type="hidden" name="action" value="pause"><button class="btn danger" type="submit">Review pause</button></form></details>'''
+        expiry = parse_date(row["demo"].get("expires_at"))
+        demo_state = str(row["demo"].get("status") or "Not requested").upper()
+        if demo_state == 'ACTIVE' and (not expiry or expiry <= datetime.now(timezone.utc)):
+            demo_state = 'EXPIRED'
+        body = f'''<section class="panel padded"><div class="eyebrow">YOUR COMPANY</div><h2>{esc(row['name'])}</h2><p>Company #{int(row['id'])} · {int(row['user_count'])} people · {int(row['project_count'])} projects</p>
+<dl class="facts"><div><dt>Local subscription</dt><dd>{state_badge(row['status'])}</dd></div><div><dt>Company plan</dt><dd>{esc(plan_label)}</dd></div><div><dt>Owner approval</dt><dd>{badge('Approved' if row['approved'] else 'Awaiting approval', 'good' if row['approved'] else 'warn')}</dd></div><div><dt>Company demo</dt><dd>{esc(label(demo_state))}</dd></div></dl></section>
+<div class="split"><section class="panel padded">{activation}</section><section class="panel padded"><h2>Access for your own team</h2><p>Your platform-owner account has separate access. Invited team members use the company subscription and approval shown here.</p><p>Activating here sets the local subscription to Active and records your approval. This is a manual access decision; it does not charge a card or confirm a Stripe payment.</p><p>Role and project permissions continue to control what each member can open.</p></section></div>
+<section class="panel">{pause}</section><section class="panel"><div class="panel-heading"><h2>Company access history</h2></div>{self.timeline(self.history(c, row['id']), account=True)}</section>'''
+        return self.shell(request, user, "My company", "Manage workspace access for the company attached to your owner account.", body, "my-company")
+
+    def own_company_review(self, request, form, csrf):
+        if set(form) - {"csrf_token", "snapshot", "action", "plan_code"}:
+            raise ConsoleProblem("Use the My company form to review team access.")
+        with self.connection() as c:
+            user = self.actor(c)
+            row, plans = self.own_company(c, user)
+            self.check_snapshot(request, form, row)
+            action = str(form.get("action") or "")
+            if action not in {"activate", "pause"}:
+                raise ConsoleProblem("Choose an available team access action.")
+            plan = str(form.get("plan_code") or "") if action == "activate" else row["plan_code"]
+            plan_digest = self.own_plan(row, plans, plan) if action == "activate" else None
+            value = {"user_id": user["id"], "company_id": row["id"], "digest": self.digest(row),
+                     "action": action, "plan": plan, "plan_digest": plan_digest}
+            review = self.token(request, "own-company-review", value)
+            title = "Activate team access" if action == "activate" else "Pause team access"
+            explanation = (f"Set the local subscription to Active with plan {esc(plan)} and record your owner approval. Members will be able to enter the workspace with their existing roles and project assignments."
+                           if action == "activate" else "Set the local subscription to Suspended, revoke company approval, and end any pending or running company demo. Ordinary members will wait for access again.")
+            body = f'''<section class="panel padded review-panel"><div class="eyebrow">REVIEW COMPANY ACCESS</div><h2>{esc(row['name'])}</h2><p>Company #{int(row['id'])} · {int(row['user_count'])} people · {int(row['project_count'])} projects</p>
+<p class="review-description">{explanation}</p><p>This changes local application access. It does not charge a card, confirm payment, or change Stripe billing. Your platform-owner access remains available.</p>
+<form class="stack-form" method="post" action="/owner/my-company/apply">{self.hidden(request, csrf)}<input type="hidden" name="review_token" value="{esc(review)}">
+<label class="check-label"><input type="checkbox" name="confirmed" value="yes" required><span>I authorize this access change for {esc(row['name'])}.</span></label>
+<div class="actions"><button class="btn {'primary' if action == 'activate' else 'danger'}" type="submit">{title}</button><a class="btn secondary" href="/owner/my-company">Keep current access</a></div></form></section>'''
+            return self.shell(request, user, title, "Confirm the company and effect before saving.", body, "my-company")
+
+    def own_company_apply(self, request, form):
+        if set(form) - {"csrf_token", "review_token", "confirmed"} or form.get("confirmed") != "yes":
+            raise ConsoleProblem("Review and confirm your company access change first.", 409)
+        value = self.verify_token(request, str(form.get("review_token") or ""), "own-company-review")
+        with self.connection(True) as c:
+            # Lock the live actor as well as the company on PostgreSQL; a role or
+            # company reassignment cannot race this decision after authorization.
+            user = self.actor(c, lock=True)
+            row, plans = self.own_company(c, user)
+            self.lock_account(c, row["id"])
+            row, plans = self.own_company(c, user)
+            if not isinstance(value, dict) or value.get("user_id") != user["id"] or value.get("company_id") != row["id"] or value.get("digest") != self.digest(row):
+                raise ConsoleProblem("Your company or access settings changed. Review the current company again.", 409)
+            action, plan = value.get("action"), value.get("plan")
+            if action == "activate":
+                if value.get("plan_digest") != self.own_plan(row, plans, plan):
+                    raise ConsoleProblem("The plan catalog changed. Review the current company plan again.", 409)
+                self.set_subscription(c, row, plan, "ACTIVE")
+                self.set_approval(c, user, row, True, "Team access explicitly activated by platform owner")
+                detail = f"Activated own-company team access. Local plan: {plan}; previous local status: {row['status']}. Owner approval granted. No Stripe billing action."
+                notice = "team_active"
+            elif action == "pause":
+                if row["sub"]:
+                    self.set_subscription(c, row, row["plan_code"], "SUSPENDED")
+                self.set_approval(c, user, row, False, "Team access explicitly paused by platform owner")
+                if row["demo"]:
+                    c.execute("UPDATE company_demo_access SET status='DENIED' WHERE company_id=?", (row["id"],))
+                detail = f"Paused own-company team access. Previous local status: {row['status']}. Approval revoked and any demo ended. No Stripe billing action."
+                notice = "team_paused"
+            else:
+                raise ConsoleProblem("Review an available team access action.", 409)
+            self.audit(c, user, row, "OWN_COMPANY_" + action.upper(), detail)
+        return RedirectResponse('/owner/my-company?notice=' + notice, status_code=303)
 
     def digest(self, row):
         selected = {key: row.get(key) for key in ("id", "name", "user_count", "project_count", "sub", "approval", "demo")}
@@ -461,6 +585,7 @@ class OwnerConsole:
 
     def shell(self, request, user, title, description, body, active="overview", action=""):
         tabs = [("overview", "Overview", "/owner", "grid"),
+                ("my-company", "My company", "/owner/my-company", "building"),
                 ("customers", "Customers", "/owner/customers", "building"),
                 ("demos", "Demo requests", "/owner/demos", "clock"),
                 ("billing", "Billing", "/owner/billing", "card"),
@@ -603,7 +728,8 @@ class OwnerConsole:
 <div class="quick-stats"><span><b>{metrics['active']}</b>Active / legacy accounts</span><span><b>{metrics['active_demos']}</b>Running demos</span><span><b>{metrics['past_due']}</b>Billing issues</span></div></section></div>
 <section class="panel"><div class="panel-heading"><div><h2>Customer accounts</h2><p>Your first ten customer accounts, listed alphabetically.</p></div><a class="text-link" href="/owner/customers">View all {icon('arrow')}</a></div>{self.customer_table([r for r in rows if r['user_count']][:10])}</section>
 <section class="panel"><div class="panel-heading"><div><h2>Recent owner activity</h2><p>Decisions and notes across the business.</p></div><a class="text-link" href="/owner/activity">View activity {icon('arrow')}</a></div>{self.timeline(events)}</section>'''
-        return self.shell(request, user, "Overview", "Your customers, account decisions, and business activity in one place.", body)
+        return self.shell(request, user, "Overview", "Your customers, account decisions, and business activity in one place.", body,
+                          action='<a class="btn primary" href="/owner/my-company">Manage my company ' + icon('arrow') + '</a>')
 
     def customers(self, request, user, rows):
         selected, total, page = self.filtered(request, rows)
@@ -857,6 +983,10 @@ class OwnerConsole:
             raise ConsoleProblem("The Owner Console is temporarily unavailable. Check the server log for the database setup error.", 503)
         if request.method == 'POST':
             self.form_security(request, form)
+            if path == '/owner/my-company/review':
+                return HTMLResponse(self.own_company_review(request, form, csrf))
+            if path == '/owner/my-company/apply':
+                return self.own_company_apply(request, form)
             if path == '/owner/cleanup/review':
                 return HTMLResponse(self.cleanup_review(request, form, csrf))
             if path == '/owner/cleanup/delete-selected':
@@ -870,6 +1000,10 @@ class OwnerConsole:
         if path in aliases:
             return RedirectResponse(aliases[path], status_code=303)
         with self.connection() as c:
+            if path == '/owner/my-company':
+                user = self.actor(c)
+                row, plans = self.own_company(c, user)
+                return HTMLResponse(self.own_company_page(c, request, user, csrf, row, plans))
             rows, plans = self.dataset(c, user)
             if path == '/owner/api/summary':
                 return JSONResponse({'status': 'ok', 'version': OWNER_CONSOLE_VERSION, **self.summary(rows, plans)})
@@ -924,6 +1058,8 @@ class OwnerConsole:
             checks['schema_readable'] = False
         for path, method in (('/owner', 'GET'), ('/owner/customers', 'GET'), ('/owner/demos', 'GET'), ('/owner/billing', 'GET'), ('/owner/activity', 'GET'), ('/owner/customers/{company_id}/subscription', 'POST'), ('/owner/cleanup/review', 'POST'), ('/owner/cleanup/delete-selected', 'POST')):
             checks[method + ' ' + path] = (path, method) in routes
+        for path, method in (('/owner/my-company', 'GET'), ('/owner/my-company/review', 'POST'), ('/owner/my-company/apply', 'POST')):
+            checks[method + ' ' + path] = (path, method) in routes
         return {'app': 'BuildCommand AI', 'version': OWNER_CONSOLE_VERSION, 'release': RELEASE_NAME,
                 'status': 'ok' if all(checks.values()) else 'degraded', 'checks': checks,
                 'passed': sum(checks.values()), 'total': len(checks), 'data_reset': False,
@@ -959,12 +1095,14 @@ STYLES = r'''
 
 OWNER_ROUTES = {
     'GET': ('/owner', '/owner/customers', '/owner/customers/{company_id}', '/owner/customers/{company_id}/review',
+            '/owner/my-company',
             '/owner/demos', '/owner/billing', '/owner/activity', '/owner/cleanup', '/owner/cleanup/preview',
             '/owner/subscriptions', '/owner/access-approvals', '/owner/financial',
             '/owner/api/summary', '/owner/api/customers', '/owner/api/billing-readiness', '/owner/api/cleanup-preview'),
     'POST': tuple('/owner/customers/{company_id}/' + action for action in ACTION_LABELS)
             + ('/owner/access-approvals/{company_id}/approve', '/owner/access-approvals/{company_id}/revoke',
                '/owner/demos/{company_id}/approve', '/owner/demos/{company_id}/deny',
+               '/owner/my-company/review', '/owner/my-company/apply',
                '/owner/cleanup/review', '/owner/cleanup/delete-selected'),
 }
 HEALTH_ROUTES = ('/health/owner-console-8-5-1', '/health/owner-console-1-8-18-97',
@@ -1027,6 +1165,7 @@ def register_owner_console(app, runtime, owner_email=OWNER_EMAIL):
     def health():
         return JSONResponse(console.health(), headers={'Cache-Control': 'no-store'})
 
+    console.endpoint = endpoint
     replacements = {(path, method) for method, paths in OWNER_ROUTES.items() for path in paths}
     replacements |= {(path, 'GET') for path in HEALTH_ROUTES}
     # Retire the earlier unreviewed bulk trial deletion route.
