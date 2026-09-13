@@ -60121,7 +60121,7 @@ def _bc840_shell(title, body, *args, **kwargs):
                 '<label for="bc840-project">Project</label><select id="bc840-project" name="project_id" aria-label="Current project" required>' +
                 '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
     if title == 'Superintendent Command': selector = ''  # Uses the appointed-project selector in Command.
-    if path == '/workspace/setup' or path.startswith('/workspace/setup/'):
+    if path == '/workspace/setup' or path.startswith('/workspace/setup/') or path.startswith('/workspace/daily') or path.startswith('/workspace/directory'):
         selector = ''  # Setup identifies the viewed job; handoffs select it explicitly.
     setup = getattr(app.state, 'project_setup', None)
     if setup and selected and (path == '/blueprint-brain' or path.startswith('/blueprint-brain/run/')):
@@ -60239,7 +60239,7 @@ def bc840_select_project(project_id:int=_BC189_Form(...)):
 
 _BC840_TOOLS = (
     ('Daily field work', (('Daily report','/daily-report'),('Schedule','/schedule'),('Look-ahead','/lookahead-intelligence'),('Punch list','/punch'),('Safety','/safety'),('Inspections','/inspections'))),
-    ('Documents & coordination', (('Documents','/documents'),('Blueprint Brain','/blueprint-brain'),('RFIs / issues','/issues'),('Submittals','/submittals'),('Subcontractor directory','/subcontractors'))),
+    ('Documents & coordination', (('Documents','/documents'),('Blueprint Brain','/blueprint-brain'),('RFIs / issues','/issues'),('Submittals','/submittals'),('Subcontractor directory','/workspace/directory'))),
     ('Planning & readiness', (('Project startup','/project-startup'),('Procurement','/procurement'),('Project health','/project-health'),('Meetings','/meetings'))),
     ('AI field review', (('AI Photo Analysis','/photo-ai'),('Morning Brief','/morning-brief'),('RFI Drafting','/rfi-drafting'))),
 )
@@ -62133,4 +62133,12 @@ from project_setup import install as _bc8120_install
 _bc8120_setup = _bc8120_install(globals())
 BUILD_COMMAND_RELEASE = '8.12.0'
 BUILD_COMMAND_RELEASE_NAME = 'First Job Setup'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.13.0 — shared subcontractor records and daily crews, with legacy summaries.
+from daily_reports import install as _bc8130_install
+_bc8130_reports = _bc8130_install(globals())
+BUILD_COMMAND_RELEASE = '8.13.0'
+BUILD_COMMAND_RELEASE_NAME = 'Daily Reports by Trade'
 app.version = BUILD_COMMAND_RELEASE
