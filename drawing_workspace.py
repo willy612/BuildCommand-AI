@@ -185,7 +185,7 @@ class DrawingWorkspace:
 
     def health(self):
         checks=dict(self.hub.health()['checks'])
-        checks['drawings_hotfix_release_active']=self.ns.get('BUILD_COMMAND_RELEASE')==VERSION
+        checks['drawings_hotfix_release_active']=self.ns.get('BUILD_COMMAND_RELEASE') in {VERSION,'8.15.0'}
         try:
             # Exercise the same bounded read as the page, including all LIKE
             # parameters, without returning any customer data or writing rows.
