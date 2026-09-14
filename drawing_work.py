@@ -14,8 +14,8 @@ from blueprint_field import esc, digest
 from command_center import AskFailure, command_json
 from drawing_register import js
 
-VERSION = '8.17.0'
-RELEASE = 'Drawing Work Cards'
+VERSION = '8.17.1'
+RELEASE = 'Full-Page Drawings'
 BASE = '/workspace/drawing-sheets'
 KINDS = {'rfi': ('project_issues', 'RFI'), 'submittal': ('submittals', 'Submittal'),
          'schedule': ('activities', 'Schedule activity'), 'photo': ('bc_photo_analyses', 'Photo analysis'),
@@ -324,9 +324,17 @@ class DrawingWork:
         if response.status_code!=200:return response
         with self.db() as c:
             user,project,sheet=self.pins.context(c,sheet_id)
-            if not self.ns['_bc850_manager'](user):return response
+            if not self.ns['_bc850_manager'](user):return self.full_page(response)
             notes=self.pins.pins(c,user,sheet)
         html=response.body.decode('utf-8')
+        # Fit the actual viewport, including a short landscape screen or a
+        # large sheet. Keep normalized markup coordinates and calibrated units.
+        html=html.replace('Math.max(320,wrap.clientWidth-24),ah=Math.max(320,wrap.clientHeight-24)',
+                          'Math.max(1,wrap.clientWidth-24),ah=Math.max(1,wrap.clientHeight-24)')
+        html=html.replace('zoom=Math.max(.25,Math.min(3,Math.min(aw/',
+                          'zoom=Math.max(.01,Math.min(3,Math.min(aw/')
+        html=html.replace('zoom=Math.max(.5,zoom-.25)', 'zoom=Math.max(.01,zoom/1.25)')
+        html=html.replace('zoom=Math.min(3,zoom+.25)', 'zoom=Math.min(3,zoom*1.25)')
         # Existing pin/render/markup behavior remains in its own module. Its
         # extension event opens the card without navigating away from the sheet.
         html=html.replace("if(!picking)location.assign('/workspace/drawing-sheets/'+config.sheet_id+'/notes#pin-'+p.id);",
@@ -343,7 +351,20 @@ class DrawingWork:
         aside='<aside id="dw-panel" aria-label="Drawing work cards"><div class="dw-panel-head"><strong>Work at this location</strong><button type="button" id="dw-close" aria-label="Close work cards">Close</button></div><div id="dw-list"><h2>What needs attention?</h2><p>Tap a pin on the drawing or choose a card below.</p>'+items+('' if notes else '<p>No work cards yet. Choose <b>Add work card</b>, then tap the drawing.</p>')+'</div><div id="dw-selected" hidden><button type="button" id="dw-show-list">All work cards</button><iframe id="dw-frame" title="Selected drawing work card"></iframe></div></aside>'
         html=html.replace('</head>',STYLE+VIEW_STYLE+'</head>',1)
         html=html.replace('</body>',aside+'<script>window.BC_DRAWING_WORK='+js({'sheet_id':sheet_id,'pins':[n['id'] for n in notes]})+';</script><script>'+VIEW_JS+'</script></body>',1)
-        return HTMLResponse(html,headers={'Cache-Control':'private, no-store','Referrer-Policy':'same-origin'})
+        return self.full_page(HTMLResponse(html,headers={'Cache-Control':'private, no-store','Referrer-Policy':'same-origin'}))
+
+    def full_page(self,response):
+        """Presentation only: retain the existing canvas, handlers and forms."""
+        html=response.body.decode('utf-8')
+        def body(match):
+            attrs=match[1]
+            if 'class="' in attrs:attrs=attrs.replace('class="','class="dw-fullpage ',1)
+            else:attrs+=' class="dw-fullpage"'
+            return '<body'+attrs+' data-drawing-layout="full-page-8.17.1">'
+        html=re.sub(r'<body([^>]*)>',body,html,count=1)
+        html=html.replace('</head>',FULL_PAGE_STYLE+'</head>',1)
+        html=html.replace('</body>','<script>'+FULL_PAGE_JS+'</script></body>',1)
+        return HTMLResponse(html,status_code=response.status_code,headers={'Cache-Control':'private, no-store','Referrer-Policy':'same-origin'})
 
     def extra_evidence(self,c,user,pid):
         rows=self.previous_evidence(c,user,pid)
@@ -377,6 +398,18 @@ class DrawingWork:
         return JSONResponse(dict(app='BuildCommand AI',version=VERSION,release=RELEASE,status='ok' if ok else 'degraded',checks=checks,
             passed=sum(checks.values()),total=len(checks),data_reset=False,scope='Installation and schema checks only. Test real pins, record links, access, Ask and reviewed notice/briefing actions on staging. Ask uses linked record text, not PDF/image analysis. No automatic sharing or email.'),status_code=200 if ok else 503)
 
+    def full_page_health(self):
+        import json
+        result=json.loads(self.health().body)
+        result['checks'].update(full_page_layout_installed=callable(self.full_page),
+            panels_closed_by_default='show(false);' in VIEW_JS,
+            fullscreen_control_configured='document.documentElement.requestFullscreen' in FULL_PAGE_JS,
+            existing_canvas_preserved='dfp-canvas' in FULL_PAGE_JS)
+        result.update(passed=sum(result['checks'].values()),total=len(result['checks']),
+            scope='Installation and layout configuration checks only. Verify full-page fit, pan/zoom, markups, save controls, sheet/work-card panels and browser fullscreen on staging. No data reset or permission changes.')
+        ok=all(result['checks'].values());result['status']='ok' if ok else 'degraded'
+        return JSONResponse(result,status_code=200 if ok else 503)
+
     def register(self):
         self.previous_viewer=self.pins.viewer
         self.previous_evidence=self.pins.hub.extra_evidence
@@ -390,6 +423,8 @@ class DrawingWork:
             for service in (self.pins,self.reg):service.routes[:]=[(m,q,endpoint if (m,q)==(method,p) else f) for m,q,f in service.routes]
         health='/health/drawing-work-cards-8-17-0'
         self.ns['app'].add_api_route(health,self.health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(health)
+        health='/health/drawings-full-page-8-17-1'
+        self.ns['app'].add_api_route(health,self.full_page_health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(health)
 
 
 STYLE='''<style>
@@ -409,6 +444,74 @@ window.BC_DRAWING_WORK_OPEN=id=>{id=Number(id);if(!config.pins.includes(id))retu
 toggle.onclick=()=>show(panel.hidden);byId('dw-close').onclick=()=>show(false);byId('dw-show-list').onclick=()=>{list.hidden=false;selected.hidden=true;};
 panel.querySelectorAll('[data-work-id]').forEach(button=>button.onclick=()=>window.BC_DRAWING_WORK_OPEN(button.dataset.workId));
 // Keep the drawing dominant on first open. Sheets are one click away.
-body.classList.add('df-sheets-hidden');byId('df-sheets')?.setAttribute('aria-expanded','false');show(true);
+body.classList.add('df-sheets-hidden');byId('df-sheets')?.setAttribute('aria-expanded','false');show(false);
 const pin=new URLSearchParams(location.search).get('pin');if(pin&&/^[0-9]+$/.test(pin))window.BC_DRAWING_WORK_OPEN(pin);
+})();'''
+
+
+FULL_PAGE_STYLE='''<style>
+html:has(body.dw-fullpage){height:100%;overflow:hidden}
+body.dw-fullpage{--dfp-top:64px;--dfp-controls:122px;margin:0!important;padding:0!important;height:100vh;height:100dvh;min-height:0!important;overflow:hidden!important;display:flex;flex-direction:column;background:#4d5d6a}
+body.dw-fullpage .dr-view-header{position:relative!important;inset:auto!important;flex:0 0 auto;height:auto!important;min-height:64px;padding:8px 16px;gap:14px;flex-wrap:nowrap!important}
+body.dw-fullpage .dr-view-header b{font-size:18px}body.dw-fullpage .dr-view-header small{margin-top:3px}
+body.dw-fullpage .bc8102-content{margin:0!important;padding:0!important;display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;width:100%}
+body.dw-fullpage .bc840-main,body.dw-fullpage.dw-open .bc840-main,body.dw-fullpage.df-sheets-hidden .bc840-main{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;width:100%;max-width:none!important;padding:0!important;margin:0!important}
+body.dw-fullpage .dfp-canvas{position:relative;display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;padding:0!important;margin:0!important;border:0!important;border-radius:0!important;box-shadow:none!important;overflow:visible}
+body.dw-fullpage .df-actions{box-sizing:border-box;flex:0 0 auto;display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:7px 12px;margin:0;background:#fff;border-bottom:1px solid #d3dee7;z-index:24}
+body.dw-fullpage .df-actions button,body.dw-fullpage .df-actions a,body.dw-fullpage .df-actions summary{min-height:42px;padding:8px 12px;font-size:13px;margin:0;box-sizing:border-box;white-space:nowrap}
+body.dw-fullpage #bcStageWrap,body.dw-fullpage.df-markup-open #bcStageWrap{box-sizing:border-box;flex:1;height:0!important;min-height:0!important;width:100%;padding:12px!important;margin:0!important;border:0;border-radius:0!important;overscroll-behavior:contain}
+body.dw-fullpage #drawing-load-state{flex:0 0 auto;font-size:12px;line-height:1.4;padding:4px 12px!important;margin:0!important;background:#f2f5f7;color:#3f566b}
+body.dw-fullpage #bcToolStatus,body.dw-fullpage #bcMeasureStatus{display:none;margin:0!important;padding:3px 12px;background:#f2f5f7;font-size:12px}
+body.dw-fullpage.df-markup-open #bcToolStatus,body.dw-fullpage.df-markup-open #bcMeasureStatus{display:block}
+body.dw-fullpage .df-tools{flex:0 0 auto;margin:0!important;border-radius:0!important;position:relative!important;top:auto!important;z-index:23;max-height:45dvh;overflow:visible}
+body.dw-fullpage .bc81-menu{position:fixed!important;top:calc(var(--dfp-controls) + 62px)!important;right:12px!important;left:auto!important;max-height:calc(100dvh - var(--dfp-controls) - 78px);overflow:auto}
+body.dw-fullpage .df-zoom{bottom:16px;left:16px;z-index:8}
+body.dw-fullpage .dr-sheet-rail{position:fixed!important;left:8px!important;top:var(--dfp-controls)!important;bottom:8px!important;width:min(300px,calc(100vw - 16px))!important;max-height:none!important;height:auto!important;margin:0!important;padding:14px!important;z-index:30;box-shadow:0 8px 25px #10263845;border:1px solid #c6d4de;border-radius:10px;overflow:auto}
+body.dw-fullpage .dr-sheet-rail nav{display:block!important}body.dw-fullpage .dr-rail-link{min-width:0!important}
+body.dw-fullpage.dw-open #dw-panel{position:fixed!important;right:8px!important;top:var(--dfp-controls)!important;bottom:8px!important;width:min(350px,calc(100vw - 16px))!important;max-width:none!important;margin:0!important;z-index:31;box-shadow:0 8px 25px #10263845;overflow:auto}
+body.dw-fullpage #dw-panel[hidden]{display:none!important}
+body.dw-fullpage .dr-read-view,body.dw-fullpage.df-sheets-hidden .dr-read-view{display:flex;flex-direction:column;flex:1;min-height:0;padding:0!important;margin:0!important}
+body.dw-fullpage .dr-read-view>iframe{display:block;flex:1;width:100%;height:0!important;min-height:0!important;border:0;margin:0}
+body.dw-fullpage .dr-read-view>p,body.dw-fullpage .dr-read-view>a{margin:0;padding:4px 12px;font-size:12px;background:white}
+body.dw-fullpage .dr-old{display:block!important;flex:0 0 auto;background:#fff0ca;color:#704a0d;padding:7px 12px;font-size:13px}
+#dfp-more{position:relative;margin-left:auto}#dfp-more>summary{display:flex;align-items:center;cursor:pointer;border:1px solid #c3d1dd;border-radius:8px;color:#193f5a;background:#fff;font-weight:700}#dfp-more>summary:after{content:' +';margin-left:6px}#dfp-more[open]>summary:after{content:' -'}
+#dfp-more>div{position:absolute;right:0;top:calc(100% + 5px);z-index:50;background:white;border:1px solid #c4d2dc;box-shadow:0 8px 25px #10263840;border-radius:10px;padding:10px;min-width:240px;max-width:calc(100vw - 24px);max-height:65dvh;overflow:auto;display:flex;flex-direction:column;gap:5px}#dfp-more>div>a,#dfp-more>div>button{text-align:left;display:block;white-space:normal!important}#dfp-more .dr-view-links{margin:0;display:flex;flex-direction:column;align-items:stretch;gap:4px}#dfp-more .dr-view-links span{margin:4px 12px;font-size:12px}
+#dfp-details{box-sizing:border-box;width:min(850px,calc(100vw - 24px));max-height:calc(100dvh - 32px);border:1px solid #bdcddb;border-radius:12px;padding:20px;color:#18334a;background:white;overflow:auto}#dfp-details::backdrop{background:#0c243c70}#dfp-details .dfp-dialog-head{display:flex;justify-content:space-between;align-items:center;gap:12px;position:sticky;top:-20px;margin:-20px -20px 18px;padding:14px 20px;background:white;z-index:4;border-bottom:1px solid #dce5eb}#dfp-details .dfp-dialog-head h2{margin:0;font-size:20px}#dfp-details button{min-height:44px;padding:10px 14px;border:1px solid #bacbd8;border-radius:8px;cursor:pointer}#dfp-details .grid2{display:block}#dfp-details .grid2>.card:nth-child(2){display:none!important}#dfp-details input,#dfp-details textarea{box-sizing:border-box;width:100%}#dfp-details .hub-back{display:none!important}
+@media(max-width:650px){body.dw-fullpage .dr-view-header{min-height:56px;padding:6px 10px;gap:10px}body.dw-fullpage .dr-view-header small{max-width:55vw}body.dw-fullpage .df-actions{padding:5px 7px;gap:5px}body.dw-fullpage .df-actions button,body.dw-fullpage .df-actions a,body.dw-fullpage .df-actions summary{font-size:12px;padding:8px 9px;min-height:42px}body.dw-fullpage #bcStageWrap{padding:5px!important}body.dw-fullpage .bc81-menu{right:auto!important;left:0!important;max-height:55dvh;overflow:auto}#dfp-more>div{min-width:210px}}
+@media(max-height:500px){body.dw-fullpage .dr-view-header small{display:none}body.dw-fullpage .dr-view-header{min-height:44px}body.dw-fullpage #drawing-load-state{font-size:11px}body.dw-fullpage.df-markup-open .df-tools{max-height:40dvh;overflow:auto}}
+</style>'''
+
+FULL_PAGE_JS=r'''(()=>{
+const byId=id=>document.getElementById(id),body=document.body,wrap=byId('bcStageWrap'),main=byId('main-content'),bar=document.querySelector('.df-actions'),header=document.querySelector('.dr-view-header');
+if(!bar)return;
+body.classList.add('df-sheets-hidden');byId('df-sheets')?.setAttribute('aria-expanded','false');
+const canvasCard=wrap?.parentElement;if(canvasCard)canvasCard.classList.add('dfp-canvas');
+const button=(id,label)=>{const b=document.createElement('button');b.type='button';b.id=id;b.textContent=label;return b;};
+const more=document.createElement('details');more.id='dfp-more';const summary=document.createElement('summary');summary.textContent='More';more.append(summary);const menu=document.createElement('div');more.append(menu);
+for(const link of [...bar.querySelectorAll('a')]){if(!link.classList.contains('df-primary'))menu.append(link);}
+const original=document.querySelector('.dr-view-links');if(original)menu.append(original);
+const detailsButton=button('dfp-open-details','Drawing details & history');
+let detailDialog=null;
+if(main&&canvasCard){
+ detailDialog=document.createElement('dialog');detailDialog.id='dfp-details';detailDialog.setAttribute('aria-labelledby','dfp-detail-title');
+ const heading=document.createElement('div');heading.className='dfp-dialog-head';const title=document.createElement('h2');title.id='dfp-detail-title';title.textContent='Drawing details & saved markups';const close=button('dfp-close-details','Close');heading.append(title,close);detailDialog.append(heading);
+ for(const element of [...main.children]){if(element!==canvasCard&&element.id!=='dw-panel'&&!['SCRIPT','STYLE'].includes(element.tagName))detailDialog.append(element);}
+ body.append(detailDialog);menu.append(detailsButton);close.onclick=()=>detailDialog.close();detailsButton.onclick=()=>{more.open=false;detailDialog.showModal();};
+ const save=byId('df-save');if(save)save.onclick=()=>{more.open=false;detailDialog.showModal();const panel=byId('df-save-panel');if(panel)panel.open=true;byId('bcRevTitle')?.focus();};
+}
+const fullscreen=button('dfp-fullscreen','Full screen');fullscreen.setAttribute('aria-pressed','false');
+if(document.documentElement.requestFullscreen){bar.append(fullscreen);fullscreen.onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch(error){const message=byId('drawing-load-state');if(message)message.textContent='Browser full screen is unavailable. The drawing still fills this page.';}};}
+bar.append(more);
+const sheets=byId('df-sheets'),cards=byId('dw-toggle'),rail=document.querySelector('.dr-sheet-rail');
+if(rail){rail.id='dfp-sheet-list';sheets?.setAttribute('aria-controls',rail.id);const close=button('dfp-close-sheets','Close sheets');rail.prepend(close);close.onclick=()=>{body.classList.add('df-sheets-hidden');sheets?.setAttribute('aria-expanded','false');sheets?.focus();};}
+cards?.setAttribute('aria-controls','dw-panel');
+sheets?.addEventListener('click',()=>{more.open=false;if(!body.classList.contains('df-sheets-hidden'))byId('dw-close')?.click();});
+cards?.addEventListener('click',()=>{more.open=false;body.classList.add('df-sheets-hidden');sheets?.setAttribute('aria-expanded','false');});
+const openWork=window.BC_DRAWING_WORK_OPEN;if(openWork)window.BC_DRAWING_WORK_OPEN=id=>{body.classList.add('df-sheets-hidden');sheets?.setAttribute('aria-expanded','false');openWork(id);};
+document.addEventListener('click',event=>{if(!more.contains(event.target))more.open=false;});
+document.addEventListener('keydown',event=>{if(event.key!=='Escape'||document.querySelector('dialog[open]'))return;more.open=false;if(body.classList.contains('dw-open')){byId('dw-close')?.click();cards?.focus();}else if(!body.classList.contains('df-sheets-hidden')){body.classList.add('df-sheets-hidden');sheets?.setAttribute('aria-expanded','false');sheets?.focus();}});
+function geometry(){body.style.setProperty('--dfp-top',(header?.getBoundingClientRect().bottom||0)+'px');body.style.setProperty('--dfp-controls',(Math.ceil(bar.getBoundingClientRect().bottom)+6)+'px');}
+if(window.ResizeObserver){const observer=new ResizeObserver(geometry);observer.observe(bar);if(header)observer.observe(header);}window.addEventListener('resize',geometry);window.visualViewport?.addEventListener('resize',geometry);geometry();
+let fitted=false;function firstFit(){if(fitted||byId('bcStage')?.dataset.drawReady!=='yes')return;fitted=true;requestAnimationFrame(()=>byId('bcFit')?.click());}window.addEventListener('bc-drawing-rendered',firstFit);firstFit();
+document.addEventListener('fullscreenchange',()=>{fullscreen.textContent=document.fullscreenElement?'Exit full screen':'Full screen';fullscreen.setAttribute('aria-pressed',String(!!document.fullscreenElement));geometry();requestAnimationFrame(()=>byId('bcFit')?.click());});
 })();'''
