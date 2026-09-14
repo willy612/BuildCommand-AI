@@ -1,4 +1,4 @@
-"""8.14.0 drawing library using the existing document and markup records.
+"""8.14.1 drawing library using the existing document and markup records.
 
 Uploads remain original files. Markup saves create separate, versioned layers.
 """
@@ -15,6 +15,8 @@ from blueprint_field import esc
 
 log=logging.getLogger('buildcommand.drawings')
 LIMIT=500*1024*1024
+VERSION='8.14.1'
+RELEASE='Drawings Query Fix'
 
 
 def install(ns):
@@ -57,10 +59,25 @@ class DrawingWorkspace:
         self.require(not path.is_symlink() and path.is_file() and path.resolve().parent==root,'The drawing file is unavailable.',404)
         return path
 
+    def list_rows(self,c,company_id,project_id,q=''):
+        # PgCompat converts '?' to psycopg placeholders. Keep every LIKE
+        # pattern in the parameter values: a literal '%.pdf' in SQL is parsed
+        # by psycopg as an invalid placeholder even inside SQL quotes.
+        pattern='%'+q.lower()[:120]+'%'
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM attachments WHERE company_id=? AND project_id=? "
+            "AND (LOWER(original_name) LIKE ? OR LOWER(original_name) LIKE ? "
+            "OR LOWER(original_name) LIKE ? OR LOWER(original_name) LIKE ? "
+            "OR LOWER(original_name) LIKE ?) "
+            "AND (LOWER(COALESCE(title,'')) LIKE ? OR LOWER(original_name) LIKE ?) "
+            "ORDER BY id DESC LIMIT 100",
+            (company_id,project_id,'%.pdf','%.png','%.jpg','%.jpeg','%.webp',pattern,pattern)
+        ).fetchall()]
+
     def index(self,project_id:int=0,q:str=''):
         with self.db() as c:
             user,project,projects=self.hub.user(c,project_id)
-            rows=[dict(r) for r in c.execute("SELECT * FROM attachments WHERE company_id=? AND project_id=? AND (LOWER(original_name) LIKE '%.pdf' OR LOWER(original_name) LIKE '%.png' OR LOWER(original_name) LIKE '%.jpg' OR LOWER(original_name) LIKE '%.jpeg' OR LOWER(original_name) LIKE '%.webp') AND (LOWER(COALESCE(title,'')) LIKE ? OR LOWER(original_name) LIKE ?) ORDER BY id DESC LIMIT 100",(user['company_id'],project['id'],'%'+q.lower()[:120]+'%','%'+q.lower()[:120]+'%')).fetchall()] if project else []
+            rows=self.list_rows(c,user['company_id'],project['id'],q) if project else []
         body='<div class="hero"><div class="eyebrow">FIELD DRAWINGS</div><h1>Drawings</h1><p>Open plans, check a detail and save a field markup.</p></div>'+self.hub.selector(projects,project,'/workspace/drawings')
         if not project:return self.hub.page('Drawings',body+'<p>Choose your job to see its drawings.</p>')
         pid=project['id']
@@ -166,6 +183,23 @@ class DrawingWorkspace:
             self.ns['_bc850_event'](c,user,project['id'],None,'DRAWING_MARKUP_SAVED:'+str(attachment_id)+':'+str(rev))
         return JSONResponse({'status':'ok','markup_revision_id':rid,'revision_no':rev,'attachment_id':attachment_id})
 
+    def health(self):
+        checks=dict(self.hub.health()['checks'])
+        checks['drawings_hotfix_release_active']=self.ns.get('BUILD_COMMAND_RELEASE')==VERSION
+        try:
+            # Exercise the same bounded read as the page, including all LIKE
+            # parameters, without returning any customer data or writing rows.
+            with self.db() as c:self.list_rows(c,0,0)
+            checks['drawing_library_query_executed']=True
+        except Exception:
+            log.exception('Drawing library query health check failed')
+            checks['drawing_library_query_executed']=False
+        ok=all(checks.values())
+        return JSONResponse(dict(app='BuildCommand AI',version=VERSION,release=RELEASE,
+            status='ok' if ok else 'degraded',checks=checks,passed=sum(checks.values()),
+            total=len(checks),data_reset=False,
+            scope='Active routes, installation and execution of the drawing-list query on the configured database. No customer records are returned. Verify opening Drawings, search, uploads and saved markups on staging.'),status_code=200 if ok else 503)
+
     def register(self):
         # The old renderer/API call this context dynamically, so they now honor
         # appointed-project access in addition to the existing company boundary.
@@ -175,3 +209,6 @@ class DrawingWorkspace:
         self.hub.destinations=lambda:original()|{'/drawings'}
         for path,method,fn in [('/workspace/drawings','GET',self.index),('/workspace/drawings/projects/{project_id}/upload','POST',self.upload),('/workspace/drawings/{attachment_id}','GET',self.view),('/workspace/drawings/{attachment_id}/markups','POST',self.save_markup),('/documents/{attachment_id}/content','GET',self.content),('/documents/{attachment_id}/view','GET',self.view),('/api/documents/{attachment_id}/markups','POST',self.save_markup)]:
             wrapped=self.endpoint(fn);self.ns['_bc840_replace'](path,method,wrapped);self.hub.routes.append((method,path,wrapped))
+        path='/health/drawings-query-8-14-1'
+        self.ns['app'].add_api_route(path,self.health,methods=['GET'])
+        self.ns['_runtime'].PUBLIC_PATHS.add(path)
