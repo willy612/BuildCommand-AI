@@ -62251,3 +62251,11 @@ _bc8170_work = _bc8170_work_install(globals())
 BUILD_COMMAND_RELEASE = '8.17.1'
 BUILD_COMMAND_RELEASE_NAME = 'Full-Page Drawings'
 app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.18.0: independent sheet scales and zoom-independent measured lengths.
+from drawing_scale import install as _bc8180_scale_install
+_bc8180_scale = _bc8180_scale_install(globals())
+BUILD_COMMAND_RELEASE = "8.18.0"
+BUILD_COMMAND_RELEASE_NAME = "Sheet Scale & Calibration"
+app.version = BUILD_COMMAND_RELEASE
