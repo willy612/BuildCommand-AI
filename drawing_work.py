@@ -324,7 +324,7 @@ class DrawingWork:
         if response.status_code!=200:return response
         with self.db() as c:
             user,project,sheet=self.pins.context(c,sheet_id)
-            if not self.ns['_bc850_manager'](user):return self.full_page(response)
+            if not self.ns['_bc850_manager'](user):return self.full_page(response,sheet_id)
             notes=self.pins.pins(c,user,sheet)
         html=response.body.decode('utf-8')
         # Fit the actual viewport, including a short landscape screen or a
@@ -351,9 +351,9 @@ class DrawingWork:
         aside='<aside id="dw-panel" aria-label="Drawing work cards"><div class="dw-panel-head"><strong>Work at this location</strong><button type="button" id="dw-close" aria-label="Close work cards">Close</button></div><div id="dw-list"><h2>What needs attention?</h2><p>Tap a pin on the drawing or choose a card below.</p>'+items+('' if notes else '<p>No work cards yet. Choose <b>Add work card</b>, then tap the drawing.</p>')+'</div><div id="dw-selected" hidden><button type="button" id="dw-show-list">All work cards</button><iframe id="dw-frame" title="Selected drawing work card"></iframe></div></aside>'
         html=html.replace('</head>',STYLE+VIEW_STYLE+'</head>',1)
         html=html.replace('</body>',aside+'<script>window.BC_DRAWING_WORK='+js({'sheet_id':sheet_id,'pins':[n['id'] for n in notes]})+';</script><script>'+VIEW_JS+'</script></body>',1)
-        return self.full_page(HTMLResponse(html,headers={'Cache-Control':'private, no-store','Referrer-Policy':'same-origin'}))
+        return self.full_page(HTMLResponse(html,headers={'Cache-Control':'private, no-store','Referrer-Policy':'same-origin'}),sheet_id)
 
-    def full_page(self,response):
+    def full_page(self,response,sheet_id=None):
         """Presentation only: retain the existing canvas, handlers and forms."""
         html=response.body.decode('utf-8')
         def body(match):
@@ -364,7 +364,9 @@ class DrawingWork:
         html=re.sub(r'<body([^>]*)>',body,html,count=1)
         html=html.replace('</head>',FULL_PAGE_STYLE+'</head>',1)
         html=html.replace('</body>','<script>'+FULL_PAGE_JS+'</script></body>',1)
-        return HTMLResponse(html,status_code=response.status_code,headers={'Cache-Control':'private, no-store','Referrer-Policy':'same-origin'})
+        result=HTMLResponse(html,status_code=response.status_code,headers={'Cache-Control':'private, no-store','Referrer-Policy':'same-origin'})
+        scale=getattr(self.ns['app'].state,'drawing_scale',None)
+        return scale.decorate(result,sheet_id) if scale and sheet_id else result
 
     def extra_evidence(self,c,user,pid):
         rows=self.previous_evidence(c,user,pid)
