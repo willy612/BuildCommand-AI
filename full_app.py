@@ -62228,6 +62228,6 @@ from workspace_hub import install as _bc8140_hub_install
 _bc8140_hub = _bc8140_hub_install(globals())
 from drawing_workspace import install as _bc8140_drawings_install
 _bc8140_drawings = _bc8140_drawings_install(globals())
-BUILD_COMMAND_RELEASE = '8.14.0'
-BUILD_COMMAND_RELEASE_NAME = 'Simple Workspace & Drawings'
+BUILD_COMMAND_RELEASE = '8.14.1'
+BUILD_COMMAND_RELEASE_NAME = 'Drawings Query Fix'
 app.version = BUILD_COMMAND_RELEASE
