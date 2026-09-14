@@ -27565,7 +27565,7 @@ def _bc181877_viewer(attachment_id:int):
       +'</div>' for r in revs[:15]
     ) or '<div class="card"><div class="muted">No saved markups yet.</div></div>'
 
-    js_initial=_bc181877_json.dumps(latest_data)
+    js_initial=_bc181877_json.dumps(latest_data).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     file_url="/documents/"+str(int(attachment_id))+"/content"
     title=_runtime.esc(row.get("title") or row.get("original_name") or "Document")
     original=_runtime.esc(row.get("original_name") or "")
@@ -28134,7 +28134,7 @@ def _bc181879_viewer(attachment_id:int):
         display=f'<iframe src="{file_url}" style="width:80vw;height:72vh;border:0;background:white"></iframe>'
         loader='<script>window.BC_DOC_KIND="other";</script>'
 
-    initial=_bc181877_json.dumps(latest_data if isinstance(latest_data,dict) else {"pages":{}},separators=(",",":"))
+    initial=_bc181877_json.dumps(latest_data if isinstance(latest_data,dict) else {"pages":{}},separators=(",",":")).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     body=f'''
     <div class="hero"><div class="eyebrow">DRAWING & DOCUMENT WORKSPACE</div><h1>{title}</h1><p>{project} · {original}</p>
       <div class="v117r-actions"><a href="/documents">← Documents</a><a href="{file_url}" target="_blank">Open Original</a><a href="/documents/{int(attachment_id)}/download">Download</a></div></div>
@@ -28200,7 +28200,7 @@ def _bc181879_viewer(attachment_id:int):
     (function(){{
       const DOC_ID={int(attachment_id)};
       let tool="pan",pageNum=1,zoom=1,pdf=null,rendering=false,down=false,start=null,current=null,panStart=null;
-      let state={initial}; if(!state||!state.pages)state={{pages:{{}},calibration:{{}}}}; if(!state.calibration)state.calibration={{}};
+      let state={initial}; if(!state||!state.pages)state={{pages:{{}},calibration:{{}}}}; if(!state.calibration)state.calibration={{}};for(const k of Object.keys(state.calibration)){{if(state.calibration[k].space!=="base")delete state.calibration[k];}};
       const wrap=document.getElementById("bcStageWrap"),canvas=document.getElementById("bcMarkupCanvas"),ctx=canvas.getContext("2d");
       const key=()=>String(pageNum); function items(){{if(!state.pages[key()])state.pages[key()]=[];return state.pages[key()]}}
       function setTool(t){{tool=t;canvas.style.pointerEvents=(t==="pan"?"none":"auto");wrap.style.cursor=(t==="pan"?"grab":"crosshair");document.getElementById("bcToolStatus").textContent="Tool: "+t.charAt(0).toUpperCase()+t.slice(1);document.querySelectorAll("[data-tool]").forEach(b=>b.classList.toggle("active",b.dataset.tool===t))}}
@@ -28261,8 +28261,8 @@ def _bc181879_viewer(attachment_id:int):
         if(tool==="rect")items().push({{type:"rect",x:Math.min(start[0],end[0]),y:Math.min(start[1],end[1]),w:Math.abs(end[0]-start[0]),h:Math.abs(end[1]-start[1]),color:color}});
         if(tool==="cloud")items().push({{type:"cloud",x:Math.min(start[0],end[0]),y:Math.min(start[1],end[1]),w:Math.abs(end[0]-start[0]),h:Math.abs(end[1]-start[1]),color:color}});
         if(tool==="arrow")items().push({{type:"arrow",x1:start[0],y1:start[1],x2:end[0],y2:end[1],color:color}});
-        if(tool==="calibrate"){{const dx=(end[0]-start[0])*canvas.width,dy=(end[1]-start[1])*canvas.height,pixels=Math.sqrt(dx*dx+dy*dy),known=parseFloat(prompt("Known real-world length:","10"));if(known>0&&pixels>0){{const unit=(prompt("Unit (ft, in, m, mm):","ft")||"ft").trim();state.calibration[key()]={{factor:known/pixels,known:known,unit:unit}};updateCal();setTool("measure")}}else setTool("pan")}}
-        if(tool==="measure"){{const c=state.calibration[key()];if(!c){{alert("Calibrate this sheet first.");setTool("pan");return}}const dx=(end[0]-start[0])*canvas.width,dy=(end[1]-start[1])*canvas.height,pixels=Math.sqrt(dx*dx+dy*dy),real=pixels*c.factor;items().push({{type:"measure",x1:start[0],y1:start[1],x2:end[0],y2:end[1],label:real.toFixed(2)+" "+c.unit,color:color}})}}
+        if(tool==="calibrate"){{const dx=(end[0]-start[0])*canvas.width/zoom,dy=(end[1]-start[1])*canvas.height/zoom,pixels=Math.sqrt(dx*dx+dy*dy),known=parseFloat(prompt("Known real-world length:","10"));if(known>0&&pixels>0){{const unit=(prompt("Unit (ft, in, m, mm):","ft")||"ft").trim();state.calibration[key()]={{factor:known/pixels,known:known,unit:unit,space:"base"}};updateCal();setTool("measure")}}else setTool("pan")}}
+        if(tool==="measure"){{const c=state.calibration[key()];if(!c){{alert("Calibrate this sheet first.");setTool("pan");return}}const dx=(end[0]-start[0])*canvas.width/zoom,dy=(end[1]-start[1])*canvas.height/zoom,pixels=Math.sqrt(dx*dx+dy*dy),real=pixels*c.factor;items().push({{type:"measure",x1:start[0],y1:start[1],x2:end[0],y2:end[1],label:real.toFixed(2)+" "+c.unit,color:color}})}}
         current=null;draw()
       }});
       document.getElementById("bcCalibrate").onclick=()=>{{setTool("calibrate");document.getElementById("bcToolStatus").textContent="Tool: Calibrate — draw over a known dimension"}};
@@ -60083,6 +60083,7 @@ function resize(){if(small.matches&&panel.contains(document.activeElement))butto
 button.addEventListener('click',()=>setOpen(panel.hidden));
 panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&small.matches){setOpen(false);button.focus();}});
 if(small.addEventListener)small.addEventListener('change',resize);else small.addListener(resize);resize();})();
+(()=>{const back=document.querySelector('[data-bc-back]');if(!back)return;back.addEventListener('click',event=>{try{const previous=new URL(document.referrer);if(previous.origin===location.origin&&previous.href!==location.href&&history.length>1){event.preventDefault();history.back();}}catch(error){}});})();
 </script>'''
 
 
@@ -60099,7 +60100,10 @@ def _bc840_shell(title, body, *args, **kwargs):
     path = _bc840_request_path.get()
     nav = [('My workspace', '/workspace')]
     if callable(globals().get('_bc850_nav')): nav += _bc850_nav(user)
-    if tier in {'owner', 'admin', 'lead', 'staff'}: nav.append(('Field tools', '/workspace/tools'))
+    if tier in {'owner', 'admin', 'lead', 'staff'}:
+        nav.append(('Drawings', '/workspace/drawings'))
+        if callable(globals().get('_bc850_manager')) and _bc850_manager(user): nav.append(('BuildCommand AI', '/workspace/brain'))
+        nav.append(('Field tools', '/workspace/tools'))
     company_links = _bc8102_company_links(user)
     in_company = any(_bc8102_active(path, url) for _, url in company_links) or _bc840_admin_path(path)
     symbols = {'/workspace':'home', '/workspace/command':'command', '/workspace/scopes':'scope',
@@ -60121,7 +60125,7 @@ def _bc840_shell(title, body, *args, **kwargs):
                 '<label for="bc840-project">Project</label><select id="bc840-project" name="project_id" aria-label="Current project" required>' +
                 '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
     if title == 'Superintendent Command': selector = ''  # Uses the appointed-project selector in Command.
-    if path == '/workspace/setup' or path.startswith('/workspace/setup/') or path.startswith('/workspace/daily') or path.startswith('/workspace/directory'):
+    if path == '/workspace/setup' or path.startswith('/workspace/setup/') or path.startswith('/workspace/daily') or path.startswith('/workspace/directory') or path.startswith('/workspace/drawings') or path in {'/workspace/brain','/workspace/portfolio'}:
         selector = ''  # Setup identifies the viewed job; handoffs select it explicitly.
     setup = getattr(app.state, 'project_setup', None)
     if setup and selected and (path == '/blueprint-brain' or path.startswith('/blueprint-brain/run/')):
@@ -60134,6 +60138,9 @@ def _bc840_shell(title, body, *args, **kwargs):
     # Limited roles get Company > My access; company administration remains server restricted.
     if in_company and tier not in {'owner','admin'}:
         breadcrumb = '<span class="bc8102-parent">Company</span><span aria-hidden="true">/</span><b>' + esc(str(title)) + '</b>'
+    if path != '/workspace':
+        back = '/workspace/drawings' if path.startswith('/workspace/drawings/') or (path.startswith('/documents/') and path.endswith('/view')) else parent_url
+        body = '<a class="hub-back" data-bc-back href="' + back + '" style="display:inline-flex;min-height:44px;align-items:center;margin-bottom:12px">← Back</a>' + body
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<meta name="referrer" content="{_BC862_FORM_REFERRER_POLICY}"><title>' + esc(str(title)) + ' · BuildCommand AI</title>'
             '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '\n' + _BC8102_CSS + '</style></head><body class="bc8102">'
@@ -60193,7 +60200,8 @@ def bc840_workspace():
         body += '<p>Only projects assigned to your account appear here. Company administration and internal GC tools are not available in this workspace.</p>'
         if tier == 'trade': body += '<p><a class="bc840-button" href="/workspace/shared">Open my shared work</a></p>'
     setup = getattr(app.state, 'project_setup', None)
-    body += '</div>' + (setup.entry(user) if setup and projects else '')
+    hub = getattr(app.state, 'workspace_hub', None)
+    body += '</div>' + (hub.quick_panel(user, projects) if hub else '') + (setup.entry(user) if setup and projects else '')
     body += '<section id="my-projects" aria-labelledby="my-projects-heading"><h2 id="my-projects-heading">My projects</h2>' + _bc840_project_cards(projects) + '</section>'
     return _bc840_page('My workspace', body)
 
@@ -60628,7 +60636,7 @@ async def bc840_role_boundary(request, call_next):
                 if not allowed:
                     return _bc830b_error('This tool is not available in your workspace. Open My workspace to see your assigned projects.',403)
             # Reject forged cross-origin changes on company/access forms.
-            if request.method not in {'GET','HEAD','OPTIONS'} and (path.startswith('/company/') or path=='/company-settings' or path.startswith('/workspace/')):
+            if request.method not in {'GET','HEAD','OPTIONS'} and (path.startswith('/company/') or path=='/company-settings' or path.startswith('/workspace/') or path.startswith('/api/documents/')):
                 if not _bc840_same_origin(request):
                     return _bc861_origin_denied(request)
         return await call_next(request)
@@ -61055,7 +61063,17 @@ def _bc850_detail(share_id,manager):
     if manager:
         body+='<p>Shared with '+_bc830b_escape(str(recipient['email'] if recipient else 'Removed account'))+f'</p><p><a href="/workspace/command?project_id={share["project_id"]}">Back to Superintendent Command</a></p>'
     if share['snapshot_file'] and not share['revoked_at']:
-        body+='<p><a class="bc840-button" href="'+prefix+str(share_id)+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
+        file_url=prefix+str(share_id)
+        preview_type=_bc8131_preview_extension(share['download_name'])
+        body+='<p style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">'
+        if preview_type:
+            label='Open drawing' if preview_type=='application/pdf' else 'Open image'
+            body+='<a class="bc840-button" href="'+file_url+'/view" target="_blank" rel="noopener">'+label+'</a>'
+        body+='<a class="bc840-button" href="'+file_url+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
+        if preview_type:
+            body+='<p class="small">Opens in a new tab. If your browser cannot display the file, use Download.</p>'
+        else:
+            body+='<p class="small">Download this file to open it in a compatible app.</p>'
     body+='</div>' + scope_html
     if manager:
         if not share['revoked_at']:
@@ -61083,13 +61101,48 @@ def bc850_shared_detail(share_id:int): return _bc850_detail(share_id,False)
 @_bc850_endpoint
 def bc850_managed_detail(share_id:int): return _bc850_detail(share_id,True)
 
-def _bc850_download(share_id,manager):
+def _bc850_shared_file(share_id,manager):
     with _bc850_db() as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,manager)
         _bc850_require(not share['revoked_at'] and share['kind']=='document' and bool(_bc830b_re.fullmatch(r'[0-9a-f]{64}\.bin',share['snapshot_file'])))
     root=_BC850_Path(_runtime.UPLOAD_DIR).resolve();folder=root/'_bc_shared_work';path=folder/share['snapshot_file']
     _bc850_require(not folder.is_symlink() and not path.is_symlink() and path.is_file() and path.resolve().parent==folder.resolve(),'This shared file is unavailable. Ask your project leader to share it again.',404)
+    return share,path
+
+def _bc850_download(share_id,manager):
+    share,path=_bc850_shared_file(share_id,manager)
     return _BC850_FileResponse(path,filename=share['download_name'],media_type='application/octet-stream',headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'})
+
+# Browser previews use the same approved snapshot and permissions as downloads.
+# File extensions alone never permit an arbitrary upload to execute as HTML.
+_BC8131_PREVIEW_TYPES={'.pdf':'application/pdf','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}
+
+def _bc8131_preview_extension(filename):
+    return _BC8131_PREVIEW_TYPES.get(_BC850_Path(str(filename or '')).suffix.lower())
+
+def _bc8131_preview_type(filename,header):
+    media=_bc8131_preview_extension(filename)
+    if media=='application/pdf' and header.startswith(b'%PDF-'): return media
+    if media=='image/png' and header.startswith(b'\x89PNG\r\n\x1a\n'): return media
+    if media=='image/jpeg' and header.startswith(b'\xff\xd8\xff'): return media
+    if media=='image/webp' and header[:4]==b'RIFF' and header[8:12]==b'WEBP': return media
+    return None
+
+def _bc8131_view(share_id,manager):
+    share,path=_bc850_shared_file(share_id,manager)
+    with path.open('rb') as source:
+        media=_bc8131_preview_type(share['download_name'],source.read(16))
+    _bc850_require(media is not None,'This file cannot be previewed here. Return to the shared item and use Download to open it in a compatible app.',415)
+    return _BC850_FileResponse(path,filename=share['download_name'],media_type=media,content_disposition_type='inline',
+        headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'SAMEORIGIN'})
+
+@app.get('/workspace/shared/{share_id}/view')
+@_bc850_endpoint
+def bc8131_shared_view(share_id:int): return _bc8131_view(share_id,False)
+
+@app.get('/workspace/sharing/{share_id}/view')
+@_bc850_endpoint
+def bc8131_managed_view(share_id:int): return _bc8131_view(share_id,True)
 
 @app.get('/workspace/shared/{share_id}/download')
 @_bc850_endpoint
@@ -62141,4 +62194,40 @@ from daily_reports import install as _bc8130_install
 _bc8130_reports = _bc8130_install(globals())
 BUILD_COMMAND_RELEASE = '8.13.0'
 BUILD_COMMAND_RELEASE_NAME = 'Daily Reports by Trade'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.13.1 — open already-shared PDF drawings and images in the browser.
+@app.get('/health/shared-drawings-8-13-1')
+def bc8131_health():
+    active={(getattr(r,'path',''),method):r.endpoint for r in app.routes for method in (getattr(r,'methods',None) or set())}
+    checks={
+        'GET /workspace/shared/{share_id}/view': active.get(('/workspace/shared/{share_id}/view','GET')) is bc8131_shared_view,
+        'GET /workspace/sharing/{share_id}/view': active.get(('/workspace/sharing/{share_id}/view','GET')) is bc8131_managed_view,
+        'subcontractor_download_preserved': active.get(('/workspace/shared/{share_id}/download','GET')) is bc850_shared_download,
+        'manager_download_preserved': active.get(('/workspace/sharing/{share_id}/download','GET')) is bc850_managed_download,
+        'pdf_preview_type_configured': _bc8131_preview_type('drawing.pdf',b'%PDF-1.7')=='application/pdf',
+        'html_preview_rejected': _bc8131_preview_type('drawing.pdf',b'<html>') is None and _bc8131_preview_type('page.html',b'<html>') is None,
+        'sharing_schema_initialized': _BC850_SCHEMA_READY,
+        'daily_reports_preserved': getattr(app.state,'daily_reports',None) is not None,
+        'reviewed_actions_preserved': getattr(app.state,'command_actions',None) is not None,
+        'form_origin_guard_preserved': _bc840_same_origin is _bc861_same_origin and _BC862_FORM_REFERRER_POLICY=='same-origin',
+    }
+    return {'app':'BuildCommand AI','version':'8.13.1','release':'Open Shared Drawings','status':'ok' if all(checks.values()) else 'degraded',
+        'checks':checks,'passed':sum(checks.values()),'total':len(checks),'data_reset':False,
+        'scope':'Active route and preview configuration checks only. Open a real shared PDF as the assigned subcontractor on staging. Verify revoked and unassigned access remains blocked; browser PDF support varies.'}
+
+_runtime.PUBLIC_PATHS.add('/health/shared-drawings-8-13-1')
+BUILD_COMMAND_RELEASE = '8.13.1'
+BUILD_COMMAND_RELEASE_NAME = 'Open Shared Drawings'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.14.0 — categorized tools, shared project intelligence and field drawings.
+from workspace_hub import install as _bc8140_hub_install
+_bc8140_hub = _bc8140_hub_install(globals())
+from drawing_workspace import install as _bc8140_drawings_install
+_bc8140_drawings = _bc8140_drawings_install(globals())
+BUILD_COMMAND_RELEASE = '8.14.0'
+BUILD_COMMAND_RELEASE_NAME = 'Simple Workspace & Drawings'
 app.version = BUILD_COMMAND_RELEASE
