@@ -19,6 +19,48 @@ VERSION='8.14.1'
 RELEASE='Drawings Query Fix'
 
 
+# Use original SVG paths instead of text glyphs. The legacy shell may already
+# contain mojibake; replace button contents by stable IDs, never by bad bytes.
+TOOL_ICONS={
+    'pen':'<path d="m4 16 12-12 4 4L8 20H4v-4Zm10-10 4 4"/>',
+    'cloud':'<path d="M6 18a4 4 0 0 1-2-7 4 4 0 0 1 5-5 4 4 0 0 1 7 0 4 4 0 0 1 5 5 4 4 0 0 1-2 7 4 4 0 0 1-7 1 4 4 0 0 1-6-1Z"/>',
+    'arrow':'<path d="M4 20 20 4M8 4h12v12"/>',
+    'rect':'<rect x="4" y="5" width="16" height="14" rx="1"/>',
+    'text':'<path d="M4 5h16M12 5v15M8 20h8"/>',
+    'stamp':'<path d="M5 16h14v4H5zM8 16v-3l2-2V6a2 2 0 0 1 4 0v5l2 2v3M4 22h16"/>',
+    'calibrate':'<path d="M3 3v18h18M7 16l10-9M7 12v4h4M13 7h4v4"/>',
+    'measure':'<path d="m3 16 13-13 5 5L8 21 3 16Zm5-5 3 3m1-7 3 3m1-7 3 3"/>',
+    'pan':'<path d="M12 3v18M3 12h18M8 7l4-4 4 4M8 17l4 4 4-4M7 8l-4 4 4 4m10-8 4 4-4 4"/>',
+    'undo':'<path d="m8 5-5 5 5 5M3 10h10a6 6 0 0 1 0 12"/>',
+    'clear':'<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6m4-6v6"/>',
+    'zoom-out':'<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6"/>',
+    'zoom-in':'<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6m-3-3v6"/>',
+    'fit':'<path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/>',
+    'previous':'<path d="m15 5-7 7 7 7"/>',
+    'next':'<path d="m9 5 7 7-7 7"/>',
+}
+TOOL_IDS={'bcPrev':'previous','bcNext':'next','bcZoomOut':'zoom-out','bcZoomIn':'zoom-in','bcFit':'fit','bcUndo':'undo','bcClear':'clear','bcCalibrate':'calibrate','bcMarkupTrigger':'pen'}
+
+
+def clean_tool_icons(html):
+    def replace(match):
+        attrs=match[1]
+        if not re.search(r'class="[^"]*\bbc81-(?:tool|iconbtn|trigger)\b',attrs):return match[0]
+        tool=re.search(r'data-tool="([^"]+)"',attrs);identity=re.search(r'\bid="([^"]+)"',attrs)
+        key=tool[1] if tool else TOOL_IDS.get(identity[1] if identity else '')
+        if key not in TOOL_ICONS:return match[0]
+        title=re.search(r'\btitle="([^"]+)"',attrs)
+        label='Markup' if identity and identity[1]=='bcMarkupTrigger' else title[1] if title else key.title()
+        svg='<svg class="drawing-tool-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">'+TOOL_ICONS[key]+'</svg>'
+        return '<button'+attrs+'>'+svg+'<span class="drawing-tool-label">'+label+'</span></button>'
+    return re.sub(r'<button([^>]*)>(.*?)</button>',replace,html,flags=re.S)
+
+
+TOOL_STYLE='''<style>
+.bc81-toolbar{flex-wrap:wrap!important;gap:8px!important}.bc81-toolbar .bc81-iconbtn{width:auto!important;height:auto!important;min-width:62px!important;min-height:48px!important;display:inline-flex!important;flex-direction:column;gap:3px;padding:8px!important}.drawing-tool-icon{display:block;flex-shrink:0;max-width:none!important}.bc81-menu{width:350px!important;max-width:calc(100vw - 32px)!important;box-sizing:border-box;right:0!important;left:auto!important;padding:14px!important}.bc81-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}.bc81-toolbar .bc81-tool{width:100%!important;min-width:0!important;height:80px!important;padding:10px 6px!important;box-sizing:border-box;display:flex!important;flex-direction:column;justify-content:center;gap:8px!important}.drawing-tool-label{font:600 13px/1.2 Arial,sans-serif!important;white-space:normal!important;word-break:normal!important;overflow-wrap:normal!important;text-align:center;max-width:100%;letter-spacing:normal!important}.bc81-trigger{display:inline-flex!important;align-items:center;gap:9px;min-height:48px!important}.bc81-trigger .drawing-tool-label{font-size:15px!important}.bc81-settings{flex-wrap:wrap!important}.bc81-toolbar button:focus-visible{outline:3px solid #e8b64e;outline-offset:2px}
+</style>'''
+
+
 def install(ns):
     service=DrawingWorkspace(ns);ns['app'].state.drawing_workspace=service;service.register();return service
 
@@ -66,12 +108,13 @@ class DrawingWorkspace:
         pattern='%'+q.lower()[:120]+'%'
         return [dict(r) for r in c.execute(
             "SELECT * FROM attachments WHERE company_id=? AND project_id=? "
+            "AND COALESCE(category,'')<>? "
             "AND (LOWER(original_name) LIKE ? OR LOWER(original_name) LIKE ? "
             "OR LOWER(original_name) LIKE ? OR LOWER(original_name) LIKE ? "
             "OR LOWER(original_name) LIKE ?) "
             "AND (LOWER(COALESCE(title,'')) LIKE ? OR LOWER(original_name) LIKE ?) "
             "ORDER BY id DESC LIMIT 100",
-            (company_id,project_id,'%.pdf','%.png','%.jpg','%.jpeg','%.webp',pattern,pattern)
+            (company_id,project_id,'DRAWING_RELEASE','%.pdf','%.png','%.jpg','%.jpeg','%.webp',pattern,pattern)
         ).fetchall()]
 
     def index(self,project_id:int=0,q:str=''):
@@ -151,11 +194,13 @@ class DrawingWorkspace:
         html=html.replace('<div id="bcToolStatus"','<p class="hub-help" id="drawing-load-state" role="status">Use Pan to move around. Open Markup to choose a tool, then save your revision below.</p><div id="bcToolStatus"',1)
         html=html.replace('<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js">','<script onerror="document.getElementById(\'drawing-load-state\').textContent=\'The drawing renderer could not load. Use Open Original to view the PDF, then reload to mark up.\'" src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js">')
         html=html.replace('pdf=p;pageNum=Math.min(pageNum,pdf.numPages);await fitToScreen()})', 'pdf=p;pageNum=Math.min(pageNum,pdf.numPages);await fitToScreen()}).catch(()=>{document.getElementById("drawing-load-state").textContent="This PDF could not be rendered. Use Open Original to check the file, then reload to mark up.";})')
-        html=re.sub(r'(<button[^>]*class="bc81-tool"[^>]*title="([^"]+)">)(.*?)(</button>)',lambda match:match[1]+'<span aria-hidden="true">'+match[3]+'</span><span class="drawing-tool-label">'+esc(match[2])+'</span>'+match[4],html)
+        html=clean_tool_icons(html)
         html=html.replace('Drawing & Document Workspace','Drawings')
         html=html.replace('</head>','<style>.bc81-toolbar button{color:#fff!important;background:#25394d!important;min-height:44px}.bc81-toolbar{position:sticky;top:8px;z-index:10}.bc81-menu{color:white}.bc81-trigger{min-width:118px}.bc81-menu{width:290px;max-width:calc(100vw - 48px);min-width:0!important}.bc81-grid{grid-template-columns:repeat(3,1fr)!important}.bc81-tool{width:80px!important;height:70px!important;flex-direction:column;gap:5px}.drawing-tool-label{font-size:11px;line-height:1.15}.bc81-tool:focus-visible{outline:3px solid #e7b448}.bc81-settings select{color:#172b3e}@media(max-width:700px){#bcStageWrap{min-height:320px!important;height:65vh!important}}</style></head>',1)
         support='''<script>(()=>{let dirty=false;const canvas=document.getElementById('bcMarkupCanvas');if(canvas)canvas.addEventListener('pointerdown',()=>{const mode=document.getElementById('bcToolStatus');if(mode&&!mode.textContent.includes('Tool: Pan'))dirty=true;});for(const id of ['bcUndo','bcClear','bcRevTitle','bcRevNotes']){const el=document.getElementById(id);if(el)el.addEventListener(el.tagName==='BUTTON'?'click':'input',()=>{dirty=true;});}window.addEventListener('beforeunload',event=>{if(dirty){event.preventDefault();event.returnValue='';}});for(const pair of [['bcSaveMarkup','bcSaveStatus'],['bcPublishCurrent','bcPublishStatus']]){const button=document.getElementById(pair[0]),status=document.getElementById(pair[1]);if(!button||!button.onclick)continue;const previous=button.onclick;button.onclick=async function(event){try{await previous.call(this,event);if(pair[0]==='bcSaveMarkup'&&status.textContent.startsWith('Saved markup revision'))dirty=false;}catch(error){status.textContent='The request could not finish. Your notes are still on this page. Check your connection and try again.';}};}})();</script>'''
         html=html.replace('</body>',support+'</body>',1)
+        html=html.replace('</head>',TOOL_STYLE+'</head>',1)
+        if not re.search(r'<meta\s+charset=',html,re.I):html=html.replace('<head>','<head><meta charset="utf-8">',1)
         return HTMLResponse(html,headers={'Cache-Control':'no-store','Referrer-Policy':'same-origin'})
 
     async def save_markup(self,attachment_id:int,request:Request):
@@ -185,7 +230,7 @@ class DrawingWorkspace:
 
     def health(self):
         checks=dict(self.hub.health()['checks'])
-        checks['drawings_hotfix_release_active']=self.ns.get('BUILD_COMMAND_RELEASE') in {VERSION,'8.15.0'}
+        checks['drawings_hotfix_release_active']=self.ns.get('BUILD_COMMAND_RELEASE') in {VERSION,'8.15.0','8.16.0'}
         try:
             # Exercise the same bounded read as the page, including all LIKE
             # parameters, without returning any customer data or writing rows.
