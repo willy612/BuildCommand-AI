@@ -145,7 +145,7 @@ class CommandCenter:
         if not cards:
             body+='<p>No priorities are recorded yet. Start by analyzing your plans or sharing the first piece of work.</p>' if totals['total']==0 else '<p>No recorded work needs attention here. Check today’s plan with your crew.</p>'
         if not priorities['available']:body+='<p class="muted">Project analysis is temporarily unavailable. The shared-work queue remains available.</p>'
-        body+=followup_panel+f'<p><a class="bc860-button" href="/workspace/command/projects/{pid}/brief">Review today’s brief</a></p></section><section id="ask" class="bc860-panel"><h2>Ask BuildCommand</h2><p>Get a clear answer from the records on this job.</p>'+self.ask_form(pid)+'</section></div>'
+        body+=followup_panel+f'<p><a class="bc860-button" href="/workspace/command/projects/{pid}/brief">Review today’s brief</a> <a href="/workspace/command/projects/{pid}/briefs">Saved briefs</a></p></section><section id="ask" class="bc860-panel"><h2>Ask BuildCommand</h2><p>Get a clear answer from the records on this job.</p>'+self.ask_form(pid)+'</section></div>'
         body+='<section id="quick" class="bc860-panel"><h2>Quick Actions</h2><div class="quick-grid">'
         for path,label in [(f'/photo-ai?project_id={pid}','Review a site photo'),(f'/workspace/scopes?project_id={pid}','Review & publish trade scopes'),(f'/workspace/rfi-answers?project_id={pid}','RFI answers to field'),(f'/workspace/sharing/projects/{pid}/team','Project subcontractors')]:body+='<a class="bc860-button secondary" href="'+path+'">'+esc(label)+'</a>'
         body+='</div><details><summary>More tools and saved work</summary><div class="bc860-tools">'
@@ -165,7 +165,13 @@ class CommandCenter:
         pages=max(1,(matched+self.ns['_BC860_PAGE_SIZE']-1)//self.ns['_BC860_PAGE_SIZE'])
         if page>1 or page<pages:
             body+='<nav class="bc860-pagination" aria-label="Command pages">'+(f'<a href="{esc(url(pid,view,q,page-1))}">← Previous</a>' if page>1 else '<span></span>')+f'<span>Page {page} of {pages}</span>'+(f'<a href="{esc(url(pid,view,q,page+1))}">Next →</a>' if page<pages else '')+'</nav>'
-        body+='</section><details id="issued-directions" class="bc860-panel"'+(' open' if rfis['needs_review'] else '')+'><summary>Issued directions and photo actions</summary>'+self.ns['app'].state.rfi_field.brief_html(rfis,True)+self.ns['app'].state.photo_field.brief_html(photos,True)+'</details><details class="bc860-panel"><summary>Full daily plan</summary>'+self.daily.plan_html({'priorities':priorities})+'</details>'
+        body+='</section><details id="issued-directions" class="bc860-panel"'+(' open' if rfis['needs_review'] else '')+f'><summary>Issued directions and photo actions</summary><p><a href="/workspace/rfi-answers?project_id={pid}">RFI answers to field</a> · <a href="/workspace/scopes?project_id={pid}">Review &amp; publish trade scopes</a></p>'+self.ns['app'].state.rfi_field.brief_html(rfis,True)+self.ns['app'].state.photo_field.brief_html(photos,True)+'</details><details class="bc860-panel"><summary>Full daily plan</summary>'+self.daily.plan_html({'priorities':priorities})+'</details>'
+        if getattr(self.ns['app'].state,'workspace_hub',None):
+            start=body.find('<section id="quick"')
+            end=body.find('<section id="problems"',start)
+            if start>=0 and end>start:
+                saved=(f'<p class="muted">Last saved field briefing · {esc(latest["brief_date"])} · <a href="/workspace/command/briefs/{latest["id"]}">Open saved copy</a></p>') if latest else ''
+                body=body[:start]+'<section id="quick" class="bc860-panel"><h2>Quick Actions</h2><p>Quick Actions and follow-ups are together on My workspace.</p><a class="bc860-button" href="/workspace#quick-actions">Open Quick Actions &amp; Follow-ups</a>'+saved+'</section>'+body[end:]
         return self.page('Superintendent Command',body)
 
     def context_json(self,value):
@@ -176,6 +182,10 @@ class CommandCenter:
     def report_evidence(self,c,user,project_id):
         reports=getattr(self.ns['app'].state,'daily_reports',None)
         return reports.evidence(c,user,project_id) if reports else []
+
+    def additional_evidence(self,c,user,project_id):
+        hub=getattr(self.ns['app'].state,'workspace_hub',None)
+        return hub.extra_evidence(c,user,project_id) if hub else []
 
     def context(self,c,user,project):
         pid=project['id'];data=self.daily.collect(c,user,project);evidence=[]
@@ -196,10 +206,11 @@ class CommandCenter:
         if getattr(self.ns['app'].state,'command_actions',None) is not None:
             for row in c.execute('SELECT id,plan_id,title,note,followup_date FROM bc_command_followups WHERE company_id=? AND project_id=? AND closed_at IS NULL AND followup_date>? ORDER BY followup_date,id LIMIT 30',(user['company_id'],pid,self.field.now().date().isoformat())).fetchall():add('Upcoming follow-up',row['id'],row['title'],row['followup_date']+' · '+row['note'],f'/workspace/command/actions/{row["plan_id"]}')
         for row in c.execute('SELECT id,original_name,result_text FROM bc_photo_analyses WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 8',(user['company_id'],pid)).fetchall():add('Photo observations',row['id'],row['original_name'],row['result_text'],f'/workspace/photos/{row["id"]}')
+        for kind,identity,title,detail,path in self.additional_evidence(c,user,pid):add(kind,identity,title,detail,path)
         for row in c.execute('SELECT id,title,original_name FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 8',(user['company_id'],pid)).fetchall():add('Document title only',row['id'],row['title'],row['original_name'],f'/workspace/command/projects/{pid}/analysis')
         if 'blueprint_scope_items' in self.ns['_bc800_table_names']():
             for row in c.execute("SELECT i.id,i.trade,i.requirement,i.source_sheet,i.source_detail FROM blueprint_scope_items i JOIN blueprint_runs r ON r.id=i.run_id AND r.project_id=i.project_id AND r.company_id=i.company_id WHERE i.company_id=? AND i.project_id=? AND UPPER(r.status) IN ('COMPLETE','COMPLETED','SUCCESS') ORDER BY i.id DESC LIMIT 12",(user['company_id'],pid)).fetchall():add('Plan scope requirement',row['id'],row['trade'],str(row['requirement'] or '')+' · Sheet '+str(row['source_sheet'] or 'unrecorded')+' · '+str(row['source_detail'] or ''),f'/workspace/scopes?project_id={pid}')
-        return {'project':data['project'],'shared_work_counts':data['totals'],'source_coverage':'Current attention queue and daily priorities; newest 15 schedule, RFI and submittal records; bounded issued work, photo observations, plan scope requirements and document titles. Not every project file is included. Full plan sheets and image pixels are not included.', 'evidence':evidence[:160]}
+        return {'project':data['project'],'shared_work_counts':data['totals'],'source_coverage':'Current attention queue and daily priorities; newest 15 schedule, RFI and submittal records; bounded issued work, photo observations, plan scope requirements, document titles, saved document excerpts, meeting summaries and drawing markup notes. Not every project file is included. Full plan sheets and image pixels are not included.', 'evidence':evidence[:160]}
 
     def fail_ask(self,category,message,status=502,exc=None,response=None):
         reference='ASK-'+secrets.token_hex(4).upper()
