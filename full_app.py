@@ -60826,7 +60826,7 @@ def _bc850_source(c,user,pid,kind,source_id=None,query=''):
     if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
     sql=f'SELECT {fields} FROM {table} t JOIN projects p ON p.id=t.project_id WHERE p.company_id=? AND t.project_id=?'
     args=[_bc810_company_id(user),pid]
-    if kind=='document': sql+=' AND t.company_id=?'; args.append(_bc810_company_id(user))
+    if kind in {'document','document_request'}: sql+=' AND t.company_id=?'; args.append(_bc810_company_id(user))
     if kind=='rfi': sql+=" AND upper(COALESCE(t.issue_type,''))='RFI'"
     if source_id is not None: sql+=' AND t.id=?';args.append(source_id)
     elif query:
@@ -60961,6 +60961,7 @@ def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0)
 @app.get('/workspace/sharing/new')
 @_bc850_endpoint
 def bc850_prepare_share(project_id:int,kind:str,source_id:int,draft_message:str=''):
+    if kind == 'document_request': return app.state.document_requests.existing(source_id,project_id)
     _bc850_require(len(draft_message)<=6000, 'Keep draft instructions within 6,000 characters.',400)
     if kind == 'command_notice':
         with _bc850_db() as c:
@@ -60993,7 +60994,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int,draft_message:str=
 @app.post('/workspace/sharing/publish')
 @_bc850_endpoint
 def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
-    _bc850_require(kind not in {'scope','photo_action','rfi_answer','command_notice'},'Review the scope, photo action, RFI answer or command action preview before publishing it.',400)
+    _bc850_require(kind not in {'scope','photo_action','rfi_answer','command_notice','document_request'},'Review the scope, photo action, RFI answer or command action preview before publishing it.',400)
     title,message,due_date=title.strip(),message.strip(),due_date.strip()
     _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
     _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
@@ -61053,6 +61054,7 @@ def bc850_shared(project_id:int=0,kind:str='',before_id:int=0):
 def _bc850_detail(share_id,manager):
     with _bc850_db() as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,manager)
+        if share['kind']=='document_request': return app.state.document_requests.render(c,user,share,manager)
         updates=[dict(r) for r in c.execute('SELECT * FROM bc_shared_work_updates WHERE share_id=? AND share_version=? ORDER BY id DESC LIMIT 100',(share_id,share['version'])).fetchall()]
         recipient=c.execute('SELECT display_name,email FROM users WHERE id=?',(share['recipient_user_id'],)).fetchone()
         project=c.execute('SELECT name FROM projects WHERE id=? AND company_id=?',(share['project_id'],_bc810_company_id(user))).fetchone()
@@ -61164,6 +61166,7 @@ def bc850_respond(share_id:int,version:int=_BC189_Form(...),status:str=_BC189_Fo
     _bc850_require(status in _BC850_STATUSES and 0<len(message)<=4000,'Choose a progress state and write an update up to 4,000 characters.',400)
     with _bc850_db(True) as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,False,True)
+        _bc850_require(share['kind']!='document_request','Open the document request to submit a file or review its exact submission.',409)
         _bc850_require(share['version']==version,'This share changed. Reload it before replying.',409)
         _bc850_require(share['allow_response']==1 and share['state']=='OPEN','Replies are closed for this item.',409)
         if share['kind']=='rfi_answer':
@@ -61179,6 +61182,7 @@ def bc850_review(share_id:int,update_id:int,version:int=_BC189_Form(...),review_
     _bc850_require(len(review_message)<=2000,'Keep your reply within 2,000 characters.',400)
     with _bc850_db(True) as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,True,True)
+        _bc850_require(share['kind']!='document_request','Open the document request to submit a file or review its exact submission.',409)
         _bc850_require(not share['revoked_at'] and share['version']==version,'This share changed. Reload it before reviewing.',409)
         row=c.execute('SELECT id FROM bc_shared_work_updates WHERE id=? AND share_id=? AND share_version=? AND reviewed_at IS NULL',(update_id,share_id,version)).fetchone()
         _bc850_require(row is not None,'This response is already reviewed or unavailable.',409)
@@ -61193,6 +61197,7 @@ def bc850_control(share_id:int,version:int=_BC189_Form(...),action:str=_BC189_Fo
     with _bc850_db(True) as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,True,True)
         _bc850_require(not share['revoked_at'] and share['version']==version,'This share changed. Reload it first.',409)
+        _bc850_require(share['kind']!='document_request' or action=='revoke','Review the document request before accepting or requesting changes.',409)
         now=_bc830b_now().isoformat()
         # Close/reopen preserve publication version and its response history.
         if action=='revoke': c.execute('UPDATE bc_shared_work SET revoked_at=?,updated_at=? WHERE id=?',(now,now,share_id))
@@ -61337,13 +61342,13 @@ def _bc860_rows(c, user, pid, view, q, page):
         LEFT JOIN users r ON r.id=s.recipient_user_id AND r.company_id=s.company_id
         WHERE s.company_id=? AND s.project_id=? AND s.revoked_at IS NULL
       ), progress AS (
-        SELECT s.*, COALESCE(u.status,'') AS latest_status, u.message AS latest_message,
+        SELECT s.*, CASE WHEN s.kind='document_request' AND s.state='OPEN' AND s.pending_count=0 AND u.status='READY_FOR_REVIEW' THEN 'IN_PROGRESS' ELSE COALESCE(u.status,'') END AS latest_status, u.message AS latest_message,
           u.created_at AS latest_time, n.status AS pending_status, n.message AS pending_message,
           n.created_at AS pending_time,
           CASE WHEN s.pending_count>0 THEN 1 ELSE 0 END AS needs_review,
           CASE WHEN s.state='OPEN' AND u.status='BLOCKED' THEN 1 ELSE 0 END AS blocked,
           CASE WHEN s.state='OPEN' AND length(s.due_date)=10 AND s.due_date<? THEN 1 ELSE 0 END AS overdue,
-          CASE WHEN s.state='OPEN' AND u.status='READY_FOR_REVIEW' THEN 1 ELSE 0 END AS ready
+          CASE WHEN s.state='OPEN' AND u.status='READY_FOR_REVIEW' AND (s.kind<>'document_request' OR s.pending_count>0) THEN 1 ELSE 0 END AS ready
         FROM scoped s
         LEFT JOIN bc_shared_work_updates u ON u.id=s.latest_id
         LEFT JOIN bc_shared_work_updates n ON n.id=s.pending_id
@@ -61427,6 +61432,8 @@ def _bc860_hidden(row, view, q, page):
 
 
 def _bc860_card(row, view, q, page):
+    if row['kind']=='document_request':
+        return app.state.document_requests.command_card(row)
     esc = _bc830b_escape
     sid = int(row['id'])
     status = _BC850_STATUSES.get(row['latest_status'], 'Awaiting first update' if row['allow_response'] else 'Shared for reference')
@@ -61546,6 +61553,7 @@ def bc860_action(share_id: int, action: str = _BC189_Form(...), version: int = _
     with _bc850_db(True) as c:
         user = _bc850_actor(c)
         share = _bc850_share(c, user, share_id, True, True)
+        _bc850_require(share['kind']!='document_request','Open the document request to review its exact file and decision.',409)
         _bc850_require(not share['revoked_at'] and share['version'] == version and
                        share['state'] == expected_state and share['updated_at'] == revision,
                        'This share changed. Reload Superintendent Command before acting.', 409)
@@ -62277,4 +62285,12 @@ from project_documents import install as _bc8200_documents_install
 _bc8200_documents = _bc8200_documents_install(globals())
 BUILD_COMMAND_RELEASE = "8.20.0"
 BUILD_COMMAND_RELEASE_NAME = "Project Documents & Closeout Register"
+app.version = BUILD_COMMAND_RELEASE
+
+
+# BuildCommand AI 8.21.0 — Reviewed document requests through trade sharing.
+from document_requests import install as _bc8210_requests_install
+_bc8210_requests = _bc8210_requests_install(globals())
+BUILD_COMMAND_RELEASE = "8.21.0"
+BUILD_COMMAND_RELEASE_NAME = "Document Requests by Trade"
 app.version = BUILD_COMMAND_RELEASE
