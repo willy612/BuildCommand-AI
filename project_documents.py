@@ -241,6 +241,7 @@ class ProjectDocuments:
         if can_edit:body+=self.link(BASE+'/new?'+urlencode(dict(project_id=pid,template=1 if not pid else 0,folder=folder or 'general')),'Add a document')
         if pid and getattr(self.ns['app'].state,'document_requests',None):body+=self.link('/workspace/document-requests?project_id='+str(pid),'Document requests')
         if pid and getattr(self.ns['app'].state,'closeout_handover',None):body+=self.link('/workspace/closeout?project_id='+str(pid),'Closeout & handover')
+        if pid and getattr(self.ns['app'].state,'safety_checklists',None):body+=self.link('/workspace/checklists?project_id='+str(pid),'Safety & inspections')
         if pid:body+=self.link(TEMPLATES,'Use company template')+self.link(BASE+'/export?'+urlencode(dict(project_id=pid,folder=folder)),'Export register')
         if pid and folder=='closeout':body+='<form method="post" action="'+BASE+'/projects/'+str(pid)+'/closeout-starter"><button>Start closeout checklist</button></form>'
         body+='</div><nav class="docs-grid" aria-label="Document folders">'
@@ -300,6 +301,8 @@ class ProjectDocuments:
             if requests:body+=requests.record_panel(c,user,row)
             closeout=getattr(self.ns['app'].state,'closeout_handover',None)
             if closeout:body+=closeout.record_panel(c,user,row)
+            checklists=getattr(self.ns['app'].state,'safety_checklists',None)
+            if checklists:body+=checklists.record_panel(c,user,row)
             body+='<div class="docs-actions">'+self.link(self.home(p['id']),'Back to documents')+'</div><section class="card"><h2>Files</h2>'
             for f in files:
                 body+='<article class="docs-row docs-file"><div><strong>'+esc(f['original_name'])+'</strong><p class="docs-meta">Version '+str(f['revision'])+' · '+('Current file · ' if f==files[0] else 'Earlier file · ')+esc(f['created'][:10])+'</p></div><div class="docs-actions">'
@@ -495,6 +498,8 @@ class ProjectDocuments:
         if requests:result.extend(requests.evidence(c,user,pid))
         closeout=getattr(self.ns['app'].state,'closeout_handover',None)
         if closeout:result.extend(closeout.evidence(c,user,pid))
+        checklists=getattr(self.ns['app'].state,'safety_checklists',None)
+        if checklists:result.extend(checklists.evidence(c,user,pid))
         return result
 
     def health(self):
