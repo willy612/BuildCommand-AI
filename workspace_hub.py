@@ -13,8 +13,8 @@ VERSION='8.14.0'
 GROUPS=(
  ('Drawings & documents',(('Drawings','/workspace/drawings'),('Project Documents','/workspace/documents'),('RFIs / issues','/issues'),('Submittals','/submittals')),
   (('Earlier document uploads','/documents'),('Change events','/changes'),('Change packages','/change-package'))),
- ('Daily field work',(('Daily report','/daily-report'),('Punch list','/punch'),('Inspections','/inspections'),('Safety','/safety')),
-  (('Quick field note','/quick-entry'),('Field log','/field'),('Production','/production'),('Reports & exports','/exports'),('PDF reports','/pdf-reports'))),
+ ('Daily field work',(('Daily report','/daily-report'),('Punch list','/punch'),('Safety & inspections','/workspace/checklists')),
+  (('Earlier inspections','/inspections'),('Earlier safety records','/safety'),('Quick field note','/quick-entry'),('Field log','/field'),('Production','/production'),('Reports & exports','/exports'),('PDF reports','/pdf-reports'))),
  ('Schedule & planning',(('Schedule','/schedule'),('Advanced Schedule Import','/advanced-schedule-import'),('3-week look-ahead','/lookahead-intelligence'),('Procurement','/procurement')),
   (('Project startup','/project-startup'),('Readiness','/readiness'),('Make ready','/make-ready'),('Recovery planning','/recovery'),('Project settings','/project-settings'))),
  ('People & coordination',(('Subcontractor directory','/workspace/directory'),('Trade sharing','/workspace/sharing'),('Meetings','/meetings'),('Portfolio','/workspace/portfolio')),
@@ -108,7 +108,7 @@ class WorkspaceHub:
         body=CSS+'<section id="quick-actions" class="card hub-section"><h2>Quick Actions &amp; Follow-ups</h2>'
         if not project:return body+'<p>Choose a project below to see its work and next actions.</p></section>'
         body+='<p>'+esc(project['name'])+'</p><div class="hub-actions">'
-        for label,path in [('Run today','/workspace/command'),('Drawings','/workspace/drawings'),('Daily report','/workspace/daily'),('Documents','/workspace/documents'),('Ask / analyze','/workspace/brain')]:body+=self.open_form(pid,path,label)
+        for label,path in [('Run today','/workspace/command'),('Drawings','/workspace/drawings'),('Daily report','/workspace/daily'),('Safety & inspections','/workspace/checklists'),('Documents','/workspace/documents'),('Ask / analyze','/workspace/brain')]:body+=self.open_form(pid,path,label)
         body+='</div><h3>Work to follow up</h3>'
         with self.db() as c:
             self.field.actor(c,pid)
