@@ -12621,6 +12621,14 @@ async def _bc1810l_create_project(request:_BC189_Request):
         )
 
     form=await request.form()
+    setup_flow = str(form.get('setup_flow') or '') == '1'
+    if setup_flow:
+        if not _bc840_same_origin(request):
+            return _bc861_origin_denied(request)
+        admin, denied = _bc820_require_company_admin()
+        if denied: return denied
+        if len(str(form.get('name') or '').strip()) > 200 or len(str(form.get('number') or '').strip()) > 80:
+            return _bc830b_error('Use a project name under 201 characters and a number under 81 characters.', 400)
     name=str(form.get("name") or "").strip()
     number=str(form.get("number") or "").strip()
     status=str(form.get("status") or "ACTIVE").strip().upper()
@@ -12645,7 +12653,7 @@ async def _bc1810l_create_project(request:_BC189_Request):
             pid=int(existing["id"])
             _bc1810l_persist_selected_project(pid,user,c)
             c.commit()
-            return _BC187_RedirectResponse("/app",status_code=303)
+            return _BC187_RedirectResponse(f"/workspace/setup/projects/{pid}" if setup_flow else "/app",status_code=303)
 
         row=c.execute(
             "INSERT INTO projects(name,number,status,company_id) "
@@ -12680,7 +12688,7 @@ async def _bc1810l_create_project(request:_BC189_Request):
     finally:
         c.close()
 
-    return _BC187_RedirectResponse("/app",status_code=303)
+    return _BC187_RedirectResponse(f"/workspace/setup/projects/{pid}" if setup_flow else "/app",status_code=303)
 
 _BC1810L_SELECT_ROUTE=_bc1810a_prepend_route(
     "/projects/select",_bc1810l_select_project,["POST"]
@@ -27557,7 +27565,7 @@ def _bc181877_viewer(attachment_id:int):
       +'</div>' for r in revs[:15]
     ) or '<div class="card"><div class="muted">No saved markups yet.</div></div>'
 
-    js_initial=_bc181877_json.dumps(latest_data)
+    js_initial=_bc181877_json.dumps(latest_data).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     file_url="/documents/"+str(int(attachment_id))+"/content"
     title=_runtime.esc(row.get("title") or row.get("original_name") or "Document")
     original=_runtime.esc(row.get("original_name") or "")
@@ -28126,7 +28134,7 @@ def _bc181879_viewer(attachment_id:int):
         display=f'<iframe src="{file_url}" style="width:80vw;height:72vh;border:0;background:white"></iframe>'
         loader='<script>window.BC_DOC_KIND="other";</script>'
 
-    initial=_bc181877_json.dumps(latest_data if isinstance(latest_data,dict) else {"pages":{}},separators=(",",":"))
+    initial=_bc181877_json.dumps(latest_data if isinstance(latest_data,dict) else {"pages":{}},separators=(",",":")).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
     body=f'''
     <div class="hero"><div class="eyebrow">DRAWING & DOCUMENT WORKSPACE</div><h1>{title}</h1><p>{project} · {original}</p>
       <div class="v117r-actions"><a href="/documents">← Documents</a><a href="{file_url}" target="_blank">Open Original</a><a href="/documents/{int(attachment_id)}/download">Download</a></div></div>
@@ -28192,7 +28200,7 @@ def _bc181879_viewer(attachment_id:int):
     (function(){{
       const DOC_ID={int(attachment_id)};
       let tool="pan",pageNum=1,zoom=1,pdf=null,rendering=false,down=false,start=null,current=null,panStart=null;
-      let state={initial}; if(!state||!state.pages)state={{pages:{{}},calibration:{{}}}}; if(!state.calibration)state.calibration={{}};
+      let state={initial}; if(!state||!state.pages)state={{pages:{{}},calibration:{{}}}}; if(!state.calibration)state.calibration={{}};for(const k of Object.keys(state.calibration)){{if(state.calibration[k].space!=="base")delete state.calibration[k];}};
       const wrap=document.getElementById("bcStageWrap"),canvas=document.getElementById("bcMarkupCanvas"),ctx=canvas.getContext("2d");
       const key=()=>String(pageNum); function items(){{if(!state.pages[key()])state.pages[key()]=[];return state.pages[key()]}}
       function setTool(t){{tool=t;canvas.style.pointerEvents=(t==="pan"?"none":"auto");wrap.style.cursor=(t==="pan"?"grab":"crosshair");document.getElementById("bcToolStatus").textContent="Tool: "+t.charAt(0).toUpperCase()+t.slice(1);document.querySelectorAll("[data-tool]").forEach(b=>b.classList.toggle("active",b.dataset.tool===t))}}
@@ -28253,8 +28261,8 @@ def _bc181879_viewer(attachment_id:int):
         if(tool==="rect")items().push({{type:"rect",x:Math.min(start[0],end[0]),y:Math.min(start[1],end[1]),w:Math.abs(end[0]-start[0]),h:Math.abs(end[1]-start[1]),color:color}});
         if(tool==="cloud")items().push({{type:"cloud",x:Math.min(start[0],end[0]),y:Math.min(start[1],end[1]),w:Math.abs(end[0]-start[0]),h:Math.abs(end[1]-start[1]),color:color}});
         if(tool==="arrow")items().push({{type:"arrow",x1:start[0],y1:start[1],x2:end[0],y2:end[1],color:color}});
-        if(tool==="calibrate"){{const dx=(end[0]-start[0])*canvas.width,dy=(end[1]-start[1])*canvas.height,pixels=Math.sqrt(dx*dx+dy*dy),known=parseFloat(prompt("Known real-world length:","10"));if(known>0&&pixels>0){{const unit=(prompt("Unit (ft, in, m, mm):","ft")||"ft").trim();state.calibration[key()]={{factor:known/pixels,known:known,unit:unit}};updateCal();setTool("measure")}}else setTool("pan")}}
-        if(tool==="measure"){{const c=state.calibration[key()];if(!c){{alert("Calibrate this sheet first.");setTool("pan");return}}const dx=(end[0]-start[0])*canvas.width,dy=(end[1]-start[1])*canvas.height,pixels=Math.sqrt(dx*dx+dy*dy),real=pixels*c.factor;items().push({{type:"measure",x1:start[0],y1:start[1],x2:end[0],y2:end[1],label:real.toFixed(2)+" "+c.unit,color:color}})}}
+        if(tool==="calibrate"){{const dx=(end[0]-start[0])*canvas.width/zoom,dy=(end[1]-start[1])*canvas.height/zoom,pixels=Math.sqrt(dx*dx+dy*dy),known=parseFloat(prompt("Known real-world length:","10"));if(known>0&&pixels>0){{const unit=(prompt("Unit (ft, in, m, mm):","ft")||"ft").trim();state.calibration[key()]={{factor:known/pixels,known:known,unit:unit,space:"base"}};updateCal();setTool("measure")}}else setTool("pan")}}
+        if(tool==="measure"){{const c=state.calibration[key()];if(!c){{alert("Calibrate this sheet first.");setTool("pan");return}}const dx=(end[0]-start[0])*canvas.width/zoom,dy=(end[1]-start[1])*canvas.height/zoom,pixels=Math.sqrt(dx*dx+dy*dy),real=pixels*c.factor;items().push({{type:"measure",x1:start[0],y1:start[1],x2:end[0],y2:end[1],label:real.toFixed(2)+" "+c.unit,color:color}})}}
         current=null;draw()
       }});
       document.getElementById("bcCalibrate").onclick=()=>{{setTool("calibrate");document.getElementById("bcToolStatus").textContent="Tool: Calibrate — draw over a known dimension"}};
@@ -59584,7 +59592,8 @@ def bc830b_invitations_page():
 def bc830b_create_invitation(request:_BC189_Request,
                              email:str=_BC189_Form(...),
                              role:str=_BC189_Form(...),
-                             project_ids:list[str]=_BC189_Form(default=[])):
+                             project_ids:list[str]=_BC189_Form(default=[]),
+                             setup_project_id:int=_BC189_Form(0)):
     admin, denied = _bc820_require_company_admin()
     if denied:
         return denied
@@ -59624,6 +59633,9 @@ def bc830b_create_invitation(request:_BC189_Request,
         valid_projects = {str(r["id"]) for r in c.execute(
             "SELECT id FROM projects WHERE company_id=?",(cid,)).fetchall()}
         requested = {str(x) for x in (project_ids or [])}
+        if setup_project_id and (setup_project_id <= 0 or str(setup_project_id) not in requested):
+            _bc830b_rollback(c)
+            return _bc830b_error('Return to job setup and choose the project for this invitation.', 400)
         if not requested.issubset(valid_projects):
             _bc830b_rollback(c)
             return _bc830b_error("Select only projects that belong to your company.", 403)
@@ -59672,6 +59684,8 @@ def bc830b_create_invitation(request:_BC189_Request,
         f"<input style='width:100%;padding:12px' value='{_runtime.esc(link)}' readonly onclick='this.select()'>"
         f"<p class='muted'>Invitation #{invitation_id} · expires in 7 days · single use.</p></div>"
     )
+    if setup_project_id:
+        body += f'<p><a class="bc840-button" href="/workspace/setup/projects/{setup_project_id}">Back to job setup</a> <a href="/workspace/setup/projects/{setup_project_id}/invite">Invite another person</a></p>'
     try: rendered = _runtime.shell("Invitation Created",body)
     except Exception:
         _bc830b_logger.exception("Invitation saved but shared page rendering failed invitation_id=%s", invitation_id)
@@ -59847,6 +59861,7 @@ BC840_RELEASE = "8.4.0"
 BC840_RELEASE_NAME = "Clear Workspaces & Company Administration"
 _BC840_NO_REQUEST = object()
 _bc840_request_user = _BC840_ContextVar("bc840_request_user", default=_BC840_NO_REQUEST)
+_bc840_request_path = _BC840_ContextVar("bc840_request_path", default="")
 
 # One role directory for labels, navigation and the route boundary. Unknown
 # roles receive the restricted observer workspace, never implicit staff access.
@@ -59981,51 +59996,169 @@ h2{font-size:22px;line-height:1.3}h3{font-size:18px}.eyebrow,.label,.v117r-eyebr
 @media(max-width:820px){.grid2,.grid3,.grid4{grid-template-columns:1fr}.bc840-top,.bc840-nav{padding-left:14px;padding-right:14px}.bc840-main{padding:18px 14px 48px}.bc840-select{width:100%;max-width:none;margin-left:0}.bc840-logo img{width:140px;height:66px}.bc840-identity{font-size:14px}.bc840-nav{gap:4px}.bc840-nav a{padding:9px}.hero,.card{padding:18px}.bc840-top{gap:10px}th,td{min-width:100px}.bc840-logout button{padding:8px 11px}}
 """
 
+def _bc8102_company_links(user):
+    links = []
+    if _bc840_tier(user) in {'owner', 'admin'}:
+        links += [('Overview', '/company'), ('People & access', '/company/users'),
+                  ('Invitations', '/company/invitations')]
+    if callable(globals().get('_bc850_manager')) and _bc850_manager(user):
+        links += [('Company templates', '/workspace/company-templates')]
+    links += [('My access', '/workspace/access'), ('Access status', '/workspace/company-access')]
+    if _bc840_tier(user) in {'owner', 'admin'}:
+        links += [('Role guide', '/company/access-matrix'), ('Settings', '/company-settings')]
+    return links
+
+
+def _bc8102_active(path, href):
+    if href == '/workspace':
+        return path == href or path.startswith('/workspace/projects')
+    if href == '/workspace/command':
+        return path.startswith(('/workspace/command', '/superintendent-command'))
+    if href in {'/workspace/access', '/company', '/company-settings'}:
+        return path == href
+    return path == href or path.startswith(href + '/')
+
+
+def _bc8102_icon(name):
+    shapes = {
+        'home': '<path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/>',
+        'command': '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+        'tools': '<path d="M14 6a5 5 0 0 0-6 6l-5 5a2 2 0 0 0 4 4l5-5a5 5 0 0 0 6-6l-3 3-4-4 3-3Z"/>',
+        'scope': '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/>',
+        'sharing': '<circle cx="8" cy="7" r="3"/><path d="M2 21v-4a6 6 0 0 1 12 0v4M16 4a3 3 0 0 1 0 6m2 4a5 5 0 0 1 4 5v2"/>',
+        'company': '<path d="M3 21V7l12-4v18M15 10h6v11M1 21h22M7 9v2m4-3v2m-4 4v2m4-3v2m-4 4v2m4-3v3m7-7v2m0 3v2"/>',
+        'arrow': '<path d="M4 12h16m-6-6 6 6-6 6"/>',
+        'menu': '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    }
+    return '<svg class="bc8102-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + shapes.get(name, shapes['scope']) + '</svg>'
+
+
+_BC8102_CSS = r'''
+body.bc8102{--ink:#172b3e;--muted:#596a7c;--line:#dfe6ee;--bg:#f5f7f9;background:var(--bg);color:var(--ink);font-size:16px}
+.bc8102 .bc8102-sidebar{position:fixed;inset:0 auto 0 0;width:246px;z-index:30;background:#112032;color:#d6e0ea;display:flex;flex-direction:column;padding:24px 16px 16px;overflow-y:auto}
+.bc8102 .bc840-logo{display:block;margin:0 8px 25px;text-align:center;color:#fff;font-size:19px;line-height:1.4;text-decoration:none}
+.bc8102 .bc840-logo img{width:198px;height:104px;max-width:100%;object-fit:contain;background:#fff;border-radius:9px;padding:7px;margin:0 auto 11px}
+.bc8102 .bc840-logo small{display:block;color:#adbed0;font-size:10px;font-weight:500;letter-spacing:2px;margin-top:8px;text-transform:uppercase}
+.bc8102 .bc8102-nav-label{font-size:10px;font-weight:600;letter-spacing:1.8px;color:#9cafc2;padding:0 13px;margin:7px 0 12px}
+.bc8102 .bc840-nav{display:block;max-width:none;margin:0;padding:0}
+.bc8102 .bc8102-link,.bc8102 .bc8102-company>summary{display:flex;align-items:center;gap:12px;min-height:46px;padding:11px 13px;margin:4px 0;border-radius:8px;color:#c5d2e0;text-decoration:none;font-size:14px;font-weight:600;line-height:1.4;border:0;background:transparent}
+.bc8102 .bc8102-link:hover,.bc8102 .bc8102-company>summary:hover{background:#203146;color:#fff;text-decoration:none}
+.bc8102 .bc8102-link[aria-current=page],.bc8102 .bc8102-company.is-current>summary{background:#2c3945;color:#f6c667;box-shadow:inset 3px 0 #edb44b}
+.bc8102-icon{width:21px;height:21px;flex-shrink:0;vertical-align:middle}
+.bc8102 .bc8102-company{margin-top:20px;border-top:1px solid #2c3b4b;padding-top:13px}
+.bc8102 .bc8102-company>summary{cursor:pointer;list-style:none}
+.bc8102-company>summary::-webkit-details-marker{display:none}
+.bc8102-company>summary::after{content:'›';font-size:22px;margin-left:auto;transform:rotate(0deg);line-height:1}
+.bc8102-company[open]>summary::after{transform:rotate(90deg)}
+.bc8102 .bc8102-company-links{margin:8px 0 8px 23px;padding-left:14px;border-left:1px solid #40546a}
+.bc8102 .bc8102-company-links a{font-size:13px;font-weight:500;min-height:44px;padding:10px 11px;margin:2px 0}
+.bc8102 #bc8102-navigation{display:flex;flex-direction:column;flex:1}.bc8102 .bc8102-sidebar-bottom{margin-top:auto;padding-top:32px}
+.bc8102 .bc840-identity{margin:18px 0 0;border-top:1px solid #2c3b4b;padding:19px 10px 8px;display:flex;gap:11px;align-items:center;color:#eef3f8;font-size:13px;overflow-wrap:anywhere}
+.bc8102 .bc840-identity small{font-size:12px;color:#aebed0;margin-top:3px;line-height:1.5}
+.bc8102-avatar{display:flex;align-items:center;justify-content:center;flex-shrink:0;width:36px;height:36px;border-radius:50%;background:#31465b;color:#eed29a;font-size:12px;font-weight:700}
+.bc8102 .bc840-logout{margin:0;padding:2px 10px 0}.bc8102 .bc840-logout button{background:transparent;border-color:#4b6077;color:#dce6f0;min-height:44px;padding:7px 13px;font-size:13px;width:100%;margin-top:9px}
+.bc8102 .bc8102-content{margin-left:246px;min-width:0}
+.bc8102 .bc840-header{min-height:78px;display:flex;align-items:center;gap:24px;justify-content:space-between;padding:16px 32px;background:#fff;border-bottom:1px solid var(--line)}
+.bc8102-breadcrumb{display:flex;align-items:center;gap:13px;flex-wrap:wrap;color:var(--muted);font-size:13px;min-width:0}.bc8102-breadcrumb b{font-weight:600;color:var(--ink)}.bc8102-breadcrumb a{color:var(--muted);text-decoration:none}.bc8102-breadcrumb a:hover{text-decoration:underline}.bc8102-breadcrumb span{color:#a8b5c4}
+.bc8102 .bc840-select{margin:0;max-width:460px;flex:0 1 460px;gap:9px}.bc8102 .bc840-select label{font-size:12px}.bc8102 .bc840-select select{font-size:14px;padding:10px;min-height:44px;width:100%}.bc8102 .bc840-select button{font-size:14px;padding:10px 15px;background:#112032;border-color:#112032}
+.bc8102 .bc840-main{max-width:1510px;margin:0 auto;padding:32px;min-height:calc(100vh - 145px);min-width:0;outline:none}
+.bc8102 .hero,.bc8102 .v117r-hero{border:0;background:transparent;padding:0;margin-bottom:27px}.bc8102 .hero h1,.bc8102 .v117r-hero h1{color:var(--ink);font-size:clamp(27px,3vw,36px);font-weight:700;letter-spacing:-.8px;margin:8px 0 12px}.bc8102 .hero p{font-size:16px;line-height:1.7}
+.bc8102 .eyebrow,.bc8102 .v117r-eyebrow{color:#876017;letter-spacing:1.5px;font-size:11px}
+.bc8102 .card,.bc8102 .v117r-card{border:1px solid var(--line);border-radius:12px;padding:24px;background:#fff;box-shadow:none;min-width:0}
+.bc8102 .card h2{margin-top:4px}.bc8102 .bc840-main h2{font-size:22px;letter-spacing:-.4px}.bc8102 .bc840-main h3{font-size:18px}
+.bc8102 .bc840-button{background:#173f64;border-color:#173f64;min-height:46px;border-radius:8px}
+.bc8102 .bc840-main .bc840-button:hover{background:#112c46;color:white;text-decoration:none}
+.bc8102 .grid3{grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr))}.bc8102 .bc840-main p,.bc8102 .bc840-main h1,.bc8102 .bc840-main h2{overflow-wrap:anywhere}
+.bc8102 .bc840-footer{max-width:1510px;margin:auto;padding:20px 32px;font-size:12px;text-align:left;background:transparent;color:var(--muted)}
+.bc8102 .bc8102-menu-button{display:none}.bc8102 [hidden]{display:none!important}
+.bc8102 .bc8102-sidebar :focus-visible{outline:3px solid #f6c667;outline-offset:2px}.bc8102 .bc840-skip:focus{position:fixed;left:12px;top:12px;z-index:100}
+@media(max-width:1100px){.bc8102 .bc840-header{padding:16px 24px;flex-wrap:wrap;gap:12px}.bc8102 .bc840-main{padding:28px 24px}.bc8102 .bc840-select{flex-basis:100%;max-width:none;width:100%}}
+@media(max-width:820px){.bc8102 .bc8102-sidebar{position:static;width:auto;padding:14px 16px;overflow:visible}.bc8102 .bc8102-brand-row{display:flex;align-items:center;justify-content:space-between;gap:14px}.bc8102 .bc840-logo{margin:0;text-align:left}.bc8102 .bc840-logo img{width:136px;height:70px;margin:0;padding:4px}.bc8102 .bc840-logo small{display:none}.bc8102 .bc8102-menu-button{display:flex;gap:9px;align-items:center;border:1px solid #60748b;background:transparent;color:#fff;padding:10px 13px;min-height:44px}.bc8102 .bc8102-content{margin-left:0}.bc8102 .bc8102-nav-label{margin-top:20px}.bc8102 .bc8102-sidebar-bottom{padding-top:12px}.bc8102 .bc840-identity{margin-top:12px}.bc8102 .bc840-logout{max-width:250px}.bc8102 .bc840-header{min-height:56px;padding:14px 18px}.bc8102 .bc840-main{padding:24px 18px;min-height:60vh}.bc8102 .card,.bc8102 .v117r-card{padding:20px}.bc8102 .bc840-footer{padding:18px}.bc8102 .bc840-select{max-width:none;flex-basis:100%;gap:7px}.bc8102 .bc840-select label{display:none}.bc8102 .bc840-select select{min-width:0}.bc8102 .bc8102-breadcrumb{font-size:12px}.bc8102 .hero{margin-bottom:23px}}
+@media print{.bc8102 .bc8102-sidebar,.bc8102 .bc840-header,.bc8102 .bc840-footer{display:none!important}.bc8102 .bc8102-content{margin:0}.bc8102 .bc840-main{max-width:none;margin:0;padding:0;min-height:0}body.bc8102{background:white}}
+'''
+
+_BC8102_MENU_SCRIPT = '''<script>
+(()=>{const button=document.getElementById('bc8102-menu-button');const panel=document.getElementById('bc8102-navigation');
+if(!button||!panel)return;const small=window.matchMedia('(max-width: 820px)');
+function setOpen(open){panel.hidden=!open;button.setAttribute('aria-expanded',String(open));}
+function resize(){if(small.matches&&panel.contains(document.activeElement))button.focus();setOpen(!small.matches);}
+button.addEventListener('click',()=>setOpen(panel.hidden));
+panel.addEventListener('keydown',event=>{if(event.key==='Escape'&&small.matches){setOpen(false);button.focus();}});
+if(small.addEventListener)small.addEventListener('change',resize);else small.addListener(resize);resize();})();
+(()=>{const back=document.querySelector('[data-bc-back]');if(!back)return;back.addEventListener('click',event=>{try{const previous=new URL(document.referrer);if(previous.origin===location.origin&&previous.href!==location.href&&history.length>1){event.preventDefault();history.back();}}catch(error){}});})();
+</script>'''
+
+
 def _bc840_company_tabs():
-    return '<nav class="bc840-tabs" aria-label="Company sections">' + ''.join(
-        f'<a href="{url}">{label}</a>' for label,url in [("Overview","/company"),("People & access","/company/users"),
-        ("Invitations","/company/invitations"),("Access status","/workspace/company-access"),
-        ("Role guide","/company/access-matrix"),("Settings","/company-settings")]) + '</nav>'
+    # Company sections now live together inside the shared sidebar.
+    return ''
+
 
 def _bc840_shell(title, body, *args, **kwargs):
     user = _bc840_user()
     if not user: return _BC840_PREVIOUS_SHELL(title, body, *args, **kwargs)
     esc = _bc830b_escape
     tier = _bc840_tier(user)
-    nav = [("My workspace","/workspace"),("Projects","/workspace/projects")]
-    if tier in {"owner","admin","lead","staff"}:
-        nav += [("Field tools","/workspace/tools"),("My access","/workspace/access")]
-    if tier in {"owner","admin"}: nav.append(("Company","/company"))
-    if tier == "owner": nav.append(("Owner console","/owner"))
-    if tier in {"trade","observer"}: nav.append(("My access","/workspace/access"))
+    path = _bc840_request_path.get()
+    nav = [('My workspace', '/workspace')]
     if callable(globals().get('_bc850_nav')): nav += _bc850_nav(user)
-    logo = globals().get("_BC706_LOGO_DATA", "")
+    if tier in {'owner', 'admin', 'lead', 'staff'}:
+        nav.append(('Drawings', '/workspace/drawings'))
+        if callable(globals().get('_bc850_manager')) and _bc850_manager(user): nav.append(('Documents', '/workspace/documents'))
+        if callable(globals().get('_bc850_manager')) and _bc850_manager(user): nav.append(('BuildCommand AI', '/workspace/brain'))
+        nav.append(('Field tools', '/workspace/tools'))
+    company_links = _bc8102_company_links(user)
+    in_company = any(_bc8102_active(path, url) for _, url in company_links) or _bc840_admin_path(path)
+    symbols = {'/workspace':'home', '/workspace/command':'command', '/workspace/scopes':'scope',
+               '/workspace/sharing':'sharing', '/workspace/shared':'scope', '/workspace/tools':'tools'}
+    def link(label, href, symbol=None):
+        current = ' aria-current="page"' if _bc8102_active(path, href) else ''
+        return f'<a class="bc8102-link" href="{esc(href,quote=True)}"{current}>' + (_bc8102_icon(symbol) if symbol else '') + '<span>' + esc(label) + '</span></a>'
+    nav_html = ''.join(link(label, href, symbols.get(href, 'scope')) for label, href in nav)
+    company_html = '<details class="bc8102-company' + (' is-current' if in_company else '') + '"' + (' open' if in_company else '') + '><summary>' + _bc8102_icon('company') + '<span>Company</span></summary><nav class="bc8102-company-links" aria-label="Company sections">' + ''.join(link(label, href) for label, href in company_links) + '</nav></details>'
+    logo = globals().get('_BC706_LOGO_DATA', '')
     brand = f'<img src="{esc(logo,quote=True)}" alt="BuildCommand AI">' if logo else 'BuildCommand AI'
     try:
         projects, selected = _bc840_projects(user), _bc840_selected_project(user)
     except Exception:
         projects, selected = [], None
     options = ''.join(f'<option value="{p["id"]}"' + (' selected' if p['id']==selected else '') + '>' +
-                      esc(str(p.get('number') or '') + ' · ' + str(p['name'])) + '</option>' for p in projects)
+                      esc(' · '.join(str(v) for v in (p.get('number'), p['name']) if v)) + '</option>' for p in projects)
     selector = ('<form class="bc840-select" method="post" action="/workspace/select-project">'
-                '<label for="bc840-project" class="small">Project</label><select id="bc840-project" name="project_id" required>' +
+                '<label for="bc840-project">Project</label><select id="bc840-project" name="project_id" aria-label="Current project" required>' +
                 '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
-    if title == 'Superintendent Command': selector = ''  # The command view has its own appointed-project selector.
-    company_titles = {"Company","Users & Access","Manage User Access","Company Invitations","Access Matrix","Company Settings","Invitation Created"}
-    tabs = _bc840_company_tabs() if title in company_titles and tier in {'owner','admin'} else ''
-    # Replace only the private shell, eliminating the stacked header/regex
-    # rewrites. Public login, branding assets and the legacy engines stay intact.
+    if title == 'Superintendent Command': selector = ''  # Uses the appointed-project selector in Command.
+    if path == '/workspace/setup' or path.startswith('/workspace/setup/') or path.startswith('/workspace/daily') or path.startswith('/workspace/directory') or path.startswith(('/workspace/drawings','/workspace/drawing-sets','/workspace/drawing-sheets','/workspace/drawing-releases')) or path.startswith('/workspace/documents') or path == '/workspace/company-templates' or path in {'/workspace/brain','/workspace/portfolio'}:
+        selector = ''  # Setup identifies the viewed job; handoffs select it explicitly.
+    setup = getattr(app.state, 'project_setup', None)
+    if setup and selected and (path == '/blueprint-brain' or path.startswith('/blueprint-brain/run/')):
+        body = setup.return_link(user, selected, path) + body
+    name = str(user.get('display_name') or user.get('email') or 'Account')
+    initials = ''.join(word[0] for word in name.split()[:2]).upper()
+    parent = 'Company' if in_company else 'My workspace'
+    parent_url = '/company' if in_company and tier in {'owner','admin'} else '/workspace'
+    breadcrumb = (f'<a href="{parent_url}">{parent}</a><span aria-hidden="true">/</span><b>{esc(str(title))}</b>') if str(title) != parent else f'<b>{esc(str(title))}</b>'
+    # Limited roles get Company > My access; company administration remains server restricted.
+    if in_company and tier not in {'owner','admin'}:
+        breadcrumb = '<span class="bc8102-parent">Company</span><span aria-hidden="true">/</span><b>' + esc(str(title)) + '</b>'
+    if path != '/workspace':
+        back = '/workspace/drawings' if path.startswith('/workspace/drawings/') or (path.startswith('/documents/') and path.endswith('/view')) else parent_url
+        body = '<a class="hub-back" data-bc-back href="' + back + '" style="display:inline-flex;min-height:44px;align-items:center;margin-bottom:12px">← Back</a>' + body
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<meta name="referrer" content="{_BC862_FORM_REFERRER_POLICY}"><title>' + esc(str(title)) + ' · BuildCommand AI</title>'
-            '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '</style></head><body>'
-            '<a class="bc840-skip" href="#main-content">Skip to content</a><header class="bc840-header">'
-            '<div class="bc840-top"><a class="bc840-logo" href="/workspace">' + brand + '</a>'
-            '<div class="bc840-identity"><strong>' + esc(str(user.get('display_name') or user.get('email') or 'Account')) +
-            '</strong><small>' + esc(_bc840_role_label(_bc840_role(user))) + '</small></div>'
-            '<form class="bc840-logout" method="post" action="/logout"><button>Sign out</button></form></div>'
-            '<nav class="bc840-nav" aria-label="Main navigation">' + ''.join(f'<a href="{u}">{t}</a>' for t,u in nav) + selector +
-            '</nav></header><main id="main-content" class="bc840-main">' + tabs + body + '</main>'
-            '<footer class="bc840-footer">Built By Willy LaHood © 2026 · BuildCommand AI ' + str(globals().get('BUILD_COMMAND_RELEASE',BC840_RELEASE)) + '</footer></body></html>')
+            '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '\n' + _BC8102_CSS + '</style></head><body class="bc8102">'
+            '<a class="bc840-skip" href="#main-content">Skip to content</a><aside class="bc8102-sidebar" aria-label="Workspace navigation">'
+            '<div class="bc8102-brand-row"><a class="bc840-logo" href="/workspace">' + brand + '<small>Construction workspace</small></a>'
+            '<button id="bc8102-menu-button" class="bc8102-menu-button" type="button" aria-controls="bc8102-navigation" aria-expanded="true">' + _bc8102_icon('menu') + 'Menu</button></div>'
+            '<div id="bc8102-navigation"><div class="bc8102-nav-label">YOUR WORK</div><nav class="bc840-nav" aria-label="Main navigation">' + nav_html + '</nav>' + company_html +
+            '<div class="bc8102-sidebar-bottom">' + (link('Owner console','/owner','arrow') if tier=='owner' else '') +
+            '<div class="bc840-identity"><span class="bc8102-avatar" aria-hidden="true">' + esc(initials) + '</span><div><strong>' + esc(name) +
+            '</strong><small>' + esc(_bc840_role_label(_bc840_role(user))) + '</small></div></div>'
+            '<form class="bc840-logout" method="post" action="/logout"><button>Sign out</button></form></div></div></aside>'
+            '<div class="bc8102-content"><header class="bc840-header"><div class="bc8102-breadcrumb" aria-label="Current section">' + breadcrumb + '</div>' + selector +
+            '</header><main id="main-content" class="bc840-main" tabindex="-1">' + body + '</main>'
+            '<footer class="bc840-footer">Built By Willy LaHood © 2026 · BuildCommand AI ' + str(globals().get('BUILD_COMMAND_RELEASE',BC840_RELEASE)) + '</footer></div>' + _BC8102_MENU_SCRIPT + '</body></html>')
+
 
 _BC840_PREVIOUS_SHELL = _runtime.shell
 _runtime.shell = _bc840_shell
@@ -60041,6 +60174,10 @@ def _bc840_require_user():
 def _bc840_project_cards(projects):
     esc = _bc830b_escape
     if not projects:
+        setup = getattr(app.state, 'project_setup', None)
+        user = _bc840_user()
+        if setup and user and setup.admin(user):
+            return '<div class="bc840-empty"><h2>Create your first project</h2><p>Start with its name and number. Then add plans and your team.</p>' + setup.link('/workspace/setup/new', 'Create a project') + '</div>'
         return '<div class="bc840-empty"><h2>No projects assigned yet</h2><p>Ask your company administrator to open People & access and assign your projects.</p></div>'
     return '<div class="grid3">' + ''.join(
         '<article class="card"><span class="small">' + esc(str(p.get('number') or 'Project')) + '</span><h2>' +
@@ -60065,7 +60202,10 @@ def bc840_workspace():
     else:
         body += '<p>Only projects assigned to your account appear here. Company administration and internal GC tools are not available in this workspace.</p>'
         if tier == 'trade': body += '<p><a class="bc840-button" href="/workspace/shared">Open my shared work</a></p>'
-    body += '</div><h2>Your projects</h2>' + _bc840_project_cards(projects)
+    setup = getattr(app.state, 'project_setup', None)
+    hub = getattr(app.state, 'workspace_hub', None)
+    body += '</div>' + (hub.quick_panel(user, projects) if hub else '') + (setup.entry(user) if setup and projects else '')
+    body += '<section id="my-projects" aria-labelledby="my-projects-heading"><h2 id="my-projects-heading">My projects</h2>' + _bc840_project_cards(projects) + '</section>'
     return _bc840_page('My workspace', body)
 
 @app.get('/workspace/projects')
@@ -60087,6 +60227,8 @@ def bc840_project(project_id:int):
         body += (f'<p><a class="bc840-button" href="/workspace/shared?project_id={project_id}">Open shared work</a></p><p>Your project leader chooses which items and files to share with you.</p>' if _bc840_tier(user)=='trade' else '<p>This observer role has project-overview access only.</p>') + '</div>'
     else:
         body += f'<div class="card"><h2>Work on this project</h2><form method="post" action="/workspace/select-project"><input type="hidden" name="project_id" value="{project_id}"><button>Set as current project</button></form><p>After selecting the project, use Field tools to open schedules, reports, documents and command.</p></div>'
+    setup = getattr(app.state, 'project_setup', None)
+    if setup: body += setup.entry(user, project_id)
     return _bc840_page('Project overview', body)
 
 @app.post('/workspace/select-project')
@@ -60108,7 +60250,7 @@ def bc840_select_project(project_id:int=_BC189_Form(...)):
 
 _BC840_TOOLS = (
     ('Daily field work', (('Daily report','/daily-report'),('Schedule','/schedule'),('Look-ahead','/lookahead-intelligence'),('Punch list','/punch'),('Safety','/safety'),('Inspections','/inspections'))),
-    ('Documents & coordination', (('Documents','/documents'),('Blueprint Brain','/blueprint-brain'),('RFIs / issues','/issues'),('Submittals','/submittals'),('Subcontractor directory','/subcontractors'))),
+    ('Documents & coordination', (('Documents','/documents'),('Blueprint Brain','/blueprint-brain'),('RFIs / issues','/issues'),('Submittals','/submittals'),('Subcontractor directory','/workspace/directory'))),
     ('Planning & readiness', (('Project startup','/project-startup'),('Procurement','/procurement'),('Project health','/project-health'),('Meetings','/meetings'))),
     ('AI field review', (('AI Photo Analysis','/photo-ai'),('Morning Brief','/morning-brief'),('RFI Drafting','/rfi-drafting'))),
 )
@@ -60166,7 +60308,7 @@ def bc840_company():
     body += f'<div class="grid3"><section class="card"><div class="label">People</div><div class="kpi">{len(users)}</div><p><a href="/company/users">Manage people & access</a></p></section>'
     body += f'<section class="card"><div class="label">Projects</div><div class="kpi">{len(projects)}</div><p><a href="/workspace/projects">View projects</a></p></section>'
     body += '<section class="card"><h2>Invite someone</h2><p>Set their role and projects before sharing their invitation.</p><a class="bc840-button" href="/company/invitations">Create invitation</a></section></div>'
-    body += '<div class="card"><h2>Company controls</h2><div class="bc840-list"><a href="/company-settings">Company settings</a><a href="/billing">Company subscription</a><a href="/projects/new">Create a project</a></div></div>'
+    body += '<div class="card"><h2>Company controls</h2><div class="bc840-list"><a href="/workspace/access">My access<small>See your role and who can change it.</small></a><a href="/company-settings">Company settings</a><a href="/billing">Company subscription</a><a href="/projects/new">Create a project</a></div></div>'
     return _bc840_page('Company',body)
 
 def bc840_company_users():
@@ -60435,6 +60577,7 @@ async def bc840_role_boundary(request, call_next):
     except Exception:
         return _bc830b_error('Sign-in could not be verified. Please try again.',503)
     context = _bc840_request_user.set(user)
+    path_context = _bc840_request_path.set(path)
     try:
         join = _bc830b_re.fullmatch(r'/join/([0-9]+)/([A-Za-z0-9_-]{20,128})(?:/(accept|register))?',path)
         if join:
@@ -60496,11 +60639,13 @@ async def bc840_role_boundary(request, call_next):
                 if not allowed:
                     return _bc830b_error('This tool is not available in your workspace. Open My workspace to see your assigned projects.',403)
             # Reject forged cross-origin changes on company/access forms.
-            if request.method not in {'GET','HEAD','OPTIONS'} and (path.startswith('/company/') or path=='/company-settings' or path.startswith('/workspace/')):
+            if request.method not in {'GET','HEAD','OPTIONS'} and (path.startswith('/company/') or path=='/company-settings' or path.startswith('/workspace/') or path.startswith('/api/documents/')):
                 if not _bc840_same_origin(request):
                     return _bc861_origin_denied(request)
         return await call_next(request)
-    finally: _bc840_request_user.reset(context)
+    finally:
+        _bc840_request_path.reset(path_context)
+        _bc840_request_user.reset(context)
 
 @app.get('/health/workspaces-company-8-4-0')
 def bc840_health():
@@ -60670,12 +60815,18 @@ def _bc850_source(c,user,pid,kind,source_id=None,query=''):
     _bc850_require(kind in _BC850_SOURCES,'Choose a supported work-item type.',400)
     if kind == 'scope':
         return app.state.blueprint_field.list_sources(c,user,pid,source_id,query)
+    if kind == 'photo_action':
+        return app.state.photo_field.list_sources(c,user,pid,source_id,query)
+    if kind == 'rfi_answer':
+        return app.state.rfi_field.list_sources(c,user,pid,source_id,query)
+    if kind == 'command_notice':
+        return app.state.command_actions.list_sources(c,user,pid,source_id,query)
     label,table,title,due=_BC850_SOURCES[kind]
     fields=f't.id,t.{title} AS title,'+(f't.{due} AS due_date' if due else "'' AS due_date")
     if kind=='document': fields+=',t.original_name,t.stored_name,t.size_bytes'
     sql=f'SELECT {fields} FROM {table} t JOIN projects p ON p.id=t.project_id WHERE p.company_id=? AND t.project_id=?'
     args=[_bc810_company_id(user),pid]
-    if kind=='document': sql+=' AND t.company_id=?'; args.append(_bc810_company_id(user))
+    if kind in {'document','document_request'}: sql+=' AND t.company_id=?'; args.append(_bc810_company_id(user))
     if kind=='rfi': sql+=" AND upper(COALESCE(t.issue_type,''))='RFI'"
     if source_id is not None: sql+=' AND t.id=?';args.append(source_id)
     elif query:
@@ -60758,6 +60909,12 @@ def _bc850_share(c,user,share_id,manager=False,lock=False):
     if not manager: _bc850_require(share['revoked_at'] is None)
     if share['kind'] == 'scope':
         app.state.blueprint_field.publication(c,share)
+    elif share['kind'] == 'photo_action':
+        app.state.photo_field.source_for_share(c,share)
+    elif share['kind'] == 'rfi_answer':
+        app.state.rfi_field.publication(c,share)
+    elif share['kind'] == 'command_notice':
+        app.state.command_actions.notice(c,share)
     elif not manager:
         _bc850_source(c,user,share['project_id'],share['kind'],share['source_id'])
     return share
@@ -60803,9 +60960,20 @@ def bc850_sharing(project_id:int=0,kind:str='schedule',q:str='',before_id:int=0)
 
 @app.get('/workspace/sharing/new')
 @_bc850_endpoint
-def bc850_prepare_share(project_id:int,kind:str,source_id:int):
+def bc850_prepare_share(project_id:int,kind:str,source_id:int,draft_message:str=''):
+    if kind == 'document_request': return app.state.document_requests.existing(source_id,project_id)
+    _bc850_require(len(draft_message)<=6000, 'Keep draft instructions within 6,000 characters.',400)
+    if kind == 'command_notice':
+        with _bc850_db() as c:
+            user,project,plan=app.state.command_actions.plan(c,source_id)
+            _bc850_require(project['id']==project_id,'Choose the notice in this project.',404)
+        return _BC187_RedirectResponse(f'/workspace/command/actions/{source_id}',status_code=303)
     if kind == 'scope':
         return app.state.blueprint_field.prepare(source_id,project_id)
+    if kind == 'photo_action':
+        return app.state.photo_field.prepare_existing(source_id,project_id)
+    if kind == 'rfi_answer':
+        return app.state.rfi_field.prepare(source_id,project_id)
     with _bc850_db() as c:
         user=_bc850_actor(c);project,source,recipients=_bc850_form_context(c,user,project_id,kind,source_id)
     body='<div class="hero"><h1>Prepare a share</h1><p>'+_bc830b_escape(project['name'])+' · '+_BC850_SOURCES[kind][0]+'</p></div>'
@@ -60816,7 +60984,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int):
     if not _bc830b_re.fullmatch(r'\d{4}-\d{2}-\d{2}',due): due=''
     body+=f'<div class="card"><form method="post" action="/workspace/sharing/publish"><input type="hidden" name="project_id" value="{project_id}"><input type="hidden" name="kind" value="{kind}"><input type="hidden" name="source_id" value="{source_id}">'
     body+='<p><label for="recipient">Share with</label><br><select id="recipient" name="recipient_user_id" required><option value="">Choose a subcontractor</option>'+options+'</select></p>'
-    body+='<p><label for="public-title">Shared title</label><br><input id="public-title" name="title" maxlength="240" required style="width:100%" value="'+_bc830b_escape(str(source['title'] or ''),quote=True)+'"></p><p><label for="share-message">Instructions for this subcontractor</label><br><textarea id="share-message" name="message" rows="6" maxlength="6000" required style="width:100%"></textarea></p>'
+    body+='<p><label for="public-title">Shared title</label><br><input id="public-title" name="title" maxlength="240" required style="width:100%" value="'+_bc830b_escape(str(source['title'] or ''),quote=True)+'"></p><p><label for="share-message">Instructions for this subcontractor</label><br><textarea id="share-message" name="message" rows="6" maxlength="6000" required style="width:100%">'+_bc830b_escape(draft_message)+'</textarea></p>'
     body+='<p><label for="share-due">Due date (optional)</label><br><input id="share-due" name="due_date" type="date" value="'+due+'"></p><p><label><input type="checkbox" name="allow_response" value="1">Allow progress updates and replies</label></p>'
     if kind=='document':
         body+='<p class="bc840-role-note">File: '+_bc830b_escape(str(source['original_name']))+'</p><p><label><input type="checkbox" name="share_file" value="yes" required>Share this entire file, including every page.</label></p><p>A fixed copy is shared. Changes to the internal document will require a new share.</p>'
@@ -60826,7 +60994,7 @@ def bc850_prepare_share(project_id:int,kind:str,source_id:int):
 @app.post('/workspace/sharing/publish')
 @_bc850_endpoint
 def bc850_publish(project_id:int=_BC189_Form(...),kind:str=_BC189_Form(...),source_id:int=_BC189_Form(...),recipient_user_id:int=_BC189_Form(...),title:str=_BC189_Form(...),message:str=_BC189_Form(...),due_date:str=_BC189_Form(''),allow_response:int=_BC189_Form(0),share_file:str=_BC189_Form('')):
-    _bc850_require(kind != 'scope','Review the trade scope preview before publishing it.',400)
+    _bc850_require(kind not in {'scope','photo_action','rfi_answer','command_notice','document_request'},'Review the scope, photo action, RFI answer or command action preview before publishing it.',400)
     title,message,due_date=title.strip(),message.strip(),due_date.strip()
     _bc850_require(0<len(title)<=240 and 0<len(message)<=6000,'Enter a title up to 240 characters and instructions up to 6,000 characters.',400)
     _bc850_require(allow_response in {0,1},'Choose whether replies are allowed.',400)
@@ -60886,16 +61054,33 @@ def bc850_shared(project_id:int=0,kind:str='',before_id:int=0):
 def _bc850_detail(share_id,manager):
     with _bc850_db() as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,manager)
+        if share['kind']=='document_request': return app.state.document_requests.render(c,user,share,manager)
         updates=[dict(r) for r in c.execute('SELECT * FROM bc_shared_work_updates WHERE share_id=? AND share_version=? ORDER BY id DESC LIMIT 100',(share_id,share['version'])).fetchall()]
         recipient=c.execute('SELECT display_name,email FROM users WHERE id=?',(share['recipient_user_id'],)).fetchone()
         project=c.execute('SELECT name FROM projects WHERE id=? AND company_id=?',(share['project_id'],_bc810_company_id(user))).fetchone()
         scope_html = app.state.blueprint_field.issued_html(c,share,manager) if share['kind']=='scope' else ''
+        if share['kind']=='photo_action':
+            scope_html = app.state.photo_field.issued_html(c,share,manager)
+        if share['kind']=='rfi_answer':
+            scope_html = app.state.rfi_field.issued_html(c,share,manager)
+    if getattr(app.state,'drawing_field',None):
+        with _bc850_db() as c: scope_html += app.state.drawing_field.issued_html(c,share,manager)
     prefix='/workspace/sharing/' if manager else '/workspace/shared/'
     body='<div class="hero"><span class="bc840-pill">'+_BC850_SOURCES[share['kind']][0]+'</span><p>'+_bc830b_escape(str(project['name'] if project else ''))+'</p><h1>'+_bc830b_escape(share['title'])+'</h1><p>'+('Revoked' if share['revoked_at'] else share['state'].capitalize())+(' · Due '+_bc830b_escape(share['due_date']) if share['due_date'] else '')+'</p></div><div class="card"><h2>Shared instructions</h2>'+_bc850_text(share['message'])
     if manager:
         body+='<p>Shared with '+_bc830b_escape(str(recipient['email'] if recipient else 'Removed account'))+f'</p><p><a href="/workspace/command?project_id={share["project_id"]}">Back to Superintendent Command</a></p>'
     if share['snapshot_file'] and not share['revoked_at']:
-        body+='<p><a class="bc840-button" href="'+prefix+str(share_id)+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
+        file_url=prefix+str(share_id)
+        preview_type=_bc8131_preview_extension(share['download_name'])
+        body+='<p style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">'
+        if preview_type:
+            label='Open drawing' if preview_type=='application/pdf' else 'Open image'
+            body+='<a class="bc840-button" href="'+file_url+'/view" target="_blank" rel="noopener">'+label+'</a>'
+        body+='<a class="bc840-button" href="'+file_url+'/download">Download '+_bc830b_escape(share['download_name'])+'</a></p>'
+        if preview_type:
+            body+='<p class="small">Opens in a new tab. If your browser cannot display the file, use Download.</p>'
+        else:
+            body+='<p class="small">Download this file to open it in a compatible app.</p>'
     body+='</div>' + scope_html
     if manager:
         if not share['revoked_at']:
@@ -60923,13 +61108,48 @@ def bc850_shared_detail(share_id:int): return _bc850_detail(share_id,False)
 @_bc850_endpoint
 def bc850_managed_detail(share_id:int): return _bc850_detail(share_id,True)
 
-def _bc850_download(share_id,manager):
+def _bc850_shared_file(share_id,manager):
     with _bc850_db() as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,manager)
         _bc850_require(not share['revoked_at'] and share['kind']=='document' and bool(_bc830b_re.fullmatch(r'[0-9a-f]{64}\.bin',share['snapshot_file'])))
     root=_BC850_Path(_runtime.UPLOAD_DIR).resolve();folder=root/'_bc_shared_work';path=folder/share['snapshot_file']
     _bc850_require(not folder.is_symlink() and not path.is_symlink() and path.is_file() and path.resolve().parent==folder.resolve(),'This shared file is unavailable. Ask your project leader to share it again.',404)
+    return share,path
+
+def _bc850_download(share_id,manager):
+    share,path=_bc850_shared_file(share_id,manager)
     return _BC850_FileResponse(path,filename=share['download_name'],media_type='application/octet-stream',headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'})
+
+# Browser previews use the same approved snapshot and permissions as downloads.
+# File extensions alone never permit an arbitrary upload to execute as HTML.
+_BC8131_PREVIEW_TYPES={'.pdf':'application/pdf','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'}
+
+def _bc8131_preview_extension(filename):
+    return _BC8131_PREVIEW_TYPES.get(_BC850_Path(str(filename or '')).suffix.lower())
+
+def _bc8131_preview_type(filename,header):
+    media=_bc8131_preview_extension(filename)
+    if media=='application/pdf' and header.startswith(b'%PDF-'): return media
+    if media=='image/png' and header.startswith(b'\x89PNG\r\n\x1a\n'): return media
+    if media=='image/jpeg' and header.startswith(b'\xff\xd8\xff'): return media
+    if media=='image/webp' and header[:4]==b'RIFF' and header[8:12]==b'WEBP': return media
+    return None
+
+def _bc8131_view(share_id,manager):
+    share,path=_bc850_shared_file(share_id,manager)
+    with path.open('rb') as source:
+        media=_bc8131_preview_type(share['download_name'],source.read(16))
+    _bc850_require(media is not None,'This file cannot be previewed here. Return to the shared item and use Download to open it in a compatible app.',415)
+    return _BC850_FileResponse(path,filename=share['download_name'],media_type=media,content_disposition_type='inline',
+        headers={'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'SAMEORIGIN'})
+
+@app.get('/workspace/shared/{share_id}/view')
+@_bc850_endpoint
+def bc8131_shared_view(share_id:int): return _bc8131_view(share_id,False)
+
+@app.get('/workspace/sharing/{share_id}/view')
+@_bc850_endpoint
+def bc8131_managed_view(share_id:int): return _bc8131_view(share_id,True)
 
 @app.get('/workspace/shared/{share_id}/download')
 @_bc850_endpoint
@@ -60946,8 +61166,11 @@ def bc850_respond(share_id:int,version:int=_BC189_Form(...),status:str=_BC189_Fo
     _bc850_require(status in _BC850_STATUSES and 0<len(message)<=4000,'Choose a progress state and write an update up to 4,000 characters.',400)
     with _bc850_db(True) as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,False,True)
+        _bc850_require(share['kind']!='document_request','Open the document request to submit a file or review its exact submission.',409)
         _bc850_require(share['version']==version,'This share changed. Reload it before replying.',409)
         _bc850_require(share['allow_response']==1 and share['state']=='OPEN','Replies are closed for this item.',409)
+        if share['kind']=='rfi_answer':
+            app.state.rfi_field.validate_response(c,share,status)
         _bc850_insert(c,'bc_shared_work_updates','share_id,actor_user_id,share_version,status,message,created_at',(share_id,user['id'],version,status,message,_bc830b_now().isoformat()))
         _bc850_event(c,user,share['project_id'],share_id,'RESPONSE')
     return _BC187_RedirectResponse(f'/workspace/shared/{share_id}',status_code=303)
@@ -60959,6 +61182,7 @@ def bc850_review(share_id:int,update_id:int,version:int=_BC189_Form(...),review_
     _bc850_require(len(review_message)<=2000,'Keep your reply within 2,000 characters.',400)
     with _bc850_db(True) as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,True,True)
+        _bc850_require(share['kind']!='document_request','Open the document request to submit a file or review its exact submission.',409)
         _bc850_require(not share['revoked_at'] and share['version']==version,'This share changed. Reload it before reviewing.',409)
         row=c.execute('SELECT id FROM bc_shared_work_updates WHERE id=? AND share_id=? AND share_version=? AND reviewed_at IS NULL',(update_id,share_id,version)).fetchone()
         _bc850_require(row is not None,'This response is already reviewed or unavailable.',409)
@@ -60973,6 +61197,7 @@ def bc850_control(share_id:int,version:int=_BC189_Form(...),action:str=_BC189_Fo
     with _bc850_db(True) as c:
         user=_bc850_actor(c);share=_bc850_share(c,user,share_id,True,True)
         _bc850_require(not share['revoked_at'] and share['version']==version,'This share changed. Reload it first.',409)
+        _bc850_require(share['kind']!='document_request' or action=='revoke','Review the document request before accepting or requesting changes.',409)
         now=_bc830b_now().isoformat()
         # Close/reopen preserve publication version and its response history.
         if action=='revoke': c.execute('UPDATE bc_shared_work SET revoked_at=?,updated_at=? WHERE id=?',(now,now,share_id))
@@ -61117,13 +61342,13 @@ def _bc860_rows(c, user, pid, view, q, page):
         LEFT JOIN users r ON r.id=s.recipient_user_id AND r.company_id=s.company_id
         WHERE s.company_id=? AND s.project_id=? AND s.revoked_at IS NULL
       ), progress AS (
-        SELECT s.*, COALESCE(u.status,'') AS latest_status, u.message AS latest_message,
+        SELECT s.*, CASE WHEN s.kind='document_request' AND s.state='OPEN' AND s.pending_count=0 AND u.status='READY_FOR_REVIEW' THEN 'IN_PROGRESS' ELSE COALESCE(u.status,'') END AS latest_status, u.message AS latest_message,
           u.created_at AS latest_time, n.status AS pending_status, n.message AS pending_message,
           n.created_at AS pending_time,
           CASE WHEN s.pending_count>0 THEN 1 ELSE 0 END AS needs_review,
           CASE WHEN s.state='OPEN' AND u.status='BLOCKED' THEN 1 ELSE 0 END AS blocked,
           CASE WHEN s.state='OPEN' AND length(s.due_date)=10 AND s.due_date<? THEN 1 ELSE 0 END AS overdue,
-          CASE WHEN s.state='OPEN' AND u.status='READY_FOR_REVIEW' THEN 1 ELSE 0 END AS ready
+          CASE WHEN s.state='OPEN' AND u.status='READY_FOR_REVIEW' AND (s.kind<>'document_request' OR s.pending_count>0) THEN 1 ELSE 0 END AS ready
         FROM scoped s
         LEFT JOIN bc_shared_work_updates u ON u.id=s.latest_id
         LEFT JOIN bc_shared_work_updates n ON n.id=s.pending_id
@@ -61137,6 +61362,9 @@ def _bc860_rows(c, user, pid, view, q, page):
         COALESCE(SUM(CASE WHEN state='CLOSED' THEN 1 ELSE 0 END),0) AS closed,
         COALESCE(SUM(CASE WHEN needs_review+blocked+overdue+ready>0 THEN 1 ELSE 0 END),0) AS attention
         FROM progress''', params).fetchone())
+    # PostgreSQL can return Decimal for sums of bigint counts. These fields
+    # represent counts on every database, including empty result sets.
+    totals = {key:int(value or 0) for key,value in totals.items()}
     where = {
         'attention': '(needs_review+blocked+overdue+ready)>0', 'review': 'needs_review=1',
         'blocked': 'blocked=1', 'overdue': 'overdue=1', 'ready': 'ready=1',
@@ -61204,6 +61432,8 @@ def _bc860_hidden(row, view, q, page):
 
 
 def _bc860_card(row, view, q, page):
+    if row['kind']=='document_request':
+        return app.state.document_requests.command_card(row)
     esc = _bc830b_escape
     sid = int(row['id'])
     status = _BC850_STATUSES.get(row['latest_status'], 'Awaiting first update' if row['allow_response'] else 'Shared for reference')
@@ -61270,6 +61500,9 @@ def bc860_command(project_id: int = 0, view: str = 'attention', q: str = '', pag
             return _bc860_page(body)
         pid = int(project['id'])
         totals, matched, rows = _bc860_rows(c, user, pid, view, q, page)
+    center = getattr(app.state, 'command_center', None)
+    if center is not None:
+        return center.render(user, project, projects, totals, matched, rows, view, q, page, notice)
     esc = _bc830b_escape
     notices = {'review': 'Update reviewed. Any reply is now visible to the subcontractor.',
                'review_close': 'Update reviewed and responses closed. The share remains visible.',
@@ -61320,6 +61553,7 @@ def bc860_action(share_id: int, action: str = _BC189_Form(...), version: int = _
     with _bc850_db(True) as c:
         user = _bc850_actor(c)
         share = _bc850_share(c, user, share_id, True, True)
+        _bc850_require(share['kind']!='document_request','Open the document request to review its exact file and decision.',409)
         _bc850_require(not share['revoked_at'] and share['version'] == version and
                        share['state'] == expected_state and share['updated_at'] == revision,
                        'This share changed. Reload Superintendent Command before acting.', 409)
@@ -61899,4 +62133,180 @@ from daily_command import install as _bc880_install
 _BC880_COMMAND = _bc880_install(globals())
 BUILD_COMMAND_RELEASE = '8.8.0'
 BUILD_COMMAND_RELEASE_NAME = 'Daily Command Briefing'
+app.version = BUILD_COMMAND_RELEASE
+
+# 8.9.0 — Photo Findings to Field Actions
+from photo_field import install as _bc890_install
+_BC890_PHOTOS = _bc890_install(globals())
+BUILD_COMMAND_RELEASE = '8.9.0'
+BUILD_COMMAND_RELEASE_NAME = 'Photo Findings to Field Actions'
+app.version = BUILD_COMMAND_RELEASE
+
+# 8.10.0 — reviewed RFI answer handoff and source revision checks.
+from rfi_field import install as _bc8100_install
+_BC8100_RFIS = _bc8100_install(globals())
+BUILD_COMMAND_RELEASE = '8.10.0'
+BUILD_COMMAND_RELEASE_NAME = 'RFI Answers to Field Work'
+app.version = BUILD_COMMAND_RELEASE
+
+# 8.10.0: simple command surface; existing routes retain their handlers.
+from command_center import install as _bc8100_command_install
+_BC8100_COMMAND = _bc8100_command_install(globals())
+BUILD_COMMAND_RELEASE_NAME = 'Simple Command — RFI Answers to Field'
+
+
+# 8.10.2 — owner-console style navigation, with existing role boundaries.
+BC8102_RELEASE = '8.10.2'
+BUILD_COMMAND_RELEASE = BC8102_RELEASE
+BUILD_COMMAND_RELEASE_NAME = 'Simple Workspace Navigation'
+app.version = BUILD_COMMAND_RELEASE
+
+
+@app.get('/health/simple-workspace-8-10-2')
+def bc8102_health():
+    paths = {getattr(route, 'path', '') for route in app.routes if 'GET' in (getattr(route, 'methods', set()) or set())}
+    checks = {
+        'workspace_shell_active': _runtime.shell is _bc840_shell,
+        'company_navigation_installed': callable(_bc8102_company_links),
+        'workspace_and_project_routes_preserved': {'/workspace','/workspace/projects','/workspace/projects/{project_id}'}.issubset(paths),
+        'personal_access_route_preserved': '/workspace/access' in paths,
+        'company_admin_boundary_preserved': _bc840_admin_path('/company') and _bc840_admin_path('/company/users'),
+        'command_center_preserved': getattr(app.state, 'command_center', None) is not None,
+        'ask_reliability_preserved': '/health/ask-reliability-8-10-1' in paths,
+        'rfi_briefing_photo_routes_preserved': {'/workspace/rfi-answers','/workspace/command/briefs/{brief_id}','/workspace/photos/{analysis_id}'}.issubset(paths),
+        'owner_console_preserved': getattr(app.state, 'owner_console', None) is not None,
+        'form_origin_guard_preserved': _bc840_same_origin is _bc861_same_origin and _BC862_FORM_REFERRER_POLICY == 'same-origin',
+    }
+    return {'app':'BuildCommand AI','version':BC8102_RELEASE,'release':'Simple Workspace Navigation',
+            'status':'ok' if all(checks.values()) else 'degraded','checks':checks,
+            'passed':sum(checks.values()),'total':len(checks),'data_reset':False,
+            'scope':'Installation checks only. Verify desktop and phone navigation, Company > My access, project selection and real role access on staging.'}
+
+
+_runtime.PUBLIC_PATHS.add('/health/simple-workspace-8-10-2')
+
+
+# 8.11.0 — reviewed trade notices and dated internal briefing follow-ups.
+from command_actions import install as _bc8110_install
+_bc8110_actions = _bc8110_install(globals())
+BUILD_COMMAND_RELEASE = '8.11.0'
+BUILD_COMMAND_RELEASE_NAME = 'Reviewed Command Actions'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.12.0 — guided first-job setup; existing workflows and gates remain active.
+from project_setup import install as _bc8120_install
+_bc8120_setup = _bc8120_install(globals())
+BUILD_COMMAND_RELEASE = '8.12.0'
+BUILD_COMMAND_RELEASE_NAME = 'First Job Setup'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.13.0 — shared subcontractor records and daily crews, with legacy summaries.
+from daily_reports import install as _bc8130_install
+_bc8130_reports = _bc8130_install(globals())
+BUILD_COMMAND_RELEASE = '8.13.0'
+BUILD_COMMAND_RELEASE_NAME = 'Daily Reports by Trade'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.13.1 — open already-shared PDF drawings and images in the browser.
+@app.get('/health/shared-drawings-8-13-1')
+def bc8131_health():
+    active={(getattr(r,'path',''),method):r.endpoint for r in app.routes for method in (getattr(r,'methods',None) or set())}
+    checks={
+        'GET /workspace/shared/{share_id}/view': active.get(('/workspace/shared/{share_id}/view','GET')) is bc8131_shared_view,
+        'GET /workspace/sharing/{share_id}/view': active.get(('/workspace/sharing/{share_id}/view','GET')) is bc8131_managed_view,
+        'subcontractor_download_preserved': active.get(('/workspace/shared/{share_id}/download','GET')) is bc850_shared_download,
+        'manager_download_preserved': active.get(('/workspace/sharing/{share_id}/download','GET')) is bc850_managed_download,
+        'pdf_preview_type_configured': _bc8131_preview_type('drawing.pdf',b'%PDF-1.7')=='application/pdf',
+        'html_preview_rejected': _bc8131_preview_type('drawing.pdf',b'<html>') is None and _bc8131_preview_type('page.html',b'<html>') is None,
+        'sharing_schema_initialized': _BC850_SCHEMA_READY,
+        'daily_reports_preserved': getattr(app.state,'daily_reports',None) is not None,
+        'reviewed_actions_preserved': getattr(app.state,'command_actions',None) is not None,
+        'form_origin_guard_preserved': _bc840_same_origin is _bc861_same_origin and _BC862_FORM_REFERRER_POLICY=='same-origin',
+    }
+    return {'app':'BuildCommand AI','version':'8.13.1','release':'Open Shared Drawings','status':'ok' if all(checks.values()) else 'degraded',
+        'checks':checks,'passed':sum(checks.values()),'total':len(checks),'data_reset':False,
+        'scope':'Active route and preview configuration checks only. Open a real shared PDF as the assigned subcontractor on staging. Verify revoked and unassigned access remains blocked; browser PDF support varies.'}
+
+_runtime.PUBLIC_PATHS.add('/health/shared-drawings-8-13-1')
+BUILD_COMMAND_RELEASE = '8.13.1'
+BUILD_COMMAND_RELEASE_NAME = 'Open Shared Drawings'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.14.0 — categorized tools, shared project intelligence and field drawings.
+from workspace_hub import install as _bc8140_hub_install
+_bc8140_hub = _bc8140_hub_install(globals())
+from drawing_workspace import install as _bc8140_drawings_install
+_bc8140_drawings = _bc8140_drawings_install(globals())
+from drawing_register import install as _bc8150_register_install
+_bc8150_register = _bc8150_register_install(globals())
+
+BUILD_COMMAND_RELEASE = '8.15.0'
+BUILD_COMMAND_RELEASE_NAME = 'Drawing Register & Sheet Viewer'
+app.version = BUILD_COMMAND_RELEASE
+
+# 8.16.0: original BuildCommand field notes and reviewed sheet copies.
+from drawing_field import install as _bc8160_field_install
+_bc8160_field = _bc8160_field_install(globals())
+BUILD_COMMAND_RELEASE = '8.16.0'
+BUILD_COMMAND_RELEASE_NAME = 'Drawings to Field'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.17.0: drawing locations connected to real job records and reviewed actions.
+from drawing_work import install as _bc8170_work_install
+_bc8170_work = _bc8170_work_install(globals())
+BUILD_COMMAND_RELEASE = '8.17.1'
+BUILD_COMMAND_RELEASE_NAME = 'Full-Page Drawings'
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.18.0: independent sheet scales and zoom-independent measured lengths.
+from drawing_scale import install as _bc8180_scale_install
+_bc8180_scale = _bc8180_scale_install(globals())
+BUILD_COMMAND_RELEASE = "8.18.0"
+BUILD_COMMAND_RELEASE_NAME = "Sheet Scale & Calibration"
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.19.0: named detail scale areas; preserve per-sheet calibration and marks.
+from drawing_scale_areas import install as _bc8190_areas_install
+_bc8190_areas = _bc8190_areas_install(globals())
+BUILD_COMMAND_RELEASE = "8.19.0"
+BUILD_COMMAND_RELEASE_NAME = "Detail Scale Areas"
+app.version = BUILD_COMMAND_RELEASE
+
+
+# BuildCommand AI 8.20.0 — internal document register and company templates.
+from project_documents import install as _bc8200_documents_install
+_bc8200_documents = _bc8200_documents_install(globals())
+BUILD_COMMAND_RELEASE = "8.20.0"
+BUILD_COMMAND_RELEASE_NAME = "Project Documents & Closeout Register"
+app.version = BUILD_COMMAND_RELEASE
+
+
+# BuildCommand AI 8.21.0 — Reviewed document requests through trade sharing.
+from document_requests import install as _bc8210_requests_install
+_bc8210_requests = _bc8210_requests_install(globals())
+BUILD_COMMAND_RELEASE = "8.21.0"
+BUILD_COMMAND_RELEASE_NAME = "Document Requests by Trade"
+app.version = BUILD_COMMAND_RELEASE
+
+
+# BuildCommand AI 8.22.0 — Closeout requirements and reviewed handover packages.
+from closeout_handover import install as _bc8220_closeout_install
+_bc8220_closeout = _bc8220_closeout_install(globals())
+BUILD_COMMAND_RELEASE = "8.22.0"
+BUILD_COMMAND_RELEASE_NAME = "Closeout by Trade & Handover Packages"
+app.version = BUILD_COMMAND_RELEASE
+
+
+# BuildCommand AI 8.23.0 — Company checklists, corrections and reviewed filing.
+from safety_checklists import install as _bc8230_checklists_install
+_bc8230_checklists = _bc8230_checklists_install(globals())
+BUILD_COMMAND_RELEASE = "8.23.0"
+BUILD_COMMAND_RELEASE_NAME = "Safety & Inspection Checklists"
 app.version = BUILD_COMMAND_RELEASE
