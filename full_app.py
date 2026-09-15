@@ -62294,3 +62294,11 @@ _bc8210_requests = _bc8210_requests_install(globals())
 BUILD_COMMAND_RELEASE = "8.21.0"
 BUILD_COMMAND_RELEASE_NAME = "Document Requests by Trade"
 app.version = BUILD_COMMAND_RELEASE
+
+
+# BuildCommand AI 8.22.0 — Closeout requirements and reviewed handover packages.
+from closeout_handover import install as _bc8220_closeout_install
+_bc8220_closeout = _bc8220_closeout_install(globals())
+BUILD_COMMAND_RELEASE = "8.22.0"
+BUILD_COMMAND_RELEASE_NAME = "Closeout by Trade & Handover Packages"
+app.version = BUILD_COMMAND_RELEASE
