@@ -11,8 +11,8 @@ VERSION='8.14.0'
 # Every older navigation item is either categorized here or intentionally hidden
 # as a duplicate/settings/test entry. Its original handler is retained.
 GROUPS=(
- ('Drawings & documents',(('Drawings','/workspace/drawings'),('Documents','/documents'),('RFIs / issues','/issues'),('Submittals','/submittals')),
-  (('Change events','/changes'),('Change packages','/change-package'))),
+ ('Drawings & documents',(('Drawings','/workspace/drawings'),('Project Documents','/workspace/documents'),('RFIs / issues','/issues'),('Submittals','/submittals')),
+  (('Earlier document uploads','/documents'),('Change events','/changes'),('Change packages','/change-package'))),
  ('Daily field work',(('Daily report','/daily-report'),('Punch list','/punch'),('Inspections','/inspections'),('Safety','/safety')),
   (('Quick field note','/quick-entry'),('Field log','/field'),('Production','/production'),('Reports & exports','/exports'),('PDF reports','/pdf-reports'))),
  ('Schedule & planning',(('Schedule','/schedule'),('Advanced Schedule Import','/advanced-schedule-import'),('3-week look-ahead','/lookahead-intelligence'),('Procurement','/procurement')),
@@ -108,7 +108,7 @@ class WorkspaceHub:
         body=CSS+'<section id="quick-actions" class="card hub-section"><h2>Quick Actions &amp; Follow-ups</h2>'
         if not project:return body+'<p>Choose a project below to see its work and next actions.</p></section>'
         body+='<p>'+esc(project['name'])+'</p><div class="hub-actions">'
-        for label,path in [('Run today','/workspace/command'),('Drawings','/workspace/drawings'),('Daily report','/workspace/daily'),('Ask / analyze','/workspace/brain')]:body+=self.open_form(pid,path,label)
+        for label,path in [('Run today','/workspace/command'),('Drawings','/workspace/drawings'),('Daily report','/workspace/daily'),('Documents','/workspace/documents'),('Ask / analyze','/workspace/brain')]:body+=self.open_form(pid,path,label)
         body+='</div><h3>Work to follow up</h3>'
         with self.db() as c:
             self.field.actor(c,pid)
@@ -159,6 +159,8 @@ class WorkspaceHub:
             for r in c.execute('SELECT id,summary_text,created FROM meeting_ai_summaries WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 3',(user['company_id'],pid)).fetchall():rows.append(('Saved meeting summary',r['id'],'Meeting · '+str(r['created'] or ''),r['summary_text'],'/meeting-minutes-ai'))
         if 'document_markup_revisions' in tables:
             for r in c.execute('SELECT m.id,m.attachment_id,m.revision_title,m.notes FROM document_markup_revisions m JOIN attachments a ON a.id=m.attachment_id AND a.project_id=m.project_id AND a.company_id=m.company_id WHERE m.company_id=? AND m.project_id=? ORDER BY m.id DESC LIMIT 5',(user['company_id'],pid)).fetchall():rows.append(('Drawing markup note',r['id'],r['revision_title'],r['notes'],f'/workspace/drawings/{r["attachment_id"]}'))
+        documents=getattr(self.ns['app'].state,'project_documents',None)
+        if documents:rows.extend(documents.evidence(c,user,pid))
         return rows
 
     def portfolio(self):
