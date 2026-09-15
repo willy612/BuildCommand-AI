@@ -133,6 +133,12 @@ class DailyCommand:
         rfis = getattr(self.ns['app'].state, 'rfi_field', None)
         if rfis is not None:
             result['rfi_directions'] = rfis.brief_data(c,user,project)
+        actions = getattr(self.ns['app'].state, 'command_actions', None)
+        if actions is not None:
+            result['command_followups'] = actions.brief_data(c,user,project)
+        checklists = getattr(self.ns['app'].state, 'safety_checklists', None)
+        if checklists is not None and checklists.schema_ready:
+            result['safety_checks'] = checklists.attention_data(c,user,pid)
         # Lists are deliberately bounded. Counts always cover all current shares.
         return result
 
@@ -200,6 +206,15 @@ class DailyCommand:
             body += self.ns['app'].state.rfi_field.brief_html(data['rfi_directions'],links)
         if data.get('leader_notes'):
             body += '<section class="card"><h2>Superintendent’s notes</h2><p style="white-space:pre-wrap">'+esc(data['leader_notes'])+'</p></section>'
+        if data.get('command_followups') is not None:
+            body += self.ns['app'].state.command_actions.brief_html(data['command_followups'],links)
+        if data.get('safety_checks') is not None:
+            checks=data['safety_checks'];body+='<section class="card"><h2>Safety &amp; inspections</h2><p>'+str(checks['total'])+' open checklist(s) at review time.</p>'
+            for row in checks['items']:
+                title=esc(row['title'])
+                if links:title='<a href="/workspace/checklists/'+str(row['id'])+'">'+title+'</a>'
+                body+='<p><strong>'+title+'</strong> · '+str(row['findings'])+' need attention · '+str(row['unchecked'])+' not checked</p>'
+            body+='</section>'
         return body
 
     def page(self, title, body):
@@ -349,6 +364,17 @@ class DailyCommand:
             for row in rfis['items']:
                 state = 'Source needs review' if row['needs_review'] else row['latest_status'] or row['state']
                 lines.append(row['title']+' | '+row['recipient_name']+' | '+state+' | Due: '+(row['due_date'] or 'Not set'))
+        followups = data.get('command_followups')
+        if followups is not None:
+            lines += ['', 'PLANNED FOLLOW-UPS', str(followups['total'])+' due today or carried forward.']
+            for row in followups['items']:
+                lines += [row['followup_date']+' | '+row['title'],row['note']]
+            if followups['total'] > len(followups['items']):
+                lines.append('Showing the first 100. Review remaining items in Command action history.')
+        checks=data.get('safety_checks')
+        if checks is not None:
+            lines+=['','SAFETY AND INSPECTIONS',str(checks['total'])+' open checklist(s) at review time.']
+            for row in checks['items']:lines.append(row['title']+' | '+str(row['findings'])+' need attention | '+str(row['unchecked'])+' not checked')
         lines += ['', 'SUPERINTENDENT NOTES',data.get('leader_notes') or 'None recorded.', '', 'Fixed reviewed copy. Later project updates do not rewrite this briefing.']
         return Response('\n'.join(lines)+'\n',media_type='text/plain; charset=utf-8',headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':f'attachment; filename="daily-command-{brief_id}-{data["brief_date"]}.txt"'})
 
