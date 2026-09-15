@@ -128,6 +128,8 @@ class CommandCenter:
             _,_,attention=self.ns['_bc860_rows'](c,user,pid,'attention','',1)
             actions=getattr(self.ns['app'].state,'command_actions',None)
             followup_panel=actions.panel(c,user,project) if actions else ''
+            checklists=getattr(self.ns['app'].state,'safety_checklists',None)
+            checklist_panel=checklists.panel(c,user,pid) if checklists else ''
         priorities=self.daily.priorities(pid)
         notices={'review':'Update reviewed. Your reply is available to the subcontractor.','review_close':'Update reviewed and responses closed.','close':'Responses closed.','reopen':'Responses reopened.','revoke':'Access revoked.'}
         body='<div role="status" class="bc860-notice">'+notices[notice]+'</div>' if notice in notices else ''
@@ -172,6 +174,7 @@ class CommandCenter:
             if start>=0 and end>start:
                 saved=(f'<p class="muted">Last saved field briefing · {esc(latest["brief_date"])} · <a href="/workspace/command/briefs/{latest["id"]}">Open saved copy</a></p>') if latest else ''
                 body=body[:start]+'<section id="quick" class="bc860-panel"><h2>Quick Actions</h2><p>Quick Actions and follow-ups are together on My workspace.</p><a class="bc860-button" href="/workspace#quick-actions">Open Quick Actions &amp; Follow-ups</a>'+saved+'</section>'+body[end:]
+        if checklist_panel:body=body.replace('<h2>Problems / Risks</h2>','<h2>Problems / Risks</h2>'+checklist_panel,1)
         return self.page('Superintendent Command',body)
 
     def context_json(self,value):
