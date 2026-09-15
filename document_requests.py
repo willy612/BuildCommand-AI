@@ -118,7 +118,11 @@ class DocumentRequests:
         if reference:self.checked_file(reference)
         active=c.execute("SELECT r.id FROM bc_doc_requests r JOIN bc_shared_work s ON s.id=r.share_id WHERE r.company_id=? AND r.record_id=? AND s.revoked_at IS NULL AND r.state<>?",(user['company_id'],record_id,'accepted')).fetchone()
         self.require(active is None,'This record already has an active request. Open that request, or use a separate record for another trade.',409)
-        return user,p,doc,dict(project=p,recipient=recipient,reference=reference,document_version=doc['version'])
+        binding=dict(project=p,recipient=recipient,reference=reference,document_version=doc['version'])
+        checklists=getattr(self.ns['app'].state,'safety_checklists',None)
+        context=checklists.request_binding(c,user,doc) if checklists else None
+        if context is not None:binding['checklist_context']=context
+        return user,p,doc,binding
 
     def token(self,c,user,pid,kind,data,request):
         raw=secrets.token_urlsafe(32);now=self.field.now()
@@ -140,17 +144,27 @@ class DocumentRequests:
     def approval_form(self,raw,label,confirmation):
         return '<form class="card" method="post" action="/workspace/document-requests/approve">'+self.hidden('review_token',raw)+'<p><label><input type="checkbox" name="confirmed" value="yes" required> '+esc(confirmation)+'</label></p><button>'+esc(label)+'</button><p class="docs-meta">This preview expires in 15 minutes.</p></form>'
 
-    def prepare(self,record_id:int):
+    def prepare(self,record_id:int,reference_file_id:int=0):
         self.ready()
         with self.db() as c:
             user,p,doc=self.docs.record(c,record_id);self.require(p['id']>0,'Choose a project document.',400)
             recipients=self.recipients(c,user,p['id']);files=self.docs.files(c,doc)
+            self.require(reference_file_id==0 or any(f['id']==reference_file_id for f in files),'Choose a reference file from this document record.',404)
+            checklists=getattr(self.ns['app'].state,'safety_checklists',None)
+            suggested_message=checklists.request_message(c,user,doc) if checklists else ''
         body='<div class="hero"><h1>Request paperwork</h1><p>'+esc(p['name'])+' · '+esc(doc['title'])+'</p></div>'
         if not recipients:return self.docs.page('Request paperwork',body+'<section class="card"><p>Assign a subcontractor to this project first.</p>'+self.docs.link(f'/workspace/sharing/projects/{p["id"]}/team','Manage project subcontractors')+'</section>')
         body+='<form class="card docs-form" method="post" action="'+BASE+'/'+str(record_id)+'/request/review">'+self.hidden('document_version',doc['version'])
         body+='<label for="request-recipient">Request from</label><select id="request-recipient" name="recipient_id" required><option value="">Choose a subcontractor</option>'+''.join('<option value="'+str(u['id'])+'">'+esc(u['display_name'] or u['email'])+' · '+esc(u['email'])+'</option>' for u in recipients)+'</select>'
         body+=self.docs.input('title','Request name',doc['title'],extra='maxlength="240" required')+self.docs.input('due_date','Needed by',doc['due_date'],'date')
         body+='<label for="request-message">What should they provide?</label><textarea id="request-message" name="message" rows="5" maxlength="4000" required placeholder="Upload the signed warranty for your completed electrical work."></textarea><label for="request-reference">Include a reference file (optional)</label><select id="request-reference" name="reference_file_id"><option value="0">No file included</option>'+''.join('<option value="'+str(f['id'])+'">'+esc(f['original_name'])+' · version '+str(f['revision'])+'</option>' for f in files)+'</select><p class="docs-meta">They will see only the reviewed request and any entire file version selected here. Internal notes and other versions stay private. Use a separate document record for each trade deliverable.</p><button>Review request</button></form>'+self.docs.link(BASE+'/'+str(record_id),'Back to document')
+        if suggested_message:body=body.replace('placeholder="Upload the signed warranty for your completed electrical work."></textarea>','placeholder="Upload the signed warranty for your completed electrical work.">'+esc(suggested_message)+'</textarea>')
+        if reference_file_id:
+            # Limit selection to the reference-file select: user and file IDs can overlap.
+            marker='<select id="request-reference" name="reference_file_id">'
+            before,after=body.split(marker,1)
+            after=after.replace('<option value="'+str(reference_file_id)+'">','<option value="'+str(reference_file_id)+'" selected>',1)
+            body=before+marker+after
         return self.docs.page('Request paperwork',body)
 
     def review_issue(self,record_id:int,request:Request,document_version:int=Form(...),recipient_id:int=Form(...),title:str=Form(...),message:str=Form(...),due_date:str=Form(''),reference_file_id:int=Form(0)):
