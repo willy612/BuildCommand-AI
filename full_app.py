@@ -62302,3 +62302,11 @@ _bc8220_closeout = _bc8220_closeout_install(globals())
 BUILD_COMMAND_RELEASE = "8.22.0"
 BUILD_COMMAND_RELEASE_NAME = "Closeout by Trade & Handover Packages"
 app.version = BUILD_COMMAND_RELEASE
+
+
+# BuildCommand AI 8.23.0 — Company checklists, corrections and reviewed filing.
+from safety_checklists import install as _bc8230_checklists_install
+_bc8230_checklists = _bc8230_checklists_install(globals())
+BUILD_COMMAND_RELEASE = "8.23.0"
+BUILD_COMMAND_RELEASE_NAME = "Safety & Inspection Checklists"
+app.version = BUILD_COMMAND_RELEASE
