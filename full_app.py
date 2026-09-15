@@ -60001,6 +60001,8 @@ def _bc8102_company_links(user):
     if _bc840_tier(user) in {'owner', 'admin'}:
         links += [('Overview', '/company'), ('People & access', '/company/users'),
                   ('Invitations', '/company/invitations')]
+    if callable(globals().get('_bc850_manager')) and _bc850_manager(user):
+        links += [('Company templates', '/workspace/company-templates')]
     links += [('My access', '/workspace/access'), ('Access status', '/workspace/company-access')]
     if _bc840_tier(user) in {'owner', 'admin'}:
         links += [('Role guide', '/company/access-matrix'), ('Settings', '/company-settings')]
@@ -60102,6 +60104,7 @@ def _bc840_shell(title, body, *args, **kwargs):
     if callable(globals().get('_bc850_nav')): nav += _bc850_nav(user)
     if tier in {'owner', 'admin', 'lead', 'staff'}:
         nav.append(('Drawings', '/workspace/drawings'))
+        if callable(globals().get('_bc850_manager')) and _bc850_manager(user): nav.append(('Documents', '/workspace/documents'))
         if callable(globals().get('_bc850_manager')) and _bc850_manager(user): nav.append(('BuildCommand AI', '/workspace/brain'))
         nav.append(('Field tools', '/workspace/tools'))
     company_links = _bc8102_company_links(user)
@@ -60125,7 +60128,7 @@ def _bc840_shell(title, body, *args, **kwargs):
                 '<label for="bc840-project">Project</label><select id="bc840-project" name="project_id" aria-label="Current project" required>' +
                 '<option value="">Select a project</option>' + options + '</select><button>Open</button></form>') if options else ''
     if title == 'Superintendent Command': selector = ''  # Uses the appointed-project selector in Command.
-    if path == '/workspace/setup' or path.startswith('/workspace/setup/') or path.startswith('/workspace/daily') or path.startswith('/workspace/directory') or path.startswith(('/workspace/drawings','/workspace/drawing-sets','/workspace/drawing-sheets','/workspace/drawing-releases')) or path in {'/workspace/brain','/workspace/portfolio'}:
+    if path == '/workspace/setup' or path.startswith('/workspace/setup/') or path.startswith('/workspace/daily') or path.startswith('/workspace/directory') or path.startswith(('/workspace/drawings','/workspace/drawing-sets','/workspace/drawing-sheets','/workspace/drawing-releases')) or path.startswith('/workspace/documents') or path == '/workspace/company-templates' or path in {'/workspace/brain','/workspace/portfolio'}:
         selector = ''  # Setup identifies the viewed job; handoffs select it explicitly.
     setup = getattr(app.state, 'project_setup', None)
     if setup and selected and (path == '/blueprint-brain' or path.startswith('/blueprint-brain/run/')):
@@ -62258,4 +62261,20 @@ from drawing_scale import install as _bc8180_scale_install
 _bc8180_scale = _bc8180_scale_install(globals())
 BUILD_COMMAND_RELEASE = "8.18.0"
 BUILD_COMMAND_RELEASE_NAME = "Sheet Scale & Calibration"
+app.version = BUILD_COMMAND_RELEASE
+
+
+# 8.19.0: named detail scale areas; preserve per-sheet calibration and marks.
+from drawing_scale_areas import install as _bc8190_areas_install
+_bc8190_areas = _bc8190_areas_install(globals())
+BUILD_COMMAND_RELEASE = "8.19.0"
+BUILD_COMMAND_RELEASE_NAME = "Detail Scale Areas"
+app.version = BUILD_COMMAND_RELEASE
+
+
+# BuildCommand AI 8.20.0 — internal document register and company templates.
+from project_documents import install as _bc8200_documents_install
+_bc8200_documents = _bc8200_documents_install(globals())
+BUILD_COMMAND_RELEASE = "8.20.0"
+BUILD_COMMAND_RELEASE_NAME = "Project Documents & Closeout Register"
 app.version = BUILD_COMMAND_RELEASE
