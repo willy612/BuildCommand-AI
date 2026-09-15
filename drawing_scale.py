@@ -199,10 +199,12 @@ class DrawingScale:
     def state(self, c, user, sheet, geometry, source_key):
         row = self.stored(c, user, sheet)
         stale = row is not None and row['source_key'] != source_key
-        return {'sheet_id': sheet['id'], 'sheet_number': sheet['sheet_number'], 'page': sheet['page_number'],
+        result = {'sheet_id': sheet['id'], 'sheet_number': sheet['sheet_number'], 'page': sheet['page_number'],
                 'version': int(row['version']) if row else 0, 'source_key': source_key, 'geometry': geometry,
                 'profile': json.loads(row['profile_json']) if row and not stale else None,
                 'stale_source': stale, 'current': self.pins.head(c, user, sheet) == sheet['id']}
+        areas = getattr(self.ns['app'].state, 'drawing_scale_areas', None)
+        return areas.enrich(c, user, sheet, source_key, result) if areas else result
 
     def get(self, sheet_id: int):
         with self.db() as c:
@@ -253,7 +255,11 @@ class DrawingScale:
         with self.db() as c:
             user, _, sheet, geometry, source_key = self.context(c, sheet_id)
             config = self.state(c, user, sheet, geometry, source_key)
-        return HTMLResponse(instrument(html, config), headers={'Cache-Control': 'private, no-store', 'Referrer-Policy': 'same-origin'})
+        html = instrument(html, config)
+        areas = getattr(self.ns['app'].state, 'drawing_scale_areas', None)
+        if areas:
+            html = areas.instrument(html, config)
+        return HTMLResponse(html, headers={'Cache-Control': 'private, no-store', 'Referrer-Policy': 'same-origin'})
 
     def health(self):
         active = {(r.path, m): r.endpoint for r in self.ns['app'].routes for m in (getattr(r, 'methods', None) or [])}
