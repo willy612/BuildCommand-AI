@@ -297,8 +297,8 @@ class CommandCenter:
         for key in ('briefing_note','notice_draft'):result[key]=(result.get(key) or '')[:2000]
         return result
 
-    def request_response(self,body,key):
-        # Only Ask uses this transport; other construction engines keep their clients.
+    def request_response(self,body,key,*,timeout=45):
+        # Shared bounded transport. Ask keeps its 45-second default.
         base=(os.environ.get('OPENAI_BASE_URL') or 'https://api.openai.com/v1').strip().rstrip('/')
         try:
             parsed=urllib.parse.urlsplit(base)
@@ -318,7 +318,7 @@ class CommandCenter:
         try:
             request=urllib.request.Request(base+'/responses',data=command_json(body).encode('utf-8'),headers=headers,method='POST')
             opener=urllib.request.build_opener(NoAIRedirect())
-            with opener.open(request,timeout=45) as response:
+            with opener.open(request,timeout=timeout) as response:
                 raw=response.read(RESPONSE_BYTE_LIMIT+1)
                 request_id=response.headers.get('x-request-id')
         except urllib.error.HTTPError as error:
