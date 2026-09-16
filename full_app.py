@@ -62324,3 +62324,10 @@ _bc8250_pilot = _bc8250_pilot_install(globals())
 BUILD_COMMAND_RELEASE = "8.25.0"
 BUILD_COMMAND_RELEASE_NAME = "GC Pilot Readiness & Reliable Delivery"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.26.0 - Persistent page coverage and estimator schema repair.
+from blueprint_batches import install as _bc8260_blueprint_install
+_bc8260_blueprint = _bc8260_blueprint_install(globals())
+BUILD_COMMAND_RELEASE = "8.26.0"
+BUILD_COMMAND_RELEASE_NAME = "Large Plan Analysis"
+app.version = BUILD_COMMAND_RELEASE
