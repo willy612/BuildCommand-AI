@@ -21,6 +21,7 @@ MAX_BYTES = 200*1024*1024
 class FieldDelivery:
     def __init__(self, core):
         self.b = core
+        self.pilot_delivery_version = "8.25.0"
         self.ns, self.docs = core.ns, core.docs
         self.requests = core.app.state.document_requests
         core.schema('bc824_packages', '''title TEXT NOT NULL,message TEXT NOT NULL,purpose TEXT NOT NULL,
@@ -217,8 +218,13 @@ class FieldDelivery:
             if not manager and not row['acknowledged_at'] and share['state']=='OPEN':body+='<form class="card field-form" method="post" action="'+BASE+'/'+str(package_id)+'/acknowledge">'+b.area('message','Reply / readiness note (optional)',maximum=2000)+'<label><input type="checkbox" name="confirmed" value="yes" required> I received this exact package.</label><button>Acknowledge receipt</button></form>'
             if manager:
                 body+='<section class="card"><h2>Email notification</h2>'
-                for job in c.execute('SELECT state,send_after,sent_at,error_code FROM bc824_mail WHERE package_id=? ORDER BY id DESC',(package_id,)).fetchall():body+='<p>'+esc(job['state'])+' · '+esc(job['sent_at'] or job['send_after'])+(' · '+esc(job['error_code']) if job['error_code'] else '')+'</p>'
-                body+='<p class="field-muted">Accepted by the mail server does not prove inbox delivery or reading.</p></section><form class="card field-form" method="post" action="'+BASE+'/'+str(package_id)+'/reminder">'+b.input('send_date','Reminder date',b.now().date().isoformat(),'date','required')+'<button>Review email reminder</button></form>'
+                from pilot_readiness import STATUS
+                jobs=c.execute('SELECT id,state,send_after,sent_at FROM bc824_mail WHERE package_id=? AND company_id=? ORDER BY id DESC LIMIT 20',(package_id,user['company_id'])).fetchall()
+                if not jobs:body+='<p>No email notification queued. This package is available in the app.</p>'
+                for job in jobs:
+                    label,note=STATUS.get(job['state'],('Needs review','Open the notification to check its state.'))
+                    body+='<p><strong>'+esc(label)+'</strong> · '+esc(job['sent_at'] or job['send_after'])+'</p><p>'+esc(note)+'</p>'+b.link('/workspace/delivery/'+str(job['id']),'Review notification')
+                body+='<p class="field-muted">Mail acceptance, opening and acknowledgment are separate events.</p>'+b.link('/workspace/delivery?project_id='+str(row['project_id']),'Delivery & receipts')+'</section><form class="card field-form" method="post" action="'+BASE+'/'+str(package_id)+'/reminder">'+b.input('send_date','Reminder date',b.now().date().isoformat(),'date','required')+'<button>Review email reminder</button></form>'
                 body+=b.link(BASE+'?project_id='+str(row['project_id']),'Back to packages')
                 body+='<form class="card" method="post" action="/workspace/sharing/'+str(share['id'])+'/control">'+b.hidden('version',share['version'])+b.hidden('action','revoke')+'<button>Revoke trade access</button></form>'
             else:body+=b.link('/workspace/inbox','Back to my work')
@@ -275,6 +281,9 @@ class FieldDelivery:
         _,row,share,snapshot,manager=self.context(c,data['package_id'])
         self.b.require(manager and row['project_id']==p['id'],'This package is unavailable.',403)
         self.b.require(not share['revoked_at'] and row['expires']>self.b.now().isoformat() and not row['acknowledged_at'],'This package does not need an outstanding-receipt reminder.',409)
+        pending=c.execute("SELECT id FROM bc824_mail WHERE package_id=? AND company_id=? AND state IN ('queued','sending','uncertain') LIMIT 1",(row['id'],user['company_id'])).fetchone()
+        self.b.require(not pending,'An email is already pending or its delivery is unconfirmed. Open Delivery & receipts before preparing another reminder.',409)
+        self.b.require(share['state']=='OPEN','This package is closed. Review its current state before preparing a reminder.',409)
         recipient=self.ns['_bc850_recipient'](c,user,p['id'],row['recipient_id'])
         self.b.require(recipient['email']==snapshot['recipient']['email'],'The recipient changed. Issue a new reviewed package.',409)
         return dict(row=row,share=share,recipient=recipient)
