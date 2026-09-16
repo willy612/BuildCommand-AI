@@ -298,7 +298,7 @@ class DailyReports:
         with self.db() as c:
             user,p=self.actor(c,project_id);s=self.sub(c,user,project_id,sub_id);links=self.linked(c,user,project_id,sub_id)
         base=f'{DIRECTORY}/projects/{project_id}/subs/{sub_id}'
-        body='<div class="hero"><div class="eyebrow">'+esc(p['name'])+' · '+esc(s['trade'])+'</div><h1>'+esc(s['name'])+'</h1><p>Contact information and the job records you have attached to this subcontractor.</p></div><div class="daily-actions">'+self.link(base+'/edit','Edit contact')+self.link(base+'/records','Attach job records')+self.link(f'{DAILY}?project_id={project_id}','Daily reports')+'</div>'
+        body='<div class="hero"><div class="eyebrow">'+esc(p['name'])+' · '+esc(s['trade'])+'</div><h1>'+esc(s['name'])+'</h1><p>Contact information and the job records you have attached to this subcontractor.</p></div><div class="daily-actions">'+self.link(base+'/edit','Edit contact')+self.link(base+'/contacts','All job contacts')+self.link(base+'/records','Attach job records')+self.link(f'{DAILY}?project_id={project_id}','Daily reports')+'</div>'
         body+='<section class="card"><h2>Job contacts</h2><p><strong>'+esc(s['contact_name'] or 'Primary contact not added')+'</strong><br>'+esc(s['email'] or 'Email not added')+'<br>'+esc(s['phone'])+'</p><p><strong>Foreman:</strong> '+esc(s['field_contact'] or 'Not added')+' · '+esc(s['field_phone'])+'</p>'
         if s['notes']:body+='<details><summary>Contact notes</summary><p class="exact">'+esc(s['notes'])+'</p></details>'
         body+='</section><section class="card"><h2>Attached job records</h2><p>These links organize your records internally. Share approved information through Trade sharing when you are ready.</p>'
