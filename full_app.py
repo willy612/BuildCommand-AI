@@ -62310,3 +62310,10 @@ _bc8230_checklists = _bc8230_checklists_install(globals())
 BUILD_COMMAND_RELEASE = "8.23.0"
 BUILD_COMMAND_RELEASE_NAME = "Safety & Inspection Checklists"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.24.0 — One connected field release over the 8.23 baseline.
+from connected_field import install as _bc8240_connected_install
+_bc8240_connected = _bc8240_connected_install(globals())
+BUILD_COMMAND_RELEASE = "8.24.0"
+BUILD_COMMAND_RELEASE_NAME = "Connected Field Release"
+app.version = BUILD_COMMAND_RELEASE
