@@ -1,0 +1,14 @@
+{
+  "app": "BuildCommand AI",
+  "version": "8.25.0",
+  "release": "GC Pilot Readiness & Reliable Delivery",
+  "baseline": "8.24.0",
+  "files": {
+    "full_app.py": "29f484c331ee8ba77674f6d85c2409cdd2d5d31f8e091fb26635ae4974b2be34",
+    "project_setup.py": "6bbf940740fab4d3b4f244be74f79e9cfab506a44c49cd3c764f3edc9568defe",
+    "field_delivery.py": "d21ab09102032fddc96014ddf67a6ac6d407ac3ab6e4b0fe484e2a979149f475",
+    "delivery_worker.py": "8718757e687a7834cbf1466cdcb8cc77e350de9249ed629f64b44689645714c3",
+    "drawing_workspace.py": "fc8c1adc86d3e8dad5c87ab74b51d7abae03009cac2d1f87b3196e057839316b",
+    "pilot_readiness.py": "7413320f7afec1c4d25b33f086e5ac92a86250916ae2c25e949466c8c87ce0a6"
+  }
+}
