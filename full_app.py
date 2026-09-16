@@ -62331,3 +62331,8 @@ _bc8260_blueprint = _bc8260_blueprint_install(globals())
 BUILD_COMMAND_RELEASE = "8.26.0"
 BUILD_COMMAND_RELEASE_NAME = "Large Plan Analysis"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.26.1 - Clear plan-start recovery and existing-review handoff.
+BUILD_COMMAND_RELEASE = "8.26.1"
+BUILD_COMMAND_RELEASE_NAME = "Plan Review Start Recovery"
+app.version = BUILD_COMMAND_RELEASE
