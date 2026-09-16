@@ -41,6 +41,7 @@ class ProjectSetup:
         self.field = ns['app'].state.blueprint_field
         self.db, self.require = self.field.db, self.field.require
         self.routes = []
+        self.pilot_guidance_version = "8.25.0"
 
     def admin(self, user):
         return self.ns['_bc840_tier'](user) in {'owner', 'admin'}
@@ -145,6 +146,9 @@ class ProjectSetup:
         else:
             title, message, action = 'Start running the day', 'Open Command for priorities and questions. Review the plan analysis before issuing a trade scope.', self.open_form(pid, 'command', 'Open Command')
         body = '<div class="hero"><div class="eyebrow">JOB SETUP · '+esc(project.get('number') or '')+'</div><h1>'+esc(project['name'])+'</h1><p>Your saved project records show what is ready. You can use Command at any time, including while you work alone.</p></div>'
+        pilot = getattr(self.ns['app'].state, 'pilot_readiness', None)
+        if pilot:
+            body += pilot.setup_link(project_id)
         body += '<section class="setup-next" aria-labelledby="setup-next-title"><div>NEXT STEP</div><h2 id="setup-next-title">'+title+'</h2><p>'+message+'</p>'+action+'</section>'
         body += '<ol class="setup-steps">'
         def step(title, status, note, action='', state=''):
@@ -199,6 +203,8 @@ class ProjectSetup:
         body += '<section class="card"><h2>Assigned people</h2>'
         for p in data['members']:
             body += '<div class="setup-person"><strong>'+esc(p['display_name'] or p['email'])+'</strong><br>'+esc(p['email'])+' · '+esc(self.ns['_bc840_role_label'](p['role']))+'</div>'
+            if getattr(self.ns['app'].state, 'pilot_readiness', None):
+                body += self.link(base+'/access/'+str(p['id']), 'Explain this person’s access')
         if not data['members']: body += '<p>No people explicitly assigned yet. Company administrators retain their company access.</p>'
         body += '</section><section class="card"><h2>Assign an existing teammate</h2><p>Choose a named person. This adds access to this project only.</p>'
         candidates = [p for p in people if p['id'] not in assigned and (self.ns['_bc840_tier'](p) == 'trade' or (self.admin(user) and p['role'] in {'SUPERINTENDENT', 'PROJECT_MANAGER', 'COMPANY_ADMIN', 'ADMIN'}))]
