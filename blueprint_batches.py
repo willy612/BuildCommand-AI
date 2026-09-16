@@ -17,8 +17,8 @@ from blueprint_field import esc
 from command_center import command_json
 from estimator_schema import install as install_estimator, sync as sync_estimator
 
-VERSION='8.26.0'
-RELEASE='Large Plan Analysis'
+VERSION='8.26.1'
+RELEASE='Plan Review Start Recovery'
 ROOT='/workspace/blueprint-analysis'
 MAX_SET_BYTES=500*1024*1024
 MAX_PAGE_BYTES=24*1024*1024
@@ -26,6 +26,13 @@ LEASE_SECONDS=600
 MAX_PAGES=5000
 COORDINATION_CHARS=42000
 log=logging.getLogger('buildcommand.blueprint_batches')
+
+
+class PlanFileUnavailable(Exception):
+    def __init__(self,source):
+        self.source=dict(source)
+        self.message='The saved PDF file is unavailable. Upload it again before analyzing it.'
+        super().__init__(self.message)
 
 
 def obj(properties):
@@ -172,15 +179,55 @@ class BlueprintBatches:
         b.route('/blueprint-brain/analyze','POST',self.legacy_start);self.routes.append(b.routes[-1])
         ns['_bc840_replace']('/health/large-plan-analysis-8-26-0','GET',self.health)
         self.runtime.PUBLIC_PATHS.add('/health/large-plan-analysis-8-26-0')
+        ns['_bc840_replace']('/health/large-plan-analysis-8-26-1','GET',self.health)
+        self.runtime.PUBLIC_PATHS.add('/health/large-plan-analysis-8-26-1')
 
     def now(self):return self.b.now().isoformat()
     def page(self,title,body):return self.b.page(title,CSS+body)
     def url(self,jid):return ROOT+'/'+str(jid)
 
     def path(self,source):
-        root=Path(self.runtime.UPLOAD_DIR).resolve();path=(root/source['stored_name']).resolve()
-        self.b.require(path.is_relative_to(root) and path.is_file(),'A selected PDF is no longer available. Upload it again.',409)
-        return path
+        try:
+            root=Path(self.runtime.UPLOAD_DIR).resolve();path=(root/source['stored_name']).resolve()
+            if path.is_relative_to(root) and path.is_file():return path
+        except (OSError,ValueError,KeyError,TypeError):pass
+        raise PlanFileUnavailable(source)
+
+    def source_size(self,source):
+        try:return self.path(source).stat().st_size
+        except OSError:raise PlanFileUnavailable(source) from None
+
+    def active_review(self,c,cid,pid,exclude=0):
+        row=c.execute("SELECT * FROM bc824_plan_jobs WHERE company_id=? AND project_id=? AND id<>? AND state='running' AND lease_until>? ORDER BY id DESC LIMIT 1",(cid,pid,exclude,time.time())).fetchone()
+        return dict(row) if row else None
+
+    def unfinished_review(self,c,cid,pid,sources,focus,model):
+        # Attachment identities, not just display names, bind a review to its inputs.
+        def inputs(items):
+            return sorted((s['id'],s['stored_name'],s['original_name'],s['bytes']) for s in items)
+        rows=c.execute("SELECT * FROM bc824_plan_jobs WHERE company_id=? AND project_id=? AND state IN ('running','paused','ready') AND focus=? AND model=? ORDER BY id DESC",(cid,pid,focus,model)).fetchall()
+        expected=inputs(sources)
+        for row in rows:
+            if inputs(json.loads(row['source_json']))==expected:return dict(row)
+        return None
+
+    def open_review(self,review,reason):
+        log.info('PLAN_START_REUSED reason=%s project_id=%s job_id=%s',reason,review['project_id'],review['id'])
+        return RedirectResponse(self.url(review['id'])+'?notice='+reason,303)
+
+    def unavailable_page(self,project,sources,focus='',job_id=None):
+        # Called only after project authorization and selected attachment ownership checks.
+        b=self.b
+        for source in sources:
+            log.warning('PLAN_START_BLOCKED reason=source_unavailable project_id=%s attachment_id=%s',project['id'],source.get('id'))
+        body='<section class="card"><h1>Upload the PDF again</h1><p>'+esc(project['name'])+'</p><p>The document entry is saved, but the app cannot find its PDF file. No new analysis was started.</p><ul>'
+        body+=''.join('<li>'+esc(s.get('original_name') or 'Selected PDF')+'</li>' for s in sources)
+        body+='</ul><p>Upload the original PDF, then select the newly uploaded copy in Blueprint Brain.</p>'+b.docs.hub.open_form(project['id'],'/documents','Upload the PDF again')
+        if focus:body+='<p>Your analysis instructions:</p><pre class="field-exact">'+esc(focus)+'</pre>'
+        if job_id:body+=b.link(self.url(job_id),'Back to saved review')
+        body+=b.link(ROOT+'?project_id='+str(project['id']),'Back to Blueprint Brain')+'</section>'
+        response=self.page('PDF needs uploading',body);response.status_code=409
+        return response
 
     def checked_sources(self,c,user,pid,sources,hashes=False):
         for source in sources:
@@ -188,7 +235,8 @@ class BlueprintBatches:
                 (source['id'],user['company_id'],pid)).fetchone()
             self.b.require(row is not None and row['stored_name']==source['stored_name'] and row['original_name']==source['original_name'],
                            'A source drawing changed. Start a new analysis from the current PDF.',409)
-            path=self.path(source)
+            try:path=self.path(source)
+            except PlanFileUnavailable as exc:self.b.require(False,exc.message,409)
             self.b.require(path.stat().st_size==source['bytes'],'A source PDF changed. Start a new analysis.',409)
             if hashes and source.get('sha256'):
                 self.b.require(file_hash(path)==source['sha256'],'A source PDF changed. Start a new analysis.',409)
@@ -202,16 +250,29 @@ class BlueprintBatches:
             docs=[dict(r) for r in c.execute('SELECT * FROM attachments WHERE company_id=? AND project_id=? ORDER BY id DESC',(cid,pid)).fetchall()]
             jobs=[dict(r) for r in c.execute('SELECT * FROM bc824_plan_jobs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 20',(cid,pid)).fetchall()]
             runs=[dict(r) for r in c.execute('SELECT * FROM blueprint_runs WHERE company_id=? AND project_id=? ORDER BY id DESC LIMIT 15',(cid,pid)).fetchall()]
+            active=self.active_review(c,cid,pid)
         body+='<section class="card"><h2>Understand the whole plan set</h2><p>Select your PDFs. The Brain checks each page, then compares findings across sheets for trade scope and RFI review.</p><p><b>Up to 500 MB per analysis.</b> Progress is saved after each page. You can leave this screen while it works.</p>'+b.docs.hub.open_form(pid,'/documents','Upload plans')+'</section>'
+        if active:
+            body+='<section class="card plan-good"><h2>A plan review is already running</h2><p>Open its progress before starting another review on this project.</p>'+b.link(self.url(active['id']),'Open current review')+'</section>'
+        else:
+            interrupted=next((j for j in jobs if j['state']=='running' and j['lease_until']<=time.time()),None)
+            if interrupted:body+='<section class="card plan-alert"><h2>A review needs your attention</h2><p>It has not checked in recently. Open the saved review to see its completed pages and resume.</p>'+b.link(self.url(interrupted['id']),'Open saved review')+'</section>'
         pdfs=[d for d in docs if Path(d['original_name'] or '').suffix.lower()=='.pdf']
+        available=0
         body+='<form class="card field-form plan-form" method="post" action="'+ROOT+'/projects/'+str(pid)+'/start">'+b.hidden('request_key',secrets.token_urlsafe(24))+'<h2>1. Choose the plan set</h2><div class="plan-list">'
         for d in pdfs:
-            body+='<label><input type="checkbox" name="attachment_ids" value="'+str(d['id'])+'"><span>'+esc(d['original_name'])+'<br><small>'+f'{int(d.get("size_bytes") or 0)/1024/1024:.1f} MB'+'</small></span></label>'
+            try:
+                size=self.source_size(d);disabled='';note=f'{size/1024/1024:.1f} MB';available+=1
+            except PlanFileUnavailable:
+                disabled=' disabled';note='File unavailable - upload this PDF again'
+            body+='<label><input type="checkbox" name="attachment_ids" value="'+str(d['id'])+'"'+disabled+'><span>'+esc(d['original_name'])+'<br><small>'+esc(note)+'</small></span></label>'
         if not pdfs:body+='<p>Upload a PDF to get started.</p>'
-        body+='</div>'+b.area('focus','2. Anything to focus on? (optional)','',2000)+'<p>Uses your configured AI account. Large sets require many requests and take longer. Results are drafts for construction review.</p><button'+(' disabled' if not pdfs else '')+'>Start plan review</button></form>'
+        body+='</div>'+b.area('focus','2. Anything to focus on? (optional)','',2000)+'<p>Uses your configured AI account. Large sets require many requests and take longer. Results are drafts for construction review.</p><details><summary>Start over with the same files</summary><label><input type="checkbox" name="fresh_review" value="yes"> Start a fresh analysis instead of opening my unfinished review. This makes new billable AI requests.</label></details><button'+(' disabled' if not available else '')+'>Start plan review</button></form>'
         if jobs:
             body+='<section class="card"><h2>Plan reviews</h2>'
-            for j in jobs:body+='<div class="plan-job">'+b.link(self.url(j['id']),'Review '+str(j['id']))+' <span class="plan-state">'+esc(j['state'])+'</span><p>'+esc(', '.join(s['original_name'] for s in json.loads(j['source_json'])))+'</p></div>'
+            for j in jobs:
+                state='Needs attention - open to resume' if j['state']=='running' and j['lease_until']<=time.time() else j['state']
+                body+='<div class="plan-job">'+b.link(self.url(j['id']),'Review '+str(j['id']))+' <span class="plan-state">'+esc(state)+'</span><p>'+esc(', '.join(s['original_name'] for s in json.loads(j['source_json'])))+'</p></div>'
             body+='</section>'
         if runs:
             body+='<details class="card"><summary>Saved analysis and estimator recovery</summary><p>If the previous analysis stopped during estimator sync, recover its saved scopes here without another AI request.</p>'
@@ -235,27 +296,37 @@ class BlueprintBatches:
             user,p=self.b.actor(c,pid)
             docs=self.runtime._v38_selected_docs(pid,attachment_ids)
         if docs and all(Path(d['original_name']).suffix.lower()=='.pdf' for d in docs):
-            return self.create(request,pid,attachment_ids,focus,secrets.token_urlsafe(24))
+            return self.create(request,pid,attachment_ids,focus,secrets.token_urlsafe(24),'')
         return self.ns['bc1810_blueprint_analyze'](attachment_ids,focus)
 
-    def create(self,request:Request,project_id:int,attachment_ids:list[int]|None=Form(None),focus:str=Form(''),request_key:str=Form(...)):
+    def create(self,request:Request,project_id:int,attachment_ids:list[int]|None=Form(None),focus:str=Form(''),request_key:str=Form(...),fresh_review:str=Form('')):
         b=self.b;b.origin(request)
         focus=b.text(focus,2000,'focus');request_key=b.text(request_key,100,'request key',True)
         ids=list(dict.fromkeys(attachment_ids or []));b.require(bool(ids) and len(ids)<=100,'Choose 1 to 100 PDF files, up to 500 MB in total.',400)
         with b.db(True) as c:
             user,p=b.actor(c,project_id,True)
-            old=c.execute('SELECT id FROM bc824_plan_jobs WHERE company_id=? AND actor_id=? AND request_key=?',(user['company_id'],user['id'],request_key)).fetchone()
-            if old:return RedirectResponse(self.url(old['id']),303)
+            old=c.execute('SELECT id,project_id FROM bc824_plan_jobs WHERE company_id=? AND actor_id=? AND request_key=?',(user['company_id'],user['id'],request_key)).fetchone()
+            if old:
+                b.require(old['project_id']==project_id,'Reopen this project before submitting its form.',409)
+                return RedirectResponse(self.url(old['id']),303)
             sources=[]
             for aid in ids:
                 row=c.execute('SELECT * FROM attachments WHERE id=? AND company_id=? AND project_id=?',(aid,user['company_id'],project_id)).fetchone()
                 b.require(row is not None,'A selected document is unavailable in this project.',404)
                 d=dict(row);b.require(Path(d['original_name']).suffix.lower()=='.pdf','Choose PDFs here. Text and spreadsheet tools remain under Other source formats.',400)
                 sources.append({k:d[k] for k in ('id','stored_name','original_name')})
-                sources[-1]['bytes']=self.path(sources[-1]).stat().st_size
+            active=self.active_review(c,user['company_id'],project_id)
+            if active:return self.open_review(active,'active_review')
+            missing=[]
+            for source in sources:
+                try:source['bytes']=self.source_size(source)
+                except PlanFileUnavailable:missing.append(source)
+            if missing:return self.unavailable_page(p,missing,focus)
             b.require(0<sum(s['bytes'] for s in sources)<=MAX_SET_BYTES,'Choose a plan set of up to 500 MB in total.',400)
-            b.require(not c.execute("SELECT id FROM bc824_plan_jobs WHERE company_id=? AND project_id=? AND state='running' AND lease_until>?",(user['company_id'],project_id,time.time())).fetchone(),'A plan review is already running on this project. Open it to check progress.',409)
-            jid=b.insert(c,'bc824_plan_jobs',dict(company_id=user['company_id'],project_id=project_id,actor_id=user['id'],request_key=request_key,source_json=command_json(sources),focus=focus,model=os.environ.get('OPENAI_MODEL','gpt-5.6'),state='paused',phase='Preparing pages',lease_token='',lease_until=0,message='Ready to start.',run_id=None,created=self.now(),updated=self.now()))
+            model=os.environ.get('OPENAI_MODEL','gpt-5.6')
+            existing=self.unfinished_review(c,user['company_id'],project_id,sources,focus,model)
+            if existing and fresh_review!='yes':return self.open_review(existing,'unfinished_review')
+            jid=b.insert(c,'bc824_plan_jobs',dict(company_id=user['company_id'],project_id=project_id,actor_id=user['id'],request_key=request_key,source_json=command_json(sources),focus=focus,model=model,state='paused',phase='Preparing pages',lease_token='',lease_until=0,message='Ready to start.',run_id=None,created=self.now(),updated=self.now()))
         self.spawn(jid)
         return RedirectResponse(self.url(jid),303)
 
@@ -268,6 +339,10 @@ class BlueprintBatches:
         with b.db(True) as c:
             user,p,j=b.scope(c,'bc824_plan_jobs',jid,True)
             if j['state'] in ('ready','saved') or (j['state']=='running' and j['lease_until']>time.time()):return None
+            active=self.active_review(c,user['company_id'],p['id'],jid)
+            if active:
+                c.execute("UPDATE bc824_plan_jobs SET state='paused',lease_token='',lease_until=0,message=?,updated=? WHERE id=?",('Another review is running on this project. Open review '+str(active['id'])+' before resuming this one.',self.now(),jid))
+                return None
             self.checked_sources(c,user,p['id'],json.loads(j['source_json']))
             token=secrets.token_hex(24)
             c.execute("UPDATE bc824_plan_jobs SET state='running',lease_token=?,lease_until=?,message='',updated=? WHERE id=?",(token,time.time()+LEASE_SECONDS,self.now(),jid))
@@ -282,7 +357,16 @@ class BlueprintBatches:
         return user,p,j
 
     def work(self,jid):
-        if not self.slots.acquire(False):return # Saved as paused: no unbounded background queue.
+        if not self.slots.acquire(False):
+            # No new worker or paid retry is queued implicitly.
+            try:
+                with self.b.db(True) as c:
+                    user,p,j=self.b.scope(c,'bc824_plan_jobs',jid,True)
+                    if j['state']=='paused':
+                        c.execute('UPDATE bc824_plan_jobs SET message=?,updated=? WHERE id=?',('The analyzer is working on another review. Your review is saved. Try Resume when that review finishes.',self.now(),jid))
+            except Exception:
+                log.warning('PLAN_REVIEW_WAITING job_id=%s reason=worker_busy',jid)
+            return
         token=None
         try:
             token=self.claim(jid)
@@ -409,8 +493,16 @@ class BlueprintBatches:
         b=self.b;b.origin(request)
         with b.db(True) as c:
             user,p,j=b.scope(c,'bc824_plan_jobs',job_id,True)
-            b.require(j['state'] not in ('saved','ready'),'This review is already finished.',409)
-            b.require(j['state']!='running' or j['lease_until']<=time.time(),'A page is still processing. Wait for its saved checkpoint.',409)
+            if j['state'] in ('saved','ready'):return self.open_review(j,'finished_review')
+            if j['state']=='running' and j['lease_until']>time.time():return self.open_review(j,'active_review')
+            active=self.active_review(c,user['company_id'],p['id'],job_id)
+            if active:return self.open_review(active,'active_review')
+            missing=[]
+            for source in json.loads(j['source_json']):
+                try:self.source_size(source)
+                except PlanFileUnavailable:missing.append(source)
+            if missing:return self.unavailable_page(p,missing,j['focus'],job_id)
+            self.checked_sources(c,user,p['id'],json.loads(j['source_json']))
             if retry_attention=='yes':c.execute("UPDATE bc824_plan_units SET state='pending' WHERE job_id=? AND state IN ('attention','failed')",(job_id,))
             else:c.execute("UPDATE bc824_plan_units SET state='pending' WHERE job_id=? AND state='failed'",(job_id,))
         self.spawn(job_id)
@@ -427,7 +519,7 @@ class BlueprintBatches:
 
     def all_units(self,c,jid):return [dict(r) for r in c.execute('SELECT * FROM bc824_plan_units WHERE job_id=? ORDER BY id',(jid,)).fetchall()]
 
-    def job(self,job_id:int,page:int=1,view:str='all'):
+    def job(self,job_id:int,page:int=1,view:str='all',notice:str=''):
         b=self.b
         b.require(page>=1 and view in ('all','attention','coordination'),'Choose a valid coverage page.',400)
         with b.db() as c:
@@ -440,18 +532,31 @@ class BlueprintBatches:
             checked=sum(r['n'] for r in counts if r['kind']=='coordination' and r['state']=='done')
             extra={'all':'','attention':" AND state IN ('attention','failed')",'coordination':" AND kind='coordination'"}[view]
             units=[dict(r) for r in c.execute('SELECT * FROM bc824_plan_units WHERE job_id=?'+extra+' ORDER BY id LIMIT 21 OFFSET ?',(job_id,(page-1)*20)).fetchall()]
+            active=self.active_review(c,user['company_id'],p['id'],job_id)
         more=len(units)>20;units=units[:20]
         running=j['state']=='running' and j['lease_until']>time.time()
-        body='<div class="hero"><h1>Plan review</h1><p>'+esc(p['name'])+'</p></div><section class="card"><p class="plan-metric">'+str(done)+' / '+str(page_count)+' pages checked</p><progress class="plan-progress" value="'+str(done)+'" max="'+str(max(1,page_count))+'"></progress><p>'+str(attention)+' pages need attention. '+str(checked)+' / '+str(coord_count)+' cross-sheet reviews saved.</p><p class="plan-state"><b>'+esc(j['state'] if running or j['state']!='running' else 'Interrupted - ready to resume')+'</b> - '+esc(j['phase'])+'</p>'
+        sources=json.loads(j['source_json']);missing=[]
+        for source in sources:
+            try:self.source_size(source)
+            except PlanFileUnavailable:missing.append(source)
+        body='<div class="hero"><h1>Plan review</h1><p>'+esc(p['name'])+'</p></div>'
+        notices={'active_review':'Opened the existing active review. No second analysis was started. Check these files and the current progress below.',
+                 'unfinished_review':'An unfinished review already exists for these files and instructions. Your saved progress is below. Resume it when you are ready.',
+                 'finished_review':'This review has already finished. Open its saved result or save the draft scopes below.'}
+        if notice in notices:body+='<section class="card plan-good" role="status">'+esc(notices[notice])+'</section>'
+        body+='<section class="card"><p>'+esc(', '.join(s['original_name'] for s in sources))+'</p><p class="plan-metric">'+str(done)+' / '+str(page_count)+' pages checked</p><progress class="plan-progress" value="'+str(done)+'" max="'+str(max(1,page_count))+'"></progress><p>'+str(attention)+' pages need attention. '+str(checked)+' / '+str(coord_count)+' cross-sheet reviews saved.</p><p class="plan-state"><b>'+esc(j['state'] if running or j['state']!='running' else 'Needs attention - open to resume')+'</b> - '+esc(j['phase'])+'</p>'
         if j['message']:body+='<p class="plan-alert">'+esc(j['message'])+'</p>'
+        if missing:
+            body+='<div class="plan-alert"><h2>PDF file unavailable</h2><p>'+esc(', '.join(s['original_name'] for s in missing))+'</p><p>Your saved page results are still recorded. Upload the original PDF again and select the newly uploaded copy for a new review.</p>'+b.docs.hub.open_form(p['id'],'/documents','Upload the PDF again')+'</div>'
+        if active and not running:body+='<p>'+b.link(self.url(active['id']),'Open the review currently running on this project')+'</p>'
         body+='<p>Every page receives an AI review. Cross-sheet checks use extracted findings, grouped by trade and sheet references; they are not an exhaustive comparison of every detail. Review the findings before issuing work.</p>'
         if running:
             body+='<form method="post" action="'+self.url(job_id)+'/pause"><button>Pause review</button></form><p>Progress refreshes automatically. You can leave this page.</p><script>setTimeout(function(){if(!document.querySelector("details[open]"))location.reload();},15000);</script>'
-        elif j['state'] not in ('saved','ready'):
+        elif j['state'] not in ('saved','ready') and not missing:
             body+='<form method="post" action="'+self.url(job_id)+'/resume"><p>Resume keeps saved pages. Unfinished provider requests may incur a new charge.</p>'
             if attention:body+='<label><input type="checkbox" name="retry_attention" value="yes"> Retry pages needing attention, too</label>'
             body+='<button>Resume plan review</button></form>'
-        if j['state']=='ready':
+        if j['state']=='ready' and not missing:
             body+='<form method="post" action="'+self.url(job_id)+'/save"><label><input type="checkbox" name="confirmed" value="yes" required> I understand these are AI draft scopes requiring field review.</label><button>Save trade scopes for review</button></form>'
         if j['run_id']:body+='<div class="plan-good">'+b.link('/blueprint-brain/run/'+str(j['run_id']),'Open saved trade scopes')+b.link('/workspace/scopes?project_id='+str(p['id']),'Review scopes for sharing')+'</div>'
         body+='</section><section class="card"><h2>Page coverage and findings</h2><div class="field-actions">'+b.link(self.url(job_id),'All steps')+b.link(self.url(job_id)+'?view=attention','Needs attention')+b.link(self.url(job_id)+'?view=coordination','Cross-sheet checks')+'</div>'
@@ -546,5 +651,8 @@ class BlueprintBatches:
             per_page_checkpoints=True,source_fingerprints=True,completed_page_gate=True,
             bounded_pdf_requests=MAX_PAGE_BYTES<50*1024*1024,review_before_scope_save=True,
             original_drawings_preserved=True,form_origin_guard_preserved=callable(self.ns.get('_bc861_same_origin')))
+        checks.update(existing_review_handoff=callable(getattr(self,'open_review',None)),
+                      unavailable_pdf_recovery=callable(getattr(self,'unavailable_page',None)),
+                      unfinished_review_reuse=callable(getattr(self,'unfinished_review',None)))
         return dict(app='BuildCommand AI',version=VERSION,release=RELEASE,status='ok' if all(checks.values()) else 'degraded',checks=checks,passed=sum(checks.values()),total=len(checks),data_reset=False,
             scope='Installation and schema checks only. Verify a real large PDF, provider access, page readability, resume, PostgreSQL and server memory on staging. No AI request or sharing occurs in this check.')
