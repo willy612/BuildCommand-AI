@@ -62317,3 +62317,10 @@ _bc8240_connected = _bc8240_connected_install(globals())
 BUILD_COMMAND_RELEASE = "8.24.0"
 BUILD_COMMAND_RELEASE_NAME = "Connected Field Release"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.25.0 - Pilot guidance and reviewed notification recovery.
+from pilot_readiness import install as _bc8250_pilot_install
+_bc8250_pilot = _bc8250_pilot_install(globals())
+BUILD_COMMAND_RELEASE = "8.25.0"
+BUILD_COMMAND_RELEASE_NAME = "GC Pilot Readiness & Reliable Delivery"
+app.version = BUILD_COMMAND_RELEASE
