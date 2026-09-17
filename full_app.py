@@ -62345,3 +62345,8 @@ _bc8262_upload_install(globals())
 BUILD_COMMAND_RELEASE = "8.26.2"
 BUILD_COMMAND_RELEASE_NAME = "Drag & Drop Uploads"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.26.3 - Full canvas with compact drawing controls.
+BUILD_COMMAND_RELEASE = "8.26.3"
+BUILD_COMMAND_RELEASE_NAME = "Full Canvas Drawings"
+app.version = BUILD_COMMAND_RELEASE
