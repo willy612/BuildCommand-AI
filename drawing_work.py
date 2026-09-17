@@ -362,8 +362,8 @@ class DrawingWork:
             else:attrs+=' class="dw-fullpage"'
             return '<body'+attrs+' data-drawing-layout="full-page-8.17.1">'
         html=re.sub(r'<body([^>]*)>',body,html,count=1)
-        html=html.replace('</head>',FULL_PAGE_STYLE+'</head>',1)
-        html=html.replace('</body>','<script>'+FULL_PAGE_JS+'</script></body>',1)
+        html=html.replace('</head>',FULL_PAGE_STYLE+CANVAS_STYLE+'</head>',1)
+        html=html.replace('</body>','<script>'+FULL_PAGE_JS+'</script><script>'+CANVAS_JS+'</script></body>',1)
         result=HTMLResponse(html,status_code=response.status_code,headers={'Cache-Control':'private, no-store','Referrer-Policy':'same-origin'})
         scale=getattr(self.ns['app'].state,'drawing_scale',None)
         return scale.decorate(result,sheet_id) if scale and sheet_id else result
@@ -427,6 +427,21 @@ class DrawingWork:
         self.ns['app'].add_api_route(health,self.health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(health)
         health='/health/drawings-full-page-8-17-1'
         self.ns['app'].add_api_route(health,self.full_page_health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(health)
+        health='/health/drawing-canvas-8-26-3'
+        self.ns['app'].add_api_route(health,self.canvas_health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(health)
+
+    def canvas_health(self):
+        import json
+        result=json.loads(self.full_page_health().body)
+        result['checks'].update(compact_menu_installed='dfp-menu' in CANVAS_JS,
+            viewport_canvas_configured='body.dw-fullpage.dfp-compact #bcStageWrap' in CANVAS_STYLE,
+            small_corner_zoom_configured='min-height:34px' in CANVAS_STYLE,
+            existing_controls_moved='menuPanel.append(bar)' in CANVAS_JS)
+        ok=all(result['checks'].values())
+        result.update(version='8.26.3',release='Full Canvas Drawings',status='ok' if ok else 'degraded',
+            passed=sum(result['checks'].values()),total=len(result['checks']),
+            scope='Installation and existing schema checks only. Verify a real sheet, menu, pan/zoom, saved markups, scale dialogs, work cards and project access in the browser. No drawing or permission changes.')
+        return JSONResponse(result,status_code=200 if ok else 503)
 
 
 STYLE='''<style>
@@ -516,4 +531,93 @@ function geometry(){body.style.setProperty('--dfp-top',(header?.getBoundingClien
 if(window.ResizeObserver){const observer=new ResizeObserver(geometry);observer.observe(bar);if(header)observer.observe(header);}window.addEventListener('resize',geometry);window.visualViewport?.addEventListener('resize',geometry);geometry();
 let fitted=false;function firstFit(){if(fitted||byId('bcStage')?.dataset.drawReady!=='yes')return;fitted=true;requestAnimationFrame(()=>byId('bcFit')?.click());}window.addEventListener('bc-drawing-rendered',firstFit);firstFit();
 document.addEventListener('fullscreenchange',()=>{fullscreen.textContent=document.fullscreenElement?'Exit full screen':'Full screen';fullscreen.setAttribute('aria-pressed',String(!!document.fullscreenElement));geometry();requestAnimationFrame(()=>byId('bcFit')?.click());});
+})();'''
+
+# 8.26.3 presentation layer. Move real controls rather than cloning handlers.
+CANVAS_STYLE='''<style data-drawing-canvas="8.26.3">
+body.dw-fullpage.dfp-compact{--dfp-controls:60px;--dfp-top:0px}
+body.dw-fullpage.dfp-compact .dr-view-header{position:fixed!important;top:10px!important;left:110px!important;right:12px!important;height:38px!important;min-height:0!important;padding:0!important;border:0!important;z-index:25;background:transparent!important;pointer-events:none;display:flex!important;align-items:center;gap:0!important;box-shadow:none!important}
+body.dw-fullpage.dfp-compact .dr-view-header>div{box-sizing:border-box;flex:0 1 auto;max-width:100%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:9px 12px;background:#112b40e8;border-radius:8px;color:#fff;font:14px/20px Arial,sans-serif;pointer-events:auto}
+body.dw-fullpage.dfp-compact .dr-view-header b{font-size:14px!important;color:#f4bf55}
+body.dw-fullpage.dfp-compact .dr-view-header small{display:none!important}
+body.dw-fullpage.dfp-compact .bc8102-content,body.dw-fullpage.dfp-compact .bc840-main{height:100%;min-height:0!important;flex:1}
+body.dw-fullpage.dfp-compact #bcStageWrap{display:flex!important;align-items:flex-start;height:0!important;min-height:0!important;flex:1;padding:12px!important}
+body.dw-fullpage.dfp-compact #bcStage{flex-shrink:0;margin:auto!important}
+body.dw-fullpage.dfp-compact .df-zoom{position:fixed!important;left:max(10px,env(safe-area-inset-left))!important;bottom:max(10px,env(safe-area-inset-bottom))!important;border-radius:7px;z-index:24;box-shadow:0 2px 10px #10273c30}
+body.dw-fullpage.dfp-compact .df-zoom button{box-sizing:border-box;min-height:34px!important;height:34px!important;min-width:34px!important;padding:4px 10px!important;font:600 13px/20px Arial,sans-serif!important}
+body.dw-fullpage.dfp-compact .df-zoom button:last-child{border-right:0}
+#dfp-menu{position:fixed;top:max(10px,env(safe-area-inset-top));left:max(10px,env(safe-area-inset-left));z-index:70;margin:0;color:#16354e;font:14px/1.45 Arial,sans-serif}
+#dfp-menu>summary{list-style:none;width:max-content;display:flex;align-items:center;gap:7px;box-sizing:border-box;height:38px;padding:8px 11px;border:1px solid #b9c9d7;border-radius:8px;background:#fff;color:#153650;font-weight:700;cursor:pointer;box-shadow:0 2px 10px #10273c25}
+#dfp-menu>summary::-webkit-details-marker{display:none}#dfp-menu>summary svg{width:18px;height:18px;flex-shrink:0}#dfp-menu>summary:focus-visible{outline:3px solid #e6ad3d;outline-offset:2px}
+#dfp-menu[open]>summary{background:#183e5c;color:#fff;border-color:#183e5c}
+#dfp-menu-panel{box-sizing:border-box;width:min(360px,calc(100vw - 20px));max-height:calc(100dvh - 76px);overflow:auto;overscroll-behavior:contain;margin-top:8px;padding:12px;background:#fff;border:1px solid #bfcddb;border-radius:10px;box-shadow:0 10px 32px #12283d45}
+body.dw-fullpage.dfp-compact #dfp-menu nav.df-actions{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));position:static!important;gap:7px!important;padding:0!important;margin:0!important;border:0!important;background:transparent;align-items:stretch}
+body.dw-fullpage.dfp-compact #dfp-menu .df-actions>button,body.dw-fullpage.dfp-compact #dfp-menu .df-actions>a{box-sizing:border-box;display:flex!important;align-items:center;justify-content:flex-start;min-height:42px;width:100%;height:auto;padding:9px 10px!important;border-radius:7px;text-align:left;white-space:normal!important;font:600 13px/1.35 Arial,sans-serif!important;overflow-wrap:anywhere}
+#dfp-menu .df-actions>label,#dfp-menu .df-actions>select,#dfp-menu .df-actions>.dr-view-links,#dfp-menu .dfp-menu-status{grid-column:1/-1}
+#dfp-menu .df-actions>label{font-weight:700;margin:8px 0 0}#dfp-menu select{box-sizing:border-box;width:100%;min-width:0;font:14px Arial,sans-serif;padding:10px;border:1px solid #bcccdc;border-radius:7px;background:white;color:#17354c}
+#dfp-menu .dr-view-links{display:flex;flex-direction:column;align-items:stretch!important;justify-content:flex-start!important;gap:7px;margin:6px 0;font-size:13px}#dfp-menu .dr-view-links a{margin:0!important;text-align:left;padding:9px 10px;border:1px solid #bfccd7;border-radius:7px}#dfp-menu .dr-view-links span{color:#546a7d}
+#dfp-menu .dfp-menu-status{margin-top:10px;padding-top:10px;border-top:1px solid #dbe4ed;color:#405b73}#dfp-menu .dfp-menu-status>summary{cursor:pointer;font-weight:600;padding:4px 0}
+body.dw-fullpage.dfp-compact #dfp-menu #drawing-load-state,body.dw-fullpage.dfp-compact #dfp-menu #bcToolStatus,body.dw-fullpage.dfp-compact #dfp-menu #bcMeasureStatus{display:block!important;background:white;font:12px/1.5 Arial,sans-serif;padding:6px 0!important;color:#425b72}
+body.dw-fullpage.dfp-compact .df-tools{position:fixed!important;top:58px!important;left:10px!important;right:auto!important;box-sizing:border-box;width:min(390px,calc(100vw - 20px));max-height:calc(100dvh - 80px);overflow:visible;padding:8px!important;border-radius:9px!important;box-shadow:0 5px 20px #10273c35;z-index:40}
+body.dw-fullpage.dfp-compact .bc81-menu{position:fixed!important;top:124px!important;left:10px!important;right:auto!important;width:min(390px,calc(100vw - 20px))!important;max-height:calc(100dvh - 136px)!important;overflow:auto!important}
+body.dw-fullpage.dfp-compact #dfp-close-tools{box-sizing:border-box;background:#fff;color:#193d58;border:1px solid #bcccd8;border-radius:6px;min-height:40px;padding:8px 10px;font:600 13px Arial,sans-serif;cursor:pointer;margin-left:auto}
+body.dw-fullpage.dfp-compact .dr-sheet-rail,body.dw-fullpage.dfp-compact.dw-open #dw-panel{top:60px!important;bottom:56px!important}
+body.dw-fullpage.dfp-compact .dr-old{position:fixed;top:58px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100vw - 24px);box-sizing:border-box;z-index:26;border-radius:6px;box-shadow:0 2px 10px #10273c30}
+body.dw-fullpage.dfp-compact .dr-read-view{height:100%;margin:0!important;padding:0!important}
+#dfp-notice{position:fixed;right:12px;bottom:12px;z-index:45;max-width:min(450px,calc(100vw - 144px));box-sizing:border-box;display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border:1px solid #bed0df;border-radius:8px;background:#fff;color:#213b50;font:13px/1.45 Arial,sans-serif;box-shadow:0 3px 15px #10273c30}#dfp-notice[hidden]{display:none!important}#dfp-notice button{min-height:28px;padding:2px 6px;border:0;background:white;color:#23455f;cursor:pointer;font:600 12px Arial,sans-serif}
+@media(pointer:coarse){body.dw-fullpage.dfp-compact .df-zoom button{min-height:40px!important;height:40px!important;min-width:40px!important}#dfp-menu>summary{height:42px}}
+@media(max-width:600px){body.dw-fullpage.dfp-compact .dr-view-header{left:108px!important;right:10px!important}.dr-view-header>div{font-size:12px!important}body.dw-fullpage.dfp-compact #bcStageWrap{padding:12px!important}#dfp-notice{bottom:60px;max-width:calc(100vw - 24px)}}
+</style>'''
+
+CANVAS_JS=r'''(()=>{
+const byId=id=>document.getElementById(id),body=document.body,bar=document.querySelector('nav.df-actions'),header=document.querySelector('.dr-view-header');
+if(!bar||byId('dfp-menu'))return;
+const menu=document.createElement('details');menu.id='dfp-menu';menu.setAttribute('data-drawing-canvas','8.26.3');
+const summary=document.createElement('summary');summary.id='dfp-menu-button';summary.setAttribute('aria-controls','dfp-menu-panel');summary.setAttribute('aria-expanded','false');summary.setAttribute('aria-label','Drawing menu');
+summary.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span>Menu</span>';
+const menuPanel=document.createElement('div');menuPanel.id='dfp-menu-panel';menu.append(summary,menuPanel);body.append(menu);
+const more=byId('dfp-more');if(more){const extras=more.querySelector(':scope>div');if(extras)for(const item of [...extras.children])bar.append(item);more.remove();}
+// Preserve nodes, IDs, form ownership, event listeners and server permissions.
+for(const link of [...(header?.querySelectorAll(':scope>a')||[])])bar.append(link);
+const filter=byId('field-pin-filter'),filterLabel=bar.querySelector('label[for="field-pin-filter"]');
+if(filterLabel)bar.append(filterLabel);if(filter)bar.append(filter);
+const status=document.createElement('details');status.className='dfp-menu-status';const statusTitle=document.createElement('summary');statusTitle.textContent='Drawing status';status.append(statusTitle);
+for(const id of ['drawing-load-state','bcToolStatus','bcMeasureStatus']){const item=byId(id);if(item)status.append(item);}
+const readView=document.querySelector('.dr-read-view');if(readView){for(const item of [...readView.children])if(item.tagName==='P'||item.tagName==='A')status.append(item);}
+menuPanel.append(bar);menuPanel.append(status);
+body.classList.add('dfp-compact');body.setAttribute('data-drawing-canvas','8.26.3');
+const title=header?.querySelector(':scope>div');if(title)title.title=title.textContent.trim();
+const focusMenu=()=>summary.focus({preventScroll:true});
+const closeMenu=(focus=false)=>{menu.open=false;summary.setAttribute('aria-expanded','false');if(focus)focusMenu();};
+menu.addEventListener('toggle',()=>summary.setAttribute('aria-expanded',String(menu.open)));
+menu.addEventListener('click',event=>{
+ const action=event.target.closest('button,a');if(!action||!menuPanel.contains(action))return;
+ if(action.id==='df-markup')event.stopPropagation(); // Keep the newly opened palette from seeing this as an outside click.
+ closeMenu();
+ if(document.querySelector('dialog[open]'))return;
+ const rail=document.querySelector('.dr-sheet-rail'),cards=byId('dw-panel');
+ if(action.id==='df-sheets'&&!body.classList.contains('df-sheets-hidden'))rail?.querySelector('button,input')?.focus({preventScroll:true});
+ else if(action.id==='dw-toggle'&&cards&&!cards.hidden)byId('dw-close')?.focus({preventScroll:true});
+ else if(action.id==='df-markup'&&body.classList.contains('df-markup-open'))byId('dfp-close-tools')?.focus({preventScroll:true});
+ else if(action.tagName==='BUTTON')focusMenu();
+});
+document.addEventListener('click',event=>{if(menu.open&&!menu.contains(event.target))closeMenu();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&menu.open&&!document.querySelector('dialog[open]')){event.preventDefault();event.stopPropagation();closeMenu(true);}},true);
+for(const id of ['dfp-close-sheets','dw-close','dfp-close-details'])byId(id)?.addEventListener('click',focusMenu);
+for(const zoom of document.querySelectorAll('.df-zoom button')){const label=zoom.textContent.trim();zoom.setAttribute('aria-label',label==='+'?'Zoom in':label==='-'?'Zoom out':'Fit drawing');zoom.title=zoom.getAttribute('aria-label');}
+const toolbar=document.querySelector('.df-tools');if(toolbar){
+ const close=document.createElement('button');close.id='dfp-close-tools';close.type='button';close.textContent='Close tools';toolbar.append(close);
+ close.onclick=()=>{body.classList.remove('df-markup-open');byId('df-markup')?.setAttribute('aria-pressed','false');byId('bcMarkupMenu')?.classList.remove('open');document.querySelector('.bc81-menu')?.classList.remove('open');document.querySelector('button[data-tool="pan"]')?.click();focusMenu();};
+}
+// Keep loading failures and active instructions visible without a permanent status row.
+const load=byId('drawing-load-state');if(load){
+ const notice=document.createElement('div');notice.id='dfp-notice';notice.hidden=true;
+ const text=document.createElement('span');text.setAttribute('role','status');text.setAttribute('aria-live','polite');
+ const dismiss=document.createElement('button');dismiss.type='button';dismiss.textContent='Close';dismiss.setAttribute('aria-label','Dismiss drawing message');dismiss.onclick=()=>{notice.hidden=true;};notice.append(text,dismiss);body.append(notice);
+ function update(){const message=load.textContent.trim();const quiet=!message||/^(Use Pan\b|Ready\b|Loaded\b)/i.test(message);notice.hidden=quiet;if(!quiet)text.textContent=message;}
+ new MutationObserver(update).observe(load,{childList:true,subtree:true,characterData:true});update();
+}
+// Final layout is in place before fitting; later manual zoom is left alone.
+window.dispatchEvent(new Event('resize'));
+if(byId('bcStage')?.dataset.drawReady==='yes')requestAnimationFrame(()=>byId('bcFit')?.click());
 })();'''
