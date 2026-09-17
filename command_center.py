@@ -173,7 +173,7 @@ class CommandCenter:
             end=body.find('<section id="problems"',start)
             if start>=0 and end>start:
                 saved=(f'<p class="muted">Last saved field briefing · {esc(latest["brief_date"])} · <a href="/workspace/command/briefs/{latest["id"]}">Open saved copy</a></p>') if latest else ''
-                body=body[:start]+'<section id="quick" class="bc860-panel"><h2>Quick Actions</h2><p>Quick Actions and follow-ups are together on My workspace.</p><a class="bc860-button" href="/workspace#quick-actions">Open Quick Actions &amp; Follow-ups</a>'+saved+'</section>'+body[end:]
+                body=body[:start]+'<section id="quick" class="bc860-panel"><h2>Quick Actions</h2><div class="quick-grid">'+''.join('<a class="bc860-button secondary" href="'+href+'">'+label+'</a>' for href,label in [(f'/workspace/drawings?project_id={pid}','Open drawings'),(f'/workspace/daily?project_id={pid}','Daily report'),(f'/workspace/checklists?project_id={pid}','Safety & inspections'),(f'/workspace/sharing?project_id={pid}','Share work')])+'</div>'+saved+'</section>'+body[end:]
         if checklist_panel:body=body.replace('<h2>Problems / Risks</h2>','<h2>Problems / Risks</h2>'+checklist_panel,1)
         return self.page('Superintendent Command',body)
 
