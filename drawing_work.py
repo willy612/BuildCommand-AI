@@ -429,6 +429,22 @@ class DrawingWork:
         self.ns['app'].add_api_route(health,self.full_page_health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(health)
         health='/health/drawing-canvas-8-26-3'
         self.ns['app'].add_api_route(health,self.canvas_health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(health)
+        health='/health/drawing-controls-8-26-5'
+        self.ns['app'].add_api_route(health,self.controls_health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(health)
+
+    def controls_health(self):
+        import json
+        result=json.loads(self.canvas_health().body)
+        result['checks'].update(
+            slim_menu_configured='width:min(264px' in CANVAS_STYLE,
+            work_buttons_removed_from_menu='dfp-legacy-work-controls' in CANVAS_JS,
+            compact_markup_palette='width:min(272px' in CANVAS_STYLE,
+            secondary_items_collapsed='dfp-secondary' in CANVAS_JS)
+        ok=all(result['checks'].values())
+        result.update(version='8.26.5',release='Compact Drawing Controls',status='ok' if ok else 'degraded',
+            passed=sum(result['checks'].values()),total=len(result['checks']),
+            scope='Installation and schema checks only. Verify the smaller menu and markup palette, saved pins, scale, markup save, and desktop/touch layouts on staging. No data or permission reset.')
+        return JSONResponse(result,status_code=200 if ok else 503)
 
     def canvas_health(self):
         import json
@@ -550,17 +566,39 @@ body.dw-fullpage.dfp-compact .df-zoom button:last-child{border-right:0}
 #dfp-menu>summary{list-style:none;width:max-content;display:flex;align-items:center;gap:7px;box-sizing:border-box;height:38px;padding:8px 11px;border:1px solid #b9c9d7;border-radius:8px;background:#fff;color:#153650;font-weight:700;cursor:pointer;box-shadow:0 2px 10px #10273c25}
 #dfp-menu>summary::-webkit-details-marker{display:none}#dfp-menu>summary svg{width:18px;height:18px;flex-shrink:0}#dfp-menu>summary:focus-visible{outline:3px solid #e6ad3d;outline-offset:2px}
 #dfp-menu[open]>summary{background:#183e5c;color:#fff;border-color:#183e5c}
-#dfp-menu-panel{box-sizing:border-box;width:min(360px,calc(100vw - 20px));max-height:calc(100dvh - 76px);overflow:auto;overscroll-behavior:contain;margin-top:8px;padding:12px;background:#fff;border:1px solid #bfcddb;border-radius:10px;box-shadow:0 10px 32px #12283d45}
-body.dw-fullpage.dfp-compact #dfp-menu nav.df-actions{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));position:static!important;gap:7px!important;padding:0!important;margin:0!important;border:0!important;background:transparent;align-items:stretch}
-body.dw-fullpage.dfp-compact #dfp-menu .df-actions>button,body.dw-fullpage.dfp-compact #dfp-menu .df-actions>a{box-sizing:border-box;display:flex!important;align-items:center;justify-content:flex-start;min-height:42px;width:100%;height:auto;padding:9px 10px!important;border-radius:7px;text-align:left;white-space:normal!important;font:600 13px/1.35 Arial,sans-serif!important;overflow-wrap:anywhere}
-#dfp-menu .df-actions>label,#dfp-menu .df-actions>select,#dfp-menu .df-actions>.dr-view-links,#dfp-menu .dfp-menu-status{grid-column:1/-1}
-#dfp-menu .df-actions>label{font-weight:700;margin:8px 0 0}#dfp-menu select{box-sizing:border-box;width:100%;min-width:0;font:14px Arial,sans-serif;padding:10px;border:1px solid #bcccdc;border-radius:7px;background:white;color:#17354c}
-#dfp-menu .dr-view-links{display:flex;flex-direction:column;align-items:stretch!important;justify-content:flex-start!important;gap:7px;margin:6px 0;font-size:13px}#dfp-menu .dr-view-links a{margin:0!important;text-align:left;padding:9px 10px;border:1px solid #bfccd7;border-radius:7px}#dfp-menu .dr-view-links span{color:#546a7d}
-#dfp-menu .dfp-menu-status{margin-top:10px;padding-top:10px;border-top:1px solid #dbe4ed;color:#405b73}#dfp-menu .dfp-menu-status>summary{cursor:pointer;font-weight:600;padding:4px 0}
-body.dw-fullpage.dfp-compact #dfp-menu #drawing-load-state,body.dw-fullpage.dfp-compact #dfp-menu #bcToolStatus,body.dw-fullpage.dfp-compact #dfp-menu #bcMeasureStatus{display:block!important;background:white;font:12px/1.5 Arial,sans-serif;padding:6px 0!important;color:#425b72}
-body.dw-fullpage.dfp-compact .df-tools{position:fixed!important;top:58px!important;left:10px!important;right:auto!important;box-sizing:border-box;width:min(390px,calc(100vw - 20px));max-height:calc(100dvh - 80px);overflow:visible;padding:8px!important;border-radius:9px!important;box-shadow:0 5px 20px #10273c35;z-index:40}
-body.dw-fullpage.dfp-compact .bc81-menu{position:fixed!important;top:124px!important;left:10px!important;right:auto!important;width:min(390px,calc(100vw - 20px))!important;max-height:calc(100dvh - 136px)!important;overflow:auto!important}
-body.dw-fullpage.dfp-compact #dfp-close-tools{box-sizing:border-box;background:#fff;color:#193d58;border:1px solid #bcccd8;border-radius:6px;min-height:40px;padding:8px 10px;font:600 13px Arial,sans-serif;cursor:pointer;margin-left:auto}
+#dfp-menu-panel{box-sizing:border-box;width:min(264px,calc(100vw - 20px));max-height:calc(100dvh - 76px);overflow:auto;overscroll-behavior:contain;margin-top:6px;padding:6px;background:#fff;border:1px solid #cbd5df;border-radius:9px;box-shadow:0 8px 24px #12283d30}
+body.dw-fullpage.dfp-compact #dfp-menu nav.df-actions{display:flex!important;flex-direction:column;position:static!important;gap:2px!important;padding:0!important;margin:0!important;border:0!important;background:transparent;align-items:stretch}
+body.dw-fullpage.dfp-compact #dfp-menu .df-actions button,body.dw-fullpage.dfp-compact #dfp-menu .df-actions a,body.dw-fullpage.dfp-compact #dfp-menu summary:not(#dfp-menu-button){box-sizing:border-box;display:flex;align-items:center;justify-content:flex-start;min-height:32px;height:auto;width:100%;padding:6px 9px!important;margin:0!important;border:0;border-radius:5px;background:transparent;color:#203b50;text-align:left;white-space:normal!important;font:500 13px/20px Arial,sans-serif!important;overflow-wrap:anywhere;text-decoration:none;cursor:pointer}
+body.dw-fullpage.dfp-compact #dfp-menu .df-actions button:hover,body.dw-fullpage.dfp-compact #dfp-menu .df-actions a:hover,body.dw-fullpage.dfp-compact #dfp-menu summary:not(#dfp-menu-button):hover{background:#eef3f7}
+body.dw-fullpage.dfp-compact #dfp-menu .df-actions .df-primary{color:#145a83;font-weight:700!important}
+body.dw-fullpage.dfp-compact #dfp-menu .df-actions button:focus-visible,body.dw-fullpage.dfp-compact #dfp-menu a:focus-visible,body.dw-fullpage.dfp-compact #dfp-menu summary:focus-visible{outline:2px solid #b27a14;outline-offset:-2px}
+#dfp-secondary{border-top:1px solid #e2e8ee;margin-top:4px;padding-top:3px;width:100%}#dfp-secondary>summary{list-style:none}#dfp-secondary>summary::-webkit-details-marker{display:none}#dfp-secondary>summary:after{content:'+';margin-left:auto;font-weight:700}#dfp-secondary[open]>summary:after{content:'-'}
+#dfp-menu .dr-view-links{display:flex;flex-direction:column;align-items:stretch!important;justify-content:flex-start!important;gap:2px;margin:0;font-size:12px}#dfp-menu .dr-view-links span{padding:5px 9px;color:#546a7d}
+#dfp-menu .dfp-menu-status{padding:0;margin:3px 0 0;border-top:1px solid #e2e8ee;color:#405b73}#dfp-menu .dfp-menu-status>summary{cursor:pointer}
+body.dw-fullpage.dfp-compact #dfp-menu #drawing-load-state,body.dw-fullpage.dfp-compact #dfp-menu #bcToolStatus,body.dw-fullpage.dfp-compact #dfp-menu #bcMeasureStatus{display:block!important;background:white;font:12px/1.5 Arial,sans-serif;padding:6px 9px!important;color:#425b72}
+#dw-list label[for="field-pin-filter"]{display:block;font:600 12px Arial,sans-serif;margin:12px 0 6px}#dw-list #field-pin-filter{width:100%;box-sizing:border-box;padding:7px;font:13px Arial,sans-serif;border:1px solid #c5d2dc;border-radius:5px;background:white}
+body.dw-fullpage.dfp-compact .df-tools{position:fixed!important;top:58px!important;left:10px!important;right:auto!important;box-sizing:border-box;width:min(272px,calc(100vw - 20px));min-height:0!important;max-height:calc(100dvh - 76px);overflow:visible;padding:5px!important;gap:4px!important;flex-wrap:nowrap!important;border:1px solid #cbd5df;border-radius:8px!important;background:#fff!important;color:#213d54;box-shadow:0 5px 18px #10273c30;z-index:40}
+body.dw-fullpage.dfp-compact .df-tools>.bc81-spacer,body.dw-fullpage.dfp-compact .df-tools>span{display:none!important}
+body.dw-fullpage.dfp-compact .df-tools .bc81-iconbtn,body.dw-fullpage.dfp-compact .df-tools .bc81-trigger,body.dw-fullpage.dfp-compact #dfp-close-tools{display:inline-flex!important;align-items:center;justify-content:center;gap:5px;box-sizing:border-box;flex:0 0 auto;width:32px!important;min-width:32px!important;min-height:32px!important;height:32px!important;padding:5px!important;margin:0;border:1px solid transparent!important;border-radius:5px!important;background:#f1f5f8!important;color:#213d54!important;font:600 12px/18px Arial,sans-serif!important;cursor:pointer}
+body.dw-fullpage.dfp-compact .df-tools #bcZoomIn,body.dw-fullpage.dfp-compact .df-tools #bcZoomOut,body.dw-fullpage.dfp-compact .df-tools #bcFit,body.dw-fullpage.dfp-compact .df-tools #bcPrev,body.dw-fullpage.dfp-compact .df-tools #bcNext{display:none!important}
+body.dw-fullpage.dfp-compact .df-tools .bc81-iconbtn .drawing-tool-label{display:none!important}
+body.dw-fullpage.dfp-compact .df-tools .bc81-trigger{width:auto!important;min-width:72px!important}
+body.dw-fullpage.dfp-compact .df-tools svg.drawing-tool-icon,body.dw-fullpage.dfp-compact #dfp-close-tools svg{width:18px!important;height:18px!important;flex:0 0 18px}
+body.dw-fullpage.dfp-compact .df-tools .drawing-tool-label{font:500 12px/18px Arial,sans-serif!important;display:inline!important;margin:0!important}
+body.dw-fullpage.dfp-compact #dfp-close-tools{margin-left:auto!important;background:transparent!important}
+body.dw-fullpage.dfp-compact .bc81-menu{position:fixed!important;top:104px!important;left:10px!important;right:auto!important;box-sizing:border-box;width:min(272px,calc(100vw - 20px))!important;max-height:calc(100dvh - 116px)!important;padding:6px!important;overflow:auto!important;border:1px solid #cbd5df!important;border-radius:8px!important;background:#fff!important;color:#213d54!important;box-shadow:0 8px 24px #10273c30}
+body.dw-fullpage.dfp-compact .bc81-grid{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:4px!important}
+body.dw-fullpage.dfp-compact .bc81-menu .bc81-tool{display:flex!important;flex-direction:row!important;align-items:center;justify-content:flex-start;gap:7px;box-sizing:border-box;min-width:0!important;width:100%!important;height:34px!important;min-height:34px!important;padding:6px 8px!important;margin:0!important;border:1px solid transparent!important;border-radius:5px!important;background:#f1f5f8!important;color:#213d54!important;font:500 12px/18px Arial,sans-serif!important;cursor:pointer;text-align:left}
+body.dw-fullpage.dfp-compact .bc81-menu .drawing-tool-icon{width:18px!important;height:18px!important;flex:0 0 18px}
+body.dw-fullpage.dfp-compact .bc81-menu .drawing-tool-label{font:500 12px/18px Arial,sans-serif!important;display:inline!important;margin:0!important}
+body.dw-fullpage.dfp-compact .df-tools button:hover,body.dw-fullpage.dfp-compact .bc81-menu .bc81-tool:hover{background:#e4edf4!important}
+body.dw-fullpage.dfp-compact .df-tools button:focus-visible,body.dw-fullpage.dfp-compact .bc81-menu button:focus-visible{outline:2px solid #b27a14;outline-offset:-2px}
+body.dw-fullpage.dfp-compact .df-tools button.active,body.dw-fullpage.dfp-compact .df-tools button[aria-pressed=true]{background:#e2edf5!important;border-color:#38688d!important}
+body.dw-fullpage.dfp-compact .bc81-settings{display:flex;align-items:center;gap:8px;margin-top:6px!important;padding-top:6px!important;border-color:#e2e8ee!important}
+body.dw-fullpage.dfp-compact .bc81-settings .bc81-label{font:12px Arial,sans-serif;color:#52677a}
+body.dw-fullpage.dfp-compact .bc81-settings select{box-sizing:border-box;width:60px!important;min-height:30px!important;height:30px!important;padding:3px 5px!important;font:13px Arial,sans-serif!important;border:1px solid #c5d2dc;border-radius:5px;background:white;color:#213d54}
+body.dw-fullpage.dfp-compact .bc81-settings input[type=color]{box-sizing:border-box;width:34px!important;min-width:34px!important;height:30px!important;min-height:30px!important;padding:2px!important;border:1px solid #c5d2dc;border-radius:5px}
+@media(pointer:coarse){body.dw-fullpage.dfp-compact #dfp-menu .df-actions button,body.dw-fullpage.dfp-compact #dfp-menu .df-actions a,body.dw-fullpage.dfp-compact #dfp-menu summary:not(#dfp-menu-button){min-height:40px}body.dw-fullpage.dfp-compact .df-tools .bc81-iconbtn,body.dw-fullpage.dfp-compact .df-tools .bc81-trigger,body.dw-fullpage.dfp-compact #dfp-close-tools{min-width:36px!important;width:36px!important;min-height:40px!important;height:40px!important}body.dw-fullpage.dfp-compact .df-tools .bc81-trigger{width:auto!important}body.dw-fullpage.dfp-compact .bc81-menu{top:112px!important;max-height:calc(100dvh - 124px)!important}body.dw-fullpage.dfp-compact .bc81-menu .bc81-tool{height:40px!important;min-height:40px!important}}
 body.dw-fullpage.dfp-compact .dr-sheet-rail,body.dw-fullpage.dfp-compact.dw-open #dw-panel{top:60px!important;bottom:56px!important}
 body.dw-fullpage.dfp-compact .dr-old{position:fixed;top:58px;left:50%;transform:translateX(-50%);width:max-content;max-width:calc(100vw - 24px);box-sizing:border-box;z-index:26;border-radius:6px;box-shadow:0 2px 10px #10273c30}
 body.dw-fullpage.dfp-compact .dr-read-view{height:100%;margin:0!important;padding:0!important}
@@ -580,12 +618,27 @@ const more=byId('dfp-more');if(more){const extras=more.querySelector(':scope>div
 // Preserve nodes, IDs, form ownership, event listeners and server permissions.
 for(const link of [...(header?.querySelectorAll(':scope>a')||[])])bar.append(link);
 const filter=byId('field-pin-filter'),filterLabel=bar.querySelector('label[for="field-pin-filter"]');
-if(filterLabel)bar.append(filterLabel);if(filter)bar.append(filter);
+const workList=byId('dw-list');
+if(workList){if(filterLabel)workList.append(filterLabel);if(filter)workList.append(filter);}
+// Keep legacy listeners alive while removing both work-card buttons from the UI.
+const legacyWork=document.createElement('div');legacyWork.id='dfp-legacy-work-controls';legacyWork.hidden=true;
+for(const id of ['dw-toggle','df-note']){const button=byId(id);if(button)legacyWork.append(button);}
+body.append(legacyWork);
+// Let a saved pin receive its click instead of handing pointer capture to Pan.
+for(const pin of document.querySelectorAll('.df-pin'))pin.addEventListener('pointerdown',event=>{if(!body.classList.contains('df-note-mode'))event.stopPropagation();});
 const status=document.createElement('details');status.className='dfp-menu-status';const statusTitle=document.createElement('summary');statusTitle.textContent='Drawing status';status.append(statusTitle);
 for(const id of ['drawing-load-state','bcToolStatus','bcMeasureStatus']){const item=byId(id);if(item)status.append(item);}
 const readView=document.querySelector('.dr-read-view');if(readView){for(const item of [...readView.children])if(item.tagName==='P'||item.tagName==='A')status.append(item);}
-menuPanel.append(bar);menuPanel.append(status);
-body.classList.add('dfp-compact');body.setAttribute('data-drawing-canvas','8.26.3');
+menuPanel.append(bar);
+const secondary=document.createElement('details');secondary.id='dfp-secondary';const secondaryTitle=document.createElement('summary');secondaryTitle.textContent='More';secondary.append(secondaryTitle);
+const primaryIds=new Set(['df-sheets','bcSheetScale','df-markup','df-save','dfp-fullscreen']);
+for(const item of [...bar.children]){
+ const href=item.getAttribute('href')||'';
+ if(primaryIds.has(item.id)||href.endsWith('/release')||href.split('?')[0]==='/workspace/drawings')continue;
+ secondary.append(item);
+}
+secondary.append(status);bar.append(secondary);
+body.classList.add('dfp-compact');body.setAttribute('data-drawing-canvas','8.26.3');body.setAttribute('data-drawing-controls','8.26.5');
 const title=header?.querySelector(':scope>div');if(title)title.title=title.textContent.trim();
 const focusMenu=()=>summary.focus({preventScroll:true});
 const closeMenu=(focus=false)=>{menu.open=false;summary.setAttribute('aria-expanded','false');if(focus)focusMenu();};
@@ -606,7 +659,10 @@ document.addEventListener('keydown',event=>{if(event.key==='Escape'&&menu.open&&
 for(const id of ['dfp-close-sheets','dw-close','dfp-close-details'])byId(id)?.addEventListener('click',focusMenu);
 for(const zoom of document.querySelectorAll('.df-zoom button')){const label=zoom.textContent.trim();zoom.setAttribute('aria-label',label==='+'?'Zoom in':label==='-'?'Zoom out':'Fit drawing');zoom.title=zoom.getAttribute('aria-label');}
 const toolbar=document.querySelector('.df-tools');if(toolbar){
- const close=document.createElement('button');close.id='dfp-close-tools';close.type='button';close.textContent='Close tools';toolbar.append(close);
+ const close=document.createElement('button');close.id='dfp-close-tools';close.type='button';close.setAttribute('aria-label','Close markup tools');close.title='Close markup tools';close.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>';toolbar.append(close);
+ for(const button of toolbar.querySelectorAll('button[title]'))button.setAttribute('aria-label',button.title);
+ const toolLabel=byId('bcMarkupTrigger')?.querySelector('.drawing-tool-label');if(toolLabel)toolLabel.textContent='Tools';
+ for(const [selector,label] of [['[data-tool="cloud"]','Cloud'],['#bcCalibrate','Calibrate']]){const text=toolbar.querySelector(selector+' .drawing-tool-label');if(text)text.textContent=label;}
  close.onclick=()=>{body.classList.remove('df-markup-open');byId('df-markup')?.setAttribute('aria-pressed','false');byId('bcMarkupMenu')?.classList.remove('open');document.querySelector('.bc81-menu')?.classList.remove('open');document.querySelector('button[data-tool="pan"]')?.click();focusMenu();};
 }
 // Keep loading failures and active instructions visible without a permanent status row.
