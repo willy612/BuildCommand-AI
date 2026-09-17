@@ -62350,3 +62350,8 @@ app.version = BUILD_COMMAND_RELEASE
 BUILD_COMMAND_RELEASE = "8.26.3"
 BUILD_COMMAND_RELEASE_NAME = "Full Canvas Drawings"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.26.4 - Restore the existing estimating entry points.
+BUILD_COMMAND_RELEASE = "8.26.4"
+BUILD_COMMAND_RELEASE_NAME = "Estimating Navigation Recovery"
+app.version = BUILD_COMMAND_RELEASE
