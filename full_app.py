@@ -58744,13 +58744,13 @@ def _bc810_company_id(user=None):
         return user.get("company_id")
 
 def _bc810_active_project_id():
-    try:
-        return _runtime.get_active_project_id()
-    except Exception:
-        try:
-            return _runtime.active_project_id()
-        except Exception:
-            return None
+    # Use the same company-scoped selection as the Startup renderer. The old
+    # runtime getter names do not exist, so every project guard saw None even
+    # when the workspace had a selected project (including for platform owners).
+    user = _bc810_user()
+    if not user:
+        return None
+    return _bc1810l_resolved_project_id(user)
 
 def _bc810_project_company(pid):
     if not pid:
@@ -62367,3 +62367,46 @@ _bc8270_takeoff = _bc8270_takeoff_install(globals())
 BUILD_COMMAND_RELEASE = "8.27.0"
 BUILD_COMMAND_RELEASE_NAME = "Scaled Drawing Takeoff"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.27.1 - Align the Startup guard with its project resolver.
+BUILD_COMMAND_RELEASE = "8.27.1"
+BUILD_COMMAND_RELEASE_NAME = "Project Startup Access Fix"
+app.version = BUILD_COMMAND_RELEASE
+
+
+@app.get('/health/project-startup-access-8-27-1')
+def bc8271_startup_access_health():
+    routes = list(app.routes)
+    startup = next((r for r in routes if getattr(r, 'path', '') == '/project-startup'
+                    and 'GET' in (getattr(r, 'methods', None) or set())), None)
+    resolver_names = _bc810_active_project_id.__code__.co_names
+    checks = {
+        'startup_guard_uses_current_project_resolver': (
+            '_bc1810l_resolved_project_id' in resolver_names
+            and 'get_active_project_id' not in resolver_names
+            and 'active_project_id' not in resolver_names),
+        'GET /project-startup': startup is not None,
+        'project_startup_access_guard_preserved': (
+            startup is not None
+            and startup.endpoint is _bc750_project_startup_page
+            and hasattr(startup.endpoint, '__wrapped__')),
+        'startup_renderer_uses_same_resolver': (
+            '_bc1810l_resolved_project_id' in _bc181812_user_project.__code__.co_names),
+        'project_selection_preserved': any(
+            getattr(r, 'path', '') == '/workspace/select-project'
+            and 'POST' in (getattr(r, 'methods', None) or set()) for r in routes),
+        'scaled_takeoff_preserved': bool(getattr(app.state, 'drawing_takeoff', None)),
+        'form_origin_guard_preserved': _bc840_same_origin is _bc861_same_origin,
+    }
+    ok = all(checks.values())
+    return _BC189_JSONResponse({
+        'app': 'BuildCommand AI', 'version': '8.27.1',
+        'release': 'Project Startup Access Fix', 'status': 'ok' if ok else 'attention',
+        'checks': checks, 'passed': sum(checks.values()), 'total': len(checks),
+        'data_reset': False,
+        'scope': 'Installation and handler checks only. Verify your selected project '
+                 'opens in Project Startup and existing role restrictions on staging.'
+    }, status_code=200 if ok else 503)
+
+
+_runtime.PUBLIC_PATHS.add('/health/project-startup-access-8-27-1')
