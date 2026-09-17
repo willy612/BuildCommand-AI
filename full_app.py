@@ -62355,3 +62355,8 @@ app.version = BUILD_COMMAND_RELEASE
 BUILD_COMMAND_RELEASE = "8.26.4"
 BUILD_COMMAND_RELEASE_NAME = "Estimating Navigation Recovery"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.26.5 - Smaller drawing menus and markup controls.
+BUILD_COMMAND_RELEASE = "8.26.5"
+BUILD_COMMAND_RELEASE_NAME = "Compact Drawing Controls"
+app.version = BUILD_COMMAND_RELEASE
