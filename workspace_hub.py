@@ -8,11 +8,16 @@ from fastapi.responses import RedirectResponse
 from blueprint_field import esc
 
 VERSION='8.14.0'
+ESTIMATING_MAIN=(('Estimator Intelligence','/brain/estimator'),('Takeoff review','/brain/takeoff'),
+                 ('Bid packages','/preconstruction/packages'),('Compare bids','/preconstruction/leveling'))
+ESTIMATING_MORE=(('Preconstruction review','/preconstruction'),('Estimate overview','/estimate'),
+                 ('Takeoff components','/brain/takeoff/components'),('Historical costs','/learning/costs'))
 # Every older navigation item is either categorized here or intentionally hidden
 # as a duplicate/settings/test entry. Its original handler is retained.
 GROUPS=(
  ('Drawings & documents',(('Drawings','/workspace/drawings'),('Project Documents','/workspace/documents'),('RFIs / issues','/issues'),('Submittals','/submittals')),
   (('Earlier document uploads','/documents'),('Change events','/changes'),('Change packages','/change-package'))),
+ ('Estimating & bidding',ESTIMATING_MAIN,ESTIMATING_MORE),
  ('Daily field work',(('Daily report','/daily-report'),('Punch list','/punch'),('Safety & inspections','/workspace/checklists')),
   (('Earlier inspections','/inspections'),('Earlier safety records','/safety'),('Quick field note','/quick-entry'),('Field log','/field'),('Production','/production'),('Reports & exports','/exports'),('PDF reports','/pdf-reports'))),
  ('Schedule & planning',(('Schedule','/schedule'),('Advanced Schedule Import','/advanced-schedule-import'),('3-week look-ahead','/lookahead-intelligence'),('Procurement','/procurement')),
@@ -42,6 +47,8 @@ class WorkspaceHub:
         self.ns=ns;self.field=ns['app'].state.blueprint_field;self.db=self.field.db;self.require=self.field.require
         self.routes=[]
         self.legacy_actions=next((r.endpoint for r in ns['app'].routes if getattr(r,'path','')=='/actions' and 'GET' in (r.methods or set())),None)
+        self.estimating_handlers={(r.path,m):r.endpoint for r in ns['app'].routes if hasattr(r,'methods')
+            for m in (r.methods or set()) if r.path.startswith(('/brain/estimator','/brain/takeoff','/preconstruction')) or r.path in {'/estimate','/learning/costs'}}
 
     def endpoint(self,fn):
         @wraps(fn)
@@ -108,7 +115,7 @@ class WorkspaceHub:
         body=CSS+'<section id="quick-actions" class="card hub-section"><h2>Quick Actions &amp; Follow-ups</h2>'
         if not project:return body+'<p>Choose a project below to see its work and next actions.</p></section>'
         body+='<p>'+esc(project['name'])+'</p><div class="hub-actions">'
-        for label,path in [('Run today','/workspace/command'),('Drawings','/workspace/drawings'),('Daily report','/workspace/daily'),('Safety & inspections','/workspace/checklists'),('Documents','/workspace/documents'),('Ask / analyze','/workspace/brain')]:body+=self.open_form(pid,path,label)
+        for label,path in [('Run today','/workspace/command'),('Drawings','/workspace/drawings'),('Estimating','/brain/estimator'),('Daily report','/workspace/daily'),('Safety & inspections','/workspace/checklists'),('Documents','/workspace/documents'),('Ask / analyze','/workspace/brain')]:body+=self.open_form(pid,path,label)
         body+='</div><h3>Work to follow up</h3>'
         with self.db() as c:
             self.field.actor(c,pid)
@@ -146,7 +153,7 @@ class WorkspaceHub:
         for label,path in AI_TOOLS[4:]:
             if path in paths:body+=self.open_form(pid,path,label)
         body+='</div>'+self.field.tool_form(pid,'analysis','Full project analysis')+'</details></section><section class="card hub-section"><h2>Review before issuing</h2><div class="hub-actions">'
-        for label,path in [('Trade scopes','/workspace/scopes'),('RFI answers','/workspace/rfi-answers'),('Command & reviewed actions','/workspace/command')]:body+=self.open_form(pid,path,label)
+        for label,path in [('Trade scopes','/workspace/scopes'),('Estimator Intelligence','/brain/estimator'),('RFI answers','/workspace/rfi-answers'),('Command & reviewed actions','/workspace/command')]:body+=self.open_form(pid,path,label)
         body+='</div><p class="hub-help">Ask uses saved project evidence. Analyzing and asking do not automatically issue instructions or send messages.</p></section>'
         return self.page('BuildCommand AI',body)
 
@@ -193,6 +200,25 @@ class WorkspaceHub:
     def brain_alias(self):return RedirectResponse('/workspace/brain',303)
     def portfolio_alias(self):return RedirectResponse('/workspace/portfolio',303)
 
+    def estimating_health(self):
+        active={(r.path,m):r.endpoint for r in self.ns['app'].routes if hasattr(r,'methods') for m in (r.methods or set())}
+        checks={'GET '+path:(path,'GET') in active for _,path in ESTIMATING_MAIN+ESTIMATING_MORE}
+        checks.update(
+            estimating_category_configured=any(title=='Estimating & bidding' and main==ESTIMATING_MAIN and more==ESTIMATING_MORE for title,main,more in GROUPS),
+            project_handoff_configured=all(path in self.destinations() for _,path in ESTIMATING_MAIN+ESTIMATING_MORE),
+            original_estimating_handlers_preserved=bool(self.estimating_handlers) and all(active.get(key) is fn for key,fn in self.estimating_handlers.items()),
+            workspace_handlers_active=all(active.get((path,method)) is fn for method,path,fn in self.routes),
+            estimator_schema_repair_installed=bool(getattr(self.ns['app'].state,'blueprint_batches',None) and self.ns['app'].state.blueprint_batches.estimator_ready),
+            drawings_preserved=('/workspace/drawing-sheets/{sheet_id}','GET') in active,
+            form_origin_guard_preserved=callable(self.ns.get('_bc861_same_origin')) and self.ns.get('_bc840_same_origin') is self.ns.get('_bc861_same_origin') and self.ns.get('_BC862_FORM_REFERRER_POLICY')=='same-origin')
+        try:
+            with self.db() as c:c.execute('SELECT id,company_id,project_id,quantity,material_unit_cost,labor_unit_cost,notes,verified FROM estimator_items WHERE 1=0')
+            checks['estimator_schema_readable']=True
+        except Exception:checks['estimator_schema_readable']=False
+        return dict(app='BuildCommand AI',version='8.26.4',release='Estimating Navigation Recovery',
+            status='ok' if all(checks.values()) else 'degraded',checks=checks,passed=sum(checks.values()),total=len(checks),data_reset=False,
+            scope='Route, navigation configuration and schema checks only. Verify the selected project, saved estimate values and role access on staging. No provider request, bid issue or email is performed.')
+
     def health(self):
         active={(r.path,m):r.endpoint for r in self.ns['app'].routes if hasattr(r,'methods') for m in (r.methods or set())}
         checks={method+' '+path:active.get((path,method)) is fn for method,path,fn in self.routes}
@@ -215,3 +241,4 @@ class WorkspaceHub:
             wrapped=self.endpoint(fn);self.ns['_bc840_replace'](path,method,wrapped);self.routes.append((method,path,wrapped))
         for path,fn in [('/portfolio',self.portfolio_alias),('/portfolio-intelligence',self.portfolio_alias),('/ai-command',self.brain_alias),('/assistant',self.brain_alias)]:self.ns['_bc840_replace'](path,'GET',self.endpoint(fn))
         path='/health/simple-drawings-8-14-0';self.ns['app'].add_api_route(path,self.health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(path)
+        path='/health/estimating-navigation-8-26-4';self.ns['app'].add_api_route(path,self.estimating_health,methods=['GET']);self.ns['_runtime'].PUBLIC_PATHS.add(path)
