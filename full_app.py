@@ -60144,6 +60144,7 @@ def _bc840_shell(title, body, *args, **kwargs):
     if path != '/workspace':
         back = '/workspace/drawings' if path.startswith('/workspace/drawings/') or (path.startswith('/documents/') and path.endswith('/view')) else parent_url
         body = '<a class="hub-back" data-bc-back href="' + back + '" style="display:inline-flex;min-height:44px;align-items:center;margin-bottom:12px">← Back</a>' + body
+    body = _bc8262_upload_ui(body)
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<meta name="referrer" content="{_BC862_FORM_REFERRER_POLICY}"><title>' + esc(str(title)) + ' · BuildCommand AI</title>'
             '<style>' + str(getattr(_runtime,'CSS','')) + '\n' + _BC840_CSS + '\n' + _BC8102_CSS + '</style></head><body class="bc8102">'
@@ -62335,4 +62336,12 @@ app.version = BUILD_COMMAND_RELEASE
 # BuildCommand AI 8.26.1 - Clear plan-start recovery and existing-review handoff.
 BUILD_COMMAND_RELEASE = "8.26.1"
 BUILD_COMMAND_RELEASE_NAME = "Plan Review Start Recovery"
+app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.26.2 - Accessible drag-and-drop file selection.
+from upload_dropzone import enhance_upload_html as _bc8262_upload_ui
+from upload_dropzone import install as _bc8262_upload_install
+_bc8262_upload_install(globals())
+BUILD_COMMAND_RELEASE = "8.26.2"
+BUILD_COMMAND_RELEASE_NAME = "Drag & Drop Uploads"
 app.version = BUILD_COMMAND_RELEASE
