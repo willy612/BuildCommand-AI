@@ -62360,3 +62360,10 @@ app.version = BUILD_COMMAND_RELEASE
 BUILD_COMMAND_RELEASE = "8.26.5"
 BUILD_COMMAND_RELEASE_NAME = "Compact Drawing Controls"
 app.version = BUILD_COMMAND_RELEASE
+
+# BuildCommand AI 8.27.0 - Manual geometry, private rates and reviewed quantities.
+from drawing_takeoff import install as _bc8270_takeoff_install
+_bc8270_takeoff = _bc8270_takeoff_install(globals())
+BUILD_COMMAND_RELEASE = "8.27.0"
+BUILD_COMMAND_RELEASE_NAME = "Scaled Drawing Takeoff"
+app.version = BUILD_COMMAND_RELEASE
