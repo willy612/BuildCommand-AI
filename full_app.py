@@ -62415,3 +62415,8 @@ _runtime.PUBLIC_PATHS.add('/health/project-startup-access-8-27-1')
 # BuildCommand AI 8.28.0 — one job home over existing authorized services.
 from simpler_workday import install as _bc8280_install
 _bc8280_workday = _bc8280_install(globals())
+
+
+# BuildCommand AI 8.29.0 — one live project schedule, reviewed 3/6-week views.
+from project_lookahead import install as _bc8290_install
+_bc8290_lookahead = _bc8290_install(globals())
