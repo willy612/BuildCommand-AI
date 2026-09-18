@@ -25,10 +25,10 @@ AREAS = {
     ('Preconstruction review', '/preconstruction', False), ('Estimate overview', '/estimate', False),
     ('Takeoff components', '/brain/takeoff/components', False), ('Historical costs', '/learning/costs', False))),
  'field': ('Field work', 'Keep today’s work moving.', (
-    ('Daily report', '/workspace/daily', True), ('Schedule', '/schedule', False),
+    ('Daily report', '/workspace/daily', True), ('Schedule', '/workspace/schedule', True),
     ('Safety & inspections', '/workspace/checklists', True), ('Site photos', '/photo-ai', True),
     ('Punch list', '/punch', False), ('Project startup', '/project-startup', True)), (
-    ('Three-week look-ahead', '/lookahead-intelligence', False), ('Advanced schedule import', '/advanced-schedule-import', False),
+    ('Earlier schedule tools', '/schedule', False), ('Advanced schedule import', '/advanced-schedule-import', False),
     ('Procurement', '/procurement', False), ('Make ready', '/make-ready', False),
     ('Readiness', '/readiness', False), ('Recovery planning', '/recovery', False),
     ('Field log', '/field', False), ('Quick field note', '/quick-entry', False),
@@ -82,7 +82,7 @@ CSS = '''<style id="bc828-styles">
 .sw-context-note{font-size:13px;color:#536579;margin:6px 0 16px}.sw-draft{font-size:13px;padding:10px 12px;background:#f5f8fb;border:1px solid #d7e2ec;border-radius:8px;margin:10px 0}.sw-draft button{margin:5px 8px 5px 0;font-size:13px}
 :focus-visible{outline:3px solid #426fa5;outline-offset:3px}
 @media(max-width:1000px){.sw-columns{grid-template-columns:1fr}.sw-projects,.sw-link-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sw-header-job{justify-content:flex-start}}
-@media(max-width:600px){.sw-card{padding:18px;border-radius:12px}.sw-job{margin-top:4px}.sw-job .sw-pill{display:none}.sw-projects,.sw-link-grid{grid-template-columns:1fr}.sw-actions{gap:9px}.sw-actions a,.sw-actions button{padding:12px;font-size:14px}.sw-header-job{width:100%;gap:10px;flex-wrap:wrap}.sw-header-job>div{flex:1;min-width:150px}.sw-ask-link{margin-left:auto}.sw-switch[open] .bc840-select{right:-12px}.sw-card-heading{align-items:flex-start}}
+@media(max-width:600px){.bc840-header{flex-wrap:wrap;gap:12px}.bc8102-breadcrumb{width:100%;min-width:0;flex-wrap:wrap}.sw-header-job{flex-basis:100%}.sw-card{padding:18px;border-radius:12px}.sw-job{margin-top:4px}.sw-job .sw-pill{display:none}.sw-projects,.sw-link-grid{grid-template-columns:1fr}.sw-actions{gap:9px}.sw-actions a,.sw-actions button{padding:12px;font-size:14px}.sw-header-job{width:100%;gap:10px;flex-wrap:wrap}.sw-header-job>div{flex:1 1 160px;min-width:0}.sw-ask-link{margin-left:auto}.sw-switch[open] .bc840-select{right:-12px}.sw-card-heading{align-items:flex-start}}
 </style>'''
 
 DRAFT_SCRIPT = r'''<script id="bc828-drafts">(()=>{
@@ -385,10 +385,19 @@ class SimplerWorkday:
                         body+='<section class="sw-card sw-alert"><h2>Priorities could not load</h2><p>Your project records have not been changed. Open the work queue or reload this page.</p><a href="/workspace/command?project_id='+str(pid)+'&amp;view=all">Open work queue</a></section>'
                     if data: body+=self.priorities_html(data,pid)
                 else: body+='<section class="sw-card"><h2>Pick up your project work</h2><p>Open drawings or project records. Your project leader manages field briefings and trade sharing.</p></section>'
+                if manager and getattr(self.app.state,'project_lookahead',None):
+                    try:
+                        with self.db() as c:
+                            self.field.actor(c,pid)
+                            body+=self.app.state.project_lookahead.home_card(c,user,project)
+                    except self.ns['_BC850_Problem']: raise
+                    except Exception:
+                        log.exception('Lookahead workspace summary unavailable')
+                        body+='<section class="sw-card"><h2>Project schedule</h2><p>The schedule summary could not load.</p><a href="/workspace/schedule?project_id='+str(pid)+'">Open schedule</a></section>'
                 body+='<section class="sw-card" id="quick-actions"><h2>Quick actions</h2><p>Go straight to the work.</p><div class="sw-actions">'+self.tool(pid,'/workspace/drawings','Open drawings',True)
-                for label,path in ([('Daily report','/workspace/daily'),('Add a site photo','/photo-ai'),('Share work','/workspace/sharing')] if manager else [('RFIs & issues','/issues'),('Schedule','/schedule'),('Submittals','/submittals')]):body+=self.tool(pid,path,label)
+                for label,path in ([('Daily report','/workspace/daily'),('Add a site photo','/photo-ai'),('Share work','/workspace/sharing')] if manager else [('RFIs & issues','/issues'),('Schedule','/workspace/schedule'),('Submittals','/submittals')]):body+=self.tool(pid,path,label)
                 body+='</div><details class="sw-more"><summary>More actions</summary><div class="sw-actions">'
-                for label,path in [('Schedule','/schedule'),('RFIs & issues','/issues')]+([('Safety & inspections','/workspace/checklists'),('Project startup','/project-startup'),('Project documents','/workspace/documents'),('Review trade scopes','/workspace/scopes')] if manager else []):body+=self.tool(pid,path,label)
+                for label,path in [('Schedule','/workspace/schedule'),('RFIs & issues','/issues')]+([('Safety & inspections','/workspace/checklists'),('Project startup','/project-startup'),('Project documents','/workspace/documents'),('Review trade scopes','/workspace/scopes')] if manager else []):body+=self.tool(pid,path,label)
                 body+='</div></details></section></div><div>'
                 if manager:
                     body+='<section class="sw-card" id="ask"><h2>Ask BuildCommand</h2><p>Get help from the saved records on this job.</p>'+self.app.state.command_center.ask_form(pid)+'<p class="sw-help">Answers and drafts require your review. Asking does not approve work or send a message.</p></section>'
@@ -486,7 +495,7 @@ class SimplerWorkday:
         checks={method+' '+path:active.get((path,method)) is fn for method,path,fn in self.routes}
         checks.update(
           installed=getattr(self.app.state,'simpler_workday',None) is self,
-          release_active=self.app.version==VERSION,
+          release_active=self.app.version in {VERSION,'8.29.0'},
           previous_tool_handlers_preserved=all(active.get(k) is v for k,v in self.original_handlers.items() if k not in changed),
           single_private_shell=self.ns['_runtime'].shell is self.ns['_bc840_shell'],
           command_uses_job_home=self.app.state.command_center.render==self.command_render,

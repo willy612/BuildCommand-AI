@@ -230,7 +230,7 @@ class DrawingWorkspace:
 
     def health(self):
         checks=dict(self.hub.health()['checks'])
-        checks['drawings_hotfix_release_active']=self.ns.get('BUILD_COMMAND_RELEASE') in {VERSION,'8.15.0','8.16.0','8.17.0','8.17.1','8.18.0','8.19.0','8.20.0','8.21.0','8.22.0','8.23.0','8.24.0','8.25.0','8.26.0','8.26.1','8.26.2','8.26.3','8.26.4','8.26.5','8.27.0','8.27.1','8.28.0'}
+        checks['drawings_hotfix_release_active']=self.ns.get('BUILD_COMMAND_RELEASE') in {VERSION,'8.15.0','8.16.0','8.17.0','8.17.1','8.18.0','8.19.0','8.20.0','8.21.0','8.22.0','8.23.0','8.24.0','8.25.0','8.26.0','8.26.1','8.26.2','8.26.3','8.26.4','8.26.5','8.27.0','8.27.1','8.28.0','8.29.0'}
         try:
             # Exercise the same bounded read as the page, including all LIKE
             # parameters, without returning any customer data or writing rows.
